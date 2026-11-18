@@ -669,6 +669,30 @@ describe('heavy.sh', () => {
     expect(readdirSync(join(tmp, 'board/leases/heavy'))).toEqual([]);
   }, 20000);
 
+  it('stops its whole subtree on HUP and exits 128+1', async () => {
+    const marker = join(tmp, 'kid.pid');
+    const c = spawn(
+      'bash',
+      [join(boardDir, 'heavy.sh'), '--', 'bash', '-c', `sleep 300 & echo $! >${marker}; wait`],
+      { env: { ...env, HEAVY_CLASS: 'build' }, cwd: tmp, stdio: 'ignore' },
+    );
+    for (let i = 0; i < 100 && !existsSync(marker); i++)
+      await new Promise((r) => setTimeout(r, 50));
+    const kid = Number(readFileSync(marker, 'utf8'));
+    const exited = new Promise<number | null>((r) => c.on('exit', (code) => r(code)));
+    c.kill('SIGHUP');
+    expect(await exited).toBe(129);
+    const state = () => {
+      try {
+        return readFileSync(`/proc/${kid}/stat`, 'utf8').split(') ')[1]![0];
+      } catch {
+        return 'gone';
+      }
+    };
+    expect(['gone', 'Z']).toContain(state());
+    expect(readdirSync(join(tmp, 'board/leases/heavy'))).toEqual([]);
+  }, 20000);
+
   it('escalates to KILL for a child that ignores TERM', async () => {
     const marker = join(tmp, 'kid.pid');
     // the stubborn sleep ignores TERM, so only the KILL passes can end it
@@ -832,6 +856,103 @@ describe('heavy.sh test cap', () => {
     expect(r.code).toBe(0);
     expect(r.err).not.toMatch(/cap/);
     expect(leases()).toEqual([]);
+  });
+
+  it('HEAVY_SLOT_CLASS: the slot and the cap take its class, the job event keeps HEAVY_CLASS', () => {
+    limits({ enforce: true });
+    const seen = join(tmp, 'slot.json');
+    const dir = join(tmp, 'board/leases/heavy');
+    const r = heavy(['--', 'bash', '-c', `cat ${dir}/*.json >${seen}`], {
+      HEAVY_CLASS: 'gate-wide',
+      HEAVY_SLOT_CLASS: 'test',
+      HEAVY_LABEL: 'gate:wide',
+    });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(seen, 'utf8'))).toMatchObject({
+      class: 'test',
+      label: 'gate:wide',
+    });
+    expect(events().find((e) => e.kind === 'job')).toMatchObject({
+      class: 'gate-wide',
+      label: 'gate:wide',
+    });
+    expect(slotFiles()).toEqual([]);
+    testSlots(cap);
+    const held = heavy(['--wait', '0', '--', 'true'], {
+      HEAVY_CLASS: 'gate-wide',
+      HEAVY_SLOT_CLASS: 'test',
+      HEAVY_LABEL: 'gate:wide',
+    });
+    expect(held.code).toBe(75);
+    expect(leases()).toEqual([
+      expect.objectContaining({
+        action: 'gaveUp',
+        reason: 'cap',
+        class: 'test',
+        label: 'gate:wide',
+      }),
+    ]);
+  });
+
+  it('HEAVY_NOSLOT inside a slotted run: no second slot, even at a full cap; the step is measured and logged', () => {
+    limits({ enforce: true });
+    testSlots(cap - 1); // the outer run takes the last place
+    const seen = join(tmp, 'slots');
+    const dir = join(tmp, 'board/leases/heavy');
+    const step = `HEAVY_NOSLOT=$HEAVY_WRAPPER HEAVY_CLASS=gate-test-fast HEAVY_LABEL=step bash ${join(boardDir, 'heavy.sh')} --wait 0 -- bash -c 'ls ${dir} | wc -l >${seen}'`;
+    const r = heavy(['--wait', '0', '--', 'bash', '-c', step], {
+      HEAVY_CLASS: 'gate-wide',
+      HEAVY_SLOT_CLASS: 'test',
+      HEAVY_LABEL: 'gate:wide',
+    });
+    expect(r.code).toBe(0);
+    expect(readFileSync(seen, 'utf8').trim()).toBe(String(cap)); // the outer's slot, none of the step's own
+    expect(
+      events()
+        .filter((e) => e.kind === 'job')
+        .map((e) => [e.label, e.class]),
+    ).toEqual([
+      ['step', 'gate-test-fast'],
+      ['gate:wide', 'gate-wide'],
+    ]);
+    expect(leases()).toEqual([]);
+  });
+
+  it('HEAVY_NOSLOT from outside a slotted run is no way past the cap: it takes a slot, and waits', () => {
+    limits({ enforce: true });
+    const holder = liveSession();
+    testSlots(cap, holder); // a live slot's wrapper, but not an ancestor of the run
+    for (const v of ['1', String(process.pid), 'x', String(holder)]) {
+      const r = heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test', HEAVY_NOSLOT: v });
+      expect(r.code, v).toBe(75);
+      expect(r.err).toMatch(/is no live slot above this run — taking a slot/);
+    }
+    expect(events().filter((e) => e.kind === 'job')).toEqual([]);
+  });
+
+  it('a `test` job inside a non-`test` slot (a narrow gate, a typecheck) still takes its own `test` slot', () => {
+    limits({ enforce: true });
+    testSlots(cap - 1); // the outer test-fast run takes no `test` place; the step finds the cap full only with it
+    testSlots(1, liveSession());
+    const step = `HEAVY_NOSLOT=$HEAVY_WRAPPER HEAVY_CLASS=test bash ${join(boardDir, 'heavy.sh')} --wait 0 -- true`;
+    const r = heavy(['--', 'bash', '-c', step], {
+      HEAVY_CLASS: 'gate-narrow',
+      HEAVY_SLOT_CLASS: 'test-fast',
+    });
+    expect(r.code).toBe(75);
+    expect(r.err).toMatch(/is no live slot above this run — taking a slot/);
+  });
+
+  it('HEAVY_SLOT_CLASS only raises a slot: anything but test/test-fast is ignored, a test job stays test', () => {
+    limits({ enforce: true });
+    testSlots(cap);
+    for (const sc of ['other', 'test-file', 'test-fast']) {
+      const r = heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test', HEAVY_SLOT_CLASS: sc });
+      expect(r.code, sc).toBe(75);
+    }
+    expect(
+      heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test', HEAVY_SLOT_CLASS: 'other' }).err,
+    ).toMatch(/HEAVY_SLOT_CLASS=other ignored/);
   });
 
   it('is per class, and never touches single-file runs', () => {

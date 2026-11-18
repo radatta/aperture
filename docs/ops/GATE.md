@@ -12,7 +12,7 @@ cores, typecheck and lint ran ×4–9 slower than their median, and a suite held
 ## What `gate:fast` runs
 
 ```
-pnpm gate:fast [--full] [--dry-run] [--base <ref>]
+pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 ```
 
 1. **The diff:** everything since the merge-base with `origin/main` — committed, staged, unstaged and untracked, with
@@ -20,20 +20,53 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
 2. **The plan** (`scripts/src/gate/plan.ts`, pure): for each package, its **whole suite**, a **fast** run, or
    **skip**. A fast run is `vitest related` on the changed modules plus the test files a rule names. The plan is
    printed with the reason for each choice, so a skip is never silent.
-3. **The steps**, in order, each under `scripts/board/heavy.sh`, so the board sees them, budgets them and logs their
-   peaks (SESSION-BOARD.md → _Heavy wrapper_):
+3. **The steps, at once.** The gate re-runs itself under one outer `scripts/board/heavy.sh` slot, then starts every
+   step inside it, each under its own `heavy.sh` with `HEAVY_NOSLOT` naming the outer one: measured and logged, but
+   taking no slot (SESSION-BOARD.md → _Heavy wrapper_).
+   - **Wide** means 3+ packages' tests, or any whole suite. A wide gate counts as a full suite: its slot is a `test`
+     one, so it takes one of the 2 full-suite places, with the same wait and exit 75 (`--wait <sec>` sets the wait,
+     90 s by default). It logs as `gate-wide`.
+   - **Narrow** holds an uncapped `test-fast` slot and logs as `gate-narrow`.
+   - The inner pass plans again after the slot wait. If the diff has widened past a narrow slot meanwhile, it refuses
+     with exit 2; run the gate again.
 
-   | Step                                                                       | Class                                           |
-   | -------------------------------------------------------------------------- | ----------------------------------------------- |
-   | `pnpm typecheck`                                                           | `typecheck`                                     |
-   | `pnpm lint`                                                                | `lint`                                          |
-   | Per fast package: `pnpm --filter <pkg> exec vitest related --run …`        | `test-fast` (a slot, not under the 2-suite cap) |
-   | Per full package: `pnpm --filter <pkg> test` (the whole repo: `pnpm test`) | `test` (the cap applies)                        |
+   | Step                                                                | Class (event)    | Workers                 |
+   | ------------------------------------------------------------------- | ---------------- | ----------------------- |
+   | `pnpm typecheck`                                                    | `gate-typecheck` | — (one core)            |
+   | `pnpm lint`                                                         | `gate-lint`      | — (one core)            |
+   | Per fast package: `pnpm --filter <pkg> exec vitest related --run …` | `gate-test-fast` | below                   |
+   | Per full package (always wide): `pnpm --filter <pkg> test`          | `gate-test`      | below                   |
+   | The whole repo: `pnpm test`, after typecheck and lint, alone        | `gate-test`      | 4 a package, as a suite |
 
-   The exit code is the first failing step's; later steps still run. 75 means `heavy.sh` gave up on the cap, which is
-   a failure, never a pass. A fast run that names tests fails if it selects no file at all (a path or include drift,
-   since a named test always matches itself). The caller's `VITEST_MAX_WORKERS` is dropped: `heavy.sh` sets the
-   container cap, and scripts pins its own 2.
+   Every step logs a `gate-*` class, so the solo baselines (`typecheck`, `lint`, `test`) and the board's slot-job
+   counts stay clean. The outer run is the gate's one slot job.
+
+   - **The budget** bounds what runs at once: 10 tokens wide (`BUDGET`, about a suite's cores), 6 narrow
+     (`NARROW_BUDGET`: one 4-worker package beside tsc and eslint, near the sequential gate's peak, since a narrow
+     gate is uncapped).
+     - A test step costs its workers; typecheck and lint cost 1 each, since `tsc -b` and eslint are single-threaded.
+     - Scripts costs 7 (`SCRIPTS_COST`, one more than app leaves free) at its 2 workers. Its tests spawn shells and
+       CLIs: a wide gate's scripts set ran ~220 threads and ~2.2 GB, an app run's weight; beside app, a replayed
+       wide gate's process tree reached 7 GB against a suite's 5.2 at most. So it never runs beside app, and in a
+       narrow gate it runs alone. A narrow set is often lighter, but a `scripts/board` diff makes it as heavy, so the
+       cost is flat (it costs a light narrow gate ~10 s).
+   - **Start order:** longest first, a smaller step filling any gap: app, extension, typecheck, lint, cdk, lambdas,
+     shared, and scripts last.
+   - **Workers:** a wide gate uses `WIDE_WORKERS` (app 4; extension, lambdas, cdk and scripts 2; shared 1). A narrow
+     one keeps 4 a package, and the budget runs a second package after the first, as the sequential gate did. Scripts
+     always pins 2, as its own test script does.
+   - **The whole suite** costs the full budget, so it runs alone once typecheck and lint are done.
+   - **Output:** each step's output is held and printed as one block when it finishes, under
+     `── <step> · ok|exit n · s ──`. `▶ <step>` marks its start.
+   - **The exit code** is the first failing step's in the printed order (typecheck, lint, then the packages), not in
+     finishing order.
+     - Every step still runs.
+     - 75 means `heavy.sh` gave up on the cap, which is a failure, never a pass.
+     - INT, TERM or HUP to the gate's own pid is passed on to the outer `heavy.sh`, which stops every step. The gate
+       then exits 128+n.
+   - A fast run that names tests fails if it selects no file at all (a path or include drift, since a named test
+     always matches itself).
+   - The caller's `VITEST_MAX_WORKERS`, `HEAVY_*` and `GATE_*` never reach a step.
 
 `--full` runs the whole suite, e.g. to reproduce a red Branch run. `--dry-run` prints the plan and runs nothing.
 
@@ -124,7 +157,7 @@ lanes' own transcripts and archives (0 of the 30 CI runs on those branches faile
 
 The record lives in the lane archive, `faster-lanes/replay/` and `gate-replay/`.
 
-**Cost, measured** before review's wider rules (one run each under `heavy.sh`, against the full suite's median of
+**Cost, measured** with the sequential gate (before gate-parallel), before review's wider rules (one run each under `heavy.sh`, against the full suite's median of
 175 s at ~8.7 container cores). A shared change now also runs lc-e2e, the smoke test and siri-capture's ~10 devcheck
 importers; a Lambda entry-file change also runs the cdk stack tests:
 
@@ -136,6 +169,32 @@ importers; a Lambda entry-file change also runs the cdk stack tests:
 | `scripts/board`          | 54        | 37 s |
 | Extension                | 25        | 62 s |
 | A shared contract change | 153       | 69 s |
+
+**Concurrent steps (gate-parallel, 2026-11-17).** Each diff was replayed through the sequential gate and the
+concurrent one on the same base (`496b934e`), serially, one run each, under `heavy.sh` on the shared container. The
+replay script is in the lane archive, `gate-parallel/replay/`. Lint was warm in both variants; the sequential
+typecheck was partly cold (13–19 s against ~2 s), which is most of the narrow row's gain (about 50 s → 49 s warm).
+
+- **Peak.** For the concurrent gate, its outer run's whole tree. For the sequential gate, the max over its steps.
+- **The yardstick:** 147 green full `pnpm test` runs on 11-17/18. Their median (max) is:
+  - wall 191 s;
+  - 276 (284) threads and 4.6 (5.2) GB RSS in the process tree;
+  - +395 container pids, +3.8 GB container anon;
+  - 8.7 cores.
+
+| Diff                                       | Wall: sequential → concurrent | Concurrent peak: threads · RSS | Container: +pids · +anon · cores |
+| ------------------------------------------ | ----------------------------- | ------------------------------ | -------------------------------- |
+| coach-fixes (wide: 6 packages, via shared) | 285 s → 65 s                  | 287 · 4.0 GB                   | 254 · 3.1 GB · 7.6               |
+| lc-catalog (wide: 6 packages, via shared)  | 174 s → 63 s                  | 286 · 4.2 GB                   | 268 · 3.3 GB · 7.3               |
+| Narrow (app + scripts: PR 202, reverted)   | 62 s → 49 s                   | 104 · 3.4 GB                   | 105 · 2.4 GB · 6.1               |
+
+**Tuning.** A wide gate sits at the suite's thread ceiling and under its median on everything else. Two tunes got it
+there:
+
+- **With scripts beside app and extension** (an earlier tune), a wide gate peaked at 371–389 threads and up to 7.1 GB
+  RSS. Hence `SCRIPTS_COST`.
+- **The narrow budget** keeps a narrow gate near the sequential peak: it saves the typecheck and lint time, and runs
+  its packages one after another. A narrow gate gains little; the win is the wide one.
 
 **Speed knobs** (adopted only if ≥15% faster and stable, at equal strictness):
 

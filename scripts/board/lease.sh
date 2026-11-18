@@ -109,7 +109,7 @@ lease_heavy_acquire() {
 
 # A held wait killed before it ends (Ctrl-C, a Bash-tool timeout) is still a block: gaveUp, interrupted, the real wait.
 _heavy_interrupted() {
-  trap - INT TERM HUP
+  trap '' INT TERM HUP  # ignore, not reset: a second delivery (the gate forwards what the group also got) must not cut the event
   _heavy_event gaveUp "$(jq -c '. + {interrupted: true}' <<<"$1")" "$2" "$3" "$4" "$5" "$(( $(sb_epoch) - $6 ))"
   exit "$7"
 }

@@ -296,7 +296,7 @@ export function formatReport(r: Report): string {
     'Jobs (heavy.sh, not load-test runs) — Δ from start, median / p95 / max:',
     ...r.jobs.map(
       (j) =>
-        `  ${j.class.padEnd(10)} ${String(j.runs).padStart(4)} runs · Δanon ${fmt(j.dAnonMiB, ' MiB')} · Δpids ${fmt(j.dPids)} · wall ${fmt(j.wallSec, 's')}${j.notClean ? ` · ${j.notClean} not clean` : ''}`,
+        `  ${j.class.padEnd(Math.max(10, ...r.jobs.map((x) => x.class.length)))} ${String(j.runs).padStart(4)} runs · Δanon ${fmt(j.dAnonMiB, ' MiB')} · Δpids ${fmt(j.dPids)} · wall ${fmt(j.wallSec, 's')}${j.notClean ? ` · ${j.notClean} not clean` : ''}`,
     ),
     '',
     'Barriers (test cap / hard-line holds; blocks = waited + gave up + denied, a deny and its re-run once):',

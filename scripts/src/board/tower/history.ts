@@ -161,8 +161,19 @@ export function ticks(
   return out;
 }
 
-// Jobs that hold a heavy slot (heavy.sh: test-file and other take none).
-const SLOT = new Set(['test', 'test-fast', 'ui', 'typecheck', 'lint', 'build', 'dev']);
+// Jobs that hold a heavy slot (heavy.sh: test-file and other take none). A gate:fast counts once, as its outer run
+// (gate-wide / gate-narrow); its steps log gate-* classes and hold none.
+const SLOT = new Set([
+  'test',
+  'test-fast',
+  'ui',
+  'typecheck',
+  'lint',
+  'build',
+  'dev',
+  'gate-wide',
+  'gate-narrow',
+]);
 
 export type ConcRow = { bin: string; runs: number; failed: number; p50Sec: number | null };
 

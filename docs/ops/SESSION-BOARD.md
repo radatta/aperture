@@ -137,9 +137,18 @@ typecheck ×1.8, lint ×2, test ×1.2.
 - **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
   measured, no slot), `typecheck`, `lint`, `build`, `dev`, `ui`, `other` (no slot). `HEAVY_CLASS` overrides;
   `HEAVY_LABEL` names the run — **never on argv** (a `pkill -f <label>` once killed the wrong process).
-  `pnpm gate:fast` sets `test-fast` on its per-package `vitest related` runs (`docs/ops/GATE.md`): a slot and the
-  `tuning.test` worker cap (unless the caller set `VITEST_MAX_WORKERS`, as it does for scripts' 2), but not the 2-suite
-  cap, and not a slowdown class (its runs differ too much in size to compare).
+  `test-fast` was the class of a pre-gate-parallel `pnpm gate:fast`'s per-package runs: the `tuning.test` worker
+  cap unless the caller set `VITEST_MAX_WORKERS`, not the 2-suite cap, and not a slowdown class.
+- **One slot for many steps** (`pnpm gate:fast`, docs/ops/GATE.md):
+  - `HEAVY_SLOT_CLASS=test|test-fast` gives the slot, and the cap, a class other than the event's. The gate's outer
+    run logs `gate-wide` / `gate-narrow` but holds a `test` / `test-fast` slot. So a wide gate counts against the
+    2-suite cap while the `test` history stays the suite's.
+  - It can only raise a slot: any other value is ignored, and a `test` job's slot stays `test`.
+  - `heavy.sh` hands its command `HEAVY_WRAPPER=<its pid>`. A step inside the run sets `HEAVY_NOSLOT=<that pid>`:
+    measured and logged under its own (`gate-*`) class, with no slot. Without this, the steps' young-slot costs would
+    stack in the prediction and the gate could wait on itself.
+  - `HEAVY_NOSLOT` is honoured only while that pid is an ancestor holding a live slot. Otherwise the run takes a slot
+    as usual, so it is never a way past the cap.
 - Takes a **heavy slot** (below), runs the command in the background, and samples at 1 Hz: container
   pids / anon / current / PSI / cores, and the command's own process subtree (threads, RSS). Renews the slot
   every 30 s.
@@ -148,8 +157,8 @@ typecheck ×1.8, lint ×2, test ×1.2.
 - **verdict**: `pids-ceiling` (134 with peak pids ≥ 95 % of max), `cgroup-oom` (137 with an `oom_kill` delta
   — should never happen), `outside-cgroup` (137 without one: VM or userland), `throttled` (PSI full past
   `psiFullKill` or a `high` delta), `guard-stop`, `clean`.
-- stdout/stderr pass straight through; the exit code is the command's (`128+sig` if signalled). A
-  background command's stdin is `/dev/null`.
+- stdout/stderr pass straight through; the exit code is the command's (`128+sig` if signalled). INT, TERM and
+  HUP stop the command's whole subtree. A background command's stdin is `/dev/null`.
 - `HEAVY_DURATION=N` stops it after N s (load tests' `dev` cell); `HEAVY_GUARD=1` enforces the stop
   conditions (load tests only).
 - **Container-only tuning** (`limits.json` `tuning.test`: `workspaceConcurrency`, `maxWorkers`) applies only
@@ -171,8 +180,8 @@ GitHub, below. History keeps its old `lease: "dev"` events for their 90 days, an
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
 (not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
-with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 2 `test` slots already
-held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
+with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job — a suite, or a wide `pnpm gate:fast`
+(`HEAVY_SLOT_CLASS=test`) — finding 2 `test` slots already held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
 over the hard line when both apply (it names the holders), other classes and `test-file` runs are never
 capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — and the hard-line wait too: they probe the
 edge on purpose and stop themselves, so a hold would only record a false edge. Past
