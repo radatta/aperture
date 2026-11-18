@@ -3,8 +3,8 @@ import type { ParseTaskResult } from '@aperture/shared';
 import { useParseTask } from '../../data/hooks/useTasks';
 
 // The client's own ceiling on a parse. The server's model budget is ≤ 8s (parseBudgetMs) plus its SSM and
-// DynamoDB reads; past this the capture saves raw rather than waiting out the Lambda's 15s — the parse
-// window is the one stretch where the capture lives only in memory (and the outbox, captureOutbox.ts).
+// DynamoDB reads; past this the preview shows the parse as failed (Retry, or Save as typed) rather than waiting out
+// the Lambda's 15s. The text stays in the field throughout.
 export const PARSE_CLIENT_TIMEOUT_MS = 10_000;
 
 // The parse, or a timeout outcome once `ms` passes with no reply (the late reply is then ignored).
@@ -27,9 +27,9 @@ export interface QuickPreview {
 }
 
 // Quick add's parse state for the capture bar (docs/areas/tasks/quick-add.md). Two callers:
-//   review(text) — parse into a visible preview (Review / ⌘Enter);
-//   parse(text)  — the promise Auto (Enter) saves from; it reuses an in-flight parse of the same text,
-//                  so Enter right after Review never asks the model twice.
+//   review(text) — parse into a visible preview (the first Enter / Send of review-first);
+//   parse(text)  — the parse as a promise; it reuses an in-flight parse of the same text, so it never asks
+//                  the model twice.
 // Staleness is by key, not by event: a preview only shows while its text equals the field's, so an edit
 // hides it, and a late result for an older text lands under that older key and never shows.
 export function useQuickParse() {

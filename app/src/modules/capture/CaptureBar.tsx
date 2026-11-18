@@ -172,8 +172,8 @@ export function CaptureBar({
   useEffect(() => writeParked(parked), [parked]);
   // This page's own outbox entries: their creates are still running here, so the sweep never parks them.
   const ownSent = useRef(new Set<string>());
-  // What the field holds right now, for a save that fails seconds later (Auto waits on the parse first):
-  // its restore must not overwrite a newer capture typed meanwhile.
+  // What the field holds right now, for a save that fails seconds later: its restore must not overwrite a
+  // newer capture typed meanwhile.
   const textRef = useRef(text);
   useLayoutEffect(() => {
     textRef.current = text;
@@ -372,6 +372,7 @@ export function CaptureBar({
     }
     setHeldAck(null);
     const nudgeAtSubmit = nudge;
+    const aiAtSubmit = aiNext;
     setNudge({ dismissed: false, held: false });
     const goesToday = submitted === 'task' && toToday;
     const goesPrivate = submitted === 'log' && privateNext;
@@ -407,7 +408,9 @@ export function CaptureBar({
       // The nudge already had its say on this draft: the retry is one Enter, and a × stays dismissed.
       setNudge({ dismissed: nudgeAtSubmit.dismissed, held: true });
       setReceipt({ mode: submitted, failed: true, at: Date.now() });
-      if (reviewedPreview?.tookSuggestion) quick.reinstate(reviewedPreview);
+      setAiNext(aiAtSubmit); // an as-typed save retries as typed
+      // The reviewed parse comes back with it, tapped chip and all: the retry saves what was reviewed, unparsed.
+      if (reviewedPreview?.result?.ok) quick.reinstate(reviewedPreview);
     };
     const done = () => setReceipt({ mode: submitted, at: Date.now() });
     if (submitted === 'task' && line) saveTask(toCreateInput(line), goesToday, restore, null, {});
@@ -689,7 +692,13 @@ export function CaptureBar({
               />
             )}
           </div>
-          {!shown && <Hint suggesting={suggestions.length > 0} task={mode === 'task'} />}
+          {!shown && (
+            <Hint
+              suggesting={suggestions.length > 0}
+              task={mode === 'task'}
+              reviewing={reviewing}
+            />
+          )}
           {/* On a phone the row can't hold both, so it gives way to a receipt there (a failure
               notice stays until the next capture). Desktop has room for both. */}
           <div
@@ -958,13 +967,23 @@ export function CaptureBar({
 
 // Desktop-only keyboard affordance — on a phone there's no Tab key and the hint is just clutter,
 // which is also why the Send button is never hidden.
-function Hint({ suggesting, task }: { suggesting: boolean; task: boolean }) {
+function Hint({
+  suggesting,
+  task,
+  reviewing,
+}: {
+  suggesting: boolean;
+  task: boolean;
+  reviewing: boolean;
+}) {
   return (
     <Text size="xs" tone="muted" className="hidden pr-1 sm:block">
       {suggesting
         ? 'Tab accepts · Enter saves · Shift+Tab switches'
         : task
-          ? 'Enter reads it, again saves · ⌘Enter saves now'
+          ? reviewing
+            ? 'Enter reads it, again saves · ⌘Enter saves now'
+            : 'Enter saves · Tab switches'
           : 'Tab switches · Enter saves · Shift+Enter new line'}
     </Text>
   );
