@@ -13,6 +13,7 @@ set -u
 source "$(dirname "${BASH_SOURCE[0]}")/watch-lib.sh"
 W=usage-watch
 HARD_ONLY=0
+[ $# -le 1 ] || { echo "usage: usage-watch.sh [--hard-only]" >&2; exit 2; }
 case "${1:-}" in
   --hard-only) HARD_ONLY=1 ;;
   '') ;;

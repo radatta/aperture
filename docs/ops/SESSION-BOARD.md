@@ -586,7 +586,8 @@ restart is ~8 min). An unreadable cgroup, PSI or loadavg reading skips the tick 
 start gate fails closed on the stale file rather than reading a stand-in 0 as an idle box. `pace-control.json` is read
 once a tick: missing is calm; empty or unparseable (a write caught mid-way) keeps the last tick's view; a `since` that
 isn't a whole epoch at or before now (a fraction floors; milliseconds, a string) counts as 0 — hot since 1970, so the
-first judged tick exits 0 (readings under the recovery lines) or 4.
+first judged tick exits 5 if a trigger matches, else 0 (readings under the recovery lines) or 4. A file without a string
+`state` counts as unreadable (the start gate refuses it too), and a trigger without a numeric `load5Below` never matches.
 
 **usage**: the account % is the max weekly `used_percentage` among meter rows from the last `freshSec` (600): a stale
 session reports an old value, a fresh row the live one. ≥ `hardPct` (60) → 8, else ≥ `softPct` (58) → 7, checked every

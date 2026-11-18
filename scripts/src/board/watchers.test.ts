@@ -250,6 +250,33 @@ describe('pace-watch.sh', () => {
     );
   });
 
+  it('a trigger needs a numeric load5Below; a state that isn’t a string keeps the last view', () => {
+    const ctl = (t: object) => hot(T10, { triggers: [t] });
+    expect(pace(T10, 6, all({ ctl: ctl({ lane: 'x', load5Below: '20' }), l5: 15 })).quiet).toBe(
+      true,
+    );
+    expect(pace(T10, 6, all({ ctl: ctl({ lane: 'x', load5Below: 20 }), l5: 15 }))).toMatchObject({
+      status: 5,
+    });
+    // hot, then the file loses its state: still hot, so anon over the trip line doesn't trip
+    const r = pace(T10, 6, (i) => ({
+      anon: 11000,
+      l5: 30,
+      ...(i === 0 && { ctl: hot(T10) }),
+      ...(i === 2 && { ctl: { since: T10 } }),
+    }));
+    expect(r.quiet).toBe(true);
+  });
+
+  it('a missing cgroup file is a skipped tick, not a line of stderr every minute', () => {
+    const d = paceFake(T10, 3);
+    for (const base of ['', 'ticks/1/', 'ticks/2/', 'ticks/3/'])
+      rmSync(join(d, base, 'cg/memory.stat'));
+    const r = run(d, 'pace-watch.sh');
+    expect(r.quiet).toBe(true); // quiet includes an empty stderr
+    expect(existsSync(join(d, 'board/pace.json'))).toBe(false);
+  });
+
   it('an empty or torn pace-control.json keeps the last view: hot stays hot', () => {
     // hot from tick 0; the file is caught empty from tick 2 on; anon over the trip line would trip a calm reading
     const r = pace(T10, 6, (i) => ({
@@ -539,6 +566,7 @@ describe('context-watch.sh', () => {
     expect(context(rows, { APERTURE_CTX_WINDOW: '500000' }).stdout).toBe('10:00 URGENT a 60%\n');
     expect(context(rows, { WINDOW: '1' }).quiet).toBe(true); // screen's WINDOW is ignored
     expect(context(rows, { APERTURE_CTX_WINDOW: '0' }).status).toBe(2);
+    expect(usage([], ['--hard-only', 'x']).status).toBe(2);
     expect(run(fake(T10, []), 'context-watch.sh', ['x']).status).toBe(2);
   });
 });
@@ -587,6 +615,35 @@ describe('limits.json and the scripts themselves', () => {
     expect([flag.status, flag.stderr]).toEqual([
       78,
       expect.stringContaining('flagPct 60 is above urgentPct 50'),
+    ]);
+  });
+
+  it('wake lines say the configured hold and hour', () => {
+    const lim = (edit: (l: typeof LIMITS) => void) => {
+      const l = structuredClone(LIMITS);
+      edit(l);
+      const f = join(tmp('limits-'), 'limits.json');
+      writeFileSync(f, JSON.stringify(l));
+      return { APERTURE_LIMITS_JSON: f };
+    };
+    const cpu = run(
+      paceFake(T10, 8, all({ cores: 9 })),
+      'pace-watch.sh',
+      [],
+      lim((l) => (l.watchers.pace.tripCpuHoldSec = 120)),
+    );
+    expect([cpu.status, cpu.tick]).toEqual([3, 5]);
+    expect(cpu.stdout).toContain('TRIP cpu (2 min)');
+    const hour = run(
+      paceFake(T10, 6, all({ ctl: hot(T10 - 1620), l5: 30 })),
+      'pace-watch.sh',
+      [],
+      lim((l) => (l.watchers.pace.hotExitSec = 1800)),
+    );
+    expect([hour.status, hour.tick, hour.stdout]).toEqual([
+      4,
+      3,
+      expect.stringContaining('HOT 30 min'),
     ]);
   });
 

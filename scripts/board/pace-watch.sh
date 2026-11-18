@@ -43,12 +43,12 @@ anon=() cores=() pcpu=() cpuhot_at=0 idle_at=0 state=calm since=0
 avg() { printf '%s\n' "$@" | awk '{s+=$1} END{if(NR) printf "%.2f", s/NR; else print 0}'; }
 push() { local -n a=$1; a+=("$2"); [ "${#a[@]}" -gt "$WINDOW" ] && a=("${a[@]:1}"); }
 is() { awk "BEGIN{exit !($1)}"; } # a numeric test; every value spliced in is checked numeric first
-u_prev=$(cg_usage_usec) t_prev=$(date +%s)
+u_prev=$(cg_usage_usec 2>/dev/null) t_prev=$(date +%s)
 [[ "$u_prev" =~ ^[0-9]+$ ]] || u_prev=
 
 while :; do
   sleep "$EVERY"
-  now=$(date +%s) u=$(cg_usage_usec) an=$(cg_anon) pc=$(wl_psi cpu some) pmem=$(wl_psi memory full) l5=
+  now=$(date +%s) u=$(cg_usage_usec 2>/dev/null) an=$(cg_anon 2>/dev/null) pc=$(wl_psi cpu some) pmem=$(wl_psi memory full) l5=
   read -r _ l5 _ 2>/dev/null <"$LOADAVG"
   # Any unreadable reading skips the tick, judging nothing: pace.json goes stale and the start gate fails closed,
   # where a stand-in 0 would read as an idle box. The next good tick's CPU rate spans the gap (t_prev stays).
@@ -63,12 +63,16 @@ while :; do
   l=$(jq -c --arg l5 "$l5" '{t, mac:.load, cpus, memFreePct:.mem.freePct, vm:$l5}' "$BOARD_DIR/mac-stats.json" 2>/dev/null) &&
     wl_hist mac-load "$l"
   A=$(avg "${anon[@]}") C=$(avg "${cores[@]}") P=$(avg "${pcpu[@]}")
-  # pace-control.json in one read. Missing: calm since 0. Unreadable or empty (a write caught mid-way): the last tick's
-  # view stands — never a flip to calm. A since that isn't a whole epoch at or before now (a fraction, milliseconds)
-  # counts as 0, so a hot box still exits 0 or 4 instead of breaking the arithmetic or never ending.
+  # pace-control.json in one read: state, since and the held lanes whose trigger is met (a numeric load5Below above
+  # load5). Missing: calm since 0. Unreadable, empty or without a string state (a write caught mid-way): the last tick's
+  # state and since stand, never a flip to calm, and no trigger. A since that isn't a whole epoch at or before now (a
+  # fraction, milliseconds) counts as 0, so a hot box still exits instead of breaking the arithmetic or never ending.
+  hit=
   if [ -e "$CTL" ]; then
-    c=$(jq -r '"\(.state // "calm") \(.since // 0 | if type == "number" then floor else 0 end)"' "$CTL" 2>/dev/null) &&
-      [ -n "$c" ] && read -r state since _ <<<"$c"
+    c=$(jq -r --argjson l5 "$l5" 'select((.state | type) == "string" and .state != "") |
+      [.state, (.since // 0 | if type == "number" then floor else 0 end),
+       ([.triggers[]? | select((.load5Below | type) == "number" and $l5 < .load5Below) | .lane | strings] | join(","))]
+      | @tsv' "$CTL" 2>/dev/null) && [ -n "$c" ] && IFS=$'\t' read -r state since hit <<<"$c"
   else state=calm since=0; fi
   [[ "$since" =~ ^[0-9]+$ ]] && [ "$since" -le "$now" ] || since=0
   jq -n --arg st "$state" --argjson hb "$now" --argjson pid $$ --argjson a "$A" --argjson c "$C" --argjson p "$P" \
@@ -86,8 +90,7 @@ while :; do
     else cpuhot_at=0; fi
   else
     cpuhot_at=0 # a hold starts afresh once the hub marks it calm again
-    # per-lane triggers while hot (e.g. a lane that resumes the moment load5 < 20)
-    hit=$(jq -r --argjson l5 "$l5" '[.triggers[]? | select($l5 < .load5Below) | .lane] | join(",")' "$CTL" 2>/dev/null)
+    # per-lane triggers while hot (e.g. a lane that resumes the moment load5 < 20), from the same read
     [ -n "$hit" ] && { wl_say $W "$line · TRIGGER $hit"; exit 5; }
     if [ $((now - since)) -ge "$REC_MIN" ] && is "$l5+0 < $REC_L5 && $A+0 < $REC_ANON"; then
       wl_say $W "$line · RECOVERED"; exit 0

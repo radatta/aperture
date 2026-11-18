@@ -188,8 +188,9 @@ timeout 65m /workspace/scripts/board/context-watch.sh
 ```
 
 **Restart a watcher after every exit**, once the state that woke it has changed — else exits 4, 5 and 8 fire again
-at once — with the same arguments. One copy of each at a time: stop a running copy by the PID its background task
-gives, never by pattern (a singleton lock is follow-up F274). What each exit asks:
+at once — with the same arguments. One copy of each at a time: stop a running copy with its background task's own stop
+(`timeout` passes TERM on to the watcher), or for pace by the `pid` in `pace.json` — never by pattern (a singleton lock
+is follow-up F274). What each exit asks:
 
 | Exit  | Watcher | Act, then restart                                                                                                |
 | ----- | ------- | ---------------------------------------------------------------------------------------------------------------- |
@@ -199,7 +200,7 @@ gives, never by pattern (a singleton lock is follow-up F274). What each exit ask
 | 4     | pace    | hot an hour: tell the user and decide; re-stamp `since`                                                          |
 | 6     | pace    | idle capacity and a ready `autoStart` lane: start it, or tell the user why not                                   |
 | 7     | usage   | soft stop (below); restart with `--hard-only`, dropped once usage is back under the soft line (the weekly reset) |
-| 8     | usage   | hard stop (below); no restart until usage is under the line                                                      |
+| 8     | usage   | hard stop (below); no restart until usage is under the line: the meter rows' `rl.seven_day.resets_at` says when  |
 | 9     | context | a session at the urgent line: tell the user at once                                                              |
 | 124   | any     | an hour with nothing to report: restart with the same arguments                                                  |
 | 78    | any     | a `limits.json` key is missing or bad (stderr and `<board>/<watcher>.log` name it): fix it, then restart         |
