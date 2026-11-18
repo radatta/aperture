@@ -184,6 +184,7 @@ export type Lifecycle = {
   baseSha: string | null;
   kickoff: string | null;
   overCap: string | null;
+  overPace?: string | null; // absent in records written before the pace gate
   archive: string | null; // where `lanes end` archived localNotes, so a rerun writes there
   startedAt: string;
 };

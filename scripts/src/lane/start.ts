@@ -22,6 +22,7 @@ import type { Deps, Lifecycle } from './state.ts';
 import { MainBusy } from '../board/main-lock.ts';
 import { LANES_THROTTLED, powerSummary } from '../board/tower/health.ts';
 import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
+import { lastStartFile, lastStartText, paceBlock, waitForPace } from './pace.ts';
 
 export const KICKOFF_MAX = 256 * 1024;
 export const CONFIRM_MS = 20_000;
@@ -34,6 +35,8 @@ export type StartArgs = {
   branch: string | undefined;
   kickoff: string | null;
   overCap: string | null;
+  overPace: string | null;
+  waitMin: number | null; // --wait: minutes to wait for the pace gate (cli.ts parseWait)
 };
 
 const refuse = (d: Deps, msg: string, code: number = EXIT.refused) => {
@@ -58,6 +61,10 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
   if (a.overCap !== null && (a.overCap === 'true' || !a.overCap.trim()))
     return refuse(d, '--over-cap wants a reason', EXIT.usage);
+  if (a.overPace !== null && (a.overPace === 'true' || !a.overPace.trim()))
+    return refuse(d, '--over-pace wants a reason', EXIT.usage);
+  if (a.overPace !== null && a.waitMin !== null)
+    return refuse(d, '--wait and --over-pace together: pick one', EXIT.usage);
   if (e.cwdTop !== e.mainRoot)
     return refuse(d, `run it from ${e.mainRoot}: the lifecycle always runs main's code`);
 
@@ -78,6 +85,19 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     );
   const [tmuxSession, serverPid, serverStart] = sessions[0]!.split(' ');
 
+  // The pace gate (pace.ts), before the main-checkout lock so a wait never holds it; re-checked inside the lock.
+  if (a.overPace === null) {
+    const why = a.waitMin === null ? paceBlock(d) : await waitForPace(d, a.waitMin);
+    if (why)
+      return refuse(
+        d,
+        a.waitMin === null
+          ? `pace: ${why}. Retry later, pass --wait, or --over-pace "<reason>".`
+          : `pace: still busy after ${a.waitMin} min: ${why}`,
+        EXIT.later,
+      );
+  }
+
   const wt = worktreePath(e, b);
   const lc = lifecyclePath(e, b);
   const rec: Lifecycle = {
@@ -92,6 +112,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     baseSha: null,
     kickoff: a.kickoff,
     overCap: a.overCap,
+    overPace: a.overPace,
     archive: null,
     startedAt: new Date(d.clock.now()).toISOString(),
   };
@@ -200,9 +221,25 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
           `note: the Mac is on battery or Low Power Mode, ${active.length} lanes active already: suggest ${advice}`,
         );
 
+      // The authoritative pace check: another start may have stamped, or the box turned hot, since the one above.
+      const pace = paceBlock(d);
+      if (pace && a.overPace === null)
+        return refuse(
+          d,
+          `pace: turned busy during the start (${pace}); nothing changed, rerun`,
+          EXIT.later,
+        );
+      if (pace) d.log(`over the pace gate (${pace}): ${a.overPace}`);
+
       if (!d.fs.writeNew(lc, lifecycleText(rec)))
         return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
       undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });
+      // Kept on a rollback: the spacing counts every start that got this far.
+      try {
+        d.fs.write(lastStartFile(e), lastStartText(b, d.clock.now()));
+      } catch (err) {
+        return rollback(`could not record the start time: ${(err as Error).message}`);
+      }
 
       // One sha for every step: another session's fetch moving origin/main mid-start can't split the base.
       try {

@@ -3,6 +3,13 @@
   "enforce": true,
   "concurrency": { "test": 2 },
   "lanes": { "maxActive": 5 },
+  "pace": {
+    "coresBelow": 7.5,
+    "psiCpuBelow": 40,
+    "anonMiBBelow": 9000,
+    "spacingSec": 120,
+    "staleSec": 180
+  },
   "measuredAt": "2026-10-14T02:52:03Z",
   "measuredLimits": { "pidsMax": 4096, "highMiB": 18432 },
   "container": {

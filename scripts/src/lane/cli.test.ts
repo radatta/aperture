@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { deps, macStats, world } from './fakes.ts';
+import { deps, macStats, pace, porcelain, world } from './fakes.ts';
 import { usageKeys } from '../bot/help.ts';
 import { FLAGS, USAGE, main } from './cli.ts';
 
@@ -43,6 +43,56 @@ describe('lane cli', () => {
     err.mockRestore();
   });
 
+  it('--wait takes nothing or whole minutes 1 to 30; anything else exits 2 before deps', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const argv of [
+      ['start', '--wait', 'new-lane'], // the branch swallowed as the value
+      ['start', 'x', '--wait=0'],
+      ['start', 'x', '--wait=31'],
+      ['start', 'x', '--wait', '2.5'],
+    ])
+      expect(await main(argv, never), argv.join(' ')).toBe(2);
+    expect(err.mock.calls.flat().join('\n')).toMatch(
+      /--wait takes whole minutes, 1 to 30: --wait=10/,
+    );
+    expect(await main(['start', 'x', '--over-pace'], never)).toBe(2);
+    err.mockRestore();
+  });
+
+  it('--wait bare, =n or n reaches start as minutes', async () => {
+    for (const [argv, min] of [
+      [['start', 'new-lane', '--wait'], 5],
+      [['start', 'new-lane', '--wait=1'], 1],
+      [['start', '--wait', '2', 'new-lane'], 2],
+    ] as const) {
+      const w = world();
+      const t = deps(w, [['tmux display', '$0 111 222']]);
+      writeFileSync(join(w.board, 'pace.json'), pace(t.clock.now(), { state: 'hot' }));
+      expect(await main([...argv], () => t.d), argv.join(' ')).toBe(75);
+      expect(t.out()).toMatch(
+        new RegExp(`waiting \\(up to ${min} min\\)[^]*still busy after ${min} min`),
+      );
+    }
+  });
+
+  it('status shows an over-pace reason from the lifecycle record', async () => {
+    const w = world();
+    const t = deps(w, [['git worktree list', porcelain(w.main, ['busy-lane'])]]);
+    mkdirSync(join(w.board, 'lifecycle'), { recursive: true });
+    writeFileSync(
+      join(w.board, 'lifecycle', 'busy-lane.json'),
+      JSON.stringify({
+        v: 1,
+        branch: 'busy-lane',
+        windowId: '@3',
+        overCap: null,
+        overPace: 'hub: box idle',
+      }),
+    );
+    expect(await main(['status'], () => t.d)).toBe(0);
+    expect(t.out()).toMatch(/^ {2}busy-lane: lifecycle, window @3, over pace: hub: box idle$/m);
+  });
+
   it('every usage command has a flags entry', () => {
     expect(usageKeys(USAGE).sort()).toEqual(Object.keys(FLAGS).sort());
   });
@@ -75,7 +125,7 @@ describe('lane cli', () => {
   });
 
   it('start.ts and end.ts reach processes and the disk only through the seam', () => {
-    for (const f of ['start.ts', 'end.ts', 'state.ts', 'mac-line.ts']) {
+    for (const f of ['start.ts', 'end.ts', 'state.ts', 'mac-line.ts', 'pace.ts']) {
       const src = readFileSync(new URL(f, import.meta.url), 'utf8');
       expect(src, f).not.toMatch(/from 'node:(child_process|fs)'/);
     }

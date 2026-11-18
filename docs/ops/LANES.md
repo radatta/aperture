@@ -6,7 +6,7 @@ window, all named after the branch. It is born at kickoff with `pnpm lanes start
 `scripts/src/lane/`.
 
 ```
-pnpm lanes start <branch> [--kickoff <file>] [--over-cap "<reason>"]
+pnpm lanes start <branch> [--kickoff <file>] [--over-cap "<reason>"] [--wait[=<min>] | --over-pace "<reason>"]
 pnpm lanes end <branch> [--force-abandon "<reason>"]
 pnpm lanes status
 ```
@@ -17,7 +17,7 @@ Exit codes:
 - 1: failed midway (says what was rolled back and what is left), or a failed fetch or GitHub read (nothing changed)
 - 2: usage or a bad name
 - 3: refused, with nothing changed
-- 75: refused for now (cap full, deploy still running, the main checkout busy): wait or act, then rerun
+- 75: refused for now (cap full, the pace gate busy, deploy still running, the main checkout busy): wait or act, then rerun
 
 `status` prints the active lanes against the cap, then the Mac's `mac:` power line (battery, Low Power Mode,
 thermal; `docs/ops/HUB.md` → _Lanes on battery_).
@@ -39,9 +39,36 @@ It refuses, changing nothing, on any of these:
 - a branch of that name, locally or on origin
 - an existing worktree path or lifecycle record
 - a window of that name
+- **the pace gate** (exit 75): the container is busy, the pace file is missing or stale, or a lane started too
+  recently (below)
 - **the cap** (exit 75): it names every active lane and its phase
 - **the main checkout busy** (exit 75): another `lanes start` or a sync-main (a `lanes end` finishing, or
   `pnpm board sync-main`) held the main-checkout lock past its 120 s wait (below)
+
+**The pace gate.** Before the main-checkout lock, start reads `<board>/pace.json`, which the hub's pace watcher
+(`pace-watch.sh` in the board dir, untracked) rewrites every minute, and `<board>/lane-last-start.json`. It starts
+only when all of these hold, else it refuses with exit 75 and one line naming each reason:
+
+- `state` is `calm`
+- the 5-sample averages are under the limits: `avg.cores` < 7.5, `avg.psiCpu` < 40, `avg.anonMiB` < 9000 (`load5`
+  isn't judged: it counts I/O-waiting tasks here and sat at 12 or more in a third of calm samples, 2026-11-17)
+- the file is fresh: `heartbeat` at most 180 s old (and at most 60 s ahead)
+- the last start was at least 120 s ago (a junk or future stamp is ignored, so spacing never blocks for good)
+
+The limits are `scripts/board/limits.json` → `pace`, each falling back to that default. A missing, stale or
+unreadable file **fails closed**: a dead watcher is the silent failure the gate exists for, and `--over-pace` always
+goes past it, so the hub is never stranded; the line names the watcher to restart. The board dir moves with
+`APERTURE_BOARD_DIR`, and no watcher writes anywhere else, so a start against another board dir needs `--over-pace`.
+
+- `--wait[=<min>]` polls every 30 s for up to `<min>` minutes (default 5, at most 30), logging the reasons once each
+  time they change, then starts, or exits 75 with the last reason. The install follows the wait, so a caller gives
+  it the wait plus 600 s or runs it in the background.
+- `--over-pace "<reason>"` skips the gate, logs what it would have refused on, and keeps the reason in the lifecycle
+  record (`pnpm lanes status` shows it). It and `--wait` together exit 2.
+- Inside the lock, just before the claim, start checks again, so a start that raced another past the first check
+  refuses (exit 75, nothing changed) rather than land inside its spacing. Right after the claim it writes
+  `lane-last-start.json` (`{v, at: epoch s, branch}`); a start that later rolls back keeps it, since its install load
+  was real.
 
 **The main-checkout lock** (F155). From the dirty check through `worktree add`, start holds
 `/tmp/aperture-main-checkout.lock` (`APERTURE_MAIN_LOCK`; `scripts/src/board/main-lock.ts`), as sync-main does from
@@ -56,7 +83,8 @@ Mode and 3 lanes already active, start prints a `note:` with the ≤ 3 advice an
 
 Then it runs these steps, each registering an undo:
 
-1. Claims the lifecycle record (`O_EXCL`, so two starts can't race), under the main-checkout lock with steps 2–3.
+1. Claims the lifecycle record (`O_EXCL`, so two starts can't race) and stamps `lane-last-start.json`, under the
+   main-checkout lock with steps 2–3.
 2. Detaches the main checkout at `origin/main`'s sha, read once: every later step uses that sha, so another session's
    fetch mid-start can't split the base.
 3. Runs `git worktree add --no-track -b <branch> .claude/worktrees/<branch> <that sha>`. If it fails after git made the
@@ -179,12 +207,13 @@ the same reason, an abandon reason must not quote the delete command.
 
 ## State
 
-| What                       | Where                                                                                                                                                                                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase (the tower reads)    | `<board>/lanes/<branch>.json` (`docs/ops/TOWER.md` → _Lane files_)                                                                                                                                                                                |
-| Window identity, the start | `<board>/lifecycle/<branch>.json`: window and pane ids, the tmux server's pid and start time, base sha, kickoff path, over-cap reason, the archive `lanes end` chose. Its own directory, because `writeLane` rebuilds a lane file from known keys |
-| The cap                    | `scripts/board/limits.json` → `lanes.maxActive`                                                                                                                                                                                                   |
-| The end record             | `/workspace/localNotes/archive/<branch>/` → `mac-cleanup.txt`, `lane-end.txt`                                                                                                                                                                     |
+| What                       | Where                                                                                                                                                                                                                                                            |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase (the tower reads)    | `<board>/lanes/<branch>.json` (`docs/ops/TOWER.md` → _Lane files_)                                                                                                                                                                                               |
+| Window identity, the start | `<board>/lifecycle/<branch>.json`: window and pane ids, the tmux server's pid and start time, base sha, kickoff path, over-cap and over-pace reasons, the archive `lanes end` chose. Its own directory, because `writeLane` rebuilds a lane file from known keys |
+| The cap                    | `scripts/board/limits.json` → `lanes.maxActive`                                                                                                                                                                                                                  |
+| The pace gate              | `<board>/pace.json` (the hub's watcher), `<board>/lane-last-start.json` (the last start), `scripts/board/limits.json` → `pace`                                                                                                                                   |
+| The end record             | `/workspace/localNotes/archive/<branch>/` → `mac-cleanup.txt`, `lane-end.txt`                                                                                                                                                                                    |
 
 **Legacy lanes.** A lane started before these commands has no lifecycle record. `lanes end` still archives
 (recording a bare record for the archive), removes and prints, but leaves the window for its owner to close.

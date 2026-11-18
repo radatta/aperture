@@ -17,6 +17,7 @@ import { REPO_SLUG } from '../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
 import { realFs } from './archive.ts';
 import { end } from './end.ts';
+import { WAIT_MAX_MIN, parseWait } from './pace.ts';
 import { start } from './start.ts';
 import {
   EXIT,
@@ -30,9 +31,10 @@ import {
 import type { Deps, Lanes } from './state.ts';
 
 export const USAGE = `pnpm lanes <command>   (run from the main checkout; docs/ops/LANES.md)
-  start <branch> [--kickoff <file>] [--over-cap "<reason>"]
+  start <branch> [--kickoff <file>] [--over-cap "<reason>"] [--wait[=<min>] | --over-pace "<reason>"]
         worktree off origin/main + install + a tmux window running Claude named <branch> (the kickoff its first
-        message) + the board lane. Give it a 600 s timeout: the install is in it.
+        message) + the board lane. Give it a 600 s timeout: the install is in it (with --wait, add the wait).
+        Refuses (75) while the pace gate is busy: --wait polls up to <min> (default 5, max 30) first.
   end <branch> [--force-abandon "<reason>"]
         merged PR + green main deploy (or the reason) → archive localNotes, remove the worktree, clear the lane,
         print the maintainer's Mac line, close the lane's window by id
@@ -111,7 +113,7 @@ export function status(d: Deps): number {
   for (const a of active) {
     const r = readLifecycle(d, a.branch);
     d.log(
-      `  ${a.branch}: ${a.why}${r?.windowId ? `, window ${r.windowId}` : ''}${r?.overCap ? `, over cap: ${r.overCap}` : ''}`,
+      `  ${a.branch}: ${a.why}${r?.windowId ? `, window ${r.windowId}` : ''}${r?.overCap ? `, over cap: ${r.overCap}` : ''}${r?.overPace ? `, over pace: ${r.overPace}` : ''}`,
     );
   }
   return EXIT.ok;
@@ -119,7 +121,7 @@ export function status(d: Deps): number {
 
 // Each command's flags (bot/help.ts cliGuard): help or a stray argument runs nothing.
 export const FLAGS: Record<string, Spec> = {
-  start: { flags: ['kickoff', 'over-cap'], args: 1 },
+  start: { flags: ['kickoff', 'over-cap', 'over-pace'], optional: ['wait'], args: 1 },
   end: { flags: ['force-abandon'], args: 1 },
   status: { args: 0 },
 };
@@ -133,6 +135,11 @@ export async function main(argv: string[], deps: () => Deps = realDeps): Promise
     return EXIT.usage;
   }
   const { positional, flags } = parseArgs(rest);
+  const wait = parseWait(flag(flags, 'wait')); // before deps: `--wait <branch>` swallows the branch
+  if (wait === 'bad') {
+    console.error(`--wait takes whole minutes, 1 to ${WAIT_MAX_MIN}: --wait=10\n${USAGE}`);
+    return EXIT.usage;
+  }
   const d = deps();
   if (cmd === 'status') return status(d);
   if (cmd === 'end')
@@ -142,6 +149,8 @@ export async function main(argv: string[], deps: () => Deps = realDeps): Promise
     branch: positional[0],
     kickoff: kickoff === null ? null : resolve(d.env.invokedIn, kickoff),
     overCap: flag(flags, 'over-cap'),
+    overPace: flag(flags, 'over-pace'),
+    waitMin: wait,
   });
 }
 
