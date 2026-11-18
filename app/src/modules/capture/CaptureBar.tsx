@@ -732,7 +732,11 @@ export function CaptureBar({
             type="button"
             // Keep focus (and the phone keyboard) in the field, like the suggestion chips do.
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setAiNext((v) => !v)}
+            onClick={() => {
+              // Off means as typed: a parse already showing goes, or the next press would save it.
+              if (aiNext) clearPreview();
+              setAiNext(!aiNext);
+            }}
             aria-pressed={aiNext}
             aria-label="Read with AI"
             title={
