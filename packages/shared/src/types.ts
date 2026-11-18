@@ -426,31 +426,20 @@ export interface SittingHeadRow {
 }
 
 // The extension's coaching, as events of type 'coach' (docs/areas/recruiting/index.md → _Coach events_).
-// The payload is the extension's; the server reads it defensively (coachMarkOf) and keeps it verbatim.
-export type CoachEventKind = 'config' | 'trace' | 'trace-skip' | 'untraced-submit' | 'nudge-shown';
+// The payload is the extension's; the server reads it defensively (coachMarkOf) and keeps it verbatim. Any other
+// kind (2.1's retired trace card among them) is stored with `kind: null` and folds nothing.
+export type CoachEventKind = 'config' | 'nudge-shown';
 export type CoachEventPayload =
-  | { kind: 'config'; trace: boolean; hold: boolean; nudge: boolean } // once per sitting: what was on
-  | {
-      kind: 'trace';
-      // the user's hand-traced inputs, each ≤ 300 chars; an empty one wasn't traced
-      inputs: { empty: string | null; boundary: string | null; normal: string | null };
-      ms: number; // time spent on the card
-    }
-  | { kind: 'trace-skip'; ms: number }
-  | { kind: 'untraced-submit' } // a Submit seen with no trace or skip before it
+  | { kind: 'config'; nudge: boolean } // once per sitting: whether the resubmit note is on
   | { kind: 'nudge-shown'; gapMs: number }; // a resubmit within ~60 s of a failed one
-// What a coach event's head row keeps: its kind (null when unknown — stored, folds nothing), how many
-// inputs a trace filled, and a config's switches.
+// What a coach event's head row keeps: its kind (null when unknown — stored, folds nothing) and a config's switch.
 export interface CoachMark {
   kind: CoachEventKind | null;
-  inputs: number | null;
-  config: { trace: boolean; hold: boolean; nudge: boolean } | null;
+  config: { nudge: boolean } | null;
 }
-// The sitting's coaching, folded from its coach rows. `trace` is the state at the first submit: three
-// inputs traced, one or two, skipped, or a submit with no trace (`none`); null until any of those.
+// The sitting's coaching, folded from its coach rows.
 export interface SittingCoach {
-  config: { trace: boolean; hold: boolean; nudge: boolean } | null;
-  trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
+  config: { nudge: boolean } | null;
   nudges: number;
 }
 

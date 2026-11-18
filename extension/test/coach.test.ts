@@ -19,13 +19,8 @@ describe('settings', () => {
     expect(coach.KEYS).toEqual({ nudge: 'coachNudge' });
     expect(coach.RETIRED_KEYS).toEqual(['coachTrace', 'coachHold']);
   });
-  it('config says the card and its hold are off, and whether the note is on', () => {
-    expect(coach.configPayload(ON)).toEqual({
-      kind: 'config',
-      trace: false,
-      hold: false,
-      nudge: true,
-    });
+  it('config says whether the note is on, and nothing else', () => {
+    expect(coach.configPayload(ON)).toEqual({ kind: 'config', nudge: true });
     expect(coach.configPayload(coach.settingsOf({ coachNudge: false })).nudge).toBe(false);
   });
   it('wraps a payload as a coach event', () => {
@@ -72,8 +67,8 @@ describe('against the shared contract', () => {
     const events = payloads.map((p, i) => coach.event(p, ulid.ulid, 1_800_000_000_000 + i));
     expect(() => normalizeSittingEvents({ sittingId: ulid.ulid(), events })).not.toThrow();
     expect(payloads.map((p) => coachMarkOf(p))).toEqual([
-      { kind: 'config', inputs: null, config: { trace: false, hold: false, nudge: true } },
-      { kind: 'nudge-shown', inputs: null, config: null },
+      { kind: 'config', config: { nudge: true } },
+      { kind: 'nudge-shown', config: null },
     ]);
   });
 });

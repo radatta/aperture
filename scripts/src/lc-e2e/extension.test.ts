@@ -242,17 +242,13 @@ describe.skipIf(!playwrightAvailable)('the extension, end to end against the loc
     expect(await page.evaluate<boolean>("!!document.querySelector('aperture-lc-coach')")).toBe(
       false,
     ); // no card host at all
-    // The coach's config landed and folded: the card and its hold off, the note on. Whether the sitting was
-    // traced is the server's call from the code, not the extension's.
+    // The coach's config landed and folded: the note on, nothing of the retired card. Whether the sitting was
+    // traced is the server's call from the code (summary.commentTrace), not the extension's.
     const coached = await until(async () => {
       const [s] = await rpc<Sitting[]>('listSittings');
       return s?.summary.coach?.config ? s : null;
     });
-    expect(coached.summary.coach).toMatchObject({
-      config: { trace: false, hold: false, nudge: true },
-      nudges: 0,
-    });
-    expect(coached.summary.coach?.trace).not.toBe('traced');
+    expect(coached.summary.coach).toEqual({ config: { nudge: true }, nudges: 0 });
     const detail = await until(async () => {
       const d = await rpc<{ live: { code: string } | null; problem: unknown }>(
         'getSitting',

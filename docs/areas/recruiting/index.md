@@ -151,25 +151,26 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 
 ### Coach events
 
-The extension's coaching (the trace card at the first Submit, the resubmit nudge — LeetCode coach epic, PR C) reports
-as events of type `coach`, a head event like a run: a compact head row (`coachMarkOf`: the kind, how many of the
-three inputs a trace filled, a config's switches) and the payload kept forever beside it. The payload is
-`CoachEventPayload` in `packages/shared/src/types.ts`: `config` (what was on: trace card, hold, nudge — once per
-sitting, so weeks with the gate on and off can be told apart), `trace` (the user's empty/boundary/normal inputs, each ≤ 300
-chars), `trace-skip`, `untraced-submit` (a Submit seen with neither) and `nudge-shown`; ≤ 4 KB each. They fold into
-`summary.coach` — `trace` is the state **at the first submit** (three inputs `traced`, one or two `partial`, none or a
-skip `skipped`, a submit seen untraced `none`; a trace after the first submit changes nothing), plus the config and
-a nudge count. A kind the server doesn't know is stored (its payload in full) and folds nothing — its head row keeps
-`kind: null` for good, so an extension that ships a kind first loses that kind's fold on those sittings unless a
-backfill re-reads the payloads. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
-extension that sends none — so readers take `summary.coach ?? null`. **The trace card is retired (extension
-2.2.0):** the extension now sends only `config` (with `trace` and `hold` false) and `nudge-shown`; `trace`,
-`trace-skip` and `untraced-submit` stay in the type and the fold for the sittings that carry them, and whether a
-newer sitting was traced is decided server-side, from the code.
+The extension's coaching (the resubmit note — LeetCode coach epic, PR C) reports as events of type `coach`, a head
+event like a run: a compact head row (`coachMarkOf`: the kind and a config's switch) and the payload kept forever
+beside it. The payload is `CoachEventPayload` in `packages/shared/src/types.ts`: `config` (whether the note is on,
+once per sitting) and `nudge-shown` (a resubmit within ~60 s of a failed one, with the gap); ≤ 4 KB each. They fold
+into `summary.coach = {config: {nudge} | null, nudges}`. A kind the server doesn't know is stored (its payload in
+full) and folds nothing — its head row keeps `kind: null` for good, so an extension that ships a kind first loses
+that kind's fold on those sittings unless a backfill re-reads the payloads. `summary.coach` is absent until a coach
+event folds — on every sitting before them, and with an extension that sends none — so readers take
+`summary.coach ?? null`.
+
+**The trace card is gone (extension 2.2.0, extension-tidy).** Its kinds (`trace`, `trace-skip`, `untraced-submit`)
+and the config's `trace`/`hold` switches were removed end to end, with no compatibility path (the maintainer,
+2026-11-17). A 2.1 extension still sending them until it's rebuilt is answered 200: its card events land on the
+unknown-kind path above (stored, folding nothing), and its config folds `nudge` alone. A head row or summary stored
+before (a card kind, a config's `trace`/`hold`, a summary's `trace`) folds only its `nudge`; the next coach fold drops
+the rest. The card's rows on prod are removed by a one-off `aws` CLI cleanup after the merge (the PR's _Needs you_), with
+no code left behind. Whether a sitting was traced is decided server-side, from the code:
 
 **The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
-the code itself is the only traced/untraced source (the card is going: extension-tidy removes it; nothing here reads
-it). At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in
+the code itself is the only traced/untraced source. At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in
 the same batch) whose code holds a trace comment becomes the server's own head row — type `trace-comment` (never an
 extension event), at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`). The rule
 (`traceComment.ts`, no model): a block is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or

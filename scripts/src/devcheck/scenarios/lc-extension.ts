@@ -879,7 +879,7 @@ export const lcExtension: Scenario = {
       id: 'ext-no-card',
       entry: 'extension',
       kind: 'nominal',
-      what: 'The first real Submit of a sitting goes straight to LeetCode: no card, no hold, no opener; the sitting folds config with the card and hold off',
+      what: 'The first real Submit of a sitting goes straight to LeetCode: no card, no hold, no opener; the sitting folds config as the note’s switch alone',
       offDev: {
         file: 'scripts/src/lc-e2e/extension.test.ts',
         test: 'Start resets the editor, starts the timer and opens a sitting; the first Submit goes straight through, no trace card; a submit lands with its verdict',
@@ -890,10 +890,10 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-config',
       entry: 'extension',
       kind: 'nominal',
-      what: '`config` goes once a sitting (trace and hold false), not again on a reload; a real or page-script Submit sends no trace, trace-skip or untraced-submit',
+      what: '`config` goes once a sitting (`{kind, nudge}` only), not again on a reload; a real or page-script Submit sends no trace, trace-skip or untraced-submit',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'sends config once a sitting (card and hold off), never again on a reload, and nothing for a submit',
+        test: 'sends config once a sitting (the note’s switch alone), never again on a reload, and nothing for a submit',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },

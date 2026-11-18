@@ -33,8 +33,8 @@
   }
 
   const event = (payload, mintId, at) => ({ id: mintId(), type: 'coach', at, payload });
-  // The card and its hold are gone: `trace` and `hold` are always false, so a sitting says which build it ran.
-  const configPayload = (s) => ({ kind: 'config', trace: false, hold: false, nudge: s.nudge });
+  // Whether the note is on, once a sitting.
+  const configPayload = (s) => ({ kind: 'config', nudge: s.nudge });
 
   return {
     KEYS,

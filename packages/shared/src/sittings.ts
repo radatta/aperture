@@ -67,7 +67,7 @@ export const SITTING_PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = 
   submitDetails: 96 * 1024,
   note: 16 * 1024,
   timer: 1024,
-  coach: 4 * 1024, // three ≤ 300-char inputs, even at 4 UTF-8 bytes a character
+  coach: 4 * 1024, // ours are tiny; this still takes a 2.1 extension's card event (three ≤ 300-char inputs) as an unknown kind
   replay: 64 * 1024,
 };
 export const SITTING_PROBLEM_MAX = 64 * 1024;
@@ -460,53 +460,27 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     }
   } else if (r.type === 'note') next.notes = s.notes + 1;
   else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
-  else if (r.type === 'coach' && r.coach?.kind) next.coach = foldCoach(s.coach, r.coach, s.submits);
+  else if (r.type === 'coach' && r.coach?.kind) next.coach = foldCoach(s.coach, r.coach);
   else if (r.type === 'trace-comment' && s.runs + s.submits === 0) next.commentTrace = 'traced';
   return next;
 }
 
-// --- Coach events (the extension's trace card and resubmit nudge) ---
-const COACH_KINDS: readonly CoachEventKind[] = [
-  'config',
-  'trace',
-  'trace-skip',
-  'untraced-submit',
-  'nudge-shown',
-];
-const TRACE_INPUTS = ['empty', 'boundary', 'normal'] as const;
-const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
-// What a coach event's head row keeps, read defensively from the extension's payload: an unknown kind is
-// kept as null (its payload is still stored) and folds nothing; a trace counts its non-blank inputs.
+// --- Coach events (the extension's resubmit note) ---
+const COACH_KINDS: readonly CoachEventKind[] = ['config', 'nudge-shown'];
+// What a coach event's head row keeps, read defensively from the extension's payload: an unknown kind is kept
+// as null (its payload is still stored) and folds nothing. A config keeps `nudge` alone, whatever else it carries.
 export function coachMarkOf(payload: unknown): CoachMark {
   const p = obj(payload);
   const kind = COACH_KINDS.find((k) => k === p?.kind) ?? null;
-  const inputs = obj(p?.inputs);
-  const sw = { trace: bool(p?.trace), hold: bool(p?.hold), nudge: bool(p?.nudge) };
-  return {
-    kind,
-    inputs:
-      kind === 'trace'
-        ? TRACE_INPUTS.filter((k) => {
-            const v = inputs?.[k];
-            return typeof v === 'string' && v.trim() !== '';
-          }).length
-        : null,
-    config:
-      kind === 'config' && sw.trace !== null && sw.hold !== null && sw.nudge !== null
-        ? { trace: sw.trace, hold: sw.hold, nudge: sw.nudge }
-        : null,
-  };
+  const nudge = p?.nudge;
+  return { kind, config: kind === 'config' && typeof nudge === 'boolean' ? { nudge } : null };
 }
-// One coach row into the sitting's coaching. The trace state is what stood at the first submit: a trace or
-// a skip counts only before it (the latest wins), and a submit seen untraced marks `none` unless one came first.
-function foldCoach(c: SittingCoach | undefined, m: CoachMark, submits: number): SittingCoach {
-  const next: SittingCoach = c ? { ...c } : { config: null, trace: null, nudges: 0 };
-  if (m.kind === 'config') next.config = m.config ?? next.config;
+// One coach row into the sitting's coaching. The config is rebuilt from `nudge` alone, so a head row stored
+// before 2.2 (with the card's switches) carries nothing else into the summary.
+function foldCoach(c: SittingCoach | undefined, m: CoachMark): SittingCoach {
+  const next: SittingCoach = { config: c?.config ? { nudge: c.config.nudge } : null, nudges: c?.nudges ?? 0 };
+  if (m.kind === 'config' && m.config) next.config = { nudge: m.config.nudge };
   else if (m.kind === 'nudge-shown') next.nudges += 1;
-  else if (m.kind === 'untraced-submit') next.trace ??= 'none';
-  else if (submits === 0)
-    next.trace =
-      m.kind === 'trace-skip' || !m.inputs ? 'skipped' : m.inputs === 3 ? 'traced' : 'partial';
   return next;
 }
 // The server's head row for a snapshot whose code holds a trace comment (traceComment.ts): its own type, at the

@@ -323,14 +323,9 @@ describe('the overlay on a LeetCode problem', () => {
     const withSubmit = messages(ext, 'enqueue').find((m) =>
       m.events!.some((e) => e.type === 'submit'),
     )!;
-    // The coach's config went with them (once a sitting): the retired card and its hold off.
+    // The coach's config went with them (once a sitting): the note on, and nothing of the retired card.
     expect(withSubmit.events!.map((e) => e.type)).toEqual(['snapshot', 'coach', 'submit']);
-    expect(withSubmit.events![1]!.payload).toEqual({
-      kind: 'config',
-      trace: false,
-      hold: false,
-      nudge: true,
-    });
+    expect(withSubmit.events![1]!.payload).toEqual({ kind: 'config', nudge: true });
     expect((withSubmit.events![0]!.payload as { code: string }).code).toContain('return [0, 1]');
     const submit = sentEvents(ext).find((e) => e.type === 'submit')!;
     expect(submit.payload).toMatchObject({
@@ -1723,7 +1718,7 @@ describe('the resubmit note, and no trace card', () => {
     noCard(p);
   }, 30_000);
 
-  it('sends config once a sitting (card and hold off), never again on a reload, and nothing for a submit', async () => {
+  it('sends config once a sitting (the note’s switch alone), never again on a reload, and nothing for a submit', async () => {
     const { p, ext } = await sitting();
     trustedClick(p.submitBtn()); // a real click
     await until(() => p.fake().submits === 1, 6000);
@@ -1733,7 +1728,7 @@ describe('the resubmit note, and no trace card', () => {
     const r = open('/problems/two-sum/', ext); // a reload, mid-sitting
     await until(() => r.phase() === 'active', 6000);
     await settle(4000);
-    expect(coachEvents(ext)).toEqual([{ kind: 'config', trace: false, hold: false, nudge: true }]);
+    expect(coachEvents(ext)).toEqual([{ kind: 'config', nudge: true }]);
     expect(bound(ext).coach).toEqual({ config: true });
   }, 30_000);
 
