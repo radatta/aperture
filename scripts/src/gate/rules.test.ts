@@ -6,8 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { FIXTURE_SUITE } from '../fixture-inputs.ts';
 import { isTest } from './plan.ts';
+import { BLIND, CODE, checkRegistry, formatProblems, type Problem } from './registry.ts';
 import {
   ALWAYS_RUN,
   INPUT_RULES,
@@ -32,16 +32,9 @@ const tracked = [
 const read = (p: string) => readFileSync(join(ROOT, p), 'utf8');
 const literal = (p: string) => !p.includes('*') && !p.includes('<pkg>');
 const exists = (p: string) => existsSync(join(ROOT, p));
-
-// File reads, raw imports, spawns, imports by a computed specifier and any `new URL(…, import.meta.url)` (a path
-// built from this file's location): what vitest's import graph can't follow.
-const BLIND =
-  /\b(?:readFileSync|readdirSync|existsSync|statSync|cpSync|execFileSync|execSync|spawnSync|spawn|execFile|createRequire)\(|import\.meta\.glob|\?raw['"]|\bimport\((?!\s*(?:(?:'[^']*'|"[^"]*"|`[^`$]*`)\s*[,)]|\)))|new URL\([^;]*?\bimport\.meta\.url/;
-const CODE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
-// The gate's own files: any change to them is REPO_FULL, and they name the API in their rules and strings.
-const GATE_DIR = 'scripts/src/gate/';
-// Directories whose every test is graph-blind through a shared loader, named whole by a rule.
-const DIR_CLAIMS = ['extension/test/'];
+// The gate's own pre-check (registry.ts) on the real tree: what `pnpm gate:fast` refuses up front, CI refuses too.
+const problems = checkRegistry(tracked, read);
+const only = (kind: Problem['kind']) => formatProblems(problems.filter((p) => p.kind === kind));
 
 describe('gate rules', () => {
   it('every literal path a rule names exists', () => {
@@ -153,27 +146,12 @@ describe('gate rules', () => {
   });
 
   it('every graph-blind test file and module is registered', () => {
-    const explicit = new Set([
-      ...ALWAYS_RUN,
-      ...INPUT_RULES.flatMap((r) => r.tests.filter((t) => !t.endsWith('/'))),
-      ...Object.keys(SELF_CONTAINED),
-      ...Object.keys(MODULE_READERS),
-      FIXTURE_SUITE,
-    ]);
-    const candidates = tracked.filter(
-      (f) =>
-        CODE.test(f) &&
-        !f.startsWith(GATE_DIR) &&
-        !f.includes('/node_modules/') &&
-        PACKAGES.some((p) => f.startsWith(`${p.dir}/`)),
-    );
-    const unregistered = candidates.filter(
-      (f) => BLIND.test(read(f)) && !explicit.has(f) && !DIR_CLAIMS.some((d) => f.startsWith(d)),
-    );
-    expect(
-      unregistered,
-      'a test: add it to an INPUT_RULES entry (what it reads), ALWAYS_RUN or SELF_CONTAINED; a module: to MODULE_READERS, with a rule for any tracked input',
-    ).toEqual([]);
+    expect(only('blind')).toBe('');
+  });
+
+  it('every test-named file runs in exactly one vitest project, through globs the check can read', () => {
+    expect(only('glob')).toBe('');
+    expect(only('include')).toBe('');
   });
 
   it('SELF_CONTAINED and MODULE_READERS entries are still graph-blind (a stale entry rots the list)', () => {
@@ -198,23 +176,10 @@ describe('gate rules', () => {
   });
 
   it('every snapshot has its owning test beside its folder', () => {
-    const snaps = tracked.filter((f) => /\/__snapshots__\/[^/]+\.snap$/.test(f));
-    const orphans = snaps.filter(
-      (s) => !tracked.includes(s.replace(/__snapshots__\/([^/]+)\.snap$/, '$1')),
-    );
-    expect(orphans).toEqual([]);
+    expect(only('snapshot')).toBe('');
   });
 
   it('every fixtures/testdata folder in a package is some rule’s input', () => {
-    const dirs = [
-      ...new Set(
-        tracked
-          .map((f) => /^(.*\/(?:fixtures|testdata|__fixtures__)\/)/.exec(f)?.[1])
-          .filter((d): d is string => !!d && PACKAGES.some((p) => d.startsWith(`${p.dir}/`))),
-      ),
-    ];
-    const inputs = INPUT_RULES.flatMap((r) => r.inputs);
-    const unclaimed = dirs.filter((d) => !inputs.some((i) => i.endsWith('/') && d.startsWith(i)));
-    expect(unclaimed).toEqual([]);
+    expect(only('fixtures')).toBe('');
   });
 });

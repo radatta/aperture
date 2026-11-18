@@ -1,8 +1,8 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { fakeRun } from '../bot/fakes.ts';
 import {
   BUDGET,
@@ -65,9 +65,12 @@ const INNER = { GATE_INNER: '1', GATE_WIDE: '0', HEAVY_WRAPPER: '4242', PATH: '/
 const noSignal = () => () => {};
 // A macrotask: every promise callback already queued has run, however many hops the scheduler takes.
 const flush = () => new Promise((r) => setImmediate(r));
-// A stand-in heavy.sh in a temp dir.
+// A stand-in heavy.sh in a temp dir, removed after the file.
+const stubs: string[] = [];
+afterAll(() => stubs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const stub = (body: string) => {
   const dir = mkdtempSync(join(tmpdir(), 'gate-cli-'));
+  stubs.push(dir);
   const f = join(dir, 'heavy.sh');
   writeFileSync(f, `#!/usr/bin/env bash\n${body}\n`);
   chmodSync(f, 0o755);
@@ -750,5 +753,170 @@ describe('main', () => {
     expect(await main(['--help'], { run: git('').run, exec, log: quiet, env: {} })).toBe(0);
     expect(await main(['--nope'], { run: git('').run, exec, log: quiet, env: {} })).toBe(2);
     expect(ran).toEqual([]);
+  });
+});
+
+describe('main: the registry check, first', () => {
+  const roots: string[] = [];
+  afterAll(() => roots.forEach((r) => rmSync(r, { recursive: true, force: true })));
+  // A real root on disk (listFiles keeps only files that exist), its files listed by the fake git.
+  const tree = (paths: Record<string, string>) => {
+    const root = mkdtempSync(join(tmpdir(), 'gate-registry-'));
+    roots.push(root);
+    for (const [p, text] of Object.entries(paths)) {
+      mkdirSync(join(root, p, '..'), { recursive: true });
+      writeFileSync(join(root, p), text);
+    }
+    return fakeRun([
+      ['git rev-parse --show-toplevel', root],
+      ['git ls-files -z --cached --others --exclude-standard', z(...Object.keys(paths))],
+      ['git merge-base origin/main HEAD', 'abc'],
+      ['git diff --name-status --no-renames -z abc', z('A', Object.keys(paths)[0]!)],
+      ['git ls-files -z', ''],
+    ]);
+  };
+  const never = async () => {
+    throw new Error('ran a step');
+  };
+  const exec = () => {
+    throw new Error('ran a step');
+  };
+
+  it.each([[[]], [['--dry-run']], [['--full']]])(
+    'a test no vitest project includes exits 1 before any step, naming it with why and the fix (%j)',
+    async (argv) => {
+      const out: string[] = [];
+      const code = await main(argv, {
+        run: tree({ 'scripts/board/new.test.ts': "it('x', () => {});\n" }).run,
+        exec,
+        outer: never,
+        log: (l) => out.push(l),
+        env: {},
+      });
+      expect(code).toBe(1);
+      const said = out.join('\n');
+      expect(said).toMatch(/1 file\(s\) the gate can't pick up \(registry check, [\d.]+ s/);
+      expect(said).toMatch(
+        /scripts\/board\/new\.test\.ts: no vitest project in scripts includes it[^\n]*\n {4}fix: /,
+      );
+      expect(said).toMatch(/nothing ran/);
+      expect(said).not.toMatch(/changed path/); // no plan: it stops first
+    },
+  );
+
+  it('an unregistered graph-blind test exits 1 too, pointing at the rules.ts lists', async () => {
+    const out: string[] = [];
+    const code = await main([], {
+      run: tree({
+        'scripts/src/new.test.ts': "import { readFileSync } from 'node:fs';\nreadFileSync('x');\n",
+      }).run,
+      exec,
+      outer: never,
+      log: (l) => out.push(l),
+      env: {},
+    });
+    expect(code).toBe(1);
+    expect(out.join('\n')).toMatch(
+      /scripts\/src\/new\.test\.ts: a test that reads files.*\n {4}fix: add it to an INPUT_RULES entry/,
+    );
+  });
+
+  it('a clean tree goes on to the plan, with the check’s line in it', async () => {
+    const out: string[] = [];
+    const code = await main(['--dry-run'], {
+      run: tree({ 'scripts/src/new.test.ts': "it('x', () => {});\n" }).run,
+      exec,
+      outer: never,
+      log: (l) => out.push(l),
+      env: {},
+    });
+    expect(code).toBe(0);
+    expect(out.join('\n')).toMatch(
+      /registry check: 1 test files, each in one vitest project and reachable \([\d.]+ s\)/,
+    );
+  });
+
+  it('a listing that fails skips the check aloud, and the gate goes on', async () => {
+    const { run } = fakeRun([
+      ['git rev-parse --show-toplevel', ROOT],
+      [
+        'git ls-files -z --cached',
+        () => {
+          throw new Error('git ls-files failed: index locked');
+        },
+      ],
+      ['git merge-base origin/main HEAD', 'abc'],
+      ['git diff --name-status --no-renames -z abc', z('M', 'docs/a.md')],
+      ['git ls-files -z', z(...ALWAYS_RUN)],
+    ]);
+    const out: string[] = [];
+    expect(
+      await main(['--dry-run'], { run, exec, outer: never, log: (l) => out.push(l), env: {} }),
+    ).toBe(0);
+    expect(out.join('\n')).toMatch(
+      /registry check skipped: couldn't list files \(git ls-files failed: index locked\)/,
+    );
+  });
+
+  it('an empty listing, or a file that won’t read, skips the check aloud: never a clean pass', async () => {
+    const said = async (run: ReturnType<typeof tree>['run'], read?: (abs: string) => string) => {
+      const out: string[] = [];
+      const code = await main(['--dry-run'], {
+        run,
+        exec,
+        outer: never,
+        log: (l) => out.push(l),
+        env: {},
+        ...(read ? { read } : {}),
+      });
+      expect(code).toBe(0);
+      return out.join('\n');
+    };
+    expect(await said(tree({}).run)).toMatch(/registry check skipped: git listed no files/);
+    const eacces = Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    expect(
+      await said(tree({ 'scripts/src/a.ts': '' }).run, () => {
+        throw eacces;
+      }),
+    ).toMatch(
+      /registry check skipped: couldn't read scripts\/src\/a\.ts \(EACCES: permission denied\)/,
+    );
+    // A file gone since the listing (ENOENT) is skipped, not the check.
+    const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    expect(
+      await said(tree({ 'scripts/src/a.ts': '' }).run, () => {
+        throw enoent;
+      }),
+    ).toMatch(/registry check: 0 test files/);
+  });
+
+  it('git lists from the repo root, whatever the cwd, and each path once', async () => {
+    const fake = tree({ 'scripts/src/new.test.ts': "it('x', () => {});\n" }).run;
+    const cwds: [string, string | undefined][] = [];
+    // fakeRun keeps no cwd: record it here. The listing comes back twice, as an unmerged path's stages would.
+    const run = ((cmd: string, args: string[], opts?: { cwd?: string }) => {
+      if (args[0] === 'ls-files') cwds.push([args.join(' '), opts?.cwd]);
+      const r = fake(cmd, args, opts);
+      return args.includes('--cached') ? r + r : r;
+    }) as typeof fake;
+    const out: string[] = [];
+    await main(['--dry-run'], { run, exec, outer: never, log: (l) => out.push(l), env: {} });
+    const root = fake('git', ['rev-parse', '--show-toplevel']);
+    expect(cwds.length).toBe(3); // the registry listing, then readDiff's two
+    for (const [args, cwd] of cwds) expect(cwd, args).toBe(root);
+    expect(out.join('\n')).toMatch(/registry check: 1 test files/);
+  });
+
+  it('the inner pass doesn’t check again: the caller did, and rules.test.ts covers a file added since', async () => {
+    const { run, calls } = tree({ 'scripts/board/new.test.ts': '' });
+    const code = await main([], {
+      run,
+      exec: () => child(0),
+      onSignal: noSignal,
+      log: quiet,
+      env: INNER,
+    });
+    expect(code).toBe(0);
+    expect(calls.some((c) => c.args.includes('--cached'))).toBe(false);
   });
 });

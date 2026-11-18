@@ -62,6 +62,8 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
      finishing order.
      - Every step still runs.
      - 75 means `heavy.sh` gave up on the cap, which is a failure, never a pass.
+     - 1 before any step is the registry check (_The rules_, below); 2 is a bad argument, the inner pass outside
+       `heavy.sh`, or a diff that widened past its slot.
      - INT, TERM or HUP to the gate's own pid is passed on to the outer `heavy.sh`, which stops every step. The gate
        then exits 128+n.
    - A fast run that names tests fails if it selects no file at all (a path or include drift, since a named test
@@ -87,8 +89,8 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 
 **A change that runs named tests:**
 
-- **A snapshot** (`__snapshots__/x.test.ts.snap`) runs only `x.test.ts` beside its folder. An orphan snapshot runs
-  its package.
+- **A snapshot** (`__snapshots__/x.test.ts.snap`) runs only `x.test.ts` beside its folder. An orphan snapshot is
+  refused up front by the registry check; when that check was skipped, it runs its package.
 - **A graph-blind input** (`INPUT_RULES`) runs the tests that read it from disk, raw-import it, or spawn it.
   - Same-area rules: a change under `scripts/src/<area>/` (board, bot, devcheck, lane, mailroom, ios-probe, lc-e2e)
     runs every test in that area, which covers the CLIs those tests spawn.
@@ -127,7 +129,13 @@ unclaimed, it runs its package.
   importers' tests; naming the module in a rule's `tests` does that, since `vitest related` runs a module's importers.
   Runtime-only state (the board dir, git, `gh`) needs none.
 
-The completeness test scans tracked and untracked files, so it fails before the first commit until you do.
+**The registry check runs first** (`registry.ts`, ~1–2 s, the caller pass in every mode, `--dry-run` too). It exits
+1 before any step, naming the file, why and the fix, on: a test-named file no vitest project includes, two include,
+or `isTest` won't name (`PACKAGES[].projects`, which `includes.test.ts` pins to `vitest list`); a glob it would read
+differently from vitest; an unregistered graph-blind test or module; an orphan snapshot; an unclaimed fixtures
+folder. A check that can't run (git fails or lists nothing, a file won't read) is skipped aloud. `rules.test.ts` runs
+the same check in CI over tracked and untracked files, so a lane's new file fails before its first commit until it's
+registered.
 
 ## The full suite on GitHub
 

@@ -3,11 +3,14 @@
 // says so. The full suite runs on GitHub on every push (the Branch workflow), which gates the all-clear.
 // The steps run at once, each under scripts/board/heavy.sh (measured and logged), inside one outer heavy.sh slot for the
 // whole gate: a wide one counts as a full suite (docs/ops/GATE.md → What gate:fast runs).
+// First, the registry check (registry.ts, ~1–2 s): a test file the gate can't pick up fails here, before any step.
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only.
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { modeOf, plan, isTest, type Change, type Plan } from './plan.ts';
+import { checkRegistry, formatProblems } from './registry.ts';
 import { PACKAGES } from './rules.ts';
 import { run as execRun, type Run } from '../bot/sh.ts';
 
@@ -18,8 +21,9 @@ export const USAGE = `pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait
   --full     every package's whole suite (what CI runs), e.g. to reproduce a red Branch run
   --dry-run  print the plan; run nothing
   --wait     how long heavy.sh waits for a slot before giving up with 75 (default 90 s)
-  Exit: the first failing step's code in the order printed (75 = heavy.sh's cap gave up); every step still runs;
-  128+n when interrupted.`;
+  Exit: 1 before any step when the registry check finds a test file the gate can't pick up (every mode, --dry-run
+  too); 2 for a bad argument, the inner pass outside heavy.sh, or a diff that widened past its slot; else the first failing step's code in the order
+  printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted.`;
 
 export interface Opts {
   full: boolean;
@@ -46,16 +50,79 @@ const fields = (s: string) => s.split('\0').filter(Boolean);
 
 // The branch's changes against the merge-base: committed + staged + unstaged in one diff (--no-renames: a move is a
 // delete and an add), plus untracked files. Every test file the planner may name, tracked or new.
-export function readDiff(run: Run, base: string): { changes: Change[]; testFiles: string[] } {
+// `cwd` is the repo root: `git ls-files` lists paths relative to its cwd, `git diff` to the root.
+export function readDiff(
+  run: Run,
+  base: string,
+  cwd?: string,
+): { changes: Change[]; testFiles: string[] } {
   const mb = run('git', ['merge-base', base, 'HEAD']);
   const diff = fields(run('git', ['diff', '--name-status', '--no-renames', '-z', mb]));
   const changes: Change[] = [];
   for (let i = 0; i + 1 < diff.length; i += 2)
     changes.push({ path: diff[i + 1]!, deleted: diff[i] === 'D' });
-  const untracked = fields(run('git', ['ls-files', '-z', '--others', '--exclude-standard']));
+  const untracked = fields(
+    run('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd }),
+  );
   for (const path of untracked) changes.push({ path, deleted: false });
-  const testFiles = [...fields(run('git', ['ls-files', '-z'])), ...untracked].filter(isTest);
+  const testFiles = [...fields(run('git', ['ls-files', '-z'], { cwd })), ...untracked].filter(
+    isTest,
+  );
   return { changes, testFiles };
+}
+
+// Every tracked and untracked file still on disk (a deleted-but-staged path is listed, not readable), once (an
+// unmerged path is listed per stage).
+export const listFiles = (run: Run, root: string) => [
+  ...new Set(
+    fields(
+      run('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }),
+    ).filter((f) => existsSync(`${root}/${f}`)),
+  ),
+];
+
+// The caller pass's registry check: problems → the message to print; else a line for the plan. A check that can't
+// run (the listing fails or comes back empty, a file won't read) is skipped aloud, never passed: the full suite on
+// GitHub runs it too (rules.test.ts). A file gone since the listing has nothing to scan.
+export function registryCheck(
+  run: Run,
+  root: string,
+  read: (abs: string) => string,
+): { fail?: string; note: string } {
+  const t0 = Date.now();
+  const skipped = (why: string) => ({
+    note: `  registry check skipped: ${why}; the Branch run's rules.test.ts still checks`,
+  });
+  let files: string[];
+  try {
+    files = listFiles(run, root);
+  } catch (err) {
+    return skipped(`couldn't list files (${(err as Error).message.split('\n')[0]})`);
+  }
+  if (!files.length) return skipped('git listed no files');
+  // Only a read is caught: a bug in the check itself still crashes the gate, never reads as a skip.
+  let unreadable: string | undefined;
+  const gone = (p: string) => {
+    try {
+      return read(`${root}/${p}`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+        unreadable ??= `${p} (${(err as Error).message.split('\n')[0]})`;
+      return '';
+    }
+  };
+  const ps = checkRegistry(files, gone);
+  if (unreadable) return skipped(`couldn't read ${unreadable}`);
+  const sec = ((Date.now() - t0) / 1000).toFixed(1);
+  const tests = files.filter(isTest).length;
+  if (!ps.length)
+    return {
+      note: `  registry check: ${tests} test files, each in one vitest project and reachable (${sec} s)`,
+    };
+  return {
+    note: '',
+    fail: `gate:fast — ${ps.length} file(s) the gate can't pick up (registry check, ${sec} s; docs/ops/GATE.md → The rules):\n${formatProblems(ps)}\nnothing ran: fix these, then run the gate again`,
+  };
 }
 
 export interface Step {
@@ -381,6 +448,7 @@ export interface Deps {
   onSignal: OnSignal;
   log: (l: string) => void;
   env: NodeJS.ProcessEnv;
+  read: (abs: string) => string;
 }
 const DEFAULTS: Deps = {
   run: execRun,
@@ -389,12 +457,13 @@ const DEFAULTS: Deps = {
   onSignal: onProcessSignal,
   log: console.log,
   env: process.env,
+  read: (abs) => readFileSync(abs, 'utf8'),
 };
 
 // Two passes: the caller plans, prints and re-runs this CLI under one heavy.sh slot (GATE_INNER=1, env, never
 // argv); that inner pass re-plans quietly and runs the steps at once.
 export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<number> {
-  const { run, exec, outer, onSignal, env } = { ...DEFAULTS, ...deps };
+  const { run, exec, outer, onSignal, env, read } = { ...DEFAULTS, ...deps };
   const out = deps.log ?? DEFAULTS.log;
   const inner = env.GATE_INNER === '1';
   const log = inner ? () => {} : out;
@@ -404,9 +473,12 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
   if (inner && !env.HEAVY_WRAPPER)
     return (out('gate:fast — the inner pass runs only under heavy.sh: run `pnpm gate:fast`'), 2);
   const root = run('git', ['rev-parse', '--show-toplevel']);
+  // The caller pass only: the inner one runs after the slot wait, and rules.test.ts catches a file added meanwhile.
+  const reg = inner ? undefined : registryCheck(run, root, read);
+  if (reg?.fail) return (out(reg.fail), 1);
   let diff: ReturnType<typeof readDiff>;
   try {
-    diff = readDiff(run, opts.base);
+    diff = readDiff(run, opts.base, root);
   } catch (err) {
     // A diff we can't read is no reason to skip tests: run them all.
     log(
@@ -416,6 +488,7 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
   }
   const p = plan(diff.changes, diff.testFiles);
   log(describePlan(p, diff.changes, opts.base, opts));
+  if (reg) log(reg.note);
   const todo = steps(p, root, opts);
   const wide = isWide(todo);
   const whole = todo.some((s) => s.label === 'test');
