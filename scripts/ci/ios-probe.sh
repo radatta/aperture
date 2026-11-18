@@ -20,7 +20,7 @@ variant() {
   case "$SHARD" in
     1) echo "restore rows nohub,axe2,hostlog,nospot" ;;
     2) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
-    *) echo "restore rows nohub,axe2mix,hostlog,nospot,warmsw,light,taplanded" ;;
+    *) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -850,8 +850,42 @@ run_sim_ci() (
       done
     fi
     [ -z "${CI_SIGNIN_T0:-}" ] || ci_landmark_trace "$r"
+    [ "${SIM_SENSITIVE:-false}" != true ] || [ -n "$r" ] || ci_reenter
     [ "$r" = already ] || sleep 3
     printf '%s\n' "$r"
+  }
+  # Rows run 5 (run 4: stuck, not slow; no AX element anywhere for 8-9 min): after the 3rd blank Home read in the
+  # submit window (~2 min), once per sign-in, count the full tree (elements, and the owning pids' process names: no
+  # labels or values), then leave and re-enter the app (WebKit 249967: a white screen after a login redirect into a
+  # PWA came back on re-entry). Home, home press, icon tap; the reads that follow are sim.sh's own. Runs inside the
+  # landmark's $(...) subshell, so sim.sh's state (SIM_ICON, a sim_err) can't leak into the op.
+  ci_reenter() {
+    local n t els form pids own="" p rc=0
+    [ ! -e "$SIM_P.cireenter" ] || return 0
+    n=$(($(cat "$SIM_P.ciblank" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$SIM_P.ciblank"
+    [ "$n" -ge 3 ] || return 0
+    : >"$SIM_P.cireenter"
+    # values are dropped in the first jq pass, before anything else sees the tree (a still-filled Password field's
+    # value would carry the password's length: sim.sh never reads it); only counts and a yes/no for a Password field
+    t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null | jq -c '[.. | objects | {r: (has("role") or has("AXLabel")), pid: (.pid? | numbers), pw: ((.AXLabel? // "") | tostring | test("^Password"; "i"))}]' 2>/dev/null)" || t=""
+    els="$(jq '[.[] | select(.r)] | length' <<<"$t" 2>/dev/null | tr -cd '0-9')"
+    form="$(jq -r 'if any(.[]; .pw) then "form" else "noform" end' <<<"$t" 2>/dev/null | tr -cd 'a-z')"
+    pids="$(jq -r '[.[] | .pid | numbers] | unique | .[]' <<<"$t" 2>/dev/null | tr -cd '0-9\n' | head -6)"
+    for p in $pids; do own="$own,$(ps -o comm= -p "$p" 2>/dev/null | sed 's#.*/##' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"; done
+    printf '%s\tstall\t%s\t%s\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${els:-x}" "${own#,}" "${form:-x}" >>"$OUT/landmark.tsv"
+    ax button home >/dev/null 2>&1 || rc=1
+    sleep 3
+    # bounded (review S2): one tree read and the icon on it, never sim_find_icon's up-to-8 rounds of 8 retries
+    if [ "$rc" = 0 ]; then
+      t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null)" || t=""
+      SIM_ICON="$(sim_icon_in "$t")" || SIM_ICON=""
+      if [ -n "$SIM_ICON" ]; then sim_icon_tap >/dev/null 2>&1 || rc=3; else rc=2; fi
+    fi
+    t=""
+    sleep 3
+    printf '%s\treenter\trc=%s\t-\t-\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "$rc" >>"$OUT/landmark.tsv"
+    return 0
   }
   # Rows run 4 tells slow from stuck from wrong-context (search, 11-17): which process owns the element at the Home
   # point (the PWA's webapp, SafariViewService still in front, SpringBoard) and whether WebContent is busy. A pid and
@@ -868,7 +902,7 @@ run_sim_ci() (
     printf '%s\t%s\t%s\t%s\t%s\n' "$((SECONDS - CI_SIGNIN_T0))" "$c" "$(cat "$SIM_P.probes" 2>/dev/null || echo 0)" "${own:--}" "$wc" >>"$OUT/landmark.tsv"
   }
   eval "ci_orig_sign_in() $(declare -f sim_sign_in | sed 1d)"
-  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
+  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; rm -f "$SIM_P.ciblank" "$SIM_P.cireenter"; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
