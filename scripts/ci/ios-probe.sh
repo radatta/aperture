@@ -6,7 +6,8 @@
 # card, and with the dev test user's password (the ios-probe environment) runs ios-standalone's own plans through
 # sim.sh's run_sim. Run by .github/workflows/ios-probe.yml (the ios-ci-probe branch only); every knob is here, so the
 # probe iterates by pushing this file. Writes ios-probe-out/: steps.tsv (step, pass|fail|soft|skip, ms, note), shots/,
-# trees/, log.txt, summary.md; after sign-in only rows.tsv (op, status, ms: no shots, reads or notes leave the runner).
+# trees/, log.txt, summary.md, cpu.log (process names and CPU), procs.txt (process table and memory, never after sign-in);
+# after sign-in only rows.tsv (op, status, ms) plus step lines and CPU samples: no shots, reads or notes from the app.
 # bash 3.2-safe (macOS /bin/bash).
 set -uo pipefail
 
@@ -15,8 +16,8 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,quiet" ;;
-    2) echo "restore card nohub,light,quiet" ;;
+    1) echo "restore card nohub,light,hostlog" ;;
+    2) echo "restore card nohub,light,taplanded" ;;
     *) echo "restore card nohub,light" ;;
   esac
 }
@@ -334,6 +335,23 @@ s_quiet() {
   if cap 15 sudo killall diagnosticd >/dev/null 2>&1; then note "host diagnosticd killed"; else note "host killall diagnosticd failed"; fi
   return 0
 }
+# Run 16: quiet didn't pay (its own 91-168 s; diagnosticd, apsd, kernel_task still on top). Run 17 asks which
+# diagnosticd is hot (host or sim: the path says) and whether kernel_task is memory pressure, at three points.
+procs() {
+  { echo "== $1 $(date +%H:%M:%S)"
+    cap 10 sysctl -n vm.swapusage
+    cap 15 memory_pressure >"$WORK/mp.txt" 2>/dev/null; tail -1 "$WORK/mp.txt"
+    cap 15 ps -axro pid,ppid,pcpu,rss,etime,command >"$WORK/ps.txt" 2>/dev/null; head -25 "$WORK/ps.txt" | cut -c1-220
+  } >>"$OUT/procs.txt" 2>&1
+}
+# hostlog (CI only, never the Mac: a throwaway runner's own logging): SIP is off on the runner (run 16's csrutil), so
+# the host's diagnosticd can be booted out for good before the boot, not just killed and relaunched.
+s_hostlog() {
+  case ",$OPTS," in *,hostlog,*) ;; *) note "hostlog off"; return 0 ;; esac
+  if cap 20 sudo -n launchctl bootout system/com.apple.diagnosticd >/dev/null 2>&1; then note "host diagnosticd booted out"; else note "host diagnosticd bootout refused"; fi
+  note "diagnosticd now: $(pgrep -lf diagnosticd | cut -c1-200 | tr '\n' ';')"
+  return 0
+}
 s_boot_wait() {
   wait "$BOOT_PID" 2>/dev/null || true
   local rc
@@ -557,10 +575,30 @@ find_icon() {
 }
 s_icon() { find_icon; }
 
+# icon_at x y: the point still reads the Home Screen's Aperture button
+icon_at() {
+  cap 8 "$AXE" describe-ui --point "$1,$2" --udid "$U" 2>/dev/null |
+    jq -e --arg n "$APP_NAME" '(if type == "array" then .[0] else . end) | (.AXLabel // "") == $n' >/dev/null 2>&1
+}
 s_launch() {
   local i t s x y r l app=""
   read -r x y r l <<<"$ICON"
   tap_at "$x" "$y" || { note "icon tap failed"; return 1; }
+  # taplanded (run 17): a dropped first tap cost 180-333 s (retap only at look 6, ~20 s a look) vs 34-82 s landed. A
+  # point read at the icon tells at once: still the Aperture button at 3 s and again at 5 s means the Home Screen never
+  # left, so tap again (up to 3 times). Two reads, so a launch still animating isn't retapped.
+  case ",$OPTS," in *,taplanded,*)
+    local k drops=0
+    for k in 1 2 3; do
+      sleep 3
+      icon_at "$x" "$y" || break
+      sleep 2
+      icon_at "$x" "$y" || break
+      drops=$((drops + 1))
+      tap_at "$x" "$y" || true
+    done
+    note "taplanded: $drops dropped tap(s) retapped" ;;
+  esac
   case ",$OPTS," in *,light,*)
     for i in $(seq 1 60); do
       late && break
@@ -829,6 +867,7 @@ CPU_PID=$!
 trap finish EXIT
 trap 'exit 143' TERM
 log "shard $SHARD: $SRC → $AFTER"
+step hostlog s_hostlog # before the boot
 case "$SRC" in
   restore) step restore s_restore ;;
   *) step create s_create ;; # cold, seed (seeding happens before the boot starts)
@@ -837,9 +876,11 @@ step env s_env # beside the boot
 step axe-install s_axe_install
 step boot s_boot_wait
 step device-hub s_hub
-step quiet s_quiet
+step quiet s_quiet # run 16: didn't pay; kept so a `quiet` variant still means something
+procs after-boot
 # A rows shard leaves the readiness tree, the icon and the launch to sim.sh's own `launch` op (the same reads).
 [ "$AFTER" = rows ] || step axe-ready s_axe_ready
+procs after-axe-ready
 step origin s_origin
 if [ "$SRC" = cold ]; then
   step safari s_safari
@@ -849,6 +890,7 @@ fi
 if [ "$AFTER" != rows ]; then
   step home-screen-icon s_icon
   step launch-to-sign-in s_launch && CARD_MS=$(($(now_ms) - T0))
+  procs at-card
 fi
 case "$AFTER" in
   save) step save s_save ;;
