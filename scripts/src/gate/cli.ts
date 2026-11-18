@@ -584,7 +584,7 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
 // The caller's exit: heavy.sh's when it failed, else the inner pass's own report; a 0 with no report is 2.
 export function reconcile(outerCode: number, readResult: () => string): number {
   if (outerCode !== 0) return outerCode;
-  let text = '';
+  let text: string;
   try {
     text = readResult().trim();
   } catch {
