@@ -195,6 +195,7 @@
       if (r.type === 'submit' || r.type === 'run') {
         const id = idStr(r.type === 'submit' ? res?.submission_id : res?.interpret_id);
         if (!id || fired.has(id)) return [];
+        const dup = pending.has(id);
         pending.set(id, {
           kind: r.type,
           slug: r.slug,
@@ -202,7 +203,10 @@
           at: reqAt,
           page,
         });
-        return [];
+        // A submit LeetCode took, however it was made (a click, ⌘↵): local only — the resubmit note reads it
+        // (content.js), and it is never an event.
+        if (r.type !== 'submit' || dup) return [];
+        return [{ kind: 'submitted', slug: r.slug, questionId: null, at: reqAt, payload: null, page }];
       }
       // check: only the final SUCCESS counts; RUNNING_TESTS / STARTED / PENDING are polls.
       if (!res || res.state !== 'SUCCESS' || fired.has(r.id)) return [];
@@ -220,6 +224,7 @@
   // A captured item → the sitting events A1 takes ({id, type, at, payload} or a replay chunk). A replay over
   // 60 KB is split along its JSON array; one that can't be split is dropped (A1 would refuse it).
   function toEventInputs(item, mintId) {
+    if (!SENDABLE.includes(item.kind)) return []; // a local-only kind (`submitted`) is never an event
     if (item.kind === 'replay') {
       return splitReplay(item.events).map((events) => ({
         id: mintId(),
@@ -339,7 +344,8 @@
       .slice(0, 5);
 
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
-  const KINDS = [...SENDABLE, 'hint', 'problem'];
+  const LOCAL = ['submitted']; // read in the page, never sent
+  const KINDS = [...SENDABLE, 'hint', 'problem', ...LOCAL];
 
   return {
     interesting,
@@ -357,6 +363,7 @@
     pathOf,
     bytes,
     SENDABLE,
+    LOCAL,
     KINDS,
     PAIR_TIMEOUT_MS,
   };

@@ -1,4 +1,4 @@
-// Where LeetCode's own controls are. Run, Submit and the language come from the 2026-11-08 page dump; the editor
+// Where LeetCode's own controls are. The language comes from the 2026-11-08 page dump; the editor
 // reset, its confirm and the timer's controls from the maintainer's debug session (2026-11-10, localNotes/debug-log.json).
 // Options → Selectors overrides any of them without a rebuild (LeetCode moves its DOM; a prod Xcode rebuild is the
 // slow path). `null` on a click key (editorReset, resetConfirm, timer*) turns that step off: the overlay says "not
@@ -31,14 +31,9 @@
     timerReset: '[role="button"][aria-label="Reset"],button[aria-label="Reset"]',
     timerResetConfirm: '[role="dialog"][id^="radix-"][data-state="open"] button.bg-sd-secondary',
     lang: '[data-e2e-locator="lang-selector-button"]',
-    // LeetCode's Submit — never clicked or held: a real click on it is what the resubmit note reads
-    // (lib/coach.js). From the 2026-11-08 page dump, and Safari's own DOM in debug log 10 (2026-11-13: a
-    // <button>, aria-label Submit); `null` turns the note off.
-    submit: '[data-e2e-locator="console-submit-button"]',
   });
   const KEYS = Object.keys(DEFAULTS);
-  // The keys `null` turns off: each click step, and `submit` (the note); `dialog` and `lang` aren't steps, so a
-  // null there is ignored.
+  // The keys `null` turns off: each click step; `dialog` and `lang` aren't steps, so a null there is ignored.
   const OFFABLE = [
     'editorReset',
     'resetConfirm',
@@ -46,12 +41,15 @@
     'timerStart',
     'timerReset',
     'timerResetConfirm',
-    'submit',
   ];
+  // Keys no longer read, which Options drops from a saved override: `submit` (2.2.1), LeetCode's Submit button —
+  // the resubmit note reads the submit request instead, so ⌘↵ counts (lib/coach.js). Its `null` meant "note
+  // off", which Options carries over to the note's switch.
+  const RETIRED = ['submit'];
 
   // Overrides from storage (an object, or its JSON text) over the defaults: each key a non-empty string, or null
   // on an off-able key.
-  // Unknown keys (a retired `timerClicks` too) and wrong types are ignored, so a bad paste can't break the overlay.
+  // Unknown keys (a retired `timerClicks` or `submit` too) and wrong types are ignored, so a bad paste can't break the overlay.
   function merge(overrides) {
     let o = overrides;
     if (typeof o === 'string') {
@@ -69,5 +67,5 @@
     }
     return out;
   }
-  return { DEFAULTS, KEYS, merge };
+  return { DEFAULTS, KEYS, RETIRED, merge };
 });

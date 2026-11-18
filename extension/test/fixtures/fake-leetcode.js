@@ -26,6 +26,7 @@
     // Reset a plain <button> that resets straight to idle (no pop-up), and the idle clock's own Start.
     toolbar2: false,
     resetDelayMs: 0, // a test's switch: toolbar2's Reset lands this late (about 600 ms in debug log 11)
+    submitInert: false, // a test's switch: a click on Submit sends nothing (⌘↵ still submits)
   });
   // A test's switch, set before load: GraphQL goes as Safari sends it (debug log 9) — an XHR whose
   // responseType is 'blob', read back with FileReader.
@@ -284,7 +285,16 @@
     }
     return null;
   };
-  $('[data-e2e-locator=console-submit-button]').addEventListener('click', async () => {
+  // LeetCode's Submit: its button, or ⌘/Ctrl+Enter with no click at all (`submitInert`: a click that sends nothing).
+  $('[data-e2e-locator=console-submit-button]').addEventListener('click', () => {
+    if (!fake.submitInert) submit();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+    e.preventDefault();
+    submit();
+  });
+  async function submit() {
     fake.submits++;
     const slug = slugNow();
     const qid = qidOf(slug);
@@ -302,7 +312,7 @@
     await poll(r.submission_id, 'v2/check/');
     gql('submissionDetails', { submissionId: String(r.submission_id) });
     gql('questionDetail', { titleSlug: slug });
-  });
+  }
   $('[data-e2e-locator=console-run-button]').addEventListener('click', async () => {
     fake.runs++;
     const slug = slugNow();
