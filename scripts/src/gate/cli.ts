@@ -62,15 +62,19 @@ export interface Step {
   label: string;
   argv: string[]; // run under heavy.sh, from the repo root
   env: Record<string, string>; // HEAVY_CLASS / HEAVY_LABEL / VITEST_MAX_WORKERS: env, never argv
-  cost: number; // tokens out of BUDGET while it runs: its vitest workers, 1 for tsc or eslint (one core each)
+  cost: number; // tokens while it runs: its vitest workers (scripts: SCRIPTS_COST), 1 for tsc or eslint (one core each)
 }
 
-// Every step runs at once under one outer heavy.sh slot (main), as many as BUDGET allows. A full `pnpm test` keeps
-// ~8–9 cores busy (VITEST_MAX_WORKERS 4 per package, pnpm's 4 packages at once); a wide gate's steps together aim
-// for about that: their workers plus tsc and eslint, single-threaded.
+// Every step runs at once under one outer heavy.sh slot (main), as many as the budget allows. A full `pnpm test`
+// keeps ~8–9 cores busy (VITEST_MAX_WORKERS 4 per package, pnpm's 4 packages at once); a wide gate's steps together
+// aim for about that: their workers plus tsc and eslint, single-threaded.
 export const BUDGET = 10;
-// Vitest workers per package when a gate runs 2+ packages besides scripts, app the long pole: a wide gate, or a narrow
-// one that would otherwise run two 4-worker packages at once (a suite's load, uncapped). One package keeps 4.
+// A narrow gate is uncapped, so it stays near the sequential gate's peak: one 4-worker package beside tsc and eslint.
+export const NARROW_BUDGET = 6;
+// scripts' tests spawn shells and CLIs: ~216 threads and ~2 GB at its 2 workers (2026-11-17 replay), an app run's
+// weight. Costed so, it never overlaps app and extension together, nor app in a narrow gate.
+export const SCRIPTS_COST = 4;
+// A wide gate's vitest workers per package, app the long pole. A narrow one keeps the container cap (4).
 export const WIDE_WORKERS: Record<string, number> = {
   app: 4,
   extension: 2,
@@ -87,11 +91,11 @@ const RANK = [
   'app',
   'extension',
   'typecheck',
-  'scripts',
   'lint',
   'cdk',
   'lambdas',
   'packages/shared',
+  'scripts', // last: its cost keeps it off app + extension at once (SCRIPTS_COST)
 ];
 export const rank = (s: Step) => {
   const i = RANK.indexOf(s.label.split(':').at(-1)!);
@@ -141,11 +145,11 @@ export function steps(p: Plan, root: string, opts: Pick<Opts, 'full'>): Step[] {
       tests.push({ dir: pkg.dir, s: step(`test-fast:${pkg.dir}`, argv, 'gate-test-fast', 0) });
     }
   }
-  const split = tests.filter((t) => t.dir !== 'scripts').length > 1;
+  const wide = isWide([...out, ...tests.map((t) => t.s)]);
   for (const { dir, s } of tests) {
-    const w = split ? WIDE_WORKERS[dir]! : (PINNED[dir] ?? NARROW_WORKERS);
+    const w = wide ? WIDE_WORKERS[dir]! : (PINNED[dir] ?? NARROW_WORKERS);
     s.env.VITEST_MAX_WORKERS = String(w);
-    s.cost = w;
+    s.cost = dir === 'scripts' ? SCRIPTS_COST : w;
     out.push(s);
   }
   return out;
@@ -418,7 +422,7 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
       ? '  as a full suite: one `test` slot (the 2-suite cap); typecheck and lint at once, then the suite alone'
       : wide
         ? `  at once, as a full suite: one \`test\` slot (the 2-suite cap), up to ${BUDGET} tokens (workers + tsc + eslint)`
-        : `  at once: one \`test-fast\` slot, uncapped, up to ${BUDGET} tokens`,
+        : `  at once: one \`test-fast\` slot, uncapped, up to ${NARROW_BUDGET} tokens`,
   );
   if (opts.dryRun) {
     for (const s of todo) log(`  would run: ${s.label}`);
@@ -453,7 +457,7 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
       2
     );
   const t0 = Date.now();
-  const h = schedule(todo, (s) => exec(s, heavy, root), out);
+  const h = schedule(todo, (s) => exec(s, heavy, root), out, wide ? BUDGET : NARROW_BUDGET);
   let interrupted = 0;
   const off = onSignal((_sig, code) => {
     interrupted ||= code;

@@ -41,14 +41,17 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
    Every step logs a `gate-*` class, so the solo baselines (`typecheck`, `lint`, `test`) and the board's slot-job
    counts stay clean. The outer run is the gate's one slot job.
 
-   - **The budget** (`BUDGET`, 10 tokens) bounds what runs at once. A test step costs its workers; typecheck and lint
-     cost 1 each, since `tsc -b` and eslint are single-threaded.
-   - **Start order:** longest first, a smaller step filling any gap. The order is app, extension, typecheck, scripts,
-     lint, cdk, lambdas, shared.
-   - **Workers** (`WIDE_WORKERS`), whenever 2+ packages besides scripts run: app 4; extension, lambdas, cdk and
-     scripts 2; shared 1. That covers every wide gate, and a narrow one that would otherwise run two 4-worker
-     packages at once, a suite's load without the cap. A single package keeps 4. Scripts always pins 2, as its own
-     test script does.
+   - **The budget** bounds what runs at once: 10 tokens wide (`BUDGET`, about a suite's cores), 6 narrow
+     (`NARROW_BUDGET`: one 4-worker package beside tsc and eslint, near the sequential gate's peak, since a narrow
+     gate is uncapped).
+     - A test step costs its workers; typecheck and lint cost 1 each, since `tsc -b` and eslint are single-threaded.
+     - Scripts costs 4 (`SCRIPTS_COST`) at its 2 workers. Its tests spawn shells and CLIs, ~216 threads and ~2 GB, an
+       app run's weight. So it never runs beside app and extension together, nor beside app in a narrow gate.
+   - **Start order:** longest first, a smaller step filling any gap: app, extension, typecheck, lint, cdk, lambdas,
+     shared, and scripts last.
+   - **Workers:** a wide gate uses `WIDE_WORKERS` (app 4; extension, lambdas, cdk and scripts 2; shared 1). A narrow
+     one keeps 4 a package, and the budget runs a second package after the first, as the sequential gate did. Scripts
+     always pins 2, as its own test script does.
    - **The whole suite** costs the full budget, so it runs alone once typecheck and lint are done.
    - **Output:** each step's output is held and printed as one block when it finishes, under
      `── <step> · ok|exit n · s ──`. `▶ <step>` marks its start.

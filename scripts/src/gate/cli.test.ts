@@ -6,7 +6,9 @@ import { describe, expect, it } from 'vitest';
 import { fakeRun } from '../bot/fakes.ts';
 import {
   BUDGET,
+  NARROW_BUDGET,
   NARROW_WORKERS,
+  SCRIPTS_COST,
   WIDE_WORKERS,
   isWide,
   main,
@@ -137,7 +139,7 @@ describe('steps', () => {
       HEAVY_LABEL: 'test-fast:scripts',
       VITEST_MAX_WORKERS: '2', // pinned, as its own test script does
     });
-    expect(t.cost).toBe(2);
+    expect(t.cost).toBe(SCRIPTS_COST); // its spawned shells weigh like an app run
     expect(isWide(s)).toBe(false);
   });
 
@@ -153,7 +155,7 @@ describe('steps', () => {
     expect([app.env.VITEST_MAX_WORKERS, app.cost]).toEqual(['4', 4]);
   });
 
-  it('two packages besides scripts split the workers even when narrow: never two 4-worker runs at once', () => {
+  it('narrow: 4 workers a package, scripts costed as an app run, within the narrow budget at most one at a time', () => {
     const changes = [
       { path: 'app/src/lib/x.ts', deleted: false },
       { path: 'lambdas/src/y.ts', deleted: false },
@@ -162,13 +164,17 @@ describe('steps', () => {
     const p = plan(changes, []);
     p.packages.scripts = { full: [], related: [], tests: [], why: {} };
     const s = steps(p, ROOT, { full: false });
-    const tests = s.filter((x) => x.label.startsWith('test'));
-    expect(tests.map((x) => [x.label, x.cost])).toEqual([
-      ['test-fast:app', WIDE_WORKERS.app],
-      ['test-fast:lambdas', WIDE_WORKERS.lambdas],
-    ]);
     expect(isWide(s)).toBe(false);
-    expect(tests.reduce((n, x) => n + x.cost, 0)).toBeLessThanOrEqual(6);
+    expect(s.filter((x) => x.label.startsWith('test')).map((x) => [x.label, x.cost])).toEqual([
+      ['test-fast:app', 4],
+      ['test-fast:lambdas', 4],
+    ]);
+    // tsc + eslint + one 4-worker package fill it: the second package waits, as the sequential gate ran them
+    expect(1 + 1 + 4).toBe(NARROW_BUDGET);
+    const scripts = steps(plan([{ path: 'docs/a.md', deleted: false }], ALWAYS_RUN), ROOT, {
+      full: false,
+    }).at(-1)!;
+    expect([scripts.env.VITEST_MAX_WORKERS, scripts.cost]).toEqual(['2', SCRIPTS_COST]);
   });
 
   it('exactly 3 packages is wide', () => {
@@ -194,7 +200,7 @@ describe('steps', () => {
     for (const t of tests) {
       const dir = t.label.slice('test-fast:'.length);
       expect(t.env.VITEST_MAX_WORKERS).toBe(String(WIDE_WORKERS[dir]));
-      expect(t.cost).toBe(WIDE_WORKERS[dir]);
+      expect(t.cost).toBe(dir === 'scripts' ? SCRIPTS_COST : WIDE_WORKERS[dir]);
     }
     const app = s.find((x) => x.label === 'test-fast:app')!;
     expect(app.argv).toContain('--passWithNoTests=true'); // reached only through changed modules
@@ -320,20 +326,21 @@ describe('schedule', () => {
       'test-fast:app',
       'test-fast:extension',
       'typecheck',
-      'test-fast:scripts',
       'lint',
+      'test-fast:cdk',
     ]);
-    kids.get('lint')!.finish(0); // 1 free: shared (1) fits, cdk (2) doesn't
+    kids.get('lint')!.finish(0); // 1 free: shared (1) fits, lambdas and scripts (2) don't
     await flush();
     expect(started.slice(5)).toEqual(['test-fast:packages/shared']);
     kids.get('typecheck')!.finish(0); // 1 free: still nothing fits
     await flush();
     expect(started).toHaveLength(6);
-    kids.get('test-fast:scripts')!.finish(0); // 3 free: cdk (2), then lambdas waits for 1 more
+    kids.get('test-fast:cdk')!.finish(0); // 3 free: lambdas (2) by rank, scripts waits for 1 more
     await flush();
-    expect(started.slice(6)).toEqual(['test-fast:cdk']);
+    expect(started.slice(6)).toEqual(['test-fast:lambdas']);
     for (const c of kids.values()) c.finish(0);
     await flush();
+    expect(started.at(-1)).toBe('test-fast:scripts'); // last by rank
     expect(started).toHaveLength(8);
     for (const c of kids.values()) c.finish(0);
     const results = await h.done;
@@ -585,6 +592,34 @@ describe('main', () => {
     );
   });
 
+  it('a narrow inner pass runs within NARROW_BUDGET: app beside tsc + eslint, scripts after app', async () => {
+    const kids = new Map<string, ReturnType<typeof child>>();
+    const started: string[] = [];
+    const p = main([], {
+      run: git(z('M', 'app/src/lib/x.ts')).run,
+      exec: (s) => {
+        started.push(s.label);
+        const c = child();
+        kids.set(s.label, c);
+        return c;
+      },
+      onSignal: noSignal,
+      log: quiet,
+      env: INNER,
+    });
+    await flush();
+    expect(started).toEqual(['test-fast:app', 'typecheck', 'lint']);
+    kids.get('typecheck')!.finish(0);
+    kids.get('lint')!.finish(0);
+    await flush();
+    expect(started).toHaveLength(3); // 2 free, scripts costs 4
+    kids.get('test-fast:app')!.finish(0);
+    await flush();
+    expect(started.at(-1)).toBe('test-fast:scripts');
+    kids.get('test-fast:scripts')!.finish(0);
+    expect(await p).toBe(0);
+  });
+
   it('the inner pass refuses outside heavy.sh, and a plan that widened past its narrow slot', async () => {
     const { ran, exec } = record();
     const out: string[] = [];
@@ -638,7 +673,7 @@ describe('main', () => {
     expect(ran).toEqual([]);
     expect(out.join('\n')).toMatch(/app: skipped — nothing in the diff reaches it/);
     expect(out.join('\n')).toMatch(/would run: test-fast:scripts/);
-    expect(out.join('\n')).toMatch(/at once: one `test-fast` slot, uncapped/);
+    expect(out.join('\n')).toMatch(/at once: one `test-fast` slot, uncapped, up to 6 tokens/);
   });
 
   it('a diff it can’t read runs the full suite, in a wide slot', async () => {
