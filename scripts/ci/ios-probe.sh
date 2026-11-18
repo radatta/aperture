@@ -18,11 +18,12 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    # round 2 (ci-signin-round1.md): each arm changes one thing against round 1's Mac-match shard (restore, Device Hub
-    # opened in the background, AXe 1.8.0, host daemons untouched), which stalled with the login overlay in front
-    1) echo "restore rows hubfg" ;; # R2 display: Device Hub in front with this device's window, the window counted
-    2) echo "seed rows macmatch" ;; # R3: a device made on this runner, only the web clip planted
-    *) echo "restore rows hostlog,nospot,quiet,idle" ;; # R1 CPU: host hogs off, and the Sign in tap waits for load1 < 10
+    # round 3, the last (ci-signin-round1.md): each arm changes one thing against round 1's Mac-match shard (restore,
+    # Device Hub opened in the background, AXe 1.8.0, host daemons untouched), which stalled with the login overlay in
+    # front; round 2 killed the restored tarball and found the overlay frozen and idle
+    1) echo "restore rows hostlog,nospot,quiet,idle" ;; # R1 CPU: host hogs off, and the Sign in tap waits for load1 < 10
+    2) echo "restore rows hubfg" ;; # R2 display: Device Hub in front with this device's window, counted before and after
+    *) echo "restore rows macmatch,tapnudge" ;; # nudge: one status-bar tap at look 1 (scroll-to-top: activates nothing)
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -335,6 +336,7 @@ s_hub() {
   [ "$HUB" = up ] || { note "Device Hub didn't start in 15 s: sim.sh gets the shim"; return 0; }
   # round 2, R2: Expo opens a device's window with devices://device/open?id=<udid> (panel 2; not Apple-documented)
   case ",$OPTS," in *,hubfg,*)
+    note "windows before devices://: $(hub_windows)"
     cap 30 open "devices://device/open?id=$U" >/dev/null 2>&1 || note "devices:// open failed"
     sleep 5 ;;
   esac
@@ -345,18 +347,24 @@ s_hub() {
 hub_windows() {
   local pid
   pid="$(pgrep -x DeviceHub | head -1)"
-  cat >"$WORK/win.swift" <<'SWIFT'
-import CoreGraphics
-let pid = Int(CommandLine.arguments[1]) ?? -1
-let l = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-var n = 0, big = 0
-for w in l where (w[kCGWindowOwnerPID as String] as? Int) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
-  n += 1
-  if let b = w[kCGWindowBounds as String] as? [String: Any], let h = b["Height"] as? Double, h > 300 { big += 1 }
+  # round 3: JXA's ObjC bridge, no compile (round 2's swift check came back unread); 1 = on-screen only, 0 = no window
+  cat >"$WORK/win.js" <<'JXA'
+ObjC.import('CoreGraphics');
+function run(argv) {
+  const pid = parseInt(argv[0], 10);
+  const l = ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo(1, 0))) || [];
+  let n = 0, big = 0;
+  for (const w of l) {
+    if (w.kCGWindowOwnerPID !== pid || w.kCGWindowLayer !== 0) continue;
+    n++;
+    if (w.kCGWindowBounds && w.kCGWindowBounds.Height > 300) big++;
+  }
+  return n + ' on screen, ' + big + ' over 300 pt tall, ' + l.length + ' on screen in all';
 }
-print("\(n) on screen, \(big) over 300 pt tall, \(l.count) on screen in all")
-SWIFT
-  cap 60 xcrun swift "$WORK/win.swift" "${pid:--1}" 2>/dev/null | tr -cd 'A-Za-z0-9 ,' | head -c 120 || printf 'unread'
+JXA
+  local r
+  r="$(cap 30 osascript -l JavaScript "$WORK/win.js" "${pid:--1}" 2>&1 | tr -cd 'A-Za-z0-9 ,:' | head -c 120)"
+  printf '%s' "${r:-unread}"
 }
 # quiet (run 16): run 14's CPU went to diagnosticd, kernel_task and iOS 27's widget extensions on 3 cores. simslim's
 # (pkg.go.dev/github.com/mobai-app/simslim) labels for what no row touches: widgets, Siri, search, health, photos,
@@ -838,6 +846,10 @@ run_sim_ci() (
   sim_err() {
     # shellcheck disable=SC2034 # read by the sourced sim.sh
     SIM_ST=error SIM_RS="$1" SIM_DT="${2:-}" SIM_NOTE="${3:-}"
+    # round 3: name the post-relaunch SIM_MISSING; only codes whose sim.sh notes are fixed strings, plus function names
+    case "${2:-}" in SIM_MISSING | BOOT_FAILED | AXE_FAILED | TERMINATE | DEVICE_HUB)
+      printf '%s %s: %s (in %s)\n' "$1" "$2" "$(printf '%s' "${3:-}" | tr -cd 'A-Za-z0-9 .,:;()-' | cut -c1-100)" "$(printf '%s ' "${FUNCNAME[@]:1:5}" | tr -cd 'A-Za-z0-9_ ')" >>"$WORK/simerr.txt" ;;
+    esac
     case "$1" in SIGNIN_FAILED | PASSWORD_MISSING) sim_diag >"$WORK/diag.txt" 2>/dev/null || true ;; esac
     return 1
   }
@@ -1012,7 +1024,16 @@ BMP
       [ ! -e "$SIM_P.late" ] || { printf '%s\t%s\tswipe down\tskipped: deadline\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" >>"$OUT/stall.tsv"; return 0; }
       px="$(ci_frame "$WORK/grid3" "$WORK/grid0")"
       fh="${px##*hash }"
-      ax swipe --start-x "$SIM_X" --start-y 110 --end-x "$SIM_X" --end-y 760 --duration 0.5 >/dev/null 2>&1 || true
+      case ",$OPTS," in
+        *,tapnudge,*)
+          # round 3 (the Appium pattern: a tap made a VM sim's stuck Safari render): one tap on the status bar's right side, iOS's
+          # scroll-to-top, which activates nothing; then the reads below, and the 5 s pair with CPU after it
+          p="status-bar tap"
+          ax tap -x 380 -y 20 >/dev/null 2>&1 || p="status-bar tap (refused)" ;; # right of the Dynamic Island (review)
+        *)
+          p="swipe down"
+          ax swipe --start-x "$SIM_X" --start-y 110 --end-x "$SIM_X" --end-y 760 --duration 0.5 >/dev/null 2>&1 || true ;;
+      esac
       sleep 3
       els="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null | jq '[.. | objects | select(((.role? // .type? // "") | tostring) != "")] | length' 2>/dev/null | tr -cd '0-9')"
       own="$(SIM_AX_CAP=8 ax describe-ui --point "$SIM_X,$SIM_Y_HOME" 2>/dev/null | jq -r '(if type == "array" then (.[0] // {}) else . end) | .pid // empty' 2>/dev/null | tr -cd '0-9')"
@@ -1020,7 +1041,14 @@ BMP
       px2="$(ci_frame "$WORK/grid4" "$WORK/grid0")"
       h1="${px2##*hash }"
       if [ -z "$h1" ] || [ -z "$fh" ]; then h1=unread; elif [ "$h1" = "$fh" ]; then h1=same; else h1=changed; fi
-      printf '%s\t%s\tswipe down\tels %s\tpoint %s\tframe %s vs before\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" "${own:--}" "$h1" "$px2" >>"$OUT/stall.tsv"
+      [ ! -e "$SIM_P.late" ] || { printf '%s\t%s\t%s\tels %s\tpoint %s\tframe %s vs before\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$p" "${els:-x}" "${own:--}" "$h1" "$px2" >>"$OUT/stall.tsv"; return 0; }
+      c0="$(ci_cpus)"
+      sleep 5
+      h2="$(ci_frame "$WORK/grid5" "$WORK/grid0")"
+      c1="$(ci_cpus)"
+      h2="${h2##*hash }"
+      if [ -z "$h2" ] || [ -z "${px2##*hash }" ]; then h2=unread; elif [ "$h2" = "${px2##*hash }" ]; then h2=same; else h2=changed; fi
+      printf '%s\t%s\t%s\tels %s\tpoint %s\tframe %s vs before\t%s; 5 s later %s frame; cpu %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$p" "${els:-x}" "${own:--}" "$h1" "$px2" "$h2" "$(ci_cpu_delta "$c0" "$c1")" >>"$OUT/stall.tsv"
     else
       # cold relaunch (panel, H2): a home press only resumes, so the web app's own process is killed, then its icon
       # tapped. Signed-in Home after it: the callback ran and only the view stuck. The card: the callback never ran,
@@ -1174,6 +1202,7 @@ s_rows() {
       [[ "$rs" =~ ^(-|[A-Z_]+(\([0-9A-Za-z.-]{0,16}\))?)$ ]] || rs=BAD_OUT
       dt="$(jq -r '.detail // ""' <<<"$js" 2>/dev/null | tr -cd 'A-Z_')"
       [ -s "$WORK/diag.txt" ] && note "$j diag: $(tr -cd '[:print:]' <"$WORK/diag.txt" | cut -c1-400)"
+      [ ! -s "$WORK/simerr.txt" ] || { note "$j sim.sh's last logged error ($(grep -c . "$WORK/simerr.txt") logged): $(tail -1 "$WORK/simerr.txt" | tr -cd '[:print:]' | cut -c1-240)"; : >"$WORK/simerr.txt"; }
       case "$st:$dt" in
         fail:ICON_SCROLL_DROPPED | fail:ICON_TAP_DROPPED | fail:HOME_PRESS_DROPPED | fail:TAP_DROPPED | fail:ERASED | fail:SWITCHER_FAILED | fail:NAV_UNCONFIRMED)
           [ "$try" = 1 ] && { note "$j: $dt (dropped input), rerun"; continue; } ;;
