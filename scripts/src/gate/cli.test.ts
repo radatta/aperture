@@ -211,7 +211,7 @@ describe('steps', () => {
     for (const pkg of PACKAGES) expect(WIDE_WORKERS[pkg.dir], pkg.dir).toBeGreaterThan(0);
     expect(WIDE_WORKERS.app).toBe(Math.max(...Object.values(WIDE_WORKERS)));
     expect(WIDE_WORKERS.scripts).toBe(2);
-    expect(SCRIPTS_COST).toBe(BUDGET - WIDE_WORKERS.app + 1); // never beside app
+    expect(SCRIPTS_COST).toBe(BUDGET - WIDE_WORKERS.app! + 1); // never beside app
     expect(SCRIPTS_COST).toBeGreaterThan(NARROW_BUDGET); // alone in a narrow gate
   });
 
