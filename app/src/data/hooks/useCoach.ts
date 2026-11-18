@@ -95,11 +95,11 @@ export function useUpsertMock() {
 // Whether the cached plan still lists a planned mock — after a write's refetch settled, a failed refetch leaves it.
 export function useMockListed() {
   const qc = useQueryClient();
-  return (id: string) => {
-    const m = qc.getQueryData<CoachToday>(qk.coachToday())?.mock;
-    return !!m && [...m.upcoming, ...(m.unlogged ?? [])].some((x) => x.id === id);
-  };
+  return (id: string) => mockListed(qc.getQueryData<CoachToday>(qk.coachToday())?.mock, id);
 }
+// The card's planned-mock rows: the 48-hour list and the passed ones under the line.
+export const mockListed = (m: CoachToday['mock'] | undefined, id: string | undefined) =>
+  !!m && !!id && [...m.upcoming, ...(m.unlogged ?? [])].some((x) => x.id === id);
 
 export function useDeleteMock() {
   const api = useApi();

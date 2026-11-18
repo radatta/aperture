@@ -15,6 +15,7 @@ import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import {
   useCoachToday,
+  mockListed,
   useDeleteMock,
   useMockListed,
   useSetCoachFloor,
@@ -384,8 +385,7 @@ function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
     const pending = state.refocus.current;
     const to = state.trigger.current ?? section.current;
     if (!pending || !to) return;
-    const listed = [...today.mock.upcoming, ...unlogged].some((x) => x.id === pending.id);
-    if (pending.id && listed) return; // its row hasn't gone yet: wait for that render
+    if (mockListed(today.mock, pending.id)) return; // its row hasn't gone yet: wait for that render
     state.refocus.current = null; // decided once, here
     // Only focus that was lost: never pull it out of a form the user went on to while the write ran.
     const at = document.activeElement;
