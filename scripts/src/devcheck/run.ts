@@ -41,7 +41,7 @@ import { openLedger } from './ledger';
 import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
-import { ensureSignedIn, readCheckedSession, refreshSession, validateCachedState } from './login';
+import { cachedState, ensureSignedIn, readCheckedSession, refreshSession } from './login';
 import { globMatch } from './glob';
 import { createIos, iosSlotNote } from './ios';
 import { IOS_SLOW_PATHS } from './scenarios/ios-paths';
@@ -290,8 +290,8 @@ async function main(): Promise<number> {
         : undefined,
       fetchShell,
       async openBrowser() {
-        validateCachedState(statePath(main), env, log);
-        const { browser, context } = await launch(pw, statePath(main));
+        const state = await cachedState(statePath(main), env, { fetch, now: Date.now, log });
+        const { browser, context } = await launch(pw, state);
         const page = await context.newPage();
         return {
           page,

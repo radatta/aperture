@@ -10,6 +10,9 @@ import type { FetchLike } from './api';
 import {
   assertTestUser,
   cognitoAuthority,
+  grantTokens,
+  LAUNCH_MARGIN_MS,
+  nearExpiry,
   sessionFromStorage,
   tokenGrant,
   userStoreKey,
@@ -77,6 +80,12 @@ export async function refreshSession(
   return session;
 }
 
+// Playwright's storageState, as `context.storageState()` writes it — what the cache file holds.
+export interface StorageState {
+  cookies: unknown[];
+  origins: { origin: string; localStorage: { name: string; value: string }[] }[];
+}
+
 // The cached session must be the test user's BEFORE any page loads: loading the app already writes (getDay
 // materialises recurring tasks), so a wrong cached identity would write to that account. A mismatch or an
 // unreadable cache is deleted and the run signs in fresh.
@@ -85,11 +94,18 @@ export function validateCachedState(
   env: DevcheckEnv,
   log: (msg: string) => void,
 ): void {
-  if (!existsSync(path)) return;
+  readCheckedState(path, env, log);
+}
+
+// The cache, parsed once and checked: undefined when there is none or it was just discarded.
+function readCheckedState(
+  path: string,
+  env: DevcheckEnv,
+  log: (msg: string) => void,
+): StorageState | undefined {
+  if (!existsSync(path)) return undefined;
   try {
-    const state = JSON.parse(readFileSync(path, 'utf8')) as {
-      origins?: { origin: string; localStorage?: { name: string; value: string }[] }[];
-    };
+    const state = JSON.parse(readFileSync(path, 'utf8')) as StorageState;
     const ls = state.origins?.find((o) => o.origin === slotOrigin())?.localStorage ?? [];
     const storage = Object.fromEntries(ls.map((x) => [x.name, x.value]));
     // Every oidc user entry, not just the env's key: a drifted client id would leave another one unchecked,
@@ -98,10 +114,99 @@ export function validateCachedState(
       const session = sessionFromStorage(storage, key);
       if (session) assertTestUser(session, env.DEVCHECK_SUB);
     }
+    return state;
   } catch (err) {
     log(`discarding the cached session (${err instanceof Error ? err.message : 'unreadable'})`);
     unlinkSync(path);
+    return undefined;
   }
+}
+
+// How long the launch renew waits on the token endpoint before loading the cache as it is.
+export const LAUNCH_RENEW_TIMEOUT_MS = 15_000;
+
+// What the browser loads (F226): the checked cache, with the app's session renewed first when it has under
+// LAUNCH_MARGIN_MS left — expired included — so the app never launches on a dead or boundary token and never
+// renews at launch. The renew uses the cache's refresh token at the dev pool's token endpoint, checks the new
+// tokens are the test user's (WRONG_USER throws, before any browser), and patches that one record in memory; the
+// file is re-saved after sign-in as before. A dead refresh token (invalid_grant) discards the cache, so the run
+// signs in through the form; any other failure loads the cache as it is (the app renews it itself), logged.
+// Nothing here logs a token.
+export async function cachedState(
+  path: string,
+  env: DevcheckEnv,
+  deps: { fetch: FetchLike; now: () => number; log: (msg: string) => void },
+): Promise<StorageState | undefined> {
+  const { fetch, now, log } = deps;
+  const state = readCheckedState(path, env, log);
+  if (!state) return undefined;
+  const key = userStoreKey(cognitoAuthority(env.DEVCHECK_POOL_ID), env.DEVCHECK_CLIENT_ID);
+  const origin = state.origins?.find((o) => o.origin === slotOrigin());
+  const entry = origin?.localStorage?.find((x) => x.name === key);
+  const session = entry ? sessionFromStorage({ [key]: entry.value }, key) : null;
+  if (!entry || !session) return state;
+  const left = Math.round((session.expiresAt * 1000 - now()) / 60_000);
+  if (!nearExpiry(session, now(), LAUNCH_MARGIN_MS)) {
+    log(`cached session good for ${left} min`);
+    return state;
+  }
+  const user = JSON.parse(entry.value) as Record<string, unknown>; // parsed above: sessionFromStorage read it
+  if (typeof user.refresh_token !== 'string' || !user.refresh_token) {
+    log('cached session near expiry and holds no refresh token — loading it as cached');
+    return state;
+  }
+  let dead = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let granted: Awaited<ReturnType<typeof grantTokens>>;
+  try {
+    granted = await Promise.race([
+      grantTokens(
+        fetch,
+        env.DEVCHECK_COGNITO_HOST,
+        { grant_type: 'refresh_token', client_id: env.DEVCHECK_CLIENT_ID, refresh_token: user.refresh_token },
+        now,
+        (m, error) => {
+          dead = error === 'invalid_grant';
+          return new DevcheckError('AUTH_REJECTED', `cached session renew: ${m}`);
+        },
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`the token endpoint took over ${LAUNCH_RENEW_TIMEOUT_MS / 1000} s`)),
+          LAUNCH_RENEW_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } catch (err) {
+    if (dead) {
+      log('discarding the cached session (its refresh token is dead: invalid_grant)');
+      unlinkSync(path);
+      return undefined;
+    }
+    log(`cached session not renewed (${err instanceof Error ? err.message : 'failed'}) — loading it as cached`);
+    return state;
+  } finally {
+    clearTimeout(timer);
+  }
+  assertTestUser(granted.session, env.DEVCHECK_SUB);
+  const renewed = JSON.stringify({
+    ...user,
+    access_token: granted.session.accessToken,
+    id_token: granted.idToken,
+    expires_at: granted.session.expiresAt,
+    ...(granted.refreshToken ? { refresh_token: granted.refreshToken } : {}),
+  });
+  log(
+    `renewed the cached session before launch (${left <= 0 ? `was expired ${-left} min` : `had ${left} min left`})`,
+  );
+  return {
+    ...state,
+    origins: state.origins.map((o) =>
+      o !== origin
+        ? o
+        : { ...o, localStorage: o.localStorage.map((x) => (x === entry ? { ...x, value: renewed } : x)) },
+    ),
+  };
 }
 
 // The browser's session file holds the refresh token and the Hosted UI cookie: mode 600 on create, and an

@@ -17,8 +17,11 @@ export interface Session {
 // Under this much life left, the app session is renewed before a request (pipeline.ts `fresh`) and the MCP
 // token, which keeps no refresh token, is refused (mcp-login.ts mcpToken).
 export const TOKEN_MARGIN_MS = 60_000;
-export const nearExpiry = (s: Session, now: number): boolean =>
-  s.expiresAt * 1000 - now < TOKEN_MARGIN_MS;
+// Under this much life left (expired included), the cached session is renewed before the browser loads anything
+// (login.ts cachedState), so the app never launches on a dead or boundary token and never renews at launch (F226).
+export const LAUNCH_MARGIN_MS = 15 * 60_000;
+export const nearExpiry = (s: Session, now: number, margin = TOKEN_MARGIN_MS): boolean =>
+  s.expiresAt * 1000 - now < margin;
 
 export const userStoreKey = (authority: string, clientId: string): string =>
   `oidc.user:${authority}:${clientId}`;
@@ -64,14 +67,16 @@ export function assertTestUser(session: Session, expectedSub: string): void {
 }
 
 // One grant at the dev pool's token endpoint (a code swap, a refresh). An error names Cognito's `error` field
-// only — the body of a success holds the tokens, and nothing here ever prints a body.
-export async function tokenGrant(
+// only — the body of a success holds the tokens, and nothing here ever prints a body. `fail` also gets that field
+// alone, so a caller can tell invalid_grant apart. The raw id token (and a rotated refresh token) go only to a
+// caller that writes them into a stored session (login.ts cachedState); tokenGrant keeps its session lean.
+export async function grantTokens(
   fetch: FetchLike,
   host: string,
   params: Record<string, string>,
   now: () => number,
-  fail: (msg: string) => Error,
-): Promise<Session & { clientId: string }> {
+  fail: (msg: string, error?: string) => Error,
+): Promise<{ session: Session & { clientId: string }; idToken: string; refreshToken?: string }> {
   const url = `https://${host}/oauth2/token`;
   assertDevCognitoUrl(url, host, '/oauth2/token');
   const res = await fetch(url, {
@@ -89,23 +94,35 @@ export async function tokenGrant(
   } catch {
     // not JSON — reported by status alone
   }
+  const error = typeof body.error === 'string' ? body.error : undefined;
   if (res.status !== 200)
-    throw fail(
-      `the token endpoint answered HTTP ${res.status}${typeof body.error === 'string' ? ` ${body.error}` : ''}`,
-    );
-  const { access_token, id_token, expires_in } = body;
+    throw fail(`the token endpoint answered HTTP ${res.status}${error ? ` ${error}` : ''}`, error);
+  const { access_token, id_token, expires_in, refresh_token } = body;
   if (typeof access_token !== 'string' || typeof id_token !== 'string')
     throw fail('the token endpoint returned no access or id token');
   const id = decodeJwtPayload(id_token);
   const access = decodeJwtPayload(access_token);
   return {
-    accessToken: access_token,
-    expiresAt:
-      typeof access.exp === 'number'
-        ? access.exp
-        : Math.floor(now() / 1000) + (typeof expires_in === 'number' ? expires_in : 0),
-    email: typeof id.email === 'string' ? id.email : '',
-    sub: typeof id.sub === 'string' ? id.sub : '',
-    clientId: typeof access.client_id === 'string' ? access.client_id : '',
+    session: {
+      accessToken: access_token,
+      expiresAt:
+        typeof access.exp === 'number'
+          ? access.exp
+          : Math.floor(now() / 1000) + (typeof expires_in === 'number' ? expires_in : 0),
+      email: typeof id.email === 'string' ? id.email : '',
+      sub: typeof id.sub === 'string' ? id.sub : '',
+      clientId: typeof access.client_id === 'string' ? access.client_id : '',
+    },
+    idToken: id_token,
+    ...(typeof refresh_token === 'string' && refresh_token ? { refreshToken: refresh_token } : {}),
   };
 }
+
+export const tokenGrant = async (
+  fetch: FetchLike,
+  host: string,
+  params: Record<string, string>,
+  now: () => number,
+  fail: (msg: string) => Error,
+): Promise<Session & { clientId: string }> =>
+  (await grantTokens(fetch, host, params, now, fail)).session;

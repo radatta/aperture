@@ -25,7 +25,7 @@ import {
 } from '../devcheck/config';
 import { DevcheckError } from '../devcheck/errors';
 import { openLedger, pendingIds, type Ledger } from '../devcheck/ledger';
-import { ensureSignedIn, validateCachedState } from '../devcheck/login';
+import { cachedState, ensureSignedIn } from '../devcheck/login';
 import { takeLock } from '../devcheck/run';
 import { pickSlot, type SlotPick } from '../devcheck/slot';
 import { PLANS_PATH, type BenchSeed } from './sim-bench-plans.ts';
@@ -233,8 +233,8 @@ async function main(): Promise<number> {
     ledger,
     async signIn(run) {
       const log = (s: string) => console.log(`[sim-bench:seed] ${s}`);
-      validateCachedState(statePath(main, 'dev'), env, log);
-      const { browser, context } = await launch(loadPlaywright(), statePath(main, 'dev'));
+      const state = await cachedState(statePath(main, 'dev'), env, { fetch, now: Date.now, log });
+      const { browser, context } = await launch(loadPlaywright(), state);
       try {
         const page = await context.newPage();
         const session = await ensureSignedIn(page, context, env, {

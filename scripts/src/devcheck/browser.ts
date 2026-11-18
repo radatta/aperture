@@ -24,9 +24,11 @@ export function loadPlaywright(
   return createRequire(join(root, 'package.json'))('playwright') as PwModule;
 }
 
+// The session to start from: a storageState file's path, or the state itself (login.ts cachedState renews it in
+// memory before the browser loads anything).
 export async function launch(
   pw: PwModule,
-  storageStatePath?: string,
+  storageState?: string | object,
 ): Promise<{ browser: PwBrowser; context: PwContext }> {
   const browser = await pw.chromium.launch({
     headless: true,
@@ -52,7 +54,9 @@ export async function launch(
     // Notification.permission as 'denied', so on a headless run Settings shows the denied line instead of
     // the button (timed-reminders' ui-enable row accepts either); a headed run would get the prompt-less grant.
     permissions: ['notifications'],
-    ...(storageStatePath && existsSync(storageStatePath) ? { storageState: storageStatePath } : {}),
+    ...(typeof storageState === 'object' || (storageState && existsSync(storageState))
+      ? { storageState }
+      : {}),
   });
   return { browser, context };
 }
