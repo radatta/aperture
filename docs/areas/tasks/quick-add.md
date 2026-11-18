@@ -102,6 +102,10 @@ Built autonomously from those:
 - **Never into a category because it's there:** the prompt says a category only when the line names it or is
   plainly about it, never because it's the only or nearest one (dev: a line about nothing filed under the user's
   only category). No validator guard — one would stop filing by topic.
+- **Notes on a short line go back into the title** (F232, dev 2026-11-18): the model put a typed line's marker
+  and a trailing word in notes ("call the dentist", notes "devcheck … typed"). When every notes word is the line's
+  own and the title with them back still fits its 80 characters, they return in place and the notes go
+  (`titleBackFromNotes`); real overflow, or a word the line never had, keeps its notes.
 - **Cost:** ~$0.003–0.006 a parse, ~20× Haiku, inside the maintainer's API credit; the app's own parse isn't
   capped (one parse per explicit press). The capture route's caps: [capture → Caps](capture.md#caps).
 
