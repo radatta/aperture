@@ -130,7 +130,22 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   while the page sits idle), so before every API request a session with under 60 s left is re-read from the
   page, which renews itself, and if the page hasn't, renewed from here with the page's refresh token at the
   env's dev-pool token endpoint (`login.ts` `refreshSession`, `assertDevCognitoUrl`, never following a
-  redirect), then checked again (`WRONG_USER`). Nothing is written back to the page or logged.
+  redirect), then checked again (`WRONG_USER`). Nothing is written back to the page or logged. **Before the
+  browser loads anything**, every launch renews the cached session the same way, with the cache's refresh token,
+  whatever its age (`login.ts` `cachedState`, through `launchCached`). The new tokens are checked: `WRONG_USER` throws
+  before any browser, and the cache goes. They are then handed to the context in memory. So the app never starts on a
+  dead, boundary or server-refused token, and never renews at launch. The log line starts `renewed the cached
+session before launch`.
+  - The file isn't written: it is re-saved after sign-in, as before.
+  - A dead refresh token (`invalid_grant`) discards the cache, so the run signs in through the form.
+  - Any other failure (the network, a 5xx, no answer in 15 s) loads the cache as it is, logged, and the app renews it
+    itself. The timeout frees the request, but one Cognito already took can't be recalled.
+  - Refresh-token rotation is off on the dev clients. If it were on, the file would go stale between sign-ins: a run
+    that dies before `saveState`, or a mid-run renew, leaves the old refresh token, and the next launch signs in
+    through the form.
+
+  Why: F226, a first load that 401-burst on 2026-11-17 and failed every scenario's console row.
+
 - **MCP as the test user.** Dev's `/mcp` accepts only tokens minted for the claude client (D14,
   `docs/areas/mcp/index.md`), so after the sweep the harness signs the test user in as `aperture-claude-dev` —
   authorization code + PKCE, no secret (a public client), the Hosted UI cookie reused so the form usually
@@ -213,7 +228,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   is never touched. **A dropped connection is retried**: a removal or read-back that hits one (`terminated`, a
   socket-level `fetch failed`) is tried again after 0.5 s and 2 s, each retry listed under _Retried after a dropped
   connection_; only then is it a failure (F177). Never a create — one whose answer died may have landed. Loading the app writes server-side too (`getDay` materialises the day), always as the test user —
-  the cached session is checked before any page loads.
+  the cached session is checked and renewed before any page loads.
 - **A row is proven only through its own entry point.** A UI row proven only through the API is a gap, not
   a pass. Every scenario's rows are checked when the run loads, before the deploy wait — a row no step proves
   through its entry, or an off-dev row naming a test that isn't there, is `MATRIX_GAP` — and again by
@@ -286,8 +301,8 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 | `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                                                                                                             | the message names what it serves                                                                                                                                                                                                           |
 | `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                                                                                                 | check the env file's host                                                                                                                                                                                                                  |
 | `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                                                                                               | screenshot in `shots/`; update `login.ts` deliberately                                                                                                                                                                                     |
-| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a refresh's `invalid_grant` means the cached session is dead: the operator deletes `.secrets/devcheck.dev.state.json`, then rerun                                                            |
-| `WRONG_USER`               | the session isn't the test user                                                                                                                                                                                        | delete `.secrets/devcheck.dev.state.json`, rerun                                                                                                                                                                                           |
+| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a refresh's `invalid_grant` means the cached session is dead: rerun — the launch renew discards a dead cache and signs in through the form                                                   |
+| `WRONG_USER`               | the session isn't the test user                                                                                                                                                                                        | rerun — at launch a wrong cached or renewed identity discards the cache itself; if it repeats, the env file `.secrets/devcheck.<slot>.env` doesn't name the pool's test user (its `DEVCHECK_SUB` or credentials) — operator                |
 | `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                                                                                                             | rerun; persistent → service-worker bug                                                                                                                                                                                                     |
 | `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                                                                                               | the message names the scenario and row; fix the scenario, never the rule                                                                                                                                                                   |
 | `MCP_AUTH_FAILED`          | the claude-client sign-in or code swap failed, before any step: Cognito's error, a state mismatch, no callback (or two), a callback that wasn't blocked — a token expiring mid-run fails its step instead              | the message names Cognito's `error`: `invalid_client` means the client needs a secret now (fall back to a test-user agent token); `redirect_mismatch` means `CLAUDE_CALLBACK` drifted from `cdk/src/config/claudeConnector.ts`; else rerun |
@@ -459,7 +474,7 @@ scenario's, and a branch with no scenario of its own reports "no feature rows". 
 carry its verdict: they hold only once a run passes.
 Shared, in the main checkout: the ledgers and the run locks, one of each per slot (_Dev slots_). Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session and the Hosted UI cookie, mode 600 — re-saved after the MCP
-sign-in).
+sign-in; the before-launch renew patches the loaded copy in memory, never the file).
 
 ## Why not Claude in Chrome
 
