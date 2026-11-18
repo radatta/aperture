@@ -4,10 +4,10 @@
 // catalog/import.ts → The catalog), which also fetches the pinned public source. It never serves HTTP. Its role reads
 // the table, puts rows and reads the Anthropic key, nothing else. The logic is coach/pick.ts and catalog/import.ts;
 // this is the AWS edge.
-import { isDayKey } from '@aperture/shared';
+import { isDayKey, isDevSlot } from '@aperture/shared';
 import { createLiveAnthropic } from './anthropic/liveAnthropic';
 import type { CatalogImportEvent } from './catalog/invoker';
-import { runCatalogImport } from './catalog/import';
+import { DEV_CATALOG_LIMIT, runCatalogImport } from './catalog/import';
 import { ensureCatalog } from './catalog/loader';
 import { liveCatalogSource } from './catalog/source';
 import type { CatalogSource } from './catalog/source';
@@ -46,12 +46,19 @@ export async function handleCatalogImport(
   gateway: AnthropicGateway,
   src: CatalogSource,
   raw: unknown,
-  opts: { now?: () => number } = {},
+  opts: { now?: () => number; devSlot?: boolean } = {},
 ): Promise<CatalogMeta> {
   const e = parseCatalogImportEvent(raw);
   const store = new CatalogStore(table, liveWrites(table));
-  return runCatalogImport({ store, source: src, anthropic: gateway, now: opts.now ?? Date.now }, e);
+  const limit = catalogImportLimit(e.limit, opts.devSlot === true);
+  return runCatalogImport(
+    { store, source: src, anthropic: gateway, now: opts.now ?? Date.now },
+    { runId: e.runId, limit },
+  );
 }
+// A dev slot's import is capped whatever the caller sent (DEV_CATALOG_LIMIT); prod's takes the caller's.
+export const catalogImportLimit = (limit: number | undefined, devSlot: boolean) =>
+  devSlot ? Math.min(limit ?? DEV_CATALOG_LIMIT, DEV_CATALOG_LIMIT) : limit;
 const isCatalogImport = (raw: unknown) =>
   !!raw && typeof raw === 'object' && (raw as { kind?: unknown }).kind === 'catalog-import';
 
@@ -95,7 +102,7 @@ export async function handleWorkerEvent(
   gateway: AnthropicGateway,
   src: CatalogSource,
   raw: unknown,
-  opts: { now?: () => number } = {},
+  opts: { now?: () => number; devSlot?: boolean } = {},
 ): Promise<CoachPickRun | CatalogMeta> {
   return isCatalogImport(raw)
     ? handleCatalogImport(table, gateway, src, raw, opts)
@@ -103,5 +110,7 @@ export async function handleWorkerEvent(
 }
 
 export async function handler(event: unknown): Promise<CoachPickRun | CatalogMeta> {
-  return handleWorkerEvent(doc, anthropic, source, event);
+  return handleWorkerEvent(doc, anthropic, source, event, {
+    devSlot: isDevSlot(process.env.STAGE),
+  });
 }

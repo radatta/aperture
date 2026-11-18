@@ -233,7 +233,8 @@ describe('normalizeCatalogImport', () => {
     expect(() => normalizeCatalogImport({ nope: 1 })).toThrow(/Unknown import field/);
     expect(() => normalizeCatalogImport({ limit: 0 })).toThrow(/limit/);
     expect(() => normalizeCatalogImport({ part: 1 })).toThrow(/go with classes/);
-    expect(() => normalizeCatalogImport({ classes: ' ' })).toThrow(/non-empty/);
+    expect(() => normalizeCatalogImport({ classes: '' })).toThrow(/non-empty/);
+    expect(normalizeCatalogImport({ classes: '\n', part: 2, parts: 2 })).toMatchObject({ part: 2 }); // a raw slice
     expect(() =>
       normalizeCatalogImport({ classes: 'x'.repeat(LC_CATALOG_PART_MAX_CHARS + 1) }),
     ).toThrow(/split it/);

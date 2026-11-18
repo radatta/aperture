@@ -60,6 +60,20 @@ describe('CatalogStore — the upload', () => {
     await expect(store.stagePart(2, 2, 'c', 3)).rejects.toThrow(/already in/);
   });
 
+  it('never joins a part row another upload wrote over this one’s', async () => {
+    const { store, doc } = setup();
+    await store.stagePart(1, 2, 'a', 1);
+    const done = await store.stagePart(2, 2, 'b', 2);
+    doc.putNow({
+      PK: CATALOG_PK,
+      SK: catalogSk.stagePart(1),
+      upload: 'u-other',
+      text: 'x',
+      updatedAt: 3,
+    });
+    expect(await store.stageText(done)).toBeNull();
+  });
+
   it('a concurrent part loses with a refusal, never a mixed file', async () => {
     const { store, doc } = setup();
     await store.stagePart(1, 2, 'a', 1);
@@ -91,6 +105,16 @@ describe('CatalogStore — the job', () => {
     expect(await store.claim('run-3', 1000 + CLAIM_MS)).toMatchObject({
       job: { runId: 'run-3' },
     });
+  });
+
+  it('records a job’s spend under its claim at once, and nothing once the claim is another’s', async () => {
+    const { store } = setup();
+    await store.claim('run-1', 1000);
+    expect(await store.recordSpend('run-1', 0.05, 1001)).toBe(true);
+    expect(await store.meta(true)).toMatchObject({ costUsd: 0.05, job: { runId: 'run-1' } });
+    await store.claim('run-2', 1000 + CLAIM_MS);
+    expect(await store.recordSpend('run-1', 0.2, 1000 + CLAIM_MS + 1)).toBe(false);
+    expect((await store.meta(true))!.costUsd).toBe(0.05);
   });
 
   it('a claim that loses the race reads as not claimed', async () => {
@@ -161,7 +185,7 @@ describe('catalogState / catalogStatus', () => {
   };
   const by = (tags: number) => ({ neetcode: 1, rule: 0, model: 1, tags });
   const live = { ...base, live: 'a' as const, rev: 'r', by: by(0) };
-  const upload = { of: 2, have: 1, updatedAt: 1 };
+  const upload = { of: 2, have: 1, upload: 'u1', updatedAt: 1 };
 
   it('reads each state', () => {
     expect(catalogState(null, null, 0)).toBe('absent');
@@ -180,6 +204,13 @@ describe('catalogState / catalogStatus', () => {
       state: 'ready',
       staged: { have: 1, of: 2 },
     });
-    expect(catalogStatus(live, { of: 0, have: 0, updatedAt: 1 }, 0).staged).toBeNull();
+    expect(catalogStatus(live, { of: 0, have: 0, upload: '', updatedAt: 1 }, 0).staged).toBeNull();
+  });
+
+  it('shows a complete upload still held — its last part came while another import ran — as waiting', () => {
+    expect(catalogStatus(live, { ...upload, have: 2 }, 0)).toMatchObject({
+      state: 'ready',
+      staged: { have: 2, of: 2 },
+    });
   });
 });

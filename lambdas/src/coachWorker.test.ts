@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  catalogImportLimit,
   handleCatalogImport,
   handleCoachPick,
   handleWorkerEvent,
@@ -144,5 +145,15 @@ describe('handleWorkerEvent', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     await handleCoachPick(doc, new FakeAnthropic(), EVENT);
     expect(catalogLoaded()).toEqual({ rev: meta.rev, count: rows.length });
+  });
+});
+
+describe('catalogImportLimit', () => {
+  it('caps a dev slot’s import at 300 whatever was sent, and leaves prod’s as sent', () => {
+    expect(catalogImportLimit(undefined, true)).toBe(300);
+    expect(catalogImportLimit(5000, true)).toBe(300);
+    expect(catalogImportLimit(50, true)).toBe(50);
+    expect(catalogImportLimit(undefined, false)).toBeUndefined();
+    expect(catalogImportLimit(5000, false)).toBe(5000);
   });
 });

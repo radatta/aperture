@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   LC_CATALOG_COST_STOP_USD,
   LC_CATALOG_SOURCE,
@@ -13,7 +13,7 @@ import { liveWrites } from '../ddb/writes';
 import { FIXTURE_CLASSES, FIXTURE_SOURCE } from './fixture';
 import { CALL_CEILING_USD, runCatalogImport } from './import';
 import { FakeCatalogSource } from './source';
-import { CatalogStore } from './store';
+import { CatalogStore, CLAIM_MS } from './store';
 
 // The fixture's rows the classes leave to their tags: 9, 9004, 9005, 9007, 9009, 9011, 9012.
 const TAGS_ONLY = [9, 9004, 9005, 9007, 9009, 9011, 9012];
@@ -123,22 +123,31 @@ describe('runCatalogImport', () => {
     expect(await run('run-3')).toMatchObject({ lastError: 'The source had no usable rows' });
   });
 
-  it('records a failed model call, keeps those rows on their tags, and charges a call with no usage at its ceiling', async () => {
-    const { anthropic, run } = setup();
+  it('records a failed model call and keeps those rows on their tags; only a timeout is charged its ceiling', async () => {
+    const { anthropic, run, store } = setup();
+    // The live gateway's shapes: an HTTP error or a missing key reports no usage and was never billed.
     anthropic.nextClassify = {
       ok: false,
       reason: 'api',
-      detail: 'HTTP 529',
+      detail: 'HTTP 529 overloaded',
       model: 'fake',
-      usage: { input: 100, output: 0 },
+      usage: null,
       ms: 1,
     };
-    const failedCall = await run('run-1');
-    expect(failedCall).toMatchObject({
-      modelError: 'api: HTTP 529',
+    const overloaded = await run('run-1');
+    expect(overloaded).toMatchObject({
+      modelError: 'api: HTTP 529 overloaded',
       by: { model: 0, tags: 12 },
+      costUsd: 0,
     });
-    expect(failedCall.costUsd).toBeCloseTo(100 * 2e-6);
+    anthropic.nextClassify = {
+      ok: false,
+      reason: 'unavailable',
+      model: 'fake',
+      usage: null,
+      ms: 0,
+    };
+    expect((await run('run-2')).costUsd).toBe(0);
 
     anthropic.nextClassify = {
       ok: false,
@@ -147,12 +156,63 @@ describe('runCatalogImport', () => {
       usage: null,
       ms: 45_000,
     };
-    const timedOut = await run('run-2');
-    expect(timedOut.costUsd).toBeCloseTo(100 * 2e-6 + CALL_CEILING_USD);
+    const timedOut = await run('run-3');
+    expect(timedOut.costUsd).toBeCloseTo(CALL_CEILING_USD);
     expect(timedOut.modelError).toBe('timeout');
 
+    // A failed call that does report usage is charged what it reports.
+    anthropic.nextClassify = {
+      ok: false,
+      reason: 'bad-json',
+      model: 'fake',
+      usage: { input: 100, output: 0 },
+      ms: 1,
+    };
+    expect((await run('run-4')).costUsd).toBeCloseTo(CALL_CEILING_USD + 100 * 2e-6);
+
     anthropic.nextClassify = answer;
-    expect((await run('run-3')).modelError).toBeNull();
+    expect((await run('run-5')).modelError).toBeNull();
+    expect((await store.meta(true))!.job).toBeNull();
+  });
+
+  it('records the spend before publishing, and a publish that fails as the import’s failure', async () => {
+    const { store, anthropic, run } = setup();
+    anthropic.nextClassify = answer;
+    const finish = store.finish.bind(store);
+    let first = true;
+    store.finish = async (runId, now, out) => {
+      if (first && out.ok) {
+        first = false;
+        throw new Error('ThrottlingException');
+      }
+      return finish(runId, now, out);
+    };
+    await expect(run('run-1')).rejects.toThrow('ThrottlingException');
+    expect(await store.meta(true)).toMatchObject({
+      live: null,
+      job: null,
+      lastError: 'publishing failed: ThrottlingException',
+    });
+    expect((await store.meta(true))!.costUsd).toBeCloseTo(1000 * 2e-6 + 500 * 10e-6);
+  });
+
+  it('a claim lost mid-job writes nothing of the job’s, and the newer claim stands', async () => {
+    const { store, run, deps } = setup();
+    const fetch = deps.source.fetch.bind(deps.source);
+    deps.source.fetch = async (url) => {
+      await store.claim('thief', deps.now() + CLAIM_MS); // the claim lapsed and another job took it
+      return fetch(url);
+    };
+    await expect(run('run-1')).rejects.toThrow(/lost its claim/);
+    expect(await store.meta(true)).toMatchObject({ live: null, job: { runId: 'thief' } });
+  });
+
+  it('logs, and survives, an upload it can’t empty', async () => {
+    const { store, run, logs } = setup();
+    await store.stagePart(1, 1, FIXTURE_CLASSES, 1);
+    vi.spyOn(store, 'clearStage').mockRejectedValue(new Error('boom'));
+    expect(await run('run-1')).toMatchObject({ live: 'a' });
+    expect(logs.some((l) => l.includes('catalog_stage_clear_failed'))).toBe(true);
   });
 
   it('makes no model call once spend reaches the stop; rows stay on their tags', async () => {

@@ -12,7 +12,7 @@ import { InMemoryDoc } from '../ddb/DocClient';
 import { CATALOG_PK, catalogSk } from '../ddb/keys';
 import { liveWrites } from '../ddb/writes';
 import { FIXTURE_SOURCE } from './fixture';
-import { ensureCatalog } from './loader';
+import { ensureCatalog, FAILED_REV_RETRY_MS, resetCatalogLoader } from './loader';
 import { CatalogStore } from './store';
 
 const rows = buildCatalog(trimSourceRows(FIXTURE_SOURCE).rows, new Map());
@@ -37,6 +37,7 @@ const setup = () => {
 describe('ensureCatalog', () => {
   afterEach(() => {
     unloadCatalog();
+    resetCatalogLoader();
     vi.restoreAllMocks();
   });
 
@@ -73,5 +74,21 @@ describe('ensureCatalog', () => {
     await ensureCatalog(store);
     expect(catalogLoaded()?.rev).toBe(m1.rev);
     expect(log).toHaveBeenCalledWith(expect.stringContaining('catalog load failed'));
+  });
+
+  it('doesn’t retry a rev that won’t load for a minute, but loads a newer rev at once', async () => {
+    const { store, doc } = setup();
+    await publish(store, 'run-1', 1000);
+    await doc.delete(CATALOG_PK, catalogSk.chunk('a', 0));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await ensureCatalog(store, 10_000);
+    const queries = doc.queries.length;
+    await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS - 1);
+    expect(doc.queries.length).toBe(queries); // meta only
+    await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS);
+    expect(doc.queries.length).toBe(queries + 1);
+    const m2 = await publish(store, 'run-2', 2000);
+    await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS + 1);
+    expect(catalogLoaded()?.rev).toBe(m2.rev);
   });
 });

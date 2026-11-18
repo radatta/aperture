@@ -21,7 +21,8 @@ import type { Writes } from '../ddb/writes';
 // `writes`, and the worker's role may put but never delete (cdk coach-worker): an emptied row is a put.
 
 type Slot = 'a' | 'b';
-// ~40 KB a write: under dev's 50-unit write ceiling a second (docs/arch/INFRA.md §11); a test passes a smaller one.
+// ~40 KB a write, each under dev's 50-unit write ceiling (docs/arch/INFRA.md §11) — per write, not per second: dev's
+// imports stay capped (the worker clamps `limit` on a dev slot), so they're one chunk. A test passes a smaller one.
 const CHUNK_CHARS = 40_000;
 // A job's claim lapses after this: the worker's async event may queue 60 s (maxEventAge) and run 90 s (its timeout),
 // so a claim always outlives the job it starts.
@@ -45,6 +46,7 @@ export interface CatalogMeta {
 export interface CatalogStage {
   of: number; // 0: none under way
   have: number; // parts 1…have are in, in order
+  upload: string; // the upload's id, stamped on each of its part rows: another upload's rows never join it
   updatedAt: number;
 }
 const EMPTY_META: Omit<CatalogMeta, 'updatedAt'> = {
@@ -71,8 +73,9 @@ const gunz = (data: string) => gunzipSync(Buffer.from(data, 'base64')).toString(
 export const stageComplete = (s: CatalogStage | null): boolean =>
   !!s && s.of > 0 && s.have === s.of;
 
-// The state from the job and the live catalog; an upload under way shows in `staged`, and is the state only while
-// there's nothing else to say (an abandoned upload never hides a live catalog).
+// The state from the job and the live catalog; an upload still held shows in `staged` — under way, or complete and
+// waiting for a kick (its last part came while another job ran) — and is the state only while there's nothing else
+// to say (an abandoned upload never hides a live catalog).
 export function catalogState(
   meta: CatalogMeta | null,
   stage: CatalogStage | null,
@@ -95,8 +98,7 @@ export function catalogStatus(
     premium: meta?.live ? meta.premium : 0,
     by: meta?.live ? meta.by : null,
     importedAt: meta?.importedAt ?? null,
-    staged:
-      stage && stage.of > 0 && !stageComplete(stage) ? { have: stage.have, of: stage.of } : null,
+    staged: stage && stage.of > 0 ? { have: stage.have, of: stage.of } : null,
     costUsd: meta?.costUsd ?? 0,
     lastError: meta?.lastError ?? null,
     modelError: meta?.modelError ?? null,
@@ -123,14 +125,16 @@ export class CatalogStore {
       ? {
           of: (it.of as number) ?? 0,
           have: (it.have as number) ?? 0,
+          upload: typeof it.upload === 'string' ? it.upload : '',
           updatedAt: it.updatedAt as number,
         }
       : null;
   }
 
   // One part of an upload, in order: a part 1 starts a new one (replacing any upload under way), part k needs parts
-  // 1…k-1 of the same size already in. Its text goes in its own row, then the header moves on, conditional on the
-  // header as read: a concurrent part loses with a refusal, never a mixed file.
+  // 1…k-1 of the same size already in. Its text goes in its own row stamped with the upload's id, then the header
+  // moves on, conditional on the header as read: a concurrent part loses with a refusal, and a part row another
+  // upload overwrote never joins this one's text (stageText reads only rows with its id).
   async stagePart(part: number, of: number, text: string, now: number): Promise<CatalogStage> {
     const cur = await this.stage();
     if (part !== 1) {
@@ -147,20 +151,20 @@ export class CatalogStore {
             : `Send part ${cur.have + 1} next (${cur.have} of ${of} in)`,
         );
     }
+    const updatedAt = Math.max(now, (cur?.updatedAt ?? 0) + 1);
+    const upload =
+      part === 1 ? `u${updatedAt}-${Math.random().toString(36).slice(2, 10)}` : cur!.upload;
     await this.writes.put({
       PK: CATALOG_PK,
       SK: catalogSk.stagePart(part),
+      upload,
       text,
       updatedAt: now,
     });
-    const next: CatalogStage = {
-      of,
-      have: part,
-      updatedAt: Math.max(now, (cur?.updatedAt ?? 0) + 1),
-    };
+    const next: CatalogStage = { of, have: part, upload, updatedAt };
     try {
       await this.writes.putIf(
-        { PK: CATALOG_PK, SK: catalogSk.stage(), of, have: part, updatedAt: next.updatedAt },
+        { PK: CATALOG_PK, SK: catalogSk.stage(), of, have: part, upload, updatedAt },
         cur?.updatedAt ?? null,
       );
     } catch (err) {
@@ -179,7 +183,7 @@ export class CatalogStore {
     const parts: string[] = [];
     for (let p = 1; p <= stage.of; p++) {
       const r = byPart.get(p);
-      if (!r || typeof r.text !== 'string') return null;
+      if (!r || typeof r.text !== 'string' || r.upload !== stage.upload) return null;
       parts.push(r.text);
     }
     return parts.join('');
@@ -193,6 +197,7 @@ export class CatalogStore {
           SK: catalogSk.stage(),
           of: 0,
           have: 0,
+          upload: '',
           updatedAt: Math.max(now, stage.updatedAt + 1),
         },
         stage.updatedAt,
@@ -208,6 +213,23 @@ export class CatalogStore {
   async classesText(): Promise<string> {
     const it = await this.doc.get(CATALOG_PK, catalogSk.classes(), { consistent: true });
     return typeof it?.data === 'string' ? gunz(it.data) : '';
+  }
+
+  // The job's model spend, recorded as soon as the call returns (the claim kept), so a run that dies before
+  // `finish` still counts it against the stop. false: the claim is no longer this job's, nothing written.
+  async recordSpend(runId: string, costUsd: number, now: number): Promise<boolean> {
+    const cur = await this.meta(true);
+    if (!cur || cur.job?.runId !== runId) return false;
+    try {
+      await this.putMeta(
+        { ...cur, costUsd, updatedAt: Math.max(now, cur.updatedAt + 1) },
+        cur.updatedAt,
+      );
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
   }
 
   // Claims the import for `runId`: null (and nothing written) while another claim is younger than CLAIM_MS.

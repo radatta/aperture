@@ -4,15 +4,20 @@
 // API and through MCP in two parts, then what reads see — the record of an off-list problem, get_problem, the
 // Problem page, the plan still NeetCode 150's. The catalog is stage-wide public metadata, not the test user's data:
 // it isn't ledgered and stays for the next run. The one off-list problem is palindrome-number (number 9, on dev's
-// source and the local fixture alike), uploaded under two-pointers — a pattern its Math tag can't give, so only the
-// upload can put it there — with two-sum as its similar problem; its one attempt is ledgered and deleted in the
-// step. Every step that needs the catalog is slow tier: it runs on --feature, or when the catalog's own code moves.
+// source and the local fixture alike): each run uploads it under whichever of two patterns its Math tag can't give
+// (two-pointers, sliding-window) it doesn't hold now — through the API, then the other through MCP — so every run's
+// upload must flip it; two-sum is its similar problem. Its attempts are ledgered and deleted in their steps. Every
+// step that needs the catalog is slow tier: it runs on --feature, or when the catalog's own code moves.
 import type { DevCatalogStatus } from '../api';
 import type { DevMcpCatalogStatus } from '../mcp';
 import { noConsoleErrors, needsYou, type Ctx, type Scenario } from '../scenario';
 
 const OFF = 'palindrome-number';
-const OFF_CLASS = '9\ttwo-pointers\t1\t-'; // number, pattern, similar (two-sum), harder
+const FLIP = { 'two-pointers': 'Two Pointers', 'sliding-window': 'Sliding Window' } as const;
+type Flip = keyof typeof FLIP;
+const other = (p: Flip): Flip => (p === 'two-pointers' ? 'sliding-window' : 'two-pointers');
+const classLine = (p: Flip) => `9\t${p}\t1\t-`; // number, pattern, similar (two-sum), harder
+const OFF_CLASS = classLine('two-pointers'); // the refusal cases' text
 const LIMIT = 300; // problems beside NeetCode's: dev's import stays quick and its worker slot free
 const SETTLE_MS = 240_000; // above the 180 s claim, so a dropped event reads as stuck, not as settled
 const STOP_USD = 0.25; // LC_CATALOG_COST_STOP_USD (scripts doesn't depend on shared)
@@ -49,6 +54,9 @@ function sane(s: DevCatalogStatus | DevMcpCatalogStatus) {
 // Steps share what earlier ones read; a failed step skips the rest, so these are set when read.
 let imported: DevCatalogStatus;
 let kicks: { first: string; second: string };
+let apiPick: Flip; // what the API upload set, then the MCP upload's flip
+let mcpPick: Flip;
+let model: { was: DevMcpCatalogStatus; now: DevMcpCatalogStatus };
 
 export const lcCatalog: Scenario = {
   id: 'lc-catalog',
@@ -60,6 +68,9 @@ export const lcCatalog: Scenario = {
     'packages/shared/src/coach.ts',
     'lambdas/src/catalog/**',
     'lambdas/src/anthropic/catalogClassifyPrompt.ts',
+    'lambdas/src/anthropic/liveAnthropic.ts',
+    'cdk/src/lib/coach-worker.ts',
+    'cdk/src/config/devAccount.ts',
     'lambdas/src/coachWorker.ts',
     'lambdas/src/mcp/coachTools.ts',
     'app/src/pages/Recruiting/ProblemPage.tsx',
@@ -76,7 +87,7 @@ export const lcCatalog: Scenario = {
       id: 'api-upload',
       entry: 'api',
       kind: 'nominal',
-      what: 'An uploaded classification line sets that problem’s pattern and similar problem, which its tags alone can’t',
+      what: 'An uploaded classification line flips that problem’s pattern (to one its tags can’t give) and sets its similar problem',
     },
     {
       id: 'api-running',
@@ -94,13 +105,19 @@ export const lcCatalog: Scenario = {
       id: 'mcp-upload',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'import_catalog takes the classification in two parts: part 1 stages (the live catalog still reads), part 2 kicks',
+      what: 'import_catalog takes the classification in two parts split mid-line: part 1 stages (the live catalog still reads), part 2 kicks; the joined line parses and flips the pattern back',
     },
     {
       id: 'mcp-import',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A repeat import through MCP settles with every earlier class and link kept, and classifies more problems while some wait and spend is under the stop',
+      what: 'A repeat import through MCP settles with every earlier class and link kept',
+    },
+    {
+      id: 'mcp-model',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'A kick classifies more problems with the real model while some wait on their tags and the slot’s spend is under the $0.25 stop',
     },
     {
       id: 'mcp-problem',
@@ -233,7 +250,19 @@ export const lcCatalog: Scenario = {
       proves: ['api-import', 'api-upload'],
       async run(ctx) {
         const before = await ctx.api.reads.getCatalogStatus();
-        const first = await ctx.api.writes.startCatalogImport({ classes: OFF_CLASS, limit: LIMIT });
+        // Whichever flip pattern the problem doesn't hold now (none before the first import): the upload must change it.
+        const now = before.count
+          ? await ctx.mcp.reads.getProblem({ slug: OFF }).then(
+              (r) => r.problem.patternId,
+              () => null,
+            )
+          : null;
+        apiPick = now === 'two-pointers' ? 'sliding-window' : 'two-pointers';
+        mcpPick = other(apiPick);
+        const first = await ctx.api.writes.startCatalogImport({
+          classes: classLine(apiPick),
+          limit: LIMIT,
+        });
         const second = await ctx.api.writes.startCatalogImport({ limit: LIMIT });
         kicks = { first: first.state, second: second.state };
         imported = await settled(() => ctx.api.reads.getCatalogStatus(), before.importedAt);
@@ -270,12 +299,7 @@ export const lcCatalog: Scenario = {
       async run(ctx) {
         const off = await ctx.mcp.reads.getProblem({ slug: OFF });
         const p = off.problem;
-        if (
-          p.onRoadmap ||
-          p.patternId !== 'two-pointers' ||
-          p.difficulty !== 'Easy' ||
-          p.number !== 9
-        )
+        if (p.onRoadmap || p.patternId !== apiPick || p.difficulty !== 'Easy' || p.number !== 9)
           fail(`get_problem ${OFF}: ${JSON.stringify(p)}`);
         if (JSON.stringify(p.lists) !== '["leetcode"]')
           fail(`${OFF} lists ${JSON.stringify(p.lists)}`);
@@ -300,9 +324,10 @@ export const lcCatalog: Scenario = {
       proves: ['mcp-upload', 'mcp-import'],
       async run(ctx) {
         const first = await ctx.mcp.reads.catalogStatus();
+        const line = classLine(mcpPick);
         const cut = 5; // mid-line: parts are raw slices of the file
         const staged = await ctx.mcp.writes.importCatalog({
-          classes: OFF_CLASS.slice(0, cut),
+          classes: line.slice(0, cut),
           part: 1,
           parts: 2,
         });
@@ -312,7 +337,7 @@ export const lcCatalog: Scenario = {
         )
           fail(`part 1 → ${JSON.stringify(staged)}`);
         const kicked = await ctx.mcp.writes.importCatalog({
-          classes: OFF_CLASS.slice(cut),
+          classes: line.slice(cut),
           part: 2,
           parts: 2,
           limit: LIMIT,
@@ -326,12 +351,36 @@ export const lcCatalog: Scenario = {
         if (again.count !== first.count)
           fail(`the repeat changed the count: ${again.count} vs ${first.count}`);
         if (by.model < was.model) fail('the repeat lost model classes');
-        // While problems wait on their tags and spend is under the stop, each kick classifies more.
-        if (was.tags > 0 && first.costUsd < STOP_USD && by.model <= was.model)
-          fail(`the model classified nothing: ${JSON.stringify(again)}`);
+        if (again.badClasses !== 0 || again.staged !== null)
+          fail(`the two parts didn’t join into one clean line: ${JSON.stringify(again)}`);
+        model = { was: first, now: again };
         const p = (await ctx.mcp.reads.getProblem({ slug: OFF })).problem;
-        if (p.patternId !== 'two-pointers' || !p.similar?.some((x) => x.slug === 'two-sum'))
-          fail(`the uploaded class was lost: ${JSON.stringify(p)}`);
+        if (p.patternId !== mcpPick || !p.similar?.some((x) => x.slug === 'two-sum'))
+          fail(`the upload didn’t flip ${OFF} to ${mcpPick}: ${JSON.stringify(p)}`);
+      },
+    },
+    {
+      id: 'model',
+      entry: 'mcp',
+      cost: 'slow',
+      title:
+        'That kick classified more problems with the model, while some waited and spend allowed',
+      proves: ['mcp-model'],
+      async run() {
+        const { was, now } = model;
+        if (!was.by?.tags)
+          needsYou(
+            'every problem in this slot’s capped catalog is classified: none left for the model',
+            {
+              stepOnly: true,
+            },
+          );
+        if (was.costUsd >= STOP_USD)
+          needsYou(`this slot’s model spend ($${was.costUsd}) reached the $${STOP_USD} stop`, {
+            stepOnly: true,
+          });
+        if ((now.by?.model ?? 0) <= (was.by?.model ?? 0))
+          fail(`the model classified nothing: ${JSON.stringify(now)}`);
       },
     },
     {
@@ -348,7 +397,7 @@ export const lcCatalog: Scenario = {
           if (
             !r ||
             r.title !== 'Palindrome Number' ||
-            r.pattern !== 'two-pointers' ||
+            r.pattern !== mcpPick ||
             r.difficulty !== 'Easy' ||
             r.inCatalog !== false ||
             JSON.stringify(r.lists) !== '["leetcode"]'
@@ -386,7 +435,7 @@ export const lcCatalog: Scenario = {
         // The app knows an off-list problem only through its record (it loads no catalog): log one, read, remove it.
         const [a] = await ctx.api.writes.logCoachAttempts([{ slug: OFF, outcome: 'solved' }]);
         try {
-          const line = 'Two Pointers · Easy · All LeetCode';
+          const line = `${FLIP[mcpPick]} · Easy · All LeetCode`;
           await ctx.ui.goto(`/recruiting/progress/${OFF}`);
           await ctx.ui.expectText(line, 20_000);
           await ctx.shot('problem-page');

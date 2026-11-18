@@ -348,7 +348,8 @@ export function normalizeCatalogImport(raw: unknown): CatalogImportInput {
       throw new Error('part and parts go with classes');
     return out;
   }
-  if (typeof o.classes !== 'string' || !o.classes.trim())
+  // Not trimmed: parts are raw slices, so a part may be only whitespace (the file's last newline).
+  if (typeof o.classes !== 'string' || o.classes === '')
     throw new Error('classes must be non-empty text');
   if (o.classes.length > LC_CATALOG_PART_MAX_CHARS)
     throw new Error(

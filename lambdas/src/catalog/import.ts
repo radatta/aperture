@@ -34,12 +34,15 @@ export interface CatalogImportDeps {
   log?: (line: string) => void;
 }
 
-// A call that reported no usage (a timeout, a dropped connection) may still be billed: charge its ceiling — a
-// generous input estimate plus every output token it could have used.
+// A call that timed out reported no usage but may still be billed: charge its ceiling — a generous input estimate plus
+// every output token it could have used. Any other failure without usage never reached the model (no key, a
+// refused or overloaded request, a connection that failed) and costs nothing. The spend never resets on its own.
 export const CALL_CEILING_USD =
   20_000 * CATALOG_CLASSIFY_USD.input + CATALOG_CLASSIFY_MAX_TOKENS * CATALOG_CLASSIFY_USD.output;
 
 type Built = Parameters<CatalogStore['finish']>[2];
+// A dev slot's import is capped here whatever the caller sent: its table's write ceiling and its one worker slot.
+export const DEV_CATALOG_LIMIT = 300;
 
 export async function runCatalogImport(
   deps: CatalogImportDeps,
@@ -83,9 +86,12 @@ export async function runCatalogImport(
       costUsd += call.usage
         ? call.usage.input * CATALOG_CLASSIFY_USD.input +
           call.usage.output * CATALOG_CLASSIFY_USD.output
-        : call.ok
-          ? 0
-          : CALL_CEILING_USD;
+        : !call.ok && call.reason === 'timeout'
+          ? CALL_CEILING_USD
+          : 0;
+      // Counted against the stop now, so a run that dies before `finish` can't lose it.
+      if (!(await store.recordSpend(job.runId, costUsd, now())))
+        throw new Error('The catalog import lost its claim');
       if (call.ok) {
         const answered = validateCatalogClasses(call.fields, [...ids]);
         for (const [id, c] of answered) classes.set(id, c);
@@ -118,12 +124,18 @@ export async function runCatalogImport(
     built = { ok: false, error: (err as Error).message || String(err), costUsd };
   }
 
-  // Published (or failed) once; a lost claim here throws, logged, and leaves the newer job's catalog alone.
+  // Published (or failed) once; a lost claim here throws, logged, and leaves the newer job's catalog alone. A publish
+  // that fails otherwise (a throttled put) is recorded as the import's failure, then thrown.
   let out: CatalogMeta;
   try {
     out = await store.finish(job.runId, now(), built);
   } catch (err) {
-    log(JSON.stringify({ event: 'catalog_import', ok: false, error: (err as Error).message }));
+    const error = (err as Error).message || String(err);
+    log(JSON.stringify({ event: 'catalog_import', ok: false, error }));
+    if (built.ok && !/lost its claim/.test(error))
+      await store
+        .finish(job.runId, now(), { ok: false, error: `publishing failed: ${error}`, costUsd })
+        .catch(() => {}); // the claim gone too: nothing left to record
     throw err;
   }
   // The upload is in the stored classes now; empty it unless a new one began meanwhile.

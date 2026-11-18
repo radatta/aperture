@@ -1021,7 +1021,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'catalog_status',
     description:
-      'The full LeetCode problem catalog (metadata only: numbers, titles, difficulty, tags, acceptance, Premium; never a statement) — whether it is imported on this stage and how: `state` (absent, staging, running, ready, partial, failed), the source commit, the count and how each problem got its pattern (`by`: neetcode, rule, model, tags), an upload\u2019s parts so far, the server model spend and the last error. Stage-wide, not the user\u2019s data. Read-only.',
+      'The full LeetCode problem catalog (metadata only: numbers, titles, difficulty, tags, acceptance, Premium; never a statement) — whether it is imported on this stage and how: `state` (absent, staging, running, ready, partial, failed), the source commit, the count and how each problem got its pattern (`by`: neetcode, rule, model, tags), `staged` (an upload still held: its parts so far, or complete and waiting for a kick when its last part came while another import ran — call import_catalog with no classes), the server model spend, `lastError`, `modelError` (the newest model step\u2019s failure) and `badClasses` (lines of the newest upload that didn\u2019t parse). Stage-wide, not the user\u2019s data. Read-only.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(_args, ctx) {
       return catalogView((await ctx.dispatch('getCatalogStatus', [])) as CatalogStatus);
@@ -1032,7 +1032,7 @@ export const COACH_TOOLS: Tool[] = [
     description: [
       ASK_FIRST,
       `Builds the stage\u2019s full LeetCode problem catalog from the pinned public dataset (stage-wide metadata, not the user\u2019s data; their plan still picks from NeetCode 150). Optional \`classes\`: the classification file (one problem per line: number, pattern, similar numbers, harder numbers, tab-separated), at most ${LC_CATALOG_PART_MAX_CHARS} characters a call — split a longer one into \`parts\` (≤ ${LC_CATALOG_PARTS_MAX}) sent in order as \`part\` 1…n — raw slices, joined as sent, so a split may fall anywhere; a part 1 starts over, one out of order is refused with why; the last part in starts the import. With no \`classes\` it starts an import with the classes already stored, and a few new problems are classified on the server each time.`,
-      'Returns the catalog_status after the call — read back `staged` (the parts in so far) and `state` (`running` once kicked; then call catalog_status until `ready` or `partial`, and read `modelError` and `badClasses`). Calling again while one runs starts nothing.',
+      'Returns the catalog_status after the call — read back `staged` (the parts in so far) and `state` (`running` once kicked; then call catalog_status until `ready` or `partial`, and read `modelError` and `badClasses`). Calling again while one runs starts nothing; an upload whose last part came then stays complete in `staged` until a call with no classes kicks it.',
     ].join(' '),
     inputSchema: {
       type: 'object',
