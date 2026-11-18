@@ -3,12 +3,12 @@
 // is the other half: a lane that doesn't already hold the slot is refused it while main is pending there, so it can't
 // slip in between main's wait reading "free" and main's deploy landing (lock.ts → acquireSlot's `pending`).
 //
-// Pending for slot S: a deploy.yml push run on main that isn't completed, unless
-//   - its `wait-<S>` job was skipped (main isn't deploying S: a docs-only `none`, or devb's shape didn't change), or
-//   - its slot job (`deploy-<S> / …`, or the bare `deploy-<S>` GitHub lists for a skipped call) has completed —
-//     main is done with S (prod may still be running).
-// Anything else is pending, a run still queued in the concurrency group with no jobs listed yet included. A run from
-// before the wait jobs has only the second rule. Errors propagate: the caller fails closed.
+// Pending for slot S: a deploy.yml push run on main, not completed, whose `wait-<S>` job has started (in progress, or
+// completed other than skipped) and whose slot job (`deploy-<S> / …`, or the bare `deploy-<S>` GitHub lists for a
+// skipped call) hasn't completed. A wait not started yet reads the lock after any lock written now, so it needs no
+// refusal: main then waits for that lane (at most one holder's turn), and a run queued behind another, or one whose
+// wait is skipped (a docs-only `none`, devb's shape unchanged), never holds a slot up. A run from before the wait jobs
+// (no `wait-` job once its slot job is listed) is pending while that job runs. Errors propagate: the caller fails closed.
 import type { Api } from './api.ts';
 import { listJobs, listRuns } from './dispatch.ts';
 import type { Job, Run } from './dispatch.ts';
@@ -16,13 +16,18 @@ import type { Slot } from './lock.ts';
 
 const NEWEST = 10;
 
-const doneWith = (jobs: Job[], slot: Slot) =>
-  jobs.some(
-    (j) =>
-      (j.name === `wait-${slot}` && j.conclusion === 'skipped') ||
-      ((j.name === `deploy-${slot}` || j.name.startsWith(`deploy-${slot} / `)) &&
-        j.status === 'completed'),
+export function pendingOn(jobs: Job[], slot: Slot): boolean {
+  const deploys = jobs.filter(
+    (j) => j.name === `deploy-${slot}` || j.name.startsWith(`deploy-${slot} / `),
   );
+  if (deploys.some((j) => j.status === 'completed')) return false;
+  const wait = jobs.find((j) => j.name === `wait-${slot}`);
+  if (wait)
+    return wait.status === 'completed'
+      ? wait.conclusion !== 'skipped'
+      : wait.status === 'in_progress';
+  return !jobs.some((j) => j.name.startsWith('wait-')) && deploys.length > 0;
+}
 
 // The oldest pending run (the one that deploys first), or null.
 export async function pendingMainDeploy(api: Api, slot: Slot): Promise<Run | null> {
@@ -30,7 +35,7 @@ export async function pendingMainDeploy(api: Api, slot: Slot): Promise<Run | nul
   let found: Run | null = null;
   for (const run of runs) {
     if (run.status === 'completed') continue;
-    if (!doneWith(await listJobs(api, run.id), slot)) found = run; // newest first: the last hit is the oldest
+    if (pendingOn(await listJobs(api, run.id), slot)) found = run; // newest first: the last hit is the oldest
   }
   return found;
 }

@@ -27,7 +27,7 @@ function github(
   minutes: number,
   conclusion: string,
   heldA?: { branch: string; sha: string; expiresAt: string },
-  mainPending = false, // a main Deploy run still queued (no jobs listed yet): pending on both slots
+  mainPending = false, // a main Deploy run whose waits are running: pending on both slots
 ) {
   const refs: Record<string, string | null> = { dev: null, devb: null };
   let tags = 0;
@@ -80,7 +80,12 @@ function github(
           ]
         : [],
     }),
-    [`GET ${R}/actions/runs/9/jobs`]: () => ({ jobs: [] }),
+    [`GET ${R}/actions/runs/9/jobs`]: () => ({
+      jobs: [
+        { name: 'wait-dev', status: 'in_progress', conclusion: null, completed_at: null },
+        { name: 'wait-devb', status: 'in_progress', conclusion: null, completed_at: null },
+      ],
+    }),
     [`POST ${R}/actions/workflows/deploy-dev.yml/dispatches`]: (c: Call) => {
       inputs.push((c.body as { inputs: Record<string, string> }).inputs);
       dispatchedAt = clock.now();

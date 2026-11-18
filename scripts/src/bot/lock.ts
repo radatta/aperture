@@ -109,7 +109,7 @@ export class MainPending extends LockHeld {
     this.message = `${refused
       .map((x) =>
         x.run
-          ? `main's deploy is still to land on ${x.slot} (${x.run})`
+          ? `${x.holder ? `${x.slot} is locked by ${describe(x.holder)}, and ` : ''}main's deploy is still to land on ${x.slot} (${x.run})`
           : `${x.slot} is locked by ${describe(x.holder)}`,
       )
       .join(
@@ -206,7 +206,13 @@ export async function acquireSlot(
     const before = pending ? await pending(slot) : null;
     if (before) {
       if (slot === mine) await letGo(slot); // our lapsed lock: a branch holds at most one
-      refused.push({ slot, holder: null, run: before });
+      // The holder main waits for, if any, so the refusal's notes name who goes before main.
+      const cur = slot === mine ? null : await readLock(api, slot);
+      refused.push({
+        slot,
+        holder: cur && !isExpired(cur.holder, nowMs) ? cur.holder : null,
+        run: before,
+      });
       continue;
     }
     let holder: Holder;
@@ -245,6 +251,12 @@ export async function renew(
   if (!cur || cur.holder?.branch !== branch)
     throw new Error(
       `${branch} does not hold the ${slot} lock (holder: ${cur ? describe(cur.holder) : 'none'})`,
+    );
+  // A lapsed lock is free to all: a merge's wait may already have read it and be deploying. Re-take it through the
+  // guarded acquire, never revive it here (CI-BOT.md → Dev deploys → A merge waits for the lock).
+  if (isExpired(cur.holder, nowMs))
+    throw new Error(
+      `${branch}'s ${slot} lock lapsed at ${cur.holder.expiresAt} — \`pnpm bot lock acquire\` (or \`deploy-dev\`) takes it back unless a merge is deploying there`,
     );
   const holder: Holder = { ...cur.holder, expiresAt: new Date(nowMs + TTL_MS).toISOString() };
   await api('PATCH', `${R}/git/refs/${lockRef(slot)}`, {
@@ -306,7 +318,7 @@ export async function waitForLock(
   branch: string,
   clock: Clock,
   o: WaitOptions,
-): Promise<{ outcome: WaitOutcome; holder: Holder | null; slot: Slot }> {
+): Promise<{ outcome: WaitOutcome; holder: Holder | null; slot: Slot; main?: boolean }> {
   const pollMs = o.pollMs ?? POLL_MS;
   const log = o.log ?? (() => undefined);
   const slots = o.slots ?? ['dev'];
@@ -316,6 +328,7 @@ export async function waitForLock(
   let loggedExpiry = '';
   let loggedAt = -Infinity;
   let loggedBusy = '';
+  let heldBack: Slot[] = []; // free or lapsed, but main's run is still to land there (`busy`)
   for (;;) {
     let reads: { slot: Slot; cur: LockState | null }[] | undefined;
     const now = clock.now();
@@ -333,6 +346,7 @@ export async function waitForLock(
         const still: Slot[] = [];
         for (const x of open) if (await o.busy(x.slot)) still.push(x.slot);
         open = open.filter((x) => !still.includes(x.slot));
+        heldBack = still;
         const said = still.join(',');
         if (said && said !== loggedBusy)
           log(`waiting: main's deploy is still to land on ${still.join(' and ')}`);
@@ -372,7 +386,8 @@ export async function waitForLock(
       return {
         outcome: 'gave-up',
         holder: last?.holder ?? null,
-        slot: last?.slot ?? slots[0] ?? 'dev',
+        slot: last?.slot ?? heldBack[0] ?? slots[0] ?? 'dev',
+        ...(!last && heldBack.length ? { main: true } : {}),
       };
     // Wake at the holder's expiry only after a good read; after a failed one, a full poll (a GitHub blip at the
     // expiry must not burn the three tries in three seconds).
@@ -399,13 +414,17 @@ export function queueNotes(
   hub?: string,
   sessionOf: (branch: string) => string | undefined = () => undefined,
   next?: string, // the wait to name, when the refusal knows better than `held` (MainPending: a slot main holds up)
+  main: Slot[] = [], // slots main's Deploy run is still to land on (MainPending): queued behind it too
 ): string[] {
-  const who = held
-    .map(({ slot, holder }) => {
+  const mainOnly = main.filter((m) => !held.some((h) => h.slot === m));
+  const many = held.length + mainOnly.length > 1;
+  const who = [
+    ...held.map(({ slot, holder }) => {
       const s = sessionOf(holder.branch);
-      return `${holder.branch}${s ? ` (${s})` : ''}${held.length > 1 || slot !== 'dev' ? ` on ${slot}` : ''}`;
-    })
-    .join(' and ');
+      return `${holder.branch}${s ? ` (${s})` : ''}${many || slot !== 'dev' ? ` on ${slot}` : ''}${main.includes(slot) ? ", then main's deploy" : ''}`;
+    }),
+    ...mainOnly.map((slot) => `main's deploy on ${slot}`),
+  ].join(' and ');
   const wait =
     next ??
     (held.length > 1

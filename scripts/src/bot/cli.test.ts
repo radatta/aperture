@@ -3,8 +3,9 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { main, parseSlot, tellingWhoToTell } from './cli.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { acquireLock, lockWait, main, parseSlot, tellingWhoToTell } from './cli.ts';
+import { fakeApi, fakeClock, ghError } from './fakes.ts';
 import { LockHeld, MainPending } from './lock.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
@@ -83,14 +84,24 @@ describe('the refused acquire', () => {
     expect(lines[0]).toMatch(
       /^devb is locked \(and main's deploy is still to land on dev\) — .*`pnpm bot lock wait --any`/,
     );
-    expect(lines[1]).toMatch(/queued behind flux on devb; lock wait --any next/);
+    expect(lines[1]).toMatch(
+      /queued behind flux on devb and main's deploy on dev; lock wait --any next/,
+    );
   });
 
-  it('prints no notes when only main holds the slot up — there is no one to tell', async () => {
+  it('still tells the hub when only main holds the slot up, and the holder main waits for', async () => {
     const { lines, c } = ctx();
-    const refused = new MainPending([{ slot: 'dev', holder: null, run: 'u' }]);
-    await expect(tellingWhoToTell(c, () => Promise.reject(refused))).rejects.toBe(refused);
-    expect(lines).toEqual([]);
+    const alone = new MainPending([{ slot: 'dev', holder: null, run: 'u' }]);
+    await expect(tellingWhoToTell(c, () => Promise.reject(alone))).rejects.toBe(alone);
+    expect(lines).toEqual([
+      "main's deploy is still to land on dev — send these now, once each, then `pnpm bot lock wait` in the background:",
+      `  SendMessage dispatch: "[lock] ci-bot — queued behind main's deploy on dev; lock wait next."`,
+    ]);
+    const { lines: l2, c: c2 } = ctx();
+    const behind = new MainPending([{ slot: 'dev', holder, run: 'u' }]);
+    await expect(tellingWhoToTell(c2, () => Promise.reject(behind))).rejects.toBe(behind);
+    expect(l2[0]).toMatch(/^dev is locked \(and main's deploy is still to land on dev\) — /);
+    expect(l2[1]).toMatch(/queued behind flux, then main's deploy; lock wait next/);
   });
 });
 
@@ -137,5 +148,68 @@ describe('run flags', () => {
     ['cancel', '42', '--failed'],
   ])('refuses %s %s %s as a usage error, before any token is minted', async (...args) => {
     expect(await main(['run', ...args])).toBe(2);
+  });
+});
+
+// The CLI's own wiring of main-pending.ts: `lock wait` doesn't wake on a slot main is still to land on, and
+// `lock acquire` is refused it — the same guard deploy-dev carries.
+describe('lock wait and lock acquire hold back for main', () => {
+  const R = '/repos/radatta/aperture';
+  // Slot A's lock is free; main's run has its wait-dev running until `untilMs`.
+  const github = (clock: { now: () => number }, untilMs: number) =>
+    fakeApi({
+      [`GET ${R}/git/ref/locks/`]: () => {
+        throw ghError(404);
+      },
+      [`GET ${R}/actions/workflows/deploy.yml/runs?`]: () => ({
+        workflow_runs:
+          clock.now() < untilMs
+            ? [
+                {
+                  id: 9,
+                  display_title: 'm',
+                  created_at: '',
+                  status: 'in_progress',
+                  conclusion: null,
+                  html_url: 'main-run',
+                },
+              ]
+            : [],
+      }),
+      [`GET ${R}/actions/runs/9/jobs`]: () => ({
+        jobs: [{ name: 'wait-dev', status: 'in_progress', conclusion: null, completed_at: null }],
+      }),
+    });
+  const quietLog = () => vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+  it('lock wait sleeps through a free slot until main has landed', async () => {
+    const log = quietLog();
+    const clock = fakeClock(NOW);
+    const g = github(clock, NOW + 90_000);
+    expect(await lockWait(g.api, {}, null, () => undefined, 'ci-bot', clock)).toBe(0);
+    expect(clock.t).toBe(NOW + 90_000);
+    log.mockRestore();
+  });
+
+  it('lock wait gives up naming main, never a missing holder', async () => {
+    const log = quietLog();
+    const clock = fakeClock(NOW);
+    const g = github(clock, Infinity);
+    expect(await lockWait(g.api, { max: '1' }, null, () => undefined, 'ci-bot', clock)).toBe(75);
+    expect(log.mock.calls.at(-1)?.[0]).toMatch(
+      /^dev: main's Deploy run is still to land there after 1 min/,
+    );
+    log.mockRestore();
+  });
+
+  it('lock acquire is refused the slot, writing nothing', async () => {
+    const clock = fakeClock(NOW);
+    const g = github(clock, Infinity);
+    const err = await acquireLock(g.api, 'ci-bot', 'a'.repeat(40), NOW, 'dev').catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(MainPending);
+    expect((err as Error).message).toMatch(/main's deploy is still to land on dev \(main-run\)/);
+    expect(g.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });
 });

@@ -141,9 +141,17 @@ describe('dev lock', () => {
 
   it('renews only for the holder', async () => {
     const g = github(live('ci-bot'));
-    const h = await renew(g.api, 'ci-bot', NOW + 30 * 60_000);
-    expect(h.expiresAt).toBe(new Date(NOW + 30 * 60_000 + TTL_MS).toISOString());
+    const h = await renew(g.api, 'ci-bot', NOW + 5 * 60_000);
+    expect(h.expiresAt).toBe(new Date(NOW + 5 * 60_000 + TTL_MS).toISOString());
     await expect(renew(g.api, 'dev-e2e', NOW)).rejects.toThrow(/does not hold/);
+  });
+
+  it('never revives a lapsed lock: a merge may already be deploying there', async () => {
+    const g = github(expired('ci-bot'));
+    await expect(renew(g.api, 'ci-bot', NOW)).rejects.toThrow(
+      /lock lapsed at .*`pnpm bot lock acquire`/,
+    );
+    expect(g.holder()?.expiresAt).toBe(expired('ci-bot').expiresAt); // untouched
   });
 
   it('treats a garbled holder (no expiry) as expired, so it can never block dev forever', async () => {
@@ -631,6 +639,20 @@ describe('main pending', () => {
     ]);
     expect((err as MainPending).wait).toBe('lock wait --any');
     expect((err as MainPending).message).toMatch(/devb is locked by lc/);
+  });
+
+  it('names the live holder main waits for, so the notes say who goes first', async () => {
+    const g = slots({ dev: live('flux') });
+    const err = await acquireSlot(g.api, 'ci-bot', SHA, NOW, 'dev', [], guard(['dev']).fn).catch(
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(MainPending);
+    expect((err as MainPending).held).toEqual([{ slot: 'dev', holder: live('flux') }]);
+    expect((err as MainPending).runs).toEqual([{ slot: 'dev', url: RUN }]);
+    expect((err as MainPending).message).toMatch(
+      /^dev is locked by flux @ aaaaaaa until .*, and main's deploy is still to land on dev/,
+    );
+    expect(g.holderOf('dev')?.branch).toBe('flux'); // untouched
   });
 
   it('releases a lock it just wrote when the second read sees main, and moves on', async () => {

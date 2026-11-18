@@ -8,7 +8,7 @@ name: Deploy
 # deploys dev as dev-main's, in the freeze-exempt lane). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: classify each stage against what it
 # serves, and look up whether a PR run already checked this exact tree → check (all of it, the fixture suite alone, or
-# nothing), and meanwhile wait for each dev slot's lock → deploy each stage at its own tier.
+# nothing) → wait for each dev slot's lock → deploy each stage at its own tier.
 on:
   push:
     branches: [main]
@@ -101,14 +101,16 @@ jobs:
       fixtures_only: ${{ needs.changes.outputs.check == 'fixtures' }}
 
   # A merge never replaces a lane's branch mid-test: each slot's deploy waits while that slot's lock is held and live
-  # (scripts/src/main-dev-wait.ts; docs/ops/CI-BOT.md → Dev deploys → A merge waits for the lock), alongside `check`.
-  # Never a gate: the deploys' `if:`s don't read these results, so a skipped, failed or timed-out wait still deploys —
-  # the module itself goes after 60 min, or after ~5 min of failed reads, and says so in a ::warning:: and the summary.
-  # Read-only (contents: read); the bot keeps other branches off the slot while this run is pending (main-pending.ts).
-  # Skipped when the slot gets nothing: a docs-only `none` touches no stack.
+  # (scripts/src/main-dev-wait.ts; docs/ops/CI-BOT.md → Dev deploys → A merge waits for the lock). Only once the deploy
+  # will happen — `check` green or planned-skipped, as the deploy's own condition — so a red check fails the run at once
+  # and the gap between reading "free" and deploying is a runner start. Never a gate: the deploys' `if:`s don't read
+  # these results, so a skipped, failed or timed-out wait still deploys — the module itself goes after 60 min, or after
+  # ~5 min of failed reads, and says so in a ::warning:: and the summary. Read-only (contents: read); the bot keeps other
+  # branches off the slot from the moment this wait starts until its deploy is done (main-pending.ts). Skipped when the
+  # slot gets nothing: a docs-only `none` touches no stack.
   wait-dev:
-    needs: [changes]
-    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.mode_dev != 'none' }}
+    needs: [changes, check]
+    if: ${{ !cancelled() && needs.changes.outputs.mode_dev != 'none' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 70 # the module's 60-minute ceiling plus a checkout; past it the job ends cancelled → quiet-failure
     permissions:
@@ -136,10 +138,10 @@ jobs:
           node scripts/src/main-dev-wait.ts dev
 
   # Slot B's twin, only when deploy-devb runs (a shape change); independent of wait-dev, so a held devb never delays
-  # dev or prod.
+  # this run's dev or prod — but it keeps the run in progress, so the next merge's whole run queues behind it (CI-BOT.md).
   wait-devb:
-    needs: [changes]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.result == 'success' && needs.changes.outputs.mode_devb == 'full' }}
+    needs: [changes, check]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 70 # as wait-dev's
     permissions:

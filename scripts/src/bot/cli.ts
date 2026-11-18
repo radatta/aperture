@@ -113,18 +113,20 @@ const hubName = (): string | undefined => {
   }
 };
 
-async function lockWait(
+// `lock wait`, exported with its branch and clock injectable so a test drives it against a scripted GitHub.
+export async function lockWait(
   api: Api,
   flags: Record<string, string>,
   dir: string | null,
   cache: (h: Holder | null, slot: Slot) => void,
+  branch = featureBranch(run),
+  clk: Clock = clock,
 ): Promise<number> {
   const maxMs = parseWaitMax(flags.max);
   const one = parseSlot(flags.slot);
   if (one && flags.any) throw new Error('--any and --slot are exclusive');
   const slots = flags.any ? SLOTS : [one ?? 'dev'];
-  const branch = featureBranch(run);
-  const r = await waitForLock(api, branch, clock, {
+  const r = await waitForLock(api, branch, clk, {
     maxMs,
     log: console.log,
     sessionOf: (b) => holderSession(dir, b),
@@ -139,9 +141,14 @@ async function lockWait(
     console.log(
       `${r.slot} lock: ${r.holder?.branch ?? 'an unreadable holder'}'s lock expired — \`pnpm bot deploy-dev\` takes it over`,
     );
-  else {
+  else if (r.main) {
+    console.log(
+      `${r.slot}: main's Deploy run is still to land there after ${maxMs / 60_000} min — tell the hub (a merge's deploy holds the slot until its dev job finishes)`,
+    );
+    return 75;
+  } else {
     const held = r.holder
-      ? holderLine(r.holder, clock.now(), holderSession(dir, r.holder.branch), r.slot)
+      ? holderLine(r.holder, clk.now(), holderSession(dir, r.holder.branch), r.slot)
       : `${r.slot} locked`;
     console.log(
       `${held} — still held after ${maxMs / 60_000} min; tell the user who holds it and until when`,
@@ -150,6 +157,16 @@ async function lockWait(
   }
   return 0;
 }
+
+// `lock acquire`: deploy-dev's acquire, guarded the same way — never a slot main's Deploy run is still to land on.
+export const acquireLock = (
+  api: Api,
+  branch: string,
+  sha: string,
+  nowMs: number,
+  only?: Slot,
+  ios: string[] = [],
+) => acquireSlot(api, branch, sha, nowMs, only, ios, mainPendingGuard(api));
 
 export interface TellContext {
   dir: string | null; // the board
@@ -166,7 +183,8 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
     return await f();
   } catch (err) {
     const held = err instanceof LockHeld ? err.held.filter((x) => x.holder) : [];
-    if (held.length) {
+    const main = err instanceof MainPending ? err.runs.map((r) => r.slot) : [];
+    if (held.length || main.length) {
       for (const { slot, holder } of held) writeLockCache(ctx.dir, holder, ctx.now(), slot);
       let branch = '<your branch>';
       try {
@@ -180,8 +198,12 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
           : held.length > 1
             ? 'lock wait --any'
             : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
+      const busy = main.length ? `main's deploy is still to land on ${main.join(' and ')}` : '';
+      const locked = held.length
+        ? `${held.length > 1 ? 'both dev slots are' : `${held[0]?.slot} is`} locked`
+        : '';
       ctx.log(
-        `${held.length > 1 ? 'both dev slots are' : `${held[0]?.slot} is`} locked${err instanceof MainPending ? ` (and main's deploy is still to land on ${err.runs.map((r) => r.slot).join(' and ')})` : ''} — send these now, once each, then \`pnpm bot ${wait}\` in the background:`,
+        `${locked && busy ? `${locked} (and ${busy})` : locked || busy} — send these now, once each, then \`pnpm bot ${wait}\` in the background:`,
       );
       const notes = queueNotes(
         branch,
@@ -189,6 +211,7 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
         ctx.hub(),
         (b) => holderSession(ctx.dir, b),
         wait,
+        main,
       );
       for (const l of notes) ctx.log(`  ${l}`);
     }
@@ -224,10 +247,17 @@ export async function main(argv: string[]): Promise<number> {
       return r.conclusion === 'success' ? 0 : 1;
     }
     case 'lock': {
-      // status and wait only read: a read-only token, which a 55-minute background wait holds
-      const api = makeApi(
-        await token(sub === 'status' || sub === 'wait' ? PERMS.lockRead : PERMS.lock),
-      );
+      // status and wait only read: a read-only token, which a 55-minute background wait holds. acquire and wait also
+      // read main's Deploy runs (main-pending.ts).
+      const perms =
+        sub === 'status'
+          ? PERMS.lockRead
+          : sub === 'wait'
+            ? PERMS.lockWait
+            : sub === 'acquire'
+              ? PERMS.lockAcquire
+              : PERMS.lock;
+      const api = makeApi(await token(perms));
       const dir = boardDir(run);
       const cache = (h: Holder | null, slot: Slot) => writeLockCache(dir, h, clock.now(), slot);
       if (sub === 'status') {
@@ -239,14 +269,13 @@ export async function main(argv: string[]): Promise<number> {
       } else if (sub === 'acquire') {
         const only = parseSlot(flags.slot);
         const { slot, holder } = await tellingWhoToTell(tellCtx(dir), () =>
-          acquireSlot(
+          acquireLock(
             api,
             featureBranch(run),
             requirePushed(run, featureBranch(run)),
             clock.now(),
             only,
             iosFiles(run),
-            mainPendingGuard(api),
           ),
         );
         cache(holder, slot);

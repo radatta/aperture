@@ -200,18 +200,23 @@ describe('deploy.yml skips the check only on a tree match', () => {
 // A merge's slot deploy waits for that slot's lock (main-dev-wait.ts) — ordering only, never a gate: the deploy `if:`s
 // above stay byte-identical, so a skipped, failed or timed-out wait still deploys, and prod follows dev as before.
 describe('deploy.yml waits for each dev lock without gating on it', () => {
-  it('waits for slot A unless dev gets nothing, and for slot B only when deploy-devb runs', () => {
+  const ok =
+    "needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip'))";
+
+  it('waits for slot A unless dev gets nothing, and for slot B only when deploy-devb runs — after a check that lets it deploy', () => {
     const dev = job(deploy, 'wait-dev');
-    expect(dev).toContain('needs: [changes]');
+    expect(dev).toContain('needs: [changes, check]');
     expect(dev).toContain(
-      "if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.mode_dev != 'none' }}",
+      `if: \${{ !cancelled() && needs.changes.outputs.mode_dev != 'none' && ${ok} }}`,
     );
     expect(dev).toContain('node scripts/src/main-dev-wait.ts dev\n');
     const devb = job(deploy, 'wait-devb');
-    expect(devb).toContain('needs: [changes]');
+    expect(devb).toContain('needs: [changes, check]');
     expect(devb).toContain(
-      "if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.result == 'success' && needs.changes.outputs.mode_devb == 'full' }}",
+      `if: \${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full' && ${ok} }}`,
     );
+    // the same check condition the deploys carry, so a wait never outlives a red check
+    expect(job(deploy, 'deploy-dev')).toContain(ok);
     expect(devb).toContain('node scripts/src/main-dev-wait.ts devb\n');
     for (const w of [dev, devb]) {
       expect(w).toContain('timeout-minutes: 70');

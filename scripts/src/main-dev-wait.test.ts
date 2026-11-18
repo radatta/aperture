@@ -22,9 +22,11 @@ const lockFetch = (
 ) => {
   let n = 0;
   const paths: string[] = [];
-  const fetchImpl = (async (url: string | URL) => {
+  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
     const path = String(url).replace('https://api.github.com', '');
     paths.push(path);
+    // every request carries its own timeout, so a hung read can't hold the job to its step timeout
+    if (!(init?.signal instanceof AbortSignal)) throw new Error(`no signal on ${path}`);
     const reply = (a: Answer) =>
       new Response(a.body === undefined ? '' : JSON.stringify(a.body), { status: a.status });
     if (path === `${R}/git/ref/locks/${slot}`) {
@@ -84,8 +86,8 @@ describe('main-dev-wait', () => {
   it("wakes at the holder's expiry and deploys over a lapsed lock", async () => {
     const h = harness(() => holder('lane-x', T0 + 2 * MIN + 10_000));
     expect(await h.go()).toBe(0);
-    expect(h.clock.t).toBeGreaterThanOrEqual(T0 + 2 * MIN + 10_000);
-    expect(h.clock.t).toBeLessThan(T0 + 3 * MIN);
+    // polls at 0:30 … 2:00, then wakes 1 s past the expiry, not at the 2:30 tick
+    expect(h.clock.t).toBe(T0 + 2 * MIN + 10_000 + 1000);
     expect(h.lines.at(-1)).toContain("lane-x @ aaaaaaa's lock lapsed — deploying");
   });
 
@@ -168,6 +170,16 @@ describe('main-dev-wait', () => {
     expect(await h.go()).toBe(0);
     expect(h.paths).toEqual([]);
     expect(h.lines[0]).toMatch(/^::warning title=dev deploy did not wait::/);
+    const probe = harness(() => null, ['dev', '--once'], {
+      GITHUB_TOKEN: 't',
+      GITHUB_REPOSITORY: 'someone/fork',
+    });
+    expect(await probe.go()).toBe(0);
+    expect(probe.paths).toEqual([]);
+    expect(probe.lines).toEqual([
+      'dev lock probe skipped: this run is someone/fork, identifiers.json names another repo',
+    ]);
+    expect(probe.summaries).toEqual([]);
   });
 
   it.each([[[]], [['prod']], [['dev', '--wait']], [['dev', '--once', 'x']]])(

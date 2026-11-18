@@ -62,6 +62,12 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
   };
   // The lock module reads the repo from identifiers.json; a fork or a rename would read some other repo's lock.
   if (repo !== `${OWNER}/${REPO}`) {
+    if (flag === '--once') {
+      log(
+        `${slot} lock probe skipped: this run is ${safeBranch(repo)}, identifiers.json names another repo`,
+      );
+      return 0;
+    }
     loud(
       `${slot} deploy did not wait`,
       `identifiers.json names ${safeBranch(`${OWNER}/${REPO}`)}, this run is ${safeBranch(repo)}: the ${slot} lock was not read, so this deploy may replace a lane's branch mid-test.`,
