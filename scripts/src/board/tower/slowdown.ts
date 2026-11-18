@@ -8,7 +8,7 @@ import type { Job } from './model.ts';
 
 // lib.sh sb_classify, plus the gate's (heavy.sh HEAVY_CLASS): its eslint step, which runs beside tsc in either gate,
 // and its outer runs. The rest are too mixed. gate-typecheck stays out: tsc cache hits make it bimodal like plain
-// typecheck (0.8–47 s), and gate-lint already speaks for the gate
+// typecheck (p10 0.8 s, p90 47 s), and gate-lint already speaks for the gate
 export const SLOW_CLASSES = [
   'typecheck',
   'lint',

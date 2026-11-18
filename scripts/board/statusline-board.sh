@@ -18,7 +18,7 @@ if [ -r "$_bl_f" ]; then
   printf -v _bl_now '%(%s)T' -1 # bash ≥ 4.2 (the container's; not the Mac's 3.2)
   _bl_merge= _bl_usage= _bl_ctx= _bl_slow= _bl_mac=
   {
-    IFS=' ' read -r _bl_w _bl_q _bl_n _bl_tone _bl_x
+    IFS=' ' read -r _bl_w _bl_q _bl_n _bl_tone _bl_x || : # an empty file: nothing, even under set -e
     while IFS=' ' read -r _bl_k _bl_rest; do
       case $_bl_k in
         merge) _bl_merge=$_bl_rest ;;

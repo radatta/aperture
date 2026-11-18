@@ -249,6 +249,9 @@ describe('slowdown', () => {
       expect(short([job('gate-wide', 200, 4), job('ui', 1, 4)])).toBe('slow: no data since 16:40');
       expect(short([job('gate-wide', 3 * 24 * 60, 4)])).toBe('slow: no data in 3 d');
       expect(slowdownShort(sd([]), NOW, hm)).toBe('slow: no data in 7 d');
+      // a class named like an Object prototype key isn't one of the cut's
+      const proto = { ...of([], 'lint'), cls: 'constructor', stale: false };
+      expect(slowdownShort({ classes: [proto] }, NOW, hm)).toBe('slow: no data in 7 d');
     });
   });
 });

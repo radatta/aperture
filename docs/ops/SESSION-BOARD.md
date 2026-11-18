@@ -124,24 +124,23 @@ up to the headline (a block can have several holders, and older events no mix).
 unslotted — fail-open; a job already held gives up instead, and with `enforce: false` a busy lock never waits) is reported,
 not counted as a block. Load tests are excluded.
 
-**Slowdown** (F120, `tower/slowdown.ts`). Per class `typecheck`, `lint`, `test`, `ui`, `gate-lint`, `gate-narrow`
-and `gate-wide`, the median `wallSec` of the clean job events (exit 0, not a load test or guard) that ended in the last
-30 min, over the median of those in the 24 h before that window, widened to 7 days when that has fewer than 5. It
-needs 2 recent and 5 baseline runs, else it shows the count instead; a class with no clean run for over 2 h shows
-`no data since HH:MM` (`no data in N h` from 20 h, `in N d` from 2 days, `in 7 d` when the loaded week has none)
-(F293). `test-file`,
+**Slowdown** (F120, `tower/slowdown.ts`). Per class `typecheck`, `lint`, `test`, `ui`, `gate-lint`, `gate-narrow` and
+`gate-wide`, the median `wallSec` of the clean job events (exit 0, not a load test or guard) that ended in the last 30
+min, over the median of those in the 24 h before that window, widened to 7 days when that has fewer than 5. It needs 2
+recent and 5 baseline runs, else it shows the count instead; a class with no clean run for over 2 h shows `no data since
+HH:MM` (`no data in N h` from 20 h, `in N d` from 2 days, `in 7 d` when the loaded week has none) (F293). `test-file`,
 `build`, `dev` and `other` are too mixed to compare. Of the gate's own classes (heavy.sh `HEAVY_CLASS`, GATE.md), its
 outer runs each count against their own baseline, never pooled with each other or the plain commands, and so does its
-eslint step, which runs beside tsc in either gate. `gate-typecheck` stays out: tsc cache hits make it bimodal (p10
-0.8 s, p90 47 s, 2026-11-15..18), as they do plain `typecheck`, and `gate-lint` already speaks for the gate. Cache
-hits spread `lint` and `gate-lint` too (eslint `--cache`), so a red tile can be a cold cache as much as load. `×1.5` is amber and `×2` red on the tower. It answers "is it slow now", whatever the cause:
-the Mac on battery or in Low Power Mode, heat, or a crowded container (the `mac:` line beside it tells the first two
-apart). `test` mixes whole suites with filtered runs, `ui` dev checks with short captures, and a gate's wall time
-follows its diff, so only `typecheck`, `lint` and `gate-lint` set the tower's colour and "slow ×…" headline —
-`gate-lint` because since the gate (PR 214) lanes rarely run the plain two; all show in the line. The status line
-(TOWER.md → _Status line_) shows `typecheck`, `lint` and the three gate classes as `tc lint gl gn gw`, the stale ones
-grouped at the newest of their last runs. Measured 2026-11-17 in a low-power window: typecheck ×1.8, lint ×2, test
-×1.2.
+eslint step, which runs beside tsc in either gate. `gate-typecheck` stays out: tsc cache hits make it bimodal (p10 0.8
+s, p90 47 s, 2026-11-15..18), as they do plain `typecheck`, and `gate-lint` already speaks for the gate. Cache hits
+spread `lint` and `gate-lint` too (eslint `--cache`), so a red tile can be a cold cache as much as load. `×1.5` is amber
+and `×2` red on the tower. It answers "is it slow now", whatever the cause: the Mac on battery or in Low Power Mode,
+heat, or a crowded container (the `mac:` line beside it tells the first two apart). `test` mixes whole suites with
+filtered runs, `ui` dev checks with short captures, and a gate's wall time follows its diff, so only `typecheck`, `lint`
+and `gate-lint` set the tower's colour and "slow ×…" headline — `gate-lint` because since the gate (PR 214) lanes rarely
+run the plain two; all show in the line. The status line (TOWER.md → _Status line_) shows `typecheck`, `lint` and the
+three gate classes as `tc lint gl gn gw`, the stale ones grouped at the newest of their last runs. Measured 2026-11-17
+in a low-power window: typecheck ×1.8, lint ×2, test ×1.2.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 
