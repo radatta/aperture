@@ -7,6 +7,8 @@
     "coresBelow": 7.5,
     "psiCpuBelow": 40,
     "anonMiBBelow": 9000,
+    "psiMemFullMax": 1,
+    "minSamples": 3,
     "spacingSec": 120,
     "staleSec": 180
   },

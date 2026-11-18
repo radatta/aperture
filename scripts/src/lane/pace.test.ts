@@ -9,6 +9,7 @@ import {
   paceLimits,
   paceReasons,
   parseWait,
+  waitForPace,
 } from './pace.ts';
 
 const NOW = Date.parse('2026-11-17T18:00:00Z');
@@ -42,8 +43,18 @@ describe('paceReasons', () => {
     expect(keys(pace(NOW, { state: 'warm' }))).toEqual(['state']);
   });
 
-  it('load5 and samples are not judged', () => {
-    expect(keys(pace(NOW, { load5: 30, samples: 1 }))).toEqual([]);
+  it('load5 is not judged', () => {
+    expect(keys(pace(NOW, { load5: 30 }))).toEqual([]);
+  });
+
+  it("under the watcher's 3 samples it is warming, whatever the averages say", () => {
+    expect(keys(pace(NOW, { samples: 2 }))).toEqual(['warming']);
+    expect(keys(pace(NOW, { samples: 3 }))).toEqual([]);
+  });
+
+  it("memory PSI full over 1 refuses: the watcher's memory trip exits with pace.json calm", () => {
+    expect(keys(pace(NOW, { psiMemFull: 1 }))).toEqual([]);
+    expect(keys(pace(NOW, { psiMemFull: 1.01 }))).toEqual(['psiMem']);
   });
 
   it('stale only past staleSec', () => {
@@ -59,6 +70,8 @@ describe('paceReasons', () => {
     ['no heartbeat', pace(NOW, { heartbeat: undefined })],
     ['a string heartbeat', pace(NOW, { heartbeat: '1794965129' })],
     ['no state', pace(NOW, { state: 42 })],
+    ['no samples', pace(NOW, { samples: undefined })],
+    ['no psiMemFull', pace(NOW, { psiMemFull: null })],
     ['no avg', pace(NOW, { avg: undefined })],
     ['a non-numeric avg field', pace(NOW, avg({ cores: 'n/a' }))],
     ['a heartbeat 61 s ahead', pace(NOW + 61_000)],
@@ -82,8 +95,10 @@ describe('paceReasons', () => {
   it("the hub's pace-control state refuses when not calm, even while pace.json still says calm", () => {
     expect(keys(pace(NOW), null, NOW, '{"state":"hot","since":1,"held":[]}')).toEqual(['control']);
     expect(keys(pace(NOW), null, NOW, '{"state":"calm","since":0}')).toEqual([]);
-    for (const junk of ['', '{', 'null', '{"since":1}', '{"state":3}'])
-      expect(keys(pace(NOW), null, NOW, junk), junk).toEqual([]);
+    expect(keys(pace(NOW), null, NOW, null)).toEqual([]); // absent: no signal
+    // present but unreadable (a hot mark caught mid-write) fails closed
+    for (const junk of ['', '{', 'null', '{"since":1}', '{"state":3}', '[]'])
+      expect(keys(pace(NOW), null, NOW, junk), junk).toEqual(['control']);
   });
 
   it('spacing: inside spacingSec refuses, at it passes', () => {
@@ -137,5 +152,23 @@ describe('parseWait', () => {
     ['', 'bad'],
   ])('%j → %j', (raw, want) => {
     expect(parseWait(raw)).toBe(want);
+  });
+});
+
+describe('waitForPace', () => {
+  it('never sleeps past the deadline, even off the 30 s grid', async () => {
+    const w = world();
+    const t = deps(w, []);
+    writeFileSync(join(w.board, 'pace.json'), pace(t.clock.now(), { state: 'hot' }));
+    const slept: number[] = [];
+    t.clock.sleep = async (ms) => {
+      slept.push(ms);
+      t.clock.t += ms;
+      writeFileSync(join(w.board, 'pace.json'), pace(t.clock.t, { state: 'hot' }));
+    };
+    const until = t.clock.now() + 70_000;
+    expect(await waitForPace(t.d, until, 1)).toMatch(/the container is hot/);
+    expect(slept).toEqual([30_000, 30_000, 10_000]);
+    expect(t.clock.now()).toBe(until);
   });
 });

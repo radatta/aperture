@@ -160,9 +160,8 @@ export function laneCap(d: Deps): number {
   }
 }
 
-// The lane's CLAUDE_CODE_AUTO_COMPACT_WINDOW (tokens), from limits.json `lanes.autoCompactWindow`: 0 turns it off,
-// absent is the default, anything else outside the documented 100k-1M range is noted and defaulted. Proven to compact
-// at the window less a ~20k reserve on 2.1.327 (2026-11-17 probe, docs/ops/LANES.md → Start step 8).
+// The lane's `claude --autocompact <tokens>`, from limits.json `lanes.autoCompactWindow`: 0 turns it off, absent is the
+// default, anything else outside 100k-1M is noted and defaulted (docs/ops/LANES.md → Start step 8).
 export const DEFAULT_COMPACT_WINDOW = 500_000; // about half a 1M window (the maintainer, 2026-11-17)
 export function compactWindow(d: Deps): number | null {
   let v: unknown;

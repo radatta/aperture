@@ -1,26 +1,31 @@
 // The pace gate `lanes start` runs before it makes anything: the hub's pace watcher (pace-watch.sh in the board dir)
-// writes pace.json each minute, and a start waits for calm, the CPU (cores, PSI) and anon averages under their limits,
-// a fresh file, and the spacing since the last start (docs/ops/LANES.md → Start → The pace gate). A missing or stale file fails closed:
-// a dead watcher is the silent failure the gate exists for, and --over-pace always goes past it.
+// writes pace.json each minute, and a start waits for calm, the CPU (cores, PSI), anon and memory-PSI readings under their
+// limits, a fresh and warmed-up file, and the spacing since the last start (docs/ops/LANES.md → Start → The pace gate). A
+// missing, stale or unreadable file fails closed: a dead watcher is the silent failure the gate exists for, and
+// --over-pace always goes past it.
 import type { Deps, Env } from './state.ts';
 
 export type PaceLimits = {
   coresBelow: number;
   psiCpuBelow: number;
   anonMiBBelow: number;
+  psiMemFullMax: number; // the watcher's own memory trip (> 1): it exits with pace.json still calm
+  minSamples: number; // the watcher's own floor: below it the "average" is a minute or two
   spacingSec: number;
   staleSec: number;
 };
-// The maintainer's rule (2026-11-17), on the signals that trip the watcher; load5 isn't one: it counts I/O-waiting
+// The maintainer's rule (2026-11-17), plus the watcher's memory trip; load5 isn't judged: it counts I/O-waiting
 // tasks here and sat >= 12 in a third of calm samples. scripts/board/limits.json `pace` overrides each field.
 export const PACE_DEFAULTS: PaceLimits = {
   coresBelow: 7.5,
   psiCpuBelow: 40,
   anonMiBBelow: 9000,
+  psiMemFullMax: 1,
+  minSamples: 3,
   spacingSec: 120,
   staleSec: 180,
 };
-// 5 by default: the hub's foreground tool call dies at 600 s and the install follows the wait.
+// 5 by default: a wait and the install after it must fit a caller's 600 s tool call; longer waits run in the background.
 export const WAIT_DEFAULT_MIN = 5;
 export const WAIT_MAX_MIN = 30;
 export const WAIT_POLL_MS = 30_000;
@@ -82,13 +87,15 @@ export function paceReasons(
   else if (
     !num(p.heartbeat) ||
     typeof p.state !== 'string' ||
+    !num(p.samples) ||
+    !num(p.psiMemFull) ||
     !num(avg?.cores) ||
     !num(avg?.psiCpu) ||
     !num(avg?.anonMiB)
   )
     out.push({
       key: 'unreadable',
-      text: `pace.json is unreadable (heartbeat, state or an avg field missing or not a number): ${restart}`,
+      text: `pace.json is unreadable (heartbeat, state, samples, psiMemFull or an avg field missing or not a number): ${restart}`,
     });
   else if (p.heartbeat - now > FUTURE_SKEW_SEC)
     out.push({
@@ -99,6 +106,11 @@ export function paceReasons(
     out.push({
       key: 'stale',
       text: `pace.json is ${Math.round(now - p.heartbeat)} s old (over ${lim.staleSec}): the watcher is not running, ${restart}`,
+    });
+  else if (p.samples < lim.minSamples)
+    out.push({
+      key: 'warming',
+      text: `the watcher has ${p.samples} of ${lim.minSamples} samples (restarted under ${lim.minSamples} min ago)`,
     });
   else {
     if (p.state !== 'calm')
@@ -116,11 +128,25 @@ export function paceReasons(
         key: 'anon',
         text: `anon avg ${Math.round(anon)} MiB, wants under ${lim.anonMiBBelow}`,
       });
+    if (p.psiMemFull > lim.psiMemFullMax)
+      out.push({
+        key: 'psiMem',
+        text: `memory PSI full ${p.psiMemFull}, wants at most ${lim.psiMemFullMax}`,
+      });
   }
-  // Absent or junk control is no signal (pace.json still judges); a non-calm state refuses.
+  // An absent control file is no signal (pace.json still judges); one that is there must read, or a hot mark caught
+  // mid-write would pass as calm.
   const c = parse(control) as { state?: unknown } | null | undefined;
-  if (c && typeof c === 'object' && typeof c.state === 'string' && c.state !== 'calm')
-    out.push({ key: 'control', text: `the hub marked the box ${c.state} (pace-control.json)` });
+  if (control !== null && (!c || typeof c !== 'object' || typeof c.state !== 'string'))
+    out.push({
+      key: 'control',
+      text: `pace-control.json is unreadable (no string state): the hub rewrites it`,
+    });
+  else if (c && typeof c === 'object' && c.state !== 'calm')
+    out.push({
+      key: 'control',
+      text: `the hub marked the box ${String(c.state)} (pace-control.json)`,
+    });
   // A junk or future stamp is ignored: spacing must never block for good.
   const s = parse(last) as { at?: unknown; branch?: unknown } | null | undefined;
   if (s && typeof s === 'object' && num(s.at)) {
@@ -159,9 +185,9 @@ export function parseWait(raw: string | null): number | null | 'bad' {
   return n >= 1 && n <= WAIT_MAX_MIN ? n : 'bad';
 }
 
-// Polls until the pace clears (null) or `min` runs out (the last reason). Logs once per change of reasons.
-export async function waitForPace(d: Deps, min: number): Promise<string | null> {
-  const until = d.clock.now() + min * 60_000;
+// Polls until the pace clears (null) or the clock reaches `until` (the last reason). Logs once per change of reasons;
+// `min` is the whole wait, for the log.
+export async function waitForPace(d: Deps, until: number, min: number): Promise<string | null> {
   let said = '';
   for (;;) {
     const r = reasonsNow(d);

@@ -17,7 +17,9 @@ save() {
     meta="$HOME/.claude/sessions/$cpid.json"
     [ -f "$meta" ] || continue
     sid=$(jq -r .sessionId "$meta"); scwd=$(jq -r .cwd "$meta")
-    flags=$(ps -o args= -p "$cpid" | grep -o -- '--dangerously-skip-permissions' || true)
+    # the flags a relaunch keeps: bypass, and a lane's auto-compact window (docs/ops/LANES.md → Start step 8)
+    flags=$(ps -o args= -p "$cpid" | grep -oE -- '--dangerously-skip-permissions|--autocompact [0-9]+' | tr '\n' ' ' || true)
+    flags=${flags% }
     printf '%s\t%s\t%s\t%s\n' "$name" "$sid" "$scwd" "$flags" >> "$tsv.tmp"
   done
   # no Claude windows (e.g. right after a rebuild) keeps the last snapshot rather than emptying it

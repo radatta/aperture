@@ -67,11 +67,19 @@ describe('lane cli', () => {
     ] as const) {
       const w = world();
       const t = deps(w, [['tmux display', '$0 111 222']]);
-      writeFileSync(join(w.board, 'pace.json'), pace(t.clock.now(), { state: 'hot' }));
+      const t0 = t.clock.now();
+      writeFileSync(join(w.board, 'pace.json'), pace(t0, { state: 'hot' }));
+      t.clock.sleep = async (ms) => {
+        t.clock.t += ms;
+        writeFileSync(join(w.board, 'pace.json'), pace(t.clock.t, { state: 'hot' })); // the watcher keeps writing
+      };
       expect(await main([...argv], () => t.d), argv.join(' ')).toBe(75);
       expect(t.out()).toMatch(
-        new RegExp(`waiting \\(up to ${min} min\\)[^]*still busy after ${min} min`),
+        new RegExp(
+          `waiting \\(up to ${min} min\\)[^]*still busy after ${min} min: the container is hot`,
+        ),
       );
+      expect(t.clock.now() - t0).toBe(min * 60_000);
     }
   });
 
