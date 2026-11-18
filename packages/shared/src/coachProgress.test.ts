@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { loadCatalog, unloadCatalog } from './catalogs';
+import { buildCatalog } from './lcCatalog';
 import type { AttemptOutcome, HelpLevel } from './types';
 import type { ProblemRecord, ProblemTry } from './coach';
 import { capTimes, coverage, problemStatus, progressWeeks, PROGRESS_STAGES } from './coachProgress';
@@ -247,5 +249,38 @@ describe('capTimes', () => {
   });
   it('nothing timed: no median', () => {
     expect(capTimes([], TODAY)).toMatchObject({ timed: 0, inside: 0, medianMin: null });
+  });
+});
+
+describe('coverage of the full catalog (a later list choice, F207)', () => {
+  afterEach(() => unloadCatalog());
+
+  it('is empty until loaded, then counts the loaded list by pattern, its `other` problems outside every card', () => {
+    expect(coverage([], 'leetcode', TODAY)).toMatchObject({ label: 'All LeetCode', total: 0 });
+    const row = (id: number, slug: string, tags: string[], algorithms = true) => ({
+      id,
+      slug,
+      title: slug,
+      difficulty: 'Medium' as const,
+      premium: false,
+      acRate: null,
+      tags,
+      algorithms,
+    });
+    loadCatalog(
+      buildCatalog(
+        [
+          row(1, 'two-sum', ['Array']),
+          row(9001, 'synthetic-heap', ['Heap (Priority Queue)']),
+          row(9002, 'synthetic-query', ['Database'], false),
+        ],
+        new Map(),
+      ),
+      'rev',
+    );
+    const c = coverage([], 'leetcode', TODAY);
+    expect(c.total).toBe(2);
+    expect(c.patterns.find((p) => p.pattern === 'heap')!.total).toBe(1);
+    expect(c.patterns.find((p) => p.pattern === 'arrays-hashing')!.total).toBe(1);
   });
 });

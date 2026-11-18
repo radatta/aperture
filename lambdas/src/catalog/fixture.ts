@@ -1,6 +1,7 @@
 // A synthetic stand-in for the pinned dataset (lcCatalog.ts → LC_CATALOG_SOURCE), in its shape: the fake source's
 // rows for tests and the local server. Made-up problems, plus two NeetCode slugs so the NeetCode-wins overlay is
-// exercised. Never a real problem list.
+// exercised and one public off-list slug the dev check reads on local and dev alike (palindrome-number, with its
+// public number and difficulty). Never a real problem list.
 
 const row = (
   id: number,
@@ -26,6 +27,7 @@ export const FIXTURE_SOURCE = [
   row(242, 'valid-anagram', 'Easy', ['Hash Table', 'String', 'Sorting'], {
     title: 'Valid Anagram',
   }),
+  row(9, 'palindrome-number', 'Easy', ['Math'], { title: 'Palindrome Number' }),
   row(9001, 'synthetic-window-sum', 'Medium', ['Array', 'Sliding Window']),
   row(9002, 'synthetic-heap-merge', 'Hard', ['Heap (Priority Queue)', 'Linked List']),
   row(9003, 'synthetic-grid-paths', 'Medium', ['Array', 'Dynamic Programming', 'Matrix']),

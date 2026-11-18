@@ -475,14 +475,28 @@ export interface DevCoachAttempt {
 export interface DevProblemRecord {
   slug: string;
   title: string;
+  pattern?: string;
   difficulty?: string | null;
   everAccepted?: boolean;
+  inCatalog?: boolean;
   lastDay: string;
   sittingIds: string[];
   peeked: boolean;
   schedule: { track: string; step?: number; dueDay: string; graduated: boolean } | null;
   historical?: { tries: number; firstDay: string; lastDay: string } | null;
   lists?: string[];
+}
+// The full LeetCode catalog's import status (packages/shared/src/lcCatalog.ts CatalogStatus).
+export interface DevCatalogStatus {
+  state: 'absent' | 'staging' | 'running' | 'ready' | 'partial' | 'failed';
+  sha: string | null;
+  count: number;
+  premium: number;
+  by: Record<'neetcode' | 'rule' | 'model' | 'tags', number> | null;
+  importedAt: number | null;
+  staged: { have: number; of: number } | null;
+  costUsd: number;
+  lastError: string | null;
 }
 export interface DevSittingStart {
   clientSittingId: string;
@@ -805,6 +819,7 @@ export function createApiClient({
     listSittings: () => call<DevSitting[]>('listSittings', []),
     getCoachToday: () => call<DevCoachToday>('getCoachToday', []),
     listProblemRecords: () => call<DevProblemRecord[]>('listProblemRecords', []),
+    getCatalogStatus: () => call<DevCatalogStatus>('getCatalogStatus', []),
     getCoachStats: () => call<DevCoachStats>('getCoachStats', []),
     // The coach's stored attempts, alive (the export's; the test user's are a handful).
     listCoachAttempts: async () =>
@@ -1257,6 +1272,14 @@ export function createApiClient({
       if (!opts.off) writes.recordCoachPickFocus();
       return call<DevCoachToday>('startCoachPick', []);
     },
+    // The full catalog's import (lc-catalog): stage-wide public metadata, not the test user's data, so not ledgered —
+    // nothing to clean, and the next run's import reuses it (DEV-CHECK.md → Ledgers).
+    startCatalogImport: (input: {
+      classes?: string;
+      part?: number;
+      parts?: number;
+      limit?: number;
+    }) => call<DevCatalogStatus>('startCatalogImport', [input]),
     // Attempts logged through the API, as the app's and log_attempt's path: an intent, then each id from the
     // answer (`coach:attempt`, deleted by deleteCoachAttempt at cleanup); a 4xx is a refusal before any write.
     async logCoachAttempts(inputs: DevCoachAttemptInput[]): Promise<DevCoachAttempt[]> {

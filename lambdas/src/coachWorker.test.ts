@@ -90,6 +90,6 @@ describe('the catalog import on the worker', () => {
       { kind: 'catalog-import', runId: 'run-1' },
       { now: () => 2 },
     );
-    expect(meta).toMatchObject({ live: 'a', count: 14, job: null });
+    expect(meta).toMatchObject({ live: 'a', count: 15, job: null });
   });
 });

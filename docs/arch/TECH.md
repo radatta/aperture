@@ -214,7 +214,7 @@ PK = push / SK = user#<userId> · health
                                 heartbeat — derived, never client-set, never exported (tasks/reminders.md)
 ```
 
-- **Three non-`u#` partitions:** `placetoken#<hash>`, `stoken#<hash>` and `push`. Everything else is under the user's.
+- **Four non-`u#` partitions:** `placetoken#<hash>`, `stoken#<hash>`, `push` and `catalog#leetcode` (the full LeetCode catalog, stage-wide public metadata: [recruiting/coach](../areas/recruiting/coach.md) → _The full LeetCode catalog_). Everything else is under the user's.
 - **One GSI, three key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms); reminders — what may ping, by when (`GSI1PK = u#<userId>#remind`, `GSI1SK` = fire time epoch ms) on open dated tasks, plans and Send-test rows, set atomically with the item's own write.
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".

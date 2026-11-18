@@ -361,8 +361,14 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listFinanceTransactions: async () => [...finance.rows.values()],
       getFinanceTransaction: async (id) => finance.rows.get(id) ?? null,
       listFinanceRules: async () => [...finance.rules.values()],
+      getCatalogStatus: async () => {
+        throw new Error('unused');
+      },
     },
     writes: {
+      startCatalogImport: async () => {
+        throw new Error('unused');
+      },
       updateSettings: async (patch) => {
         settings = { ...settings, ...patch };
         return settings;

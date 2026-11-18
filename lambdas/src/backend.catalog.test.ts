@@ -65,9 +65,9 @@ describe('the full catalog through the BFF', () => {
     const done = await api.startCatalogImport({ classes: b.join('\n'), part: 2, parts: 2 });
     expect(kicks).toHaveLength(1);
     expect(done).toMatchObject({
-      state: 'partial', // the fixture leaves six problems to their tags, and the model is off
-      count: 14,
-      by: { neetcode: 2, rule: 1, model: 5, tags: 6 },
+      state: 'partial', // the fixture leaves seven problems to their tags, and the model is off
+      count: 15,
+      by: { neetcode: 2, rule: 1, model: 5, tags: 7 },
       staged: null,
       lastError: null,
     });

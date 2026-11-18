@@ -11,8 +11,8 @@ import { recheckCatalogSoon } from './loader';
 import { FakeCatalogSource } from './source';
 import { CatalogStore } from './store';
 
-// The fixture's rows the classes leave to their tags: 9004, 9005, 9007, 9009, 9011, 9012.
-const TAGS_ONLY = [9004, 9005, 9007, 9009, 9011, 9012];
+// The fixture's rows the classes leave to their tags: 9, 9004, 9005, 9007, 9009, 9011, 9012.
+const TAGS_ONLY = [9, 9004, 9005, 9007, 9009, 9011, 9012];
 const answer = (req: CatalogClassifyRequest) => ({
   ok: true as const,
   fields: {
@@ -55,9 +55,9 @@ describe('runCatalogImport', () => {
     expect(meta).toMatchObject({
       live: 'a',
       sha: LC_CATALOG_SOURCE.sha,
-      count: 14,
+      count: 15,
       premium: 1,
-      by: { neetcode: 2, rule: 1, model: 11, tags: 0 },
+      by: { neetcode: 2, rule: 1, model: 12, tags: 0 },
       lastError: null,
       job: null,
     });
@@ -106,7 +106,7 @@ describe('runCatalogImport', () => {
       ms: 1,
     };
     const failedCall = await run('run-1');
-    expect(failedCall.by).toMatchObject({ model: 0, tags: 11 });
+    expect(failedCall.by).toMatchObject({ model: 0, tags: 12 });
     expect(failedCall.costUsd).toBeCloseTo(100 * 2e-6);
 
     anthropic.nextClassify = answer;
@@ -118,7 +118,7 @@ describe('runCatalogImport', () => {
     });
     const stopped = await run('run-2');
     expect(anthropic.classifyCalls).toHaveLength(1);
-    expect(stopped.by).toMatchObject({ model: 0, tags: 11 });
+    expect(stopped.by).toMatchObject({ model: 0, tags: 12 });
   });
 
   it('caps the non-NeetCode problems at the limit (dev’s import)', async () => {

@@ -740,7 +740,7 @@ describe('the full catalog over MCP', () => {
       part: 2,
       parts: 2,
     });
-    expect(done).toMatchObject({ state: 'partial', count: 14, by: { model: 5 } });
+    expect(done).toMatchObject({ state: 'partial', count: 15, by: { model: 5 } });
     expect(done.importedAt).toMatch(/^2026-11-09T/);
   });
 

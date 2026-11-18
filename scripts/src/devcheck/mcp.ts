@@ -11,6 +11,7 @@ import {
   coachSlotId,
   MCP_SERIES_VIA,
   ledgerKind,
+  type DevCatalogStatus,
   type DevCoachToday,
   type CreateSeriesInput,
   MCP_CATEGORY_VIA,
@@ -101,6 +102,9 @@ export interface DevProblemRead {
     difficulty?: string | null;
     onRoadmap: boolean;
     url: string;
+    patternId?: string;
+    lists?: string[];
+    number?: number;
   };
   record: {
     attempts: number;
@@ -411,6 +415,7 @@ export function createMcpClient({
         args,
       ),
     getProblem: (args: Record<string, unknown>) => data<DevProblemRead>('get_problem', args),
+    catalogStatus: () => data<DevCatalogStatus>('catalog_status', {}),
     coachStats: (args: Record<string, unknown> = {}) => data<DevCoachStats>('coach_stats', args),
     listStories: () =>
       data<{
@@ -420,6 +425,10 @@ export function createMcpClient({
   };
 
   const writes = {
+    // import_catalog (lc-catalog): the stage's full problem catalog — public metadata, not the test user's data, so
+    // not ledgered (DEV-CHECK.md → Ledgers); the next run reuses it. Returns the status the tool reads back.
+    importCatalog: (args: Record<string, unknown> = {}) =>
+      data<DevCatalogStatus>('import_catalog', args),
     async createTask(input: {
       title: string;
       estimateMin?: number;

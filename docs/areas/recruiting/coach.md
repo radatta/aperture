@@ -241,9 +241,52 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
 
 `packages/shared/src/neetcode150.ts`: the public NeetCode 150 list (slug, LeetCode title, roadmap pattern,
 difficulty), kept by hand and pinned by `neetcode150.test.ts`. `catalogs.ts` labels each list by its source
-(`CATALOGS`, `CatalogId`; NeetCode 150 alone today) and answers `catalogProblem` and `listsOf` across all of them; a
-problem on two lists has the same facts in each (`catalogs.test.ts`). The plan picks from `DEFAULT_CATALOG`; a
-second list adds a member there, and its picker a Settings field, since the plan, MCP and every device must agree.
+(`CATALOGS`, `CatalogId`: `neetcode150` and `leetcode`) and answers `catalogProblem` and `listsOf` across all of
+them; a problem on two lists answers with NeetCode's facts (`catalogs.test.ts`). The plan picks from
+`DEFAULT_CATALOG` (NeetCode 150); `onPlanList` is that list's membership, which swap targets, `inCatalog` and
+`get_problem`'s `onRoadmap` read, whatever else is loaded. A per-user list choice is a Settings field still to come
+(F207), since the plan, MCP and every device must agree.
+
+### The full LeetCode catalog
+
+`leetcode` ("All LeetCode") is every LeetCode problem's **metadata** — number, slug, title, difficulty, topic
+tags, acceptance, Premium; never a statement — with a roadmap pattern and up to two similar and two harder problems
+each (`packages/shared/src/lcCatalog.ts`).
+
+- **Source.** The public dataset [noworneverev/leetcode-api](https://github.com/noworneverev/leetcode-api),
+  `data/leetcode_questions_mini.json`, pinned by commit (`LC_CATALOG_SOURCE`, commit `d4f29be`, 2026-11-17; 4,114
+  problems). Its repo is MIT (© 2025 Yan-Ying Liao) and says it is not affiliated with LeetCode; the data is
+  LeetCode's public problem metadata. Nothing here reads leetcode.com.
+- **Not in this repo.** The licence covers the dataset's code, not LeetCode's data, so the rows — and their
+  classifications, the catalog by another name — live only in each stage's table: the stage-wide partition
+  `catalog#leetcode` (`lambdas/src/catalog/store.ts`): `meta`, a `stage` for an upload's parts, and two slots of
+  the packed catalog, gzipped in ≤ 300 k-character chunks; an import fills the idle slot and flips `meta`. Never
+  exported. Tests and the local server use a synthetic fixture (`lambdas/src/catalog/fixture.ts`).
+- **Classification.** Each problem's pattern comes from, in order: NeetCode's own facts (its 150 problems); `other`
+  for LeetCode's non-algorithm sets (Database, Shell, Concurrency, JavaScript, pandas); an uploaded class; the live
+  catalog's earlier model class; else its tags (`patternOfTags`). The bulk pass ran once, outside the server: Opus
+  subagents in Claude Code classified the 3,546 algorithm problems from their title, difficulty and tags
+  (2026-11-17, ~2.6 M tokens), into an untracked file uploaded through `import_catalog`. A problem the dataset adds
+  later is classified on the server: each import sends at most 50 still on their tags to Sonnet 5.5
+  (`anthropic/catalogClassifyPrompt.ts`), until the stage's cumulative spend reaches $0.25
+  (`LC_CATALOG_COST_STOP_USD`). Related problems are kept only when they're on the catalog, never the problem
+  itself, and a harder one at least as hard.
+- **The import** runs on the coach worker (`kind: 'catalog-import'`, `lambdas/src/catalog/import.ts`): the BFF's
+  `startCatalogImport` stages a part, or — the last part in, or a call with none — claims `meta` (one job at a time;
+  a claim lapses after 120 s) and invokes the worker, which fetches the pinned file (10 s, 8 MB cap), builds,
+  packs and publishes. A failure keeps the live catalog and records `lastError`. `limit` keeps only the first n
+  problems besides NeetCode's (dev's import). No new function, grant or recurring cost: the worker's GetItem /
+  PutItem / Query cover it (an emptied stage is a put, not a delete).
+- **Reads.** A Lambda loads the live catalog into `catalogs.ts` (`loadCatalog`) before any read that names problems
+  (`Backend.coachInput`, the worker's pick), re-reading `meta` at most once a minute and the chunks only when its
+  rev moves (`catalog/loader.ts`); a failed load logs and reads as before. Records are derived on the server, so a
+  problem off NeetCode 150 now takes the catalog's title, pattern and difficulty and lists `leetcode`; that can move
+  the focus once at import, as a Premium flip does. The app loads nothing: Progress and the plan stay NeetCode 150's,
+  and the Problem page names the list from the record. Related problems are read only through `get_problem` for now.
+- **Status** (`getCatalogStatus`, `catalog_status`): `absent`, `staging`, `running`, `ready`, `partial` (some
+  problems still on their tags' guess), `failed`; the counts by classifier, the source commit, the spend.
+- **On prod**, once deployed: `import_catalog` on `aperture` with the maintainer's go, the classification file in
+  ≤ 64 k-character parts, then `catalog_status` until `ready`.
 
 The 7 LeetCode Premium problems are marked `premium`. **`Settings.leetcodePremium`** (default on; an older row reads
 as on) lets the coach pick them like any other — `pickable`, `easierIn`, the ranking's "nothing unseen left" and
@@ -267,15 +310,17 @@ the working catalog from the user's own sittings, its pattern from its LeetCode 
 | `log_attempt {attempts[]}`                                              | write  | `logCoachAttempts` (≤ 50; no Roll rep, no calibration); an item's `historical: true` is a history-only solve, up to 10 years back; help `solution` is a peek in one call (outcome optional; `accepted`), `title` + `difficulty` off the roadmap; a repeated peek fills what the first lacked |
 | `set_void {targets[]}`                                                  | write  | a sitting's `review.test` (`patchSittingReview`) or a legacy day's `CoachVoid` (`setCoachVoids`); ≤ 50, every target checked first                                                                                                                                                           |
 | `set_claude_notes {notes[]}`                                            | write  | `setSittingClaudeNotes` (≤ 20, ≤ 800 characters each, ended sittings, all or nothing)                                                                                                                                                                                                        |
+| `import_catalog {classes?, part?, parts?, limit?}`                      | write  | `startCatalogImport` (stage-wide, not the user's data): stages a part of the classification file, or kicks the import (_The full LeetCode catalog_)                                                                                                                                          |
+| `catalog_status`                                                        | read   | `getCatalogStatus`                                                                                                                                                                                                                                                                           |
 
 Every write's description opens with the same ask-first sentence and says what it returns to read back. Leave all
-eight (these six and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
+nine (these seven and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
 review's one cause) lives in the claude.ai project's instructions, kept outside the repo.
 
 ## RPCs
 
 `getCoachToday(day?)`, `startCoachPick()`, `listProblemRecords()`, `setCoachSlot({slug, action, toSlug?})`, `setCoachFloor(on)`,
-`setCoachFocus(pattern | null)`, `logCoachAttempts(inputs)`, `deleteCoachAttempt(id)`, `patchSittingReview(id,
+`setCoachFocus(pattern | null)`, `logCoachAttempts(inputs)`, `deleteCoachAttempt(id)`, `getCatalogStatus()`, `startCatalogImport({classes?, part?, parts?, limit?})`, `patchSittingReview(id,
 {cause?, help?, test?})`, `listLegacyGroups(slug?)`, `setCoachVoids(inputs)`, `setSittingClaudeNotes(items)` — JWT
 only, none an ingest method. Day-scoped writes act on the user's day as the server reads it. `ExportBundle` carries
 `coachDays`, `coachAttempts`, `coachFocus`, `coachVoids`, and the legacy rows (`legacyLeetcodeAttempts`, read-only).
