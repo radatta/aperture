@@ -624,7 +624,7 @@ export interface SwitcherTally {
   kills: number; // kill ops that ran (passed or failed)
   killed: number;
   noSwipe: number; // failed (ASSERT) before any swipe: presses dropped, no card
-  errored: number; // ended by an error with no swipe in its note (a hung read, the budget, a failed leave)
+  errored: number; // ended by an error before any swipe (a hung read, the budget, a failed leave)
   untraced: number; // passed with no swipe in its note: a runner that predates the ladder
   rungs: Record<string, { sent: number; killed: number }>;
 }
@@ -652,7 +652,7 @@ export function tallyKills(results: (SimResult | undefined)[]): SwitcherTally {
 export function switcherTable(tag: string, t: SwitcherTally): string[] {
   const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)}%` : '-');
   return [
-    `switcher trial ${tag}: ${t.killed} of ${t.kills} kills passed (${pct(t.killed, t.kills)}); ${t.noSwipe} failed before any swipe; ${t.errored} errored`,
+    `switcher trial ${tag}: ${t.killed} of ${t.kills} kills passed (${pct(t.killed, t.kills)}); ${t.noSwipe} failed before any swipe; ${t.errored} errored before any swipe`,
     'rung        sent  killed  rate',
     ...Object.keys(t.rungs)
       .sort()

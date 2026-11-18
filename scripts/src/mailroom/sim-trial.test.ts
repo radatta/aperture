@@ -712,7 +712,9 @@ describe('switcherTrial', () => {
     expect(jobs).toHaveLength(SWITCHER_ROUNDS);
     expect(jobs.map((j) => j.params.shutdown)).toEqual([false, false, false, true]);
     const out = logs.join('\n');
-    expect(out).toContain('8 of 8 kills passed (100%); 0 failed before any swipe; 0 errored');
+    expect(out).toContain(
+      '8 of 8 kills passed (100%); 0 failed before any swipe; 0 errored before any swipe',
+    );
     expect(out).toMatch(/1 flick\s+8\s+4\s+50%/);
     expect(out).toMatch(/2 lead\s+4\s+4\s+100%/);
     expect(out).not.toContain('predates');
@@ -751,7 +753,9 @@ describe('switcherTrial', () => {
     };
     expect(await switcherTrial(d, 'loaded', runner)).toBe(1);
     const out = logs.join('\n');
-    expect(out).toContain('0 of 3 kills passed (0%); 1 failed before any swipe; 1 errored');
+    expect(out).toContain(
+      '0 of 3 kills passed (0%); 1 failed before any swipe; 1 errored before any swipe',
+    );
     expect(out).toMatch(/3 drag\s+1\s+0\s+0%/);
     expect(out).toContain('pnpm mailroom sim-shutdown');
   });

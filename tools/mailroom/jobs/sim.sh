@@ -553,6 +553,7 @@ sim_find_icon() {
 # simctl refuses to terminate an app that isn't running (mac-sim's idle4 round), so only a running one is terminated.
 sim_launch_again() {
   if sim_web_alive; then
+    [ "$SIM_WEB_RC" = 0 ] || { sim_err SIM_UNAVAILABLE TERMINATE "pgrep failed (rc $SIM_WEB_RC): the web app's state is unknown"; return 1; }
     sx 30 terminate "$SIM_U" "$SIM_TERMINATE_ID" >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE TERMINATE "simctl terminate failed"; return 1; }
     ! sim_web_alive || sleep 1 # the process takes a moment to exit (as after the switcher's swipe)
     if sim_web_alive; then sim_err SIM_UNAVAILABLE TERMINATE "the web app still runs after terminate"; return 1; fi
@@ -962,11 +963,11 @@ sim_op_kill() {
 }
 
 # The standalone web app's process, by name (a backgrounded app is still running; a killed one is gone). Only pgrep's
-# "no match" (1) is gone: an error (2, 3) reads as alive, so a broken check never passes a kill.
+# "no match" (1) is gone: an error (2, 3) reads as alive, so a broken check never passes a kill. SIM_WEB_RC ← its code.
 sim_web_alive() {
-  local rc=0
-  pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >/dev/null 2>&1 || rc=$?
-  [ "$rc" != 1 ]
+  SIM_WEB_RC=0
+  pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >/dev/null 2>&1 || SIM_WEB_RC=$?
+  [ "$SIM_WEB_RC" != 1 ]
 }
 
 # What one tree read shows in front: SIM_FRONT_APP (the first AXApplication's label) and SIM_FRONT_PAGE (the Home
@@ -1132,8 +1133,10 @@ sim_kill_switcher() {
   done
   # Out of presses or rungs. A process that exits only now (after the last rung's polls) is still the kill, late.
   if [ -n "$swiped" ] && sim_web_gone; then sim_switcher_leave "$tel; late$why"; return; fi
-  # Leave the switcher only when the last read showed it in front.
-  [ -z "$insw" ] || ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
+  # Leave the switcher only when a fresh read still shows it in front (the polls above took a while).
+  if [ -n "$insw" ] && sim_front && [ "$SIM_FRONT_APP" != Web ] && [ -z "$SIM_FRONT_PAGE" ]; then
+    ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
+  fi
   # Every rung swiped the card and the app ran on: the gesture not killing, not a dropped input. Needs you (the
   # maintainer, option a), never a pass.
   if [ "$rung" = 3 ]; then

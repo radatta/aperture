@@ -704,7 +704,9 @@ spass('sim: a process that exits inside the polls is the first rung, its time no
       tape=[dtree(tree(), 4), dtree(SWITCHER, 2), alive(3)], notes={'1': 's1 flick 339,600 gone@1.5'}, simCount={S1: 1, S2: 0, LEAVE: 1})
 serr('sim: an app still running after all three card swipes is SWITCHER_FAILED, needs you; every swipe noted; the switcher is left', 'SWITCHER_FAILED', KS,
      notes={'1': "the switcher swipe didn't kill the app; card 239,136 306x664 r2; s1 flick 339,600 alive>sw; s2 lead 339,600 alive>sw; s3 drag 339,720 alive>sw"},
-     tape=[dtree(tree(), 4), dtree(SWITCHER, 4), alive()], simCount={DOUBLE: 1, S1: 1, S2: 1, S3: 1, LEAVE: 1}, files=['shots/01-fail.png'])
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 5), alive()], simCount={DOUBLE: 1, S1: 1, S2: 1, S3: 1, LEAVE: 1}, files=['shots/01-fail.png'])
+serr('sim: a switcher that closed itself while the last polls ran is not tapped on the way out', 'SWITCHER_FAILED', KS,
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 4), dtree(tree('SpringBoard'), 1), alive()], simCount={S3: 1, LEAVE: 0})
 spass('sim: a card still moving is read until it holds still, and the swipe aims at where it settled', KS,
       tape=[dtree(tree(), 4), dtree(SWITCHER, 2), card(300)], notes={'1': 'card 239,136 306x664 r3; s1 flick 339,600 gone@0'}, simCount={CARD: 3, S1: 1})
 spass('sim: a card that never holds still is swiped at its last frame, noted moving', KS,
@@ -1103,6 +1105,9 @@ sfail('sim: no landmark and no keyboard is LANDMARK as before, no relaunch', 'LA
       tape=[pt(220, 895, {}), pt(220, 530, {}), pt(221, 856, {})], simCount={TERM: 0})
 spass('sim: a relaunch onto a web app already gone skips the terminate (simctl refuses one)', [L],
       tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3)], notes={'0': 'keyboard up; no web process though the tree showed the app, so not terminated)'}, simCount={TERM: 0, 'tap -x 371 -y 247': 2})
+serr('sim: a relaunch whose pgrep errors is TERMINATE (state unknown), never terminated or passed', 'TERMINATE', [L],
+     tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 2}], simCount={TERM: 0},
+     notes={'0': 'pgrep failed (rc 2)'})
 serr('sim: a web app that survives the relaunch\'s terminate is TERMINATE', 'TERMINATE', [L],
      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0}], simCount={TERM: 1})
 
