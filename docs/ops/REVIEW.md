@@ -2,7 +2,7 @@
 
 Phase 6 of the feature workflow (`docs/ops/FEATURE-WORKFLOW.md`) points here. Several independent reviews of one
 diff find more than the same review run again, and here the late rounds mostly found bugs that the previous round's
-fixes had introduced, or a twin call site a fix had missed: about 45 of the ~130 archived lanes ran an extra round
+fixes had introduced, or another call site a fix had missed: about 45 of the ~130 archived lanes ran an extra round
 (the coverage check, 2026-11-17, _Coverage_ below). So the review is one round of reviewers in parallel, each
 reading the same diff through a different **lens**, merged into one list, fixed in one pass, gated once — then a
 recheck of the fix diff alone, only while a round still finds something serious.
@@ -150,11 +150,25 @@ commit for the round.
 - **What it reports** — each fixed finding closed or not, regressions in the touched functions and their callers,
   sibling call sites with the same pattern, S1/S2 left unfixed whose reason the code doesn't bear out; each
   line tagged `cause=fix|sibling|not-closed|pre-existing`.
-- **Serious again** → fix, gate, commit, and the next round rechecks that fix diff. **Minor only** → fix, gate,
-  commit, done. **Nothing** → done, no extra gate.
-- **Stop and ask** after four rounds, or from round 3 on when a round finds no fewer serious bugs than the one before:
-  `[ask-maintainer]` with the open list and three options — another recheck, re-plan that piece, or ship with it
-  logged as a follow-up — and the lane's pick. In both modes; the lane holds until the relay.
+- **Serious again** (unless the stop below fires) → fix, gate, commit, and the next round rechecks that fix diff.
+  **Minor only** → fix, gate, commit, done. **Nothing** → done, no extra gate.
+- **Stop and ask**, in both modes: after four rounds; from round 3 on, when a round finds no fewer serious bugs
+  than the one before; or, from round 2 on, at a **twin** — a serious `cause=fix` or `cause=sibling` finding in
+  the mechanism an earlier round's fix already patched (one regex family, one parser, one state machine): the
+  design is wrong, not the code. Round 2 counts; a serious regression elsewhere (a caller, another module) does
+  not. The round file names, for each serious `cause=fix` or `cause=sibling` finding, the earlier finding whose
+  fix patched that mechanism, or why it lies elsewhere. At any stop the round's findings stay unpatched:
+  `[ask-maintainer]` with the open list and three options — patch it and recheck, re-plan that piece, or ship with
+  the open list unpatched, logged as a follow-up and each S1/S2 under _Open findings shipped_ — and the lane's pick; the lane holds until the relay.
+- **The pick.** At a twin, cap or not: re-plan that piece — move the judgment to where it is made once (the
+  model, one parser) or narrow the scope. A relayed re-plan, with the open list's other fixes, is built, gated and
+  committed, then reviewed afresh: a round 1 over its own diff with every lens _Picking lenses_ picks for it (risk
+  classes and kickoff or relay additions included), never skipped, its rounds counted anew in
+  `localNotes/review/replan<k>-round-<n>.md` with ids `P<k>R<n>-<nn>`. At the cap with no twin, on a diff with no
+  risk class: fix the open list, gate, commit, then one final broad review — every lens _Picking lenses_ picks for the
+  branch (kickoff or relay additions included), on the whole branch diff, not the fix range — its S1/S2 fixed and gated with no further
+  round, then ship; one it can't fix goes back as `[ask-maintainer]`. Not another narrow recheck. At any other
+  stop, the lane picks on the merits.
 
 ## After a dev fix or a rebase
 
@@ -163,7 +177,8 @@ A fix from dev testing (phases 8–9, a red `Branch` run included), or a rebase 
 whatever its size. Only a fix that touches no infra, shell, UI or extension trigger and no risk class, and is
 covered by a test it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
 recheck is the chain's round 1, the rest runs as round 2 and later (serious again → recheck that fix), the cap and the
-no-fewer comparison count within the chain, and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
+no-fewer comparison count within the chain, the twin in a dev-fix chain from its round 1 on, against any earlier
+fix to that mechanism (a rebase chain has no twin stop: a bad resolution is serious again), and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
 
 - **Dev fix** — the range is `<the commit before the fix>..HEAD`; the list is the dev defects it fixes.
 - **Rebase** — note the head before rebasing (`git rev-parse HEAD`); after, the recheck reads
@@ -172,7 +187,7 @@ no-fewer comparison count within the chain, and its files are `localNotes/review
 
 ## Lens gaps
 
-A serious finding in round 2 or later, or in any recheck of a dev or rebase chain, that the fixes didn't cause
+A serious finding in round 2 or later, or in any recheck of a dev, rebase or re-plan chain, that the fixes didn't cause
 (`cause=pre-existing`) means an earlier lens should have seen it.
 
 - **The lane** records it under `## Lens gaps` in its report — lens, kind, one line, round — and sends one
@@ -189,7 +204,7 @@ them, findings by severity, gates run. No lane recorded review tokens before thi
 for the next design change.
 
 **Open findings shipped** — every S1/S2 left unfixed (a drop the second reader upheld, a product call "not now", the
-round cap's "ship it"), every live-state item still open (only after the relay's answer, _Merge_ 5) by id from the round files,
+stop-and-ask's "ship it"), every live-state item still open (only after the relay's answer, _Merge_ 5) by id from the round files,
 and every lens that didn't run, by lens and round (only after the user's yes, _Merge_ 1).
 The list goes in the report, the PR body and `[pr-open]`; an empty one is written "none".
 
@@ -248,7 +263,7 @@ owns it. Kinds no lens can own are listed last. "Also" lenses see the kind from 
 | `ios`         | inputs under 16 px; iOS probe points                                                 | UI          | dev                |
 | `webkit`      | Safari extension behaviour                                                           | extension   | dev (Safari pass)  |
 | `fix-regress` | a bug the previous round's fix introduced                                            | fix recheck |                    |
-| `sibling`     | a twin call site the fix missed                                                      | fix recheck | correctness        |
+| `sibling`     | another call site the fix missed                                                     | fix recheck | correctness        |
 
 Not a lens's to own: real-device, Simulator and model-variance behaviour (the dev check and _Needs you_), and
 product calls (the decision log or `[ask-maintainer]`).
