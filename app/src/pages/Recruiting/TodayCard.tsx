@@ -285,12 +285,11 @@ function useMockState() {
   const [form, setForm] = useState<{ mock: MockBrief | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect). Holds what
-  // had focus when the action began, so the effect can tell focus that was lost from focus the user moved.
-  const refocus = useRef<{ from: Element | null } | null>(null);
-  const pend = () => (refocus.current = { from: document.activeElement });
+  // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect). A cancel
+  // names its mock, so the effect waits for the render where that row has gone.
+  const refocus = useRef<{ id?: string } | null>(null);
   const close = () => {
-    pend();
+    refocus.current = {};
     setForm(null);
   };
   return {
@@ -310,10 +309,9 @@ function useMockState() {
     cancel: async (m: MockBrief) => {
       if (del.isPending) return;
       setError(null);
-      const from = document.activeElement;
       try {
         await del.mutateAsync(m.id);
-        refocus.current = { from }; // the row and its buttons go
+        refocus.current = { id: m.id }; // the row and its buttons go
         if (form?.mock?.id === m.id) setForm(null);
       } catch (e) {
         setError(
@@ -342,7 +340,7 @@ function PlannedMockRow({
   onCancel: () => void;
 }) {
   const when = m.day < today ? fmtPastDay(m.day, today) : fmtSpokenDay(m.day, today);
-  const named = `mock ${when} ${mockWho(m)}`; // as the row reads, so two the same day still differ
+  const named = `mock ${when}, ${mockWho(m)}`; // as the row reads: the who tells two the same day apart
   return (
     <li className="flex flex-col">
       <div className="flex items-baseline justify-between gap-3">
@@ -383,10 +381,11 @@ function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
     const pending = state.refocus.current;
     const to = state.trigger.current ?? section.current;
     if (!pending || !to) return;
-    const at = document.activeElement;
-    if (at && at === pending.from && at.isConnected) return; // its row hasn't gone yet: wait for that render
-    state.refocus.current = null;
+    const listed = [...today.mock.upcoming, ...unlogged].some((x) => x.id === pending.id);
+    if (pending.id && listed) return; // its row hasn't gone yet: wait for that render
+    state.refocus.current = null; // decided once, here
     // Only focus that was lost: never pull it out of a form the user went on to while the write ran.
+    const at = document.activeElement;
     if (at && at !== document.body && at.isConnected) return;
     returnFocus(to);
   });
