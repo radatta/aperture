@@ -22,6 +22,7 @@
 # Second wall, not a proof: a symlink into the dir, a dir deeper than the walk, or under a pruned tree, gets past.
 set -euo pipefail
 export LC_ALL=C.UTF-8
+shopt -u extglob # BASHOPTS or BASH_ENV can switch it on; the glob name test below needs it off
 INPUT=$(cat)
 
 deny() {
@@ -69,7 +70,7 @@ hit_piece() { # one `--glob` as the tool passes it
   seg=${p##*/}
   shopt -s nocasematch
   # `case`, never `[[ == $seg ]]`: bash 5.2 turns extglob on for a pattern inside [[ ]], and a 15-character
-  # `*(?|?|?|?)z` then backtracks past the hook timeout (a timeout runs the tool). `case` keeps extglob off.
+  # `*(?|?|?|?)z` then backtracks past the hook timeout (a timeout runs the tool). `case` honours the `shopt -u extglob` above.
   for name in .secrets private-key.pem app.env; do
     # shellcheck disable=SC2254 # seg is a glob on purpose
     case $name in $seg) HIT=1 ;; esac

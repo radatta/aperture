@@ -300,6 +300,12 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
     if board:
         return decision_for(hook, tool, tool_input, None, case.get("payload"), env=board_env(case, root))
     if root is None:
+        if hook.name == "secrets-read-guard.sh":
+            # A hostile launch environment: no UTF-8 locale (the hook must set its own for the case-fold cases) and
+            # extglob forced on (the hook must switch it off for the extglob case).
+            env = {k: v for k, v in os.environ.items() if not k.startswith("LC_") and k != "LANG"}
+            env.update(LANG="C", BASHOPTS="extglob")
+            return decision_for(hook, tool, tool_input, cwd, case.get("payload"), env=env)
         return decision_for(hook, tool, tool_input, cwd, case.get("payload"))
     repo = make_repo(root, case.get("branch", "fixture-branch"), case.get("identity"))
     if "head_author" in case:
