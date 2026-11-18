@@ -1184,7 +1184,7 @@ describe('heavy.sh test cap', () => {
     testSlots(cap - 1);
     // an orphan (its bash parent exits at once), so init reaps it the moment it ends — like a real wrapper's
     // shell would; a direct child of this blocked test runner would linger as a zombie and keep its slot
-    const brief = spawnSync('bash', ['-c', 'sleep 1.5 >/dev/null 2>&1 & echo $!'], {
+    const brief = spawnSync('bash', ['-c', 'sleep 5 >/dev/null 2>&1 & echo $!'], {
       encoding: 'utf8',
     });
     testSlots(1, Number(brief.stdout.trim()));
@@ -1664,6 +1664,28 @@ describe('the log-only budget', () => {
     limits({ budget: undefined });
     expect(status().some((l) => l.startsWith('budget'))).toBe(false);
   });
+
+  it('off the container (no cgroup, the Mac): status prints no budget line, since it has no /proc to judge by', () => {
+    slotFile('test');
+    const tick = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], {
+      env,
+      encoding: 'utf8',
+    }).stdout;
+    const day = new Date().toISOString().slice(0, 10);
+    mkdirSync(join(tmp, 'board/history'), { recursive: true });
+    writeFileSync(join(tmp, `board/history/samples-${day}.jsonl`), tick);
+    const r = spawnSync('bash', [join(boardDir, 'board.sh'), 'status'], {
+      env: {
+        ...env,
+        APERTURE_CGROUP_DIR: join(tmp, 'no-cgroup'),
+        APERTURE_DEVLOCK_SOURCE: `file:${join(tmp, 'gh-lock')}`,
+      },
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    expect(r.stdout).toMatch(/^heavy: 1 slot\(s\)/m); // the Mac path ran
+    expect(r.stdout).not.toMatch(/^budget/m);
+  });
 });
 
 describe('sampler.sh lane phases', () => {
@@ -1711,9 +1733,10 @@ describe('sampler.sh lane phases', () => {
     const a = claude('aa');
     const bb = claude('bb');
     const c = claude('cc');
-    lane('aa', JSON.stringify({ v: 1, branch: 'aa', phase: 'gate' }, null, 2));
-    lane('bb', '{"v":1,"branch":"bb","pha');
-    expect(phases()).toMatchObject({ [a]: 'gate', [bb]: null, [c]: null });
+    // the torn file sorts first: one jq over all of them stops there, so only the per-file fallback reads bb
+    lane('aa', '{"v":1,"branch":"aa","pha');
+    lane('bb', JSON.stringify({ v: 1, branch: 'bb', phase: 'gate' }, null, 2));
+    expect(phases()).toMatchObject({ [a]: null, [bb]: 'gate', [c]: null });
   });
 
   it('a sampler.sh from before the phase field (no F5) still reads every row, phase null', () => {

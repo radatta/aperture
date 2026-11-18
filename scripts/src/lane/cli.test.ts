@@ -152,6 +152,21 @@ describe('lane cli', () => {
     const t2 = deps(w, [['git worktree list', `worktree ${w.main}\nHEAD 1\ndetached\n`]]);
     expect(await main(['status'], () => t2.d)).toBe(0);
     expect(t2.out()).not.toMatch(/budget/);
+    // a budget read that throws costs its line, never the status
+    writeFileSync(join(w.main, 'scripts/board/limits.json'), shipped);
+    const t3 = deps(w, [['git worktree list', `worktree ${w.main}\nHEAD 1\ndetached\n`]]);
+    const list = t3.d.fs.list;
+    let calls = 0;
+    t3.d.fs = {
+      ...t3.d.fs,
+      list: (dir) => {
+        // activeLanes' own read is the first; the budget's second read of the registry throws
+        if (dir.endsWith('/sessions') && ++calls > 1) throw new Error('EIO');
+        return list(dir);
+      },
+    };
+    expect(await main(['status'], () => t3.d)).toBe(0);
+    expect(t3.out()).not.toMatch(/budget/);
   });
 
   it('start.ts and end.ts reach processes and the disk only through the seam', () => {

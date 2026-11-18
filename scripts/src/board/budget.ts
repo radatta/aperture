@@ -200,7 +200,6 @@ export function laneBudget(
   };
 }
 
-const f1 = (x: number) => (Math.round(x * 10) / 10).toFixed(1);
 const lim = (x: number) => String(Math.round(x * 100) / 100); // the value `would` compares against: 3.46, not 3.5
 
 // The one status line (board.sh status, pnpm lanes status): what is committed now against each scaled limit.
@@ -210,8 +209,8 @@ export function budgetLine(
   pf: { k: number; why: KWhy },
 ): string {
   const bits: string[] = [];
-  if (now.jobs !== null) bits.push(`jobs ${f1(now.jobs)}/${lim(r2(b.jobUnits / pf.k))}`);
-  if (now.lanes !== null) bits.push(`lanes ${f1(now.lanes)}/${lim(r2(b.laneUnits / pf.k))}`);
+  if (now.jobs !== null) bits.push(`jobs ${lim(now.jobs)}/${lim(r2(b.jobUnits / pf.k))}`);
+  if (now.lanes !== null) bits.push(`lanes ${lim(now.lanes)}/${lim(r2(b.laneUnits / pf.k))}`);
   if (now.sessions !== null) bits.push(`sessions ${now.sessions}/${b.sessionsMax}`);
   bits.push(`k ${lim(pf.k)} ${pf.why}`);
   return `budget (log-only): ${bits.join(' · ')}`;

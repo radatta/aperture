@@ -220,7 +220,7 @@ export function laneBudgetNow(d: Deps, active: Active[]) {
     lb,
     now: lanesNow(b, active),
     line:
-      `budget (log-only): lanes ${(lb.units.base + lb.units.lanes).toFixed(1)}+${lb.units.new}/${lim(lb.allowed)}` +
+      `budget (log-only): lanes ${lim(lb.units.base + lb.units.lanes)}+${lb.units.new}/${lim(lb.allowed)}` +
       ` · sessions ${live + 1}/${b.sessionsMax} · k ${lim(pf.k)} ${pf.why} → would ${lb.would}${lb.wouldWhy.length ? ` (${lb.wouldWhy.join(', ')})` : ''}`,
   };
 }

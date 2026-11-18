@@ -299,7 +299,7 @@ describe('laneBudget', () => {
 describe('budgetLine and lastSample', () => {
   it('prints the scaled limits and k', () => {
     expect(budgetLine(b, { jobs: 4, lanes: 3.25, sessions: 12 }, { k: 1, why: 'ac' })).toBe(
-      'budget (log-only): jobs 4.0/6.5 · lanes 3.3/4.5 · sessions 12/14 · k 1 ac',
+      'budget (log-only): jobs 4/6.5 · lanes 3.25/4.5 · sessions 12/14 · k 1 ac',
     );
     expect(
       budgetLine(

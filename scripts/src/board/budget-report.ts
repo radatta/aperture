@@ -93,8 +93,9 @@ export function budgetReport(
   }
 
   // Coverage: a branch running slotted jobs with no budget event is a worktree older than the budget's merge.
-  // both sides keyed as a job event names its session: the branch, else the session name (the hub on detached main)
-  const key = (e: Ev) => String(e.branch || e.name || '?');
+  // both sides keyed by the registry's session name, which heavy.sh and the budget read from the same file (a job
+  // event's branch falls back to git, a budget event's doesn't); the branch only when no session is registered
+  const key = (e: Ev) => String(e.name || e.branch || '?');
   const logged = new Set(jobs.map(key));
   const unseenMap = new Map<string, number>();
   for (const e of evs) {

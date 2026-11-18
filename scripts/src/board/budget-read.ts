@@ -43,7 +43,8 @@ const list = (dir: string) => {
   }
 };
 
-// lib.sh sb_alive: a pid alive and, given a start tick, the same process (zombies and reused pids are not).
+// A pid alive and, given a start tick, the same process (zombies and reused pids are not) — as lane/state.ts alive:
+// an empty start never matches (lib.sh sb_alive reads '' as alive; no live writer leaves one).
 export function alive(procDir: string, pid: unknown, start: unknown): boolean {
   if (!Number.isInteger(pid) || (pid as number) <= 0) return false;
   let s;
@@ -144,7 +145,7 @@ export function logJobBudget(
   );
 }
 
-// Live heavy slots, as lease.sh counts them (a dead or zombie wrapper's slot is no job).
+// Live heavy slots, as lease.sh counts them bar an empty wrapperStart (a dead or zombie wrapper's slot is no job).
 export function liveSlots(boardDir: string, procDir: string): BudgetSlot[] {
   const dir = join(boardDir, 'leases', 'heavy');
   return list(dir).flatMap((f) => {
