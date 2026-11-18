@@ -70,6 +70,9 @@ function stress(v) {
   v.heads = Object.fromEntries(Object.keys(v.heads).map((k) => [k, '12 lanes · ask late']));
   v.next.more = 4;
   v.slipping.push({ kind: 'fired', what: `F99: ${LONG('fired')}`, owner: 'lane', since: now - 7200000, after: 'tower-web merge' });
+  // a red board: long items, a count gh can't vouch for (the chip reads "n? stale")
+  v.board = { ...v.board, tone: 'bad', why: LONG('why'), unsure: `gh PRs ${LONG('unsure')}`,
+    items: [...(v.board?.items ?? []), { kind: 'queue-state', what: LONG('board'), fix: LONG('fix'), branch: 'echo-branch', since: now - 3600000 }] };
   if (v.sparks) v.sparks.mac = Array(58).fill(null).concat([30000, 31000]); // two points: no line to draw
   // F120: every power alert at once, and a slow container
   v.health.power = { known: true, line: 'battery 12% discharging (0:50 left) · Low Power Mode on · limit: CPU speed 80%, thermal warning 2', alerts: ['battery 12%', 'Low Power Mode', 'CPU speed 80%', 'thermal warning 2'], advice: '≤ 3 lanes (on battery under 30% or Low Power Mode)' };
@@ -85,6 +88,7 @@ function empty(v) {
   v.next = { order: [], queue: [], merge: [], maintainer: null, more: 0, parked: [], table: [], nowIndex: 0, soon: [], notes: [], planAt: null, ask: null };
   v.done = [];
   v.slipping = [];
+  delete v.board; // a server older than the page: no board chip, no BOARD rows
   return v;
 }
 
@@ -129,6 +133,31 @@ async function check(page, tag, phone) {
     return bad;
   }, phone);
   for (const b of r) fails.push(`${tag}: ${b}`);
+}
+
+// Board freshness (TOWER.md → Board freshness): the fixtures' queue.json contradicts the derived board, so the count
+// shows amber or red — its own chip on the desktop, inside the sources chip on the phone (no room for a third
+// button) — wherever a board is served; an older server's view has none; stress's SLIPPING (opened) has BOARD rows.
+async function boardChecks(page, tag, variant, phone) {
+  const r = await page.evaluate(() => {
+    const shown = (c) => !!c && c.offsetParent !== null && getComputedStyle(c).display !== 'none';
+    const b = document.querySelector('#board-chip');
+    const s = document.querySelector('#sources-chip');
+    const rows = [...document.querySelectorAll('#slipping .badge')].filter((e) => e.textContent === 'BOARD' && e.offsetParent !== null).length;
+    // innerText: what shows, not a hidden span
+    return { board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows };
+  });
+  const loud = /t-(warn|bad)/;
+  if (variant === 'empty') {
+    if (r.board || /stale/.test(r.sText)) fails.push(`${tag}: a board count with no board in the view`);
+    return;
+  }
+  if (phone) {
+    if (r.board) fails.push(`${tag}: the board chip shows on the phone (the header has no room)`);
+    if (!/stale/.test(r.sText) || !loud.test(r.sCls)) fails.push(`${tag}: sources chip lacks the board count (${r.sCls} "${r.sText}")`);
+  } else if (!r.board || !loud.test(r.bCls) || !/^board .* stale$/.test(r.bText))
+    fails.push(`${tag}: board chip missing or quiet (${r.bCls} "${r.bText}")`);
+  if (variant === 'stress' && !r.rows) fails.push(`${tag}: no BOARD row in the opened SLIPPING`);
 }
 
 // The Home Screen app at 440, in a real engine's cascade: no browser here emulates display-mode (Playwright has no
@@ -354,6 +383,7 @@ async function taps(page, tag) {
           // the folded panels open, so the frame shows (and checks) them too
           if (variant === 'stress') for (const id of ['slipping', 'sources']) await page.click(`#${id} h2`);
           await check(page, tag, size !== 'desk');
+          await boardChecks(page, tag, variant, size !== 'desk');
           if (at) await expandChecks(page, tag, at);
           await page.screenshot({ path: `${OUT}/${tag}.png`, fullPage: true });
           if (variant === 'stress' && scheme === 'light' && size !== 'desk') await taps(page, tag);
