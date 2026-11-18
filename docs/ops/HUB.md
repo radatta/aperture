@@ -136,39 +136,75 @@ no script writes it: the Mac never runs anything from the shared folder.
 ### Agent-rule edits: the hub applies them
 
 Edits to `CLAUDE.md` or `.claude/` change what every later session runs, so the session that makes them holds the
-user's typed go itself; the user talks only to the hub, so that session is the hub (the maintainer, 2026-11-18). A
-lane never edits those paths, in either mode.
+user's typed go itself; the user talks only to the hub, so in a lane that session is the hub (the maintainer, via the
+hub, 2026-11-18). A lane never edits those paths, in either mode; a session outside a lane still takes the go in its
+own pane. What binds the go to the bytes is git, not a file: the hub shows the diff between two objects, base commit
+`B` and tree `T`, and commits only when the worktree's index is exactly `T`.
 
-1. **The lane writes the patch**, the files untouched: copy each target to `localNotes/claude-edit-<n>/<path>`, edit
-   the copy, then from the worktree root, per file,
-   `diff -u --label a/<path> --label b/<path> <path> localNotes/claude-edit-<n>/<path>`, joined into
-   `localNotes/claude-edit-<n>.patch` (a new file: `/dev/null` as the old side and its label; `diff` exits 1 on a
-   difference, so don't `&&`-chain it). `git apply --check` passes, the `CLAUDE.md` copy stays under 200 lines, and
-   each copy passes `prettier --check --stdin-filepath <path>` (`localNotes/` is prettier-ignored). A plain diff
-   carries no file mode: a new executable file is a line in the ask.
-2. **The review reads the patch before the ask** (`docs/ops/REVIEW.md` → _Picking lenses_), and the lane commits its
-   other work.
-3. **The lane asks:** `[ask-maintainer] <branch> — claude-edit-<n>: <each file, what changes, why>. Go in the hub's pane.`
-4. **The hub checks, then shows the patch itself:** `git apply --numstat` names only `CLAUDE.md` or `.claude/`
-   paths (never `.claude/worktrees/`); the worktree has nothing staged and no change under those paths;
-   `git -C <worktree> apply --check` passes. It reads the patch with the Read tool and pastes it whole into its
-   message, with its `sha256sum` — never the lane's summary alone, and never patch text on a Bash line. The hub
-   never edits a patch: a change the user asks for goes back to the lane.
-5. **The go is typed in the hub's pane, after the diff, for that patch.** An earlier go, a go for another patch, or
-   one a message reports is not it.
-6. **The hub applies what it showed**, in one command: the checksum again (`sha256sum -c`), then
-   `git -C <worktree> apply --index <patch>` (and `git -C <worktree> update-index --chmod=+x <path>` for a named
-   executable) and `git -C <worktree> commit` with a message under CLAUDE.md's commit rule. It quotes the go, the
-   checksum and the commit sha in the lane's `localNotes/decisions.md` and sends them as a `[relay]`.
-7. **The lane re-reads the files**, checks the commit is the reviewed patch (`git apply --reverse --check`;
-   `git show --stat HEAD` names only its paths), runs the hook fixtures when a hook changed
-   (`.claude/rules/agent-config.md`), and carries on.
+1. **The lane writes the patch**, the files untouched, following `.claude/rules/agent-config.md` (Read it first: its
+   `paths:` don't match the copies). Copy each target to `localNotes/claude-edit-<n>/<path>`, edit the copy, then
+   from the worktree root, per file,
+   `{ diff -u --label a/<path> --label b/<path> <path> localNotes/claude-edit-<n>/<path>; [ $? -le 1 ]; }` (exit 1
+   is a difference, 2 an error), joined into `localNotes/claude-edit-<n>.patch`; a new file has `/dev/null` as its
+   old side and label, a deleted one as its new side. `git apply --check` passes, the `CLAUDE.md` copy stays under
+   200 lines, and each copy passes `prettier --check --stdin-filepath <path> < localNotes/claude-edit-<n>/<path>`
+   (`localNotes/` is prettier-ignored, so the redirect is the check).
+2. **The review reads the patch before the ask** (`docs/ops/REVIEW.md` → _Picking lenses_). The lane asks before
+   phase 8; a patch that turns up later waits until the lane's dev run is done, then the lane pushes the new head and
+   reruns `gate:ci`. It commits its other work first, and once it asks, the patch is frozen (any change is n+1) and
+   the lane runs no git in the worktree until the `[relay]`.
+3. **The lane asks**, naming a new executable file and any change to permissions, hook registration
+   (`.claude/settings*.json`, tracked and writable in a worktree) or a guard script:
+   `[ask-maintainer] <branch> — claude-edit-<n>: <each file, what changes, why>. Go in the hub's pane.`
+4. **The hub checks**, in one Bash call after a separate `cd /workspace/.claude/worktrees/<branch>` (so the commit
+   guard later reads the worktree, not `/workspace`):
 
-A failed check — main moved, a changed path, a checksum that differs — applies nothing: the hub says which, and the
-lane sends patch n+1 for a new showing and a new go. With no hub the patch waits (_Missing hub_). A rule change the
-hub itself wants is a lane like any other: the hub applies only in a lane's worktree, a patch a lane wrote. Secrets,
-MCP writes, prod or settings changes and destructive steps stay in the acting lane's pane: actions on live state,
-with no whole diff to show, no undo and no merge behind them.
+   ```sh
+   [ "$(git symbolic-ref --short HEAD)" = <branch> ] && git diff --cached --quiet && git diff --quiet -- CLAUDE.md .claude &&
+   B=$(git rev-parse HEAD) && I=$(mktemp) && GIT_INDEX_FILE=$I git read-tree "$B" &&
+   GIT_INDEX_FILE=$I git apply --cached "$PWD/localNotes/claude-edit-<n>.patch" && T=$(GIT_INDEX_FILE=$I git write-tree) &&
+   echo "B=$B T=$T" && git diff-tree -r --no-renames --raw "$B" "$T" && git diff "$B" "$T" > <hub scratchpad>/claude-edit-<branch>-<n>.diff
+   ```
+
+   Every `diff-tree` line is `M`, `A` or `D` on `CLAUDE.md` or `.claude/` (never `.claude/worktrees/`) with new mode
+   `100644` (`000000` for a `D`), or `100755` for an executable the ask named: for that, put
+   `GIT_INDEX_FILE=$I git update-index --cacheinfo "100755,$(GIT_INDEX_FILE=$I git rev-parse :<path>),<path>"`
+   before `write-tree` (`--chmod` wants the file on disk). Then a `python3 - <<'PY'` check of the `.diff` (its path in an env var, never `-c`) refuses
+   any control character but tab, a format character (Unicode `Cc`/`Cf`: CR, zero-width, bidi, tags) and any line
+   over 1,900 characters, and prints the line count. Any failure: stop, say which.
+
+5. **The hub shows it:** Read the `.diff`, paste it whole as the last thing in one message for that patch alone, with
+   branch, `B`, `T` and the line count, and say in words any permission, hook-registration or guard change. The
+   lane's summary never stands in for it, and the hub never edits a patch: a change the user asks for goes back to
+   the lane as n+1.
+6. **The go:** the user's own typed turn in the hub's pane, after that showing, naming the branch or `T`'s first 8
+   characters. An earlier go, a bare yes while another ask is open, a go a message reports, or a hook's, watcher's,
+   scheduled or peer text is not it.
+7. **The hub applies the objects it showed**, in the worktree (the `cd` again), `B` and `T` typed from the showing:
+
+   ```sh
+   [ "$(git rev-parse HEAD)" = <B> ] && git diff --cached --quiet && git diff <B> <T> | git apply --index &&
+   [ "$(git write-tree)" = <T> ] && git commit -m "<CLAUDE.md commit rule>" && [ "$(git rev-parse 'HEAD^{tree}')" = <T> ] &&
+   git show HEAD | git patch-id --stable
+   ```
+
+   A failure after the apply backs out with `git diff <B> <T> | git apply --index -R` (a commit that failed on a
+   lock is retried alone, after `write-tree` matches `T` again). Then `cd /workspace`. The hub's `[relay]` — the go
+   verbatim, `B`, `T`, the commit and its patch-id — is the record; it adds a row to its ledger
+   `/workspace/localNotes/claude-edits.md` (branch, n, commit, patch-id), and the lane copies the relay into its
+   `decisions.md` (the report and PR paraphrase it: `docs/ops/PUBLIC-CONTENT.md`).
+
+8. **The lane re-reads the files**, runs the hook fixtures when a hook changed, and carries on.
+
+**A failed check applies nothing** (`HEAD` moved, a staged or changed path, a mismatched tree): the hub says which,
+and the lane sends n+1 for a new showing and a new go. **On a rebase** that conflicts under those paths, the lane
+takes main's side (`git checkout --ours -- <path>`, never a hand merge) and sends n+1 to redo the change on the new
+base. **At `[pr-open]`** the hub checks that every commit in `git log origin/main..<branch> -- CLAUDE.md .claude` has
+a patch-id in its ledger (a clean rebase keeps it), and a pending patch blocks phase 10. With no hub the patch waits
+(_Missing hub_). A rule change the hub itself wants is a lane like any other: the hub applies only in a lane's
+worktree, a patch a lane wrote. Accepted residuals: the ledger and this section are files any session can write,
+with the user's merge behind them. Secrets, MCP writes, prod or settings changes and destructive steps stay in the
+acting lane's pane: actions on live state, with no whole diff to show, no undo and no merge behind them.
 
 ## The hub's duties
 
