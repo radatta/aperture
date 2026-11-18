@@ -132,15 +132,16 @@ the event's _start_, so the phone's calendar alerts when the block starts and Ap
 deadline. A patch merges, so existing events pick it up on their next edit; there is no backfill. It is always
 on, with no toggle; reverting it is one line in `liveGoogle.ts`.
 
-| Task change                                       | Event                                                                                                             |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| gains a time (create, edit, bulk, MCP) — no event | created                                                                                                           |
-| gains a time — a block already exists             | **moved** to end at the deadline (no duplicate)                                                                   |
-| day / time / estimate / title changes             | patched (`events.patch`) — **only what the event lacks** (the window moves as one)                                |
-| untimed task with a block, renamed                | title patched; a day move leaves it (gcal owns that clock)                                                        |
-| time or day cleared                               | deleted, pointers cleared                                                                                         |
-| done                                              | left alone · cancel → delete-on-cancel (above)                                                                    |
-| a **parent** (has parts) with a time              | its **due marker**: 15 min ending at the deadline, free, graphite — moved by a due change (Parent + parts, below) |
+| Task change                                       | Event                                                                                                                    |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| gains a time (create, edit, bulk, MCP) — no event | created                                                                                                                  |
+| a timed series occurrence spawned by `getDay`     | created, like a timed create — inside the bulk budget, the rest marked for Retry ([recurring](../tasks/recurring.md) D8) |
+| gains a time — a block already exists             | **moved** to end at the deadline (no duplicate)                                                                          |
+| day / time / estimate / title changes             | patched (`events.patch`) — **only what the event lacks** (the window moves as one)                                       |
+| untimed task with a block, renamed                | title patched; a day move leaves it (gcal owns that clock)                                                               |
+| time or day cleared                               | deleted, pointers cleared                                                                                                |
+| done                                              | left alone · cancel → delete-on-cancel (above)                                                                           |
+| a **parent** (has parts) with a time              | its **due marker**: 15 min ending at the deadline, free, graphite — moved by a due change (Parent + parts, below)        |
 
 - **Timed only** — no all-day events for day-only tasks; a rename or estimate change alone never
   creates one (so an event you removed by hand isn't resurrected).

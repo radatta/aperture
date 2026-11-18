@@ -27,6 +27,8 @@ export interface DevTask {
   seriesDay?: string | null;
   dueDay?: string | null;
   dueTime?: string | null; // plan-write-refetch: a planned task given a time
+  gcalEventId?: string | null; // recurring: a timed occurrence's event (none — the test user has no Google)
+  gcalSyncError?: string | null;
 }
 
 // The slice of a recurring series the check reads and writes (packages/shared/src/types.ts TaskSeries).
@@ -38,6 +40,7 @@ export interface DevSeries {
   active: boolean;
   anchorDate: string;
   dueOffsetDays?: number | null;
+  dueTime?: string | null;
   until?: string | null;
 }
 export interface CreateSeriesInput {
@@ -49,6 +52,7 @@ export interface CreateSeriesInput {
   };
   defaultEstimateMin?: number | null;
   dueOffsetDays?: number | null;
+  dueTime?: string | null;
   until?: string | null;
 }
 

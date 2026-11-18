@@ -85,6 +85,34 @@ describe('todayRows', () => {
     expect(rows.map((r) => r.task.id)).toEqual(['d1']);
   });
 
+  // recurring.md D8: a series occurrence timed after its work day is planned; its time is its deadline.
+  const occ = (id: string, seriesDay: string, dueDay: string, status: TaskStatus = 'planned') =>
+    mkTask(id, status, { seriesId: 's', seriesDay, dueDay, dueTime: '14:00' });
+
+  it('a deadline occurrence on its work day is a plan row, not By time', () => {
+    const rows = todayRows([mkPlan('o', 0)], [occ('o', TODAY, addDays(TODAY, 1))], TODAY, START);
+    expect(rows.map((r) => [r.task.id, r.byTime, !!r.plan])).toEqual([['o', false, true]]);
+  });
+
+  it('on its due day: without a row it is By time; with a row it stays in the plan, listed once', () => {
+    const y = addDays(TODAY, -1);
+    expect(
+      todayRows([], [occ('o', y, TODAY, 'backlog')], TODAY, START).map((r) => [
+        r.task.id,
+        r.byTime,
+      ]),
+    ).toEqual([['o', true]]);
+    const rows = todayRows([mkPlan('o', 0)], [occ('o', y, TODAY)], TODAY, START);
+    expect(rows.map((r) => [r.task.id, r.byTime])).toEqual([['o', false]]);
+  });
+
+  it('a same-day timed occurrence is plain D13: By time, a row on it places nothing more', () => {
+    const same = occ('o', TODAY, TODAY, 'backlog');
+    const rows = todayRows([mkPlan('o', 0, 50)], [same], TODAY, START);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ byTime: true, plan: { plannedMinutes: 50 } });
+  });
+
   it('rowMinutes: a plan row’s minutes, else the block’s length (estimate + buffer, else 30)', () => {
     expect(rowMinutes({ task: timedAt('a', '9:00'), plan: null, byTime: true })).toBe(30);
     const scoped = timedAt('b', '9:00', { estimateMin: 40, bufferMin: 10 });

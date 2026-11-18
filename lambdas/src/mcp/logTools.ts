@@ -1,6 +1,7 @@
 import {
   addDays,
-  isTimed,
+  isDeadlineOccurrence,
+  timeDecidesDay,
   isUlid,
   computeDayShape,
   dayKeyInZone,
@@ -201,11 +202,14 @@ async function composeDay(day: string, ctx: ToolContext) {
     t.status === 'done' && t.completedAt !== null && appDay(t.completedAt) === day;
   // The server twin of the app's todayRows: a timed task is on the app day its deadline falls on, by
   // clock (a parent's deadline is a marker, never a row; one finished on another day is gone); an untimed
-  // one is on the day by its plan row.
+  // one is on the day by its plan row — and so is a series deadline occurrence (recurring.md D8), which is
+  // by time only on its due day without a row there.
+  const rowed = new Set(plans.map((p) => p.taskId));
   const timedOnDay = (t: Task) =>
     !!t.dueDay &&
     !!t.dueTime &&
     !parentIds.has(t.id) &&
+    !(isDeadlineOccurrence(t) && rowed.has(t.id)) &&
     appDay(userDueEpoch(t.dueDay, t.dueTime)) === day &&
     (!finished(t) || doneOnDay(t));
   const byId = new Map(tasks.map((t) => [t.id, t]));
@@ -230,7 +234,7 @@ async function composeDay(day: string, ctx: ToolContext) {
       .map((t) => plannedRow(t, null, true)),
     ...plans.flatMap((p) => {
       const t = byId.get(p.taskId);
-      return t && !isTimed(t) ? [plannedRow(t, p.plannedMinutes, false)] : [];
+      return t && !timeDecidesDay(t) ? [plannedRow(t, p.plannedMinutes, false)] : [];
     }),
   ];
 

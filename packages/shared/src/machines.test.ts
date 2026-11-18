@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   accruesTime,
+  byTimeOn,
+  isDeadlineOccurrence,
+  timeDecidesDay,
   canEditEstimate,
   canTransitionTask,
   isCalibrated,
@@ -307,6 +310,40 @@ describe('stalePlannedMoves', () => {
     expect(moves.map((m) => [m.task.id, m.to])).toEqual([['o', 'backlog']]);
   });
 
+  it('a deadline occurrence (D8) is swept like an untimed task: kept with a row ahead, else backlog', () => {
+    const occ = (id: string) =>
+      baseTask({
+        id,
+        seriesId: 's',
+        seriesDay: '2026-08-04',
+        dueDay: '2026-08-05',
+        dueTime: '14:00',
+      });
+    const moves = stalePlannedMoves(
+      [occ('kept'), occ('dueday'), occ('gone')],
+      [plan('kept', '2026-08-04'), plan('dueday', '2026-08-05'), plan('gone', '2026-08-03')],
+      '2026-08-04',
+    );
+    expect(moves.map((m) => [m.task.id, m.to])).toEqual([['gone', 'backlog']]);
+  });
+
+  it("a deadline occurrence is never cancelled as superseded by its series' next copy", () => {
+    const yesterday = baseTask({
+      id: 'y',
+      seriesId: 's',
+      seriesDay: '2026-08-03',
+      dueDay: '2026-08-04',
+      dueTime: '14:00',
+    });
+    const today = baseTask({ id: 'n', seriesId: 's', seriesDay: '2026-08-04' });
+    const moves = stalePlannedMoves(
+      [yesterday, today],
+      [plan('y', '2026-08-03'), plan('n', '2026-08-04')],
+      '2026-08-04',
+    );
+    expect(moves.map((m) => [m.task.id, m.to])).toEqual([['y', 'backlog']]);
+  });
+
   it('ignores anything not planned', () => {
     const started = baseTask({ id: 'x', status: 'in_progress' });
     expect(stalePlannedMoves([started], [], '2026-08-04')).toEqual([]);
@@ -335,5 +372,44 @@ describe('option 3: a time decides the day', () => {
     expect(timedDay(at('00:00'), 0)).toBe('2026-08-05');
     expect(timedDay({ dueDay: '2026-08-05', dueTime: null }, 4)).toBeNull();
     expect(placedByTime(at('00:30'), '2026-08-04', 4)).toBe(true);
+  });
+
+  it('isDeadlineOccurrence: an occurrence timed after its work day; timeDecidesDay is the rest', () => {
+    const occ = (over: Partial<Task>) =>
+      baseTask({
+        seriesId: 's',
+        seriesDay: '2026-08-04',
+        dueDay: '2026-08-05',
+        dueTime: '14:00',
+        ...over,
+      });
+    expect(isDeadlineOccurrence(occ({}))).toBe(true);
+    expect(timeDecidesDay(occ({}))).toBe(false);
+    // Same-day (offset 0), moved onto or before its work day, untimed, not an occurrence, legacy: plain.
+    for (const t of [
+      occ({ dueDay: '2026-08-04' }),
+      occ({ dueDay: '2026-08-03' }),
+      occ({ dueTime: null }),
+      occ({ seriesId: null }),
+      occ({ seriesDay: undefined }),
+    ])
+      expect(isDeadlineOccurrence(t)).toBe(false);
+    expect(timeDecidesDay(occ({ dueDay: '2026-08-04' }))).toBe(true);
+    expect(timeDecidesDay(occ({ dueTime: null }))).toBe(false);
+    expect(timeDecidesDay(baseTask({ dueDay: '2026-08-05', dueTime: '14:00' }))).toBe(true);
+  });
+
+  it('byTimeOn: a deadline occurrence with a row on its due day stays in the plan', () => {
+    const occ = baseTask({
+      seriesId: 's',
+      seriesDay: '2026-08-04',
+      dueDay: '2026-08-05',
+      dueTime: '14:00',
+    });
+    expect(byTimeOn(occ, '2026-08-05', 4, false)).toBe(true);
+    expect(byTimeOn(occ, '2026-08-05', 4, true)).toBe(false);
+    expect(byTimeOn(occ, '2026-08-04', 4, false)).toBe(false);
+    const plain = baseTask({ dueDay: '2026-08-05', dueTime: '14:00' });
+    expect(byTimeOn(plain, '2026-08-05', 4, true)).toBe(true);
   });
 });

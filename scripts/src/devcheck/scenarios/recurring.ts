@@ -4,6 +4,9 @@
 // each is ledgered from its create response (recorder.ts for the browser's upsertSeries, mcp.ts for
 // create_series) and the last step deletes them with the occurrences they spawned, by those ids — cleanup
 // by ledger id is the backstop. Titles use `devcheck-recur <nonce>`: the parts scenarios sweep `devcheck <nonce>`.
+// A due time (D8): offset ≥ 1 keeps the occurrence on its day's plan with the time as its deadline; offset 0 is
+// a plain timed task. The test user has no Google account, so a timed occurrence's event is needsYou here and
+// proven off dev (backend.calendar.test.ts); on dev it spawns with neither an event nor a sync error.
 // The /tasks search text persists across lenses (sessionStorage), so the last UI step clears it.
 import type { DevSeries } from '../api';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
@@ -25,6 +28,9 @@ let report: DevSeries; // the form's series: due next day, until +30 d
 let ended: DevSeries; // the form's series whose until is already past
 let plain: DevSeries; // the form's series with no cadence
 let viaMcp: DevSeries; // create_series's
+let prelab: DevSeries; // the form's timed series: due next day 2pm (D8)
+let quiz: DevSeries; // the form's same-day timed series
+let timedMcp: DevSeries; // create_series's timed one
 
 const lastCreated = (ctx: Ctx, what: string): string => {
   const id = ctx.createdIds().at(-1);
@@ -57,6 +63,7 @@ async function addSeries(
     repeats: 'Every day' | 'Weekdays';
     estimate?: string;
     due?: 'Same day' | 'Next day';
+    dueTime?: string; // HH:MM, typed into the Due time field Due reveals
     until?: string;
   },
 ): Promise<DevSeries> {
@@ -65,7 +72,8 @@ async function addSeries(
   await ctx.page.getByLabel('Title').fill(title);
   await ctx.page.getByLabel('Repeats').selectOption({ label: opts.repeats });
   if (opts.estimate) await ctx.page.getByLabel('Estimate (min)').fill(opts.estimate);
-  if (opts.due) await ctx.page.getByLabel('Due').selectOption({ label: opts.due });
+  if (opts.due) await ctx.page.getByLabel('Due', { exact: true }).selectOption({ label: opts.due });
+  if (opts.dueTime) await ctx.page.getByLabel('Due time').fill(opts.dueTime);
   if (opts.until) await ctx.page.getByLabel('Until').fill(opts.until);
   await ctx.page.getByRole('button', { name: 'Add series' }).click();
   await ctx.page.getByText(title, { exact: true }).waitFor({ timeout: 15_000 });
@@ -74,7 +82,7 @@ async function addSeries(
 
 export const recurring: Scenario = {
   id: 'recurring',
-  title: 'Recurring cadences: due offset, until, no respawn after unplan, series over MCP',
+  title: 'Recurring cadences: due offset and time, until, no respawn after unplan, series over MCP',
   tiers: ['full'],
   rows: [
     {
@@ -148,6 +156,215 @@ export const recurring: Scenario = {
       },
     },
     {
+      id: 'time-form',
+      entry: 'ui',
+      proves: ['time-cancel', 'time-clear-due', 'time-create-ui'],
+      title:
+        'A filled timed draft cancelled writes nothing; “No due date” hides and clears the time; then due next day 2pm',
+      async run(ctx) {
+        const before = (await ctx.api.reads.listSeries()).length;
+        await ctx.ui.goto('/tasks?lens=recurring');
+        const open = ctx.page.getByRole('button', { name: 'New recurring task' });
+        await open.click();
+        await ctx.page.getByLabel('Title').fill(name(ctx, 'cancelled'));
+        const due = ctx.page.getByLabel('Due', { exact: true });
+        const time = ctx.page.getByLabel('Due time');
+        if ((await time.count()) !== 0) throw new Error('Due time shows before a Due is picked');
+        await due.selectOption({ label: 'Next day' });
+        await time.fill('14:00');
+        await ctx.shot('recurring-form-due-time');
+        await due.selectOption({ label: 'No due date' });
+        if ((await time.count()) !== 0) throw new Error('“No due date” left the Due time field');
+        await due.selectOption({ label: 'In 2 days' });
+        if ((await time.inputValue()) !== '') throw new Error('the cleared time came back');
+        await ctx.page.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await open.waitFor({ timeout: 10_000 });
+        if ((await ctx.api.reads.listSeries()).length !== before)
+          throw new Error('Cancel wrote a series');
+        prelab = await addSeries(ctx, name(ctx, 'prelab'), {
+          repeats: 'Every day',
+          estimate: '45',
+          due: 'Next day',
+          dueTime: '14:00',
+        });
+        if (prelab.dueOffsetDays !== 1 || prelab.dueTime !== '14:00')
+          throw new Error(`the server has ${JSON.stringify(prelab)}`);
+        await ctx.ui.expectText('Every day · due next day 2pm');
+        await ctx.shot('recurring-row-timed');
+      },
+    },
+    {
+      id: 'time-today',
+      entry: 'ui',
+      proves: ['time-today', 'time-api-fields', 'time-no-google'],
+      title:
+        'Today: the timed occurrence is on the plan, “due tomorrow 2pm”, Unplan offered; a reload keeps one',
+      async run(ctx) {
+        const title = name(ctx, 'prelab');
+        for (const pass of [1, 2]) {
+          await todaySearched(ctx, title); // each visit is another getDay(today)
+          await rowOf(ctx, title).waitFor({ timeout: 15_000 });
+          await ctx.ui.expectText('due tomorrow 2pm');
+          const unplans = await ctx.page
+            .getByRole('button', { name: 'Unplan', exact: true })
+            .count();
+          if ((await rowOf(ctx, title).count()) !== 1 || unplans !== 1)
+            throw new Error(
+              `pass ${pass}: ${await rowOf(ctx, title).count()} rows, ${unplans} Unplan`,
+            );
+          if (pass === 1) await ctx.shot('today-timed-occurrence');
+        }
+        const occ = await occurrencesOf(ctx, prelab.id);
+        if (occ.length !== 1) throw new Error(`${occ.length} occurrences after two loads`);
+        const t = occ[0]!;
+        if (
+          t.status !== 'planned' ||
+          t.seriesDay !== appToday ||
+          t.dueDay !== shiftDays(appToday, 1) ||
+          t.dueTime !== '14:00'
+        )
+          throw new Error(`the occurrence is ${JSON.stringify(t)}`);
+        const rows = (await ctx.api.reads.listPlansForDay(appToday)).filter(
+          (p) => p.taskId === t.id,
+        );
+        if (rows.length !== 1) throw new Error(`${rows.length} plan rows today for it`);
+        if (t.gcalEventId || t.gcalSyncError)
+          throw new Error(`calendar state with no Google account: ${JSON.stringify(t)}`);
+      },
+    },
+    {
+      id: 'time-unplan-replan',
+      entry: 'ui',
+      proves: ['time-unplan-replan'],
+      title: 'Unplan → backlog, “+ Today” offered; “+ Today” brings the same timed occurrence back',
+      async run(ctx) {
+        const title = name(ctx, 'prelab');
+        await todaySearched(ctx, title);
+        await ctx.page.getByRole('button', { name: 'Unplan', exact: true }).click();
+        const [t] = await occurrencesOf(ctx, prelab.id);
+        for (let i = 0; (await ctx.api.reads.getTask(t!.id))?.status !== 'backlog'; i++) {
+          if (i >= 40) throw new Error('Unplan never reached the server');
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        await todaySearched(ctx, title);
+        const add = ctx.page.getByRole('button', { name: `Add ${title} to today` });
+        await add.waitFor({ timeout: 15_000 });
+        await ctx.shot('today-timed-unplanned');
+        await add.click();
+        for (let i = 0; (await ctx.api.reads.getTask(t!.id))?.status !== 'planned'; i++) {
+          if (i >= 40) throw new Error('“+ Today” never reached the server');
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        await todaySearched(ctx, title);
+        await ctx.page
+          .getByRole('button', { name: 'Unplan', exact: true })
+          .waitFor({ timeout: 15_000 });
+        const rows = await occurrencesOf(ctx, prelab.id);
+        if (rows.length !== 1 || rows[0]!.id !== t!.id)
+          throw new Error(`${rows.length} occurrences after “+ Today”`);
+      },
+    },
+    {
+      id: 'time-same-day',
+      entry: 'ui',
+      proves: ['time-same-day', 'time-neighbour'],
+      title:
+        'Due “Same day” 23:59: By time on Today, no Unplan or “+ Today”, unplanned; the untimed series is untouched',
+      async run(ctx) {
+        quiz = await addSeries(ctx, name(ctx, 'quiz'), {
+          repeats: 'Every day',
+          due: 'Same day',
+          dueTime: '23:59',
+        });
+        await ctx.ui.expectText('Every day · due same day 11:59pm');
+        const title = name(ctx, 'quiz');
+        await todaySearched(ctx, title);
+        await rowOf(ctx, title).waitFor({ timeout: 15_000 });
+        await ctx.ui.expectText('due today 11:59pm');
+        const unplans = await ctx.page.getByRole('button', { name: 'Unplan', exact: true }).count();
+        const adds = await ctx.page.getByRole('button', { name: `Add ${title} to today` }).count();
+        if (unplans !== 0 || adds !== 0)
+          throw new Error(
+            `a same-day timed occurrence offers ${unplans} Unplan, ${adds} “+ Today”`,
+          );
+        await ctx.shot('today-same-day-timed');
+        const occ = await occurrencesOf(ctx, quiz.id);
+        if (occ.length !== 1 || occ[0]!.status !== 'backlog' || occ[0]!.dueTime !== '23:59')
+          throw new Error(`the same-day occurrence is ${JSON.stringify(occ)}`);
+        if ((await ctx.api.reads.listPlansForDay(appToday)).some((p) => p.taskId === occ[0]!.id))
+          throw new Error('a same-day timed occurrence has a plan row');
+        const [first] = await occurrencesOf(ctx, report.id);
+        if (!first || first.dueTime != null || first.dueDay !== shiftDays(appToday, 1))
+          throw new Error(`the untimed series' occurrence moved: ${JSON.stringify(first)}`);
+        await ctx.ui.goto('/tasks?lens=recurring');
+        await ctx.ui.expectText(`Every day · due next day · until ${monthDay(report.until!)}`);
+      },
+    },
+    {
+      id: 'time-api-invalid',
+      entry: 'api',
+      proves: ['time-api-invalid'],
+      title: 'upsertSeries with a time and no offset, or with 25:00 → refused, nothing written',
+      async run(ctx) {
+        const before = (await ctx.api.reads.listSeries()).length;
+        for (const [what, input] of [
+          ['no offset', { dueTime: '14:00' }],
+          ['25:00', { dueOffsetDays: 1, dueTime: '25:00' }],
+        ] as const) {
+          const got = await ctx.api.writes.createSeriesExpectingRefusal(
+            { title: name(ctx, `bad ${what}`), rule: { kind: 'daily' }, ...input },
+            appToday,
+          );
+          if (got.status < 400 || got.status >= 500 || !/due/i.test(JSON.stringify(got.body)))
+            throw new Error(`${what}: ${got.status} ${JSON.stringify(got.body)}`);
+        }
+        if ((await ctx.api.reads.listSeries()).length !== before)
+          throw new Error('a refused upsertSeries wrote a series');
+      },
+    },
+    {
+      id: 'time-mcp',
+      entry: 'mcp',
+      proves: ['time-mcp-create', 'time-mcp-refused'],
+      title:
+        'create_series with dueTime 14:00 → list_series, Today “due tomorrow 2pm”; no offset or "2pm" → param error',
+      async run(ctx) {
+        const title = name(ctx, 'mcp-timed');
+        timedMcp = await ctx.mcp.writes.createSeries({
+          title,
+          rule: { kind: 'daily' },
+          dueOffsetDays: 1,
+          dueTime: '14:00',
+        });
+        const listed = (await ctx.mcp.reads.listSeries()).find((s) => s.id === timedMcp.id);
+        if (listed?.dueTime !== '14:00')
+          throw new Error(`list_series has ${JSON.stringify(listed)}`);
+        await todaySearched(ctx, title);
+        await rowOf(ctx, title).waitFor({ timeout: 15_000 });
+        await ctx.ui.expectText('due tomorrow 2pm');
+        const before = (await ctx.api.reads.listSeries()).length;
+        for (const [what, input] of [
+          ['no offset', { dueTime: '14:00' }],
+          ['2pm', { dueOffsetDays: 1, dueTime: '2pm' }],
+        ] as const) {
+          const err = await ctx.mcp.writes
+            .createSeries({
+              title: name(ctx, `mcp bad ${what}`),
+              rule: { kind: 'daily' },
+              ...input,
+            })
+            .then(
+              () => null,
+              (e: unknown) => (e instanceof Error ? e.message : String(e)),
+            );
+          if (!err || !/-32602/.test(err) || !/dueTime/.test(err))
+            throw new Error(`${what}: expected a dueTime param error, got ${err ?? 'a series'}`);
+        }
+        if ((await ctx.api.reads.listSeries()).length !== before)
+          throw new Error('a refused create_series wrote a series');
+      },
+    },
+    {
       id: 'mcp-create',
       entry: 'mcp',
       kind: 'nominal',
@@ -170,6 +387,119 @@ export const recurring: Scenario = {
       entry: 'mcp',
       kind: 'edge',
       what: 'stop_series on an id the user has no series for → Not found',
+    },
+    {
+      id: 'time-create-ui',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Due “Next day” reveals Due time; 14:00 saves with the series and its row reads “due next day 2pm”',
+    },
+    {
+      id: 'time-clear-due',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Due back to “No due date” hides the time; picking a Due again shows it empty (nothing carried over)',
+    },
+    {
+      id: 'time-cancel',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Cancel on a filled timed draft writes no series',
+    },
+    {
+      id: 'time-today',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Today lists the occurrence on the plan (Unplan offered) reading “due tomorrow 2pm”; a reload keeps one',
+    },
+    {
+      id: 'time-api-fields',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'The occurrence: planned with one plan row today, seriesDay today, dueDay tomorrow, dueTime 14:00',
+    },
+    {
+      id: 'time-no-google',
+      entry: 'api',
+      kind: 'edge',
+      what: 'With no Google account the timed occurrence has no event and no sync error',
+    },
+    {
+      id: 'time-unplan-replan',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Unplan → backlog with “+ Today” (not hidden as a timed task’s is); “+ Today” brings the same one back',
+    },
+    {
+      id: 'time-same-day',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Due “Same day” 23:59: its occurrence is By time on Today with neither Unplan nor “+ Today”, unplanned (D13)',
+    },
+    {
+      id: 'time-api-invalid',
+      entry: 'api',
+      kind: 'edge',
+      what: 'upsertSeries with a time and no due offset, or with 25:00 → refused; no series written',
+    },
+    {
+      id: 'time-mcp-create',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'create_series {dueOffsetDays: 1, dueTime: "14:00"} → list_series carries the time; Today reads “due tomorrow 2pm”',
+    },
+    {
+      id: 'time-mcp-refused',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'create_series with dueTime and no dueOffsetDays, or dueTime "2pm" → param error; nothing written',
+    },
+    {
+      id: 'time-neighbour',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The untimed “due next day” series still reads with no clock, its occurrence untimed',
+    },
+    {
+      id: 'time-due-day',
+      entry: 'api',
+      kind: 'edge',
+      what: 'On its due day: no row there → backlog and By time; a row there → stays planned, listed once',
+      offDev: {
+        file: 'packages/shared/src/contractTests.ts',
+        test: 'series: a deadline occurrence on its due day — no row there sends it to backlog, a row keeps it planned',
+        why: 'needs the next app day; dev can’t move its clock, and both impls run the contract case',
+      },
+    },
+    {
+      id: 'time-sweep',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A deadline occurrence is never cancelled as superseded by its series’ next copy',
+      offDev: {
+        file: 'packages/shared/src/machines.test.ts',
+        test: "a deadline occurrence is never cancelled as superseded by its series' next copy",
+        why: 'needs two app days of one daily series',
+      },
+    },
+    {
+      id: 'time-planned-ping',
+      entry: 'api',
+      kind: 'edge',
+      what: '“Planned for today” fires for a deadline occurrence on its work day, then its deadline ping',
+      offDev: {
+        file: 'lambdas/src/push/dispatch.test.ts',
+        test: 'a timed series occurrence due later (recurring D8) pings on its planned day, then at its deadline',
+        why: 'fires at 09:00 and at the deadline the next day; the reminders scenario proves the push path on dev',
+      },
+    },
+    {
+      id: 'time-calendar',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Each timed occurrence gets a Google Calendar event ending at its deadline, once; Google down marks the rest for Retry',
+      needsYou:
+        'needs a Google account the test user doesn’t have (backend.calendar.test.ts → series occurrences proves it off dev)',
     },
     {
       id: 'mcp-other-user',
@@ -426,9 +756,10 @@ export const recurring: Scenario = {
       entry: 'api',
       title: 'Delete this run’s series with their occurrences (by recorded id); clear the search',
       async run(ctx) {
-        for (const s of [report, ended, plain, viaMcp]) await ctx.api.writes.deleteSeries(s.id);
+        const mine = [report, ended, plain, viaMcp, prelab, quiz, timedMcp];
+        for (const s of mine) await ctx.api.writes.deleteSeries(s.id);
         const left = (await ctx.api.reads.listTasks()).filter((t) =>
-          [report, ended, plain, viaMcp].some((s) => s.id === t.seriesId),
+          mine.some((s) => s.id === t.seriesId),
         );
         if (left.length) throw new Error(`${left.length} occurrences left after deleteSeries`);
         await ctx.ui.goto('/tasks');

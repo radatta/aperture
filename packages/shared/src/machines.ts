@@ -63,9 +63,21 @@ export function taskTransition(task: Task, to: TaskStatus, now: number): Task {
 }
 
 // Option 3 (lenses.md D13, parts.md D14): a time decides the day. A timed task is on the app day its
-// deadline falls on, by clock, and never holds a plan row; only an untimed task is planned. Time-only
+// deadline falls on, by clock, and never holds a plan row; only an untimed task is planned — bar a series
+// deadline occurrence (timeDecidesDay, below). Time-only
 // rules — callers add the parent check (a parent is never on Today; parts.ts can't be imported here).
 export const isTimed = (t: Pick<Task, 'dueDay' | 'dueTime'>): boolean => !!t.dueDay && !!t.dueTime;
+// The one exception (recurring.md D8): a series occurrence due after its work day is planned on that day
+// like an untimed task; its time is only its deadline. A calendar-date compare, so no clock or zone is
+// needed — an offset-1 02:00 deadline (a 4am day start) stays planned and reads "due tonight 2am".
+export const isDeadlineOccurrence = (
+  t: Pick<Task, 'seriesId' | 'seriesDay' | 'dueDay' | 'dueTime'>,
+): boolean => !!t.seriesId && !!t.seriesDay && isTimed(t) && t.dueDay! > t.seriesDay;
+// D13's rule with its exception: the time decides the task's day, so it is never planned. Every placement
+// and plan-write site reads this; display, urgency, reminders and calendar keep reading isTimed.
+export const timeDecidesDay = (
+  t: Pick<Task, 'seriesId' | 'seriesDay' | 'dueDay' | 'dueTime'>,
+): boolean => isTimed(t) && !isDeadlineOccurrence(t);
 // The deadline instant, bucketed like every other instant (dayKey): with a 4am day start a 00:30
 // deadline is still tonight. Browser-side — the zone is the runtime's. null if untimed.
 export const timedDay = (
@@ -78,6 +90,14 @@ export const placedByTime = (
   day: string,
   dayStartHour: number,
 ): boolean => timedDay(t, dayStartHour) === day;
+// On `day`'s By-time tier: its deadline falls on `day` — unless it's a deadline occurrence with a plan row
+// there, which stays in the plan (the row wins: Unplan offered, never listed twice).
+export const byTimeOn = (
+  t: Pick<Task, 'seriesId' | 'seriesDay' | 'dueDay' | 'dueTime'>,
+  day: string,
+  dayStartHour: number,
+  hasRowOnDay: boolean,
+): boolean => placedByTime(t, day, dayStartHour) && !(isDeadlineOccurrence(t) && hasRowOnDay);
 export const TIMED_NO_PLAN_ERROR =
   'A timed task is on the day its time falls on — change its time instead of planning it.';
 // getDay's guard: its sweep is monotone, so a day after the user's current app day would move every
@@ -88,7 +108,8 @@ export const FUTURE_DAY_ERROR =
 // Stale-planned sweep (getDay's lazy rollover): a planned task with no alive plan row on `day` or later
 // was left behind. `plans` is the alive rows dated `day` or later — earlier rows never change a move, so
 // a caller may pass only those (the Lambda's range read does). A timed `planned` task is swept whatever its rows — option 3's standing invariant,
-// and the lazy migration of rows made before it (the rows stay as history). It goes back to backlog —
+// and the lazy migration of rows made before it (the rows stay as history) — bar a deadline occurrence
+// (isDeadlineOccurrence), swept like an untimed task. It goes back to backlog —
 // unless it's a recurring occurrence already superseded by its series' copy on `day`, which is dropped
 // instead (a missed daily would otherwise pile up one backlog copy per day). An occurrence carrying a
 // calendar event goes to backlog: a background read never deletes external events. Plan rows are
@@ -110,9 +131,10 @@ export function stalePlannedMoves(
     if (seriesId) seriesToday.add(seriesId);
   }
   return planned
-    .filter((t) => isTimed(t) || !ahead.has(t.id))
+    .filter((t) => timeDecidesDay(t) || !ahead.has(t.id))
     .map((task) => {
-      // A timed occurrence's own row today would read as its series' copy: never drop it for that.
+      // A timed occurrence's own row today would read as its series' copy: never drop it for that. Raw
+      // isTimed on purpose: a deadline occurrence is never cancelled as superseded either — it has a deadline.
       const superseded =
         !isTimed(task) &&
         task.seriesId !== null &&

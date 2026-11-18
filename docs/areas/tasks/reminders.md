@@ -42,7 +42,9 @@ Notifications:
   - **Series:** a series' task and plan for a day are created on that day's first `getDay`
     ([recurring.md](recurring.md) §2), so a first open after 09:00 means that plan was made after its fire
     time — no planned ping that day. An occurrence due later (`dueOffsetDays`) still pings at 09:00 on its
-    due day: that deadline was set before it fires.
+    due day: that deadline was set before it fires — or, with a series due time, at that minute (`timed`).
+    A timed occurrence due after its day is planned on that day like an untimed task, so it also gets the
+    `planned` ping there (`timeDecidesDay`, recurring.md D8); any other timed task never does.
 - There is no user-facing cap and no quiet hours (both rejected).
 - **Same-tick batching:** several reminders in one minute become one notification ("3 reminders", titles joined).
 - **Tap-through:** `/tasks?lens=today&task=<id>&n=<tag>` opens the task's modal on Today. A batch opens Today.

@@ -1,13 +1,15 @@
 import {
   addDays,
-  AREAS,
   areaOf,
+  AREAS,
+  byTimeOn,
   deadlineOf,
-  isTimed,
+  isDeadlineOccurrence,
   LIFE_AREAS,
   placedByTime,
   placeTasks,
   timedDay,
+  timeDecidesDay,
 } from '@aperture/shared';
 import type { Area, Category, Task } from '@aperture/shared';
 import { byDueHint } from './taskMath';
@@ -82,9 +84,11 @@ export function placeOf(task: Task, ctx: PlaceCtx, parent?: Task, isParent = fal
   if (task.status === 'in_progress') return 'today';
   const { today, dayStartHour } = ctx;
   const onToday =
-    isTimed(task) && !isParent
+    timeDecidesDay(task) && !isParent
       ? placedByTime(task, today, dayStartHour)
-      : ctx.planOrder.has(task.id);
+      : // A series deadline occurrence (recurring.md D8) is planned, and on its due day by time too.
+        ctx.planOrder.has(task.id) ||
+        (isDeadlineOccurrence(task) && placedByTime(task, today, dayStartHour));
   if (onToday) return 'today';
   const openParent = parent && parent.status !== 'done' && parent.status !== 'cancelled';
   const owner = openParent ? parent : task;
@@ -300,7 +304,7 @@ export function groupTasks(
               .map((t, i) => ({
                 t,
                 i,
-                timed: placedByTime(t, ctx.today, ctx.dayStartHour) ? 0 : 1,
+                timed: byTimeOn(t, ctx.today, ctx.dayStartHour, ctx.planOrder.has(t.id)) ? 0 : 1,
                 o: ctx.planOrder.get(t.id) ?? Infinity,
               }))
               .sort(

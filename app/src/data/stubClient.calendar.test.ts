@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_EVENT_MIN, localEpochFromDayTime, MARKER_MIN } from '@aperture/shared';
+import { DEFAULT_EVENT_MIN, dayKey, localEpochFromDayTime, MARKER_MIN } from '@aperture/shared';
 import { createStubClient, STUB_GCAL_EDITS_KEY, type StubGcalEdit } from './stubClient';
 
 // Parity for the gated calendar methods. These can't live in the shared ApiClient contract suite: their
@@ -138,6 +138,32 @@ describe('stub calendar auto-sync parity', () => {
     const t = await api.createTask({ title: 't', dueDay: '2026-10-09', dueTime: '16:00' });
     expect(t).toMatchObject({ gcalAccountId: 'seed-personal', gcalSyncError: null });
     expect(t.gcalEventId).toBeTruthy();
+  });
+  it('a timed series occurrence links its event when getDay spawns it — once; untimed does not (recurring D8)', async () => {
+    const api = stub();
+    const today = dayKey(1_700_000_000_000, 4);
+    const base = { categoryId: null, defaultEstimateMin: 60, rule: { kind: 'daily' } as const };
+    const timed = await api.upsertSeries({
+      ...base,
+      title: 'Pre-lab',
+      anchorDate: today,
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    const untimed = await api.upsertSeries({
+      ...base,
+      title: 'Reading',
+      anchorDate: today,
+      dueOffsetDays: 1,
+    });
+    await api.getDay(today);
+    const occ = async (id: string) => (await api.listTasks()).filter((t) => t.seriesId === id);
+    const [pre] = await occ(timed.id);
+    expect(pre).toMatchObject({ gcalAccountId: 'seed-personal', gcalSyncError: null });
+    expect(pre!.gcalEventId).toBeTruthy();
+    expect((await occ(untimed.id))[0]!.gcalEventId).toBeNull();
+    await api.getDay(today);
+    expect((await occ(timed.id)).map((t) => t.gcalEventId)).toEqual([pre!.gcalEventId]);
   });
   it('edits keep the same event; clearing the time unlinks it', async () => {
     const api = stub();

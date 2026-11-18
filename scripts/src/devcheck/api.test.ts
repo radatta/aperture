@@ -186,6 +186,7 @@ describe('createApiClient', () => {
       'createAttachment',
       'createLogEntry',
       'createSeries',
+      'createSeriesExpectingRefusal',
       'createStory',
       'createTask',
       'createTaskExpectingRefusal',

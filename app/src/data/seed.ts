@@ -542,7 +542,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
 
   // --- A recurring series with a cadence (docs/areas/tasks/recurring.md): the weekly report is written the
   // day before it's due, so it recurs weekly on today's weekday (its occurrence materializes on today's
-  // load), due the next day, through the term's last week. Course = category.
+  // load), due the next day at 2pm — a deadline, so it stays on today's plan (recurring.md D8) — through the
+  // term's last week. Course = category.
   const weeklyReport: TaskSeries = {
     ...mk(nowMs - 20 * DAY),
     title: 'Weekly report',
@@ -552,6 +553,7 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     active: true,
     anchorDate: addDays(today, -21),
     dueOffsetDays: 1,
+    dueTime: '14:00',
     until: addDays(today, 42),
   };
   store.series.push(weeklyReport);

@@ -9,6 +9,8 @@ import {
   DEFAULT_EVENT_MIN,
   MARKER_MIN,
   PARENT_NO_EVENT_ERROR,
+  addDays,
+  dayKeyInZone,
   USER_TIME_ZONE,
   zonedEpoch,
 } from '@aperture/shared';
@@ -920,6 +922,80 @@ describe('calendar auto-sync (timed tasks)', () => {
       expect(g.events.size).toBe(1);
       await b.deleteTask(q.id);
       expect(g.events.size).toBe(0);
+    });
+  });
+
+  // recurring.md D8: getDay's series spawns sync like any timed create (5.1), inside the bulk budget.
+  describe('series occurrences', () => {
+    const today = dayKeyInZone(1_700_000_000_000, USER_TIME_ZONE, 4);
+    const series = (title: string, over: Record<string, unknown> = {}) => ({
+      title,
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' as const },
+      anchorDate: today,
+      ...over,
+    });
+
+    it('a timed occurrence makes one event ending at its deadline; a second getDay adds none', async () => {
+      const { g, b } = await connected();
+      await b.upsertSeries(series('Pre-lab', { dueOffsetDays: 1, dueTime: '14:00' }));
+      await b.upsertSeries(series('Reading', { dueOffsetDays: 1 }));
+      const insert = vi.spyOn(g, 'insertEvent');
+      await b.getDay(today);
+      expect(insert).toHaveBeenCalledTimes(1);
+      const [id, evt] = only(g);
+      const due = addDays(today, 1);
+      expect(evt).toMatchObject({
+        title: 'Pre-lab',
+        startMs: at(due, '13:15'),
+        endMs: at(due, '14:00'),
+      });
+      const occ = (await b.listTasks()).filter((t) => t.seriesId);
+      expect(occ.find((t) => t.title === 'Pre-lab')).toMatchObject({
+        gcalEventId: id,
+        gcalSyncError: null,
+        status: 'planned',
+      });
+      expect(occ.find((t) => t.title === 'Reading')?.gcalEventId).toBeNull();
+      await b.getDay(today);
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect(g.events.size).toBe(1);
+    });
+
+    it('a same-day timed occurrence gets its event too, unplanned', async () => {
+      const { g, b } = await connected();
+      await b.upsertSeries(series('Quiz', { dueOffsetDays: 0, dueTime: '23:00' }));
+      await b.getDay(today);
+      expect(only(g)[1]).toMatchObject({ title: 'Quiz', endMs: at(today, '23:00') });
+      expect((await b.listPlansForDay(today)).length).toBe(0);
+    });
+
+    it('Google down: getDay still returns, the first sync fails and the rest wait for Retry', async () => {
+      const { g, b } = await connected();
+      for (let i = 0; i < 6; i++)
+        await b.upsertSeries(series(`s${i}`, { dueOffsetDays: 1, dueTime: '14:00' }));
+      g.markDead('A');
+      const insert = vi.spyOn(g, 'insertEvent');
+      await expect(b.getDay(today)).resolves.toMatchObject({ date: today });
+      const occ = (await b.listTasks()).filter((t) => t.seriesId);
+      expect(occ).toHaveLength(6);
+      expect(occ.every((t) => t.gcalSyncError && !t.gcalEventId)).toBe(true);
+      expect(insert.mock.calls.length).toBeLessThanOrEqual(4); // the first wave only
+      expect(occ.some((t) => /not attempted/.test(t.gcalSyncError ?? ''))).toBe(true);
+      expect((await b.listPlansForDay(today)).length).toBe(6); // the spawns stand
+    });
+
+    it('auto-sync off: occurrences spawn with no event and no error', async () => {
+      const { g, b } = await connected();
+      await b.updateSettings({ autoCalendar: false });
+      await b.upsertSeries(series('Pre-lab', { dueOffsetDays: 1, dueTime: '14:00' }));
+      await b.getDay(today);
+      expect(g.events.size).toBe(0);
+      expect((await b.listTasks()).find((t) => t.seriesId)).toMatchObject({
+        gcalEventId: null,
+        gcalSyncError: null,
+      });
     });
   });
 

@@ -1,9 +1,9 @@
 import {
+  byTimeOn,
   dayKey,
   DEFAULT_EVENT_MIN,
-  isTimed,
   localEpochFromDayTime,
-  placedByTime,
+  timeDecidesDay,
 } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { plannedDefault } from './taskMath';
@@ -21,7 +21,8 @@ const finished = (t: Task) => t.status === 'done' || t.status === 'cancelled';
 
 // Today's work: every timed task whose deadline falls on today's app day, by instant (a parent's
 // deadline is its marker, never a row; one finished before today is gone), then the plan rows in their
-// order. A plan row on a timed task is history and places nothing.
+// order. A plan row on a timed task is history and places nothing — bar a series deadline occurrence
+// (recurring.md D8), which is planned like an untimed task; on its due day without a row it is By time.
 export function todayRows(
   plans: TaskPlan[],
   tasks: Task[],
@@ -36,7 +37,7 @@ export function todayRows(
   const timed = tasks
     .filter(
       (t) =>
-        placedByTime(t, today, dayStartHour) &&
+        byTimeOn(t, today, dayStartHour, rowOf.has(t.id)) &&
         !parents.has(t.id) &&
         (!finished(t) || doneToday(t)),
     )
@@ -45,7 +46,7 @@ export function todayRows(
   const byId = new Map(tasks.map((t) => [t.id, t]));
   const planned = plans.flatMap((plan) => {
     const task = byId.get(plan.taskId);
-    return task && !isTimed(task) ? [{ task, plan, byTime: false }] : [];
+    return task && !timeDecidesDay(task) ? [{ task, plan, byTime: false }] : [];
   });
   return [...timed, ...planned];
 }

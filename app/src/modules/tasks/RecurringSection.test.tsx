@@ -85,4 +85,43 @@ describe('RecurringSection — cadences', () => {
     );
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('Quiz prep');
   });
+
+  it('a due time shows once Due is set, saves with it, and the row reads it (D8)', async () => {
+    const { api, user } = await openForm();
+    expect(screen.queryByLabelText('Due time')).toBeNull();
+    await user.type(screen.getByLabelText('Title'), 'Pre-lab');
+    await user.selectOptions(screen.getByLabelText('Repeats'), 'daily');
+    await user.selectOptions(screen.getByLabelText('Due'), '1');
+    await user.type(screen.getByLabelText('Due time'), '14:00');
+    await user.click(screen.getByRole('button', { name: 'Add series' }));
+    await waitFor(async () => expect(await api.listSeries()).toHaveLength(1));
+    expect((await api.listSeries())[0]).toMatchObject({ dueOffsetDays: 1, dueTime: '14:00' });
+    await screen.findByText('Every day · due next day 2pm');
+  });
+
+  it('"No due date" hides and clears the time — re-picking Due shows it empty; the save is untimed', async () => {
+    const { api, user } = await openForm();
+    await user.type(screen.getByLabelText('Title'), 'Reading');
+    await user.selectOptions(screen.getByLabelText('Due'), '1');
+    await user.type(screen.getByLabelText('Due time'), '14:00');
+    await user.selectOptions(screen.getByLabelText('Due'), '');
+    expect(screen.queryByLabelText('Due time')).toBeNull();
+    await user.selectOptions(screen.getByLabelText('Due'), '2');
+    expect((screen.getByLabelText('Due time') as HTMLInputElement).value).toBe('');
+    await user.selectOptions(screen.getByLabelText('Due'), '');
+    await user.click(screen.getByRole('button', { name: 'Add series' }));
+    await waitFor(async () => expect(await api.listSeries()).toHaveLength(1));
+    expect((await api.listSeries())[0]).toMatchObject({ dueOffsetDays: null, dueTime: null });
+  });
+
+  it('same day before the day start is refused inline, the draft kept', async () => {
+    const { api, user } = await openForm();
+    await user.type(screen.getByLabelText('Title'), 'Quiz');
+    await user.selectOptions(screen.getByLabelText('Due'), '0');
+    await user.type(screen.getByLabelText('Due time'), '02:00');
+    await user.click(screen.getByRole('button', { name: 'Add series' }));
+    expect((await screen.findByRole('alert')).textContent).toMatch(/before your day starts/);
+    expect((screen.getByLabelText('Due time') as HTMLInputElement).value).toBe('02:00');
+    expect(await api.listSeries()).toHaveLength(0);
+  });
 });

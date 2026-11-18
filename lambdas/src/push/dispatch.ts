@@ -10,6 +10,7 @@ import {
   reminderPayload,
   reminderTag,
   taskFireAt,
+  timeDecidesDay,
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
@@ -137,7 +138,10 @@ export const planSource: CandidateSource = async ({ repo, rows, settings, notBef
       continue; // a stale copy
     if (armedAt > row.fireAt || notBefore('planned') > row.fireAt) continue; // planned after 9:00
     const task = await repo.getTask(plan.taskId, { consistent: true });
-    if (!task || task.status === 'done' || task.status === 'cancelled' || task.dueTime) continue;
+    // A timed task is never planned (lenses.md D13) — bar a series deadline occurrence (recurring.md D8),
+    // which is planned on its work day like an untimed task, so it gets this ping too.
+    if (!task || task.status === 'done' || task.status === 'cancelled' || timeDecidesDay(task))
+      continue;
     out.push({
       kind: 'planned',
       fireAt: row.fireAt,

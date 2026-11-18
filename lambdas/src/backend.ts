@@ -30,6 +30,7 @@ import {
   seriesDueOn,
   seriesHasOccurrence,
   occurrenceFields,
+  occurrencePlanned,
   setNotesArg,
   setReflectionArg,
   followUpPlanDay,
@@ -46,7 +47,7 @@ import {
   PARENT_NO_ESTIMATE_ERROR,
   PARENT_NO_EVENT_ERROR,
   PARENT_NO_PLAN_ERROR,
-  isTimed,
+  timeDecidesDay,
   TIMED_NO_PLAN_ERROR,
   FUTURE_DAY_ERROR,
   isDayKey,
@@ -1042,7 +1043,7 @@ export class BackendClient implements ApiClient {
       if (rep.title !== title) rep = await this.setTaskTitle(rep.id, title);
       if (!rep.notes) rep = await this.setTaskNotes(rep.id, url);
       const dayPlans = await this.repo.listPlans(s.day, { consistent: true });
-      if (!isTimed(rep) && !dayPlans.some((p) => p.taskId === rep!.id))
+      if (!timeDecidesDay(rep) && !dayPlans.some((p) => p.taskId === rep!.id))
         await this.repo.putPlan({
           ...this.base(),
           id: s.id, // one plan row per sitting, however many Starts race
@@ -2206,11 +2207,16 @@ export class BackendClient implements ApiClient {
           order: row.order,
         });
     }
+    return this.syncCreated(saved, deadline, all);
+  }
+  // Fresh tasks' calendar events (createTasks, and getDay's series spawns — recurring.md D8). Timed tasks get
+  // their events a few at a time, inside a time budget: the tasks are already saved, so the Lambda timing
+  // out now would report a failed paste (and invite a duplicating resubmit) or a failed getDay. No new
+  // Google call starts after the budget, or once one has failed (Google is likely down for all of them) —
+  // the rest are marked for Retry instead. Worst case: budget + one sync's timeouts. `all`: the list a
+  // part's parent title is read from ([] = none to scan; a brand-new task is never a parent).
+  private async syncCreated(saved: Task[], deadline: number, all: Task[]): Promise<Task[]> {
     if (!saved.some((t) => t.dueTime)) return saved;
-    // Timed tasks get their events a few at a time, inside a time budget: the tasks are already saved,
-    // so the Lambda timing out now would report a failed paste (and invite a duplicating resubmit). No
-    // new Google call starts after the budget, or once one has failed (Google is likely down for all
-    // of them) — the rest are marked for Retry instead. Worst case: budget + one sync's timeouts.
     const settings = await this.ensureSettings();
     let tripped = false;
     const out = [...saved];
@@ -2519,7 +2525,7 @@ export class BackendClient implements ApiClient {
     const tasks = await this.repo.listTasks({ consistent: true });
     if (hasParts(tasks, input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
     const task = tasks.find((t) => t.id === input.taskId);
-    if (task && isTimed(task)) throw new Error(TIMED_NO_PLAN_ERROR);
+    if (task && timeDecidesDay(task)) throw new Error(TIMED_NO_PLAN_ERROR);
     const fields = {
       taskId: input.taskId,
       day: input.day,
@@ -2556,6 +2562,8 @@ export class BackendClient implements ApiClient {
     return this.repo.listSeries();
   }
   async upsertSeries(input: UpsertSeriesInput): Promise<TaskSeries> {
+    // The day start judges a same-day time (D8): read only when a time is asked for, unused otherwise.
+    const dayStartHour = input.dueTime != null ? (await this.ensureSettings()).dayStartHour : 0;
     const fields = {
       title: input.title,
       categoryId: input.categoryId,
@@ -2563,7 +2571,7 @@ export class BackendClient implements ApiClient {
       rule: input.rule,
       anchorDate: input.anchorDate,
       active: input.active ?? true,
-      ...seriesCadence(input), // throws before any write
+      ...seriesCadence(input, dayStartHour), // throws before any write
     };
     if (input.id) {
       const existing = await this.repo.getSeries(input.id, { consistent: true });
@@ -2680,7 +2688,7 @@ export class BackendClient implements ApiClient {
     const roll = await this.repo.getRoll(rollId);
     if (!roll) throw new Error(`Not found: ${rollId}`);
     const existing = findOpenRollTask(await this.repo.listTasks({ consistent: true }), rollId);
-    if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR);
+    if (existing && timeDecidesDay(existing)) throw new Error(TIMED_NO_PLAN_ERROR);
     const task = existing
       ? existing.status === 'backlog'
         ? await this.repo.putTask(taskTransition(existing, 'planned', this.now()))
@@ -2745,25 +2753,32 @@ export class BackendClient implements ApiClient {
   }
   // An occurrence is spawned once per (series, day) — identity by seriesDay (seriesHasOccurrence), so an
   // unplanned occurrence isn't respawned (recurring.md D4). Stub parity. Spawns go through the repo's
-  // putTask/putPlan like every other task write (their item shapes are the repo's).
+  // putTask/putPlan like every other task write (their item shapes are the repo's). Planned with a row
+  // unless it's a same-day timed one; a timed one makes its calendar event like any timed task, inside
+  // the bulk budget so a getDay with several never nears the Lambda timeout (D8). The task read is
+  // consistent: a spawn now costs a Google event, so one made a moment ago must count.
   private async materializeDueSeries(day: string): Promise<void> {
     const active = (await this.repo.listSeries()).filter((s) => s.active);
     if (active.length === 0) return;
     const due = active.filter((s) => seriesDueOn(s, day));
     if (due.length === 0) return;
-    const tasks = await this.repo.listTasks();
+    const tasks = await this.repo.listTasks({ consistent: true });
     const plansOnDay = await this.repo.listPlans(day);
+    const spawned: Task[] = [];
     for (const series of due) {
       if (seriesHasOccurrence(series, day, tasks, plansOnDay)) continue;
       const task = await this.repo.putTask({ ...this.base(), ...occurrenceFields(series, day) });
-      await this.repo.putPlan({
-        ...this.base(),
-        taskId: task.id,
-        day,
-        plannedMinutes: series.defaultEstimateMin ?? 0,
-        order: 1000,
-      });
+      spawned.push(task);
+      if (occurrencePlanned(series))
+        await this.repo.putPlan({
+          ...this.base(),
+          taskId: task.id,
+          day,
+          plannedMinutes: series.defaultEstimateMin ?? 0,
+          order: 1000,
+        });
     }
+    await this.syncCreated(spawned, Date.now() + BULK_SYNC_BUDGET_MS, []);
   }
   // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
   // planned. Each move re-reads the task first (consistently): a sweep races the user's own writes (e.g.

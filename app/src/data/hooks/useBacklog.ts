@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { isTimed, lifeFrom } from '@aperture/shared';
+import { lifeFrom, timeDecidesDay } from '@aperture/shared';
 import type { Category, Task } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { useCategories } from './useCategories';
@@ -15,7 +15,7 @@ export const waiting = (ts: Task[], categories: Category[]): Task[] => {
   const parents = new Set(ts.map((t) => t.parentId).filter((id): id is string => !!id));
   const life = lifeFrom(categories);
   return ts
-    .filter((t) => t.status === 'backlog' && !isTimed(t) && !parents.has(t.id) && life(t))
+    .filter((t) => t.status === 'backlog' && !timeDecidesDay(t) && !parents.has(t.id) && life(t))
     .sort((a, b) => b.createdAt - a.createdAt);
 };
 

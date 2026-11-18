@@ -25,7 +25,8 @@ write), `AddToTodayDialog.tsx`, `app/src/pages/Home/StillOpenSection.tsx`.
 
 A task planned for **tomorrow** (the night "Tomorrow") is `planned` with no row today, so tonight it
 shows under Week or Backlog by its due day. That is deliberate and transient: tomorrow's `getDay` makes
-it a Today task. A **timed** task's day is its time (D13): a plan row on it places nothing.
+it a Today task. A **timed** task's day is its time (D13): a plan row on it places nothing — bar a series
+deadline occurrence, which is planned like an untimed task (D13's exception, [recurring.md](recurring.md) D8).
 
 ## 2. Decisions
 
@@ -80,7 +81,7 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
     answer, PR 77); `useTransitionTask({ settled: true })` does, for the row that leaves its list.
   - `createToday` = create + add, not atomic: on a planning failure the task stays in the backlog and
     the caller says so.
-  - A timed task is never added (D13): `addToDay` returns `'timed'` and writes nothing, and the server's
+  - A timed task is never added (D13; a series deadline occurrence is, D13's exception): `addToDay` returns `'timed'` and writes nothing, and the server's
     `upsertPlan` refuses it (`TIMED_NO_PLAN_ERROR`, both impls). `createToday` of a timed input says
     so (`timed`), and the capture receipt reads "due Fri 4pm, by its time".
 - **D6 — status filters only split history.** The Done lens offers Done · Dropped (accessible names
@@ -154,6 +155,19 @@ it a Today task. A **timed** task's day is its time (D13): a plan row on it plac
   - **Why:** "OA closes Sun 11:59pm" belongs to Sunday; a plan row put it on Wednesday and the deadline
     read twice. Working earlier means a part with its own Ends ([parts.md](parts.md) D14), not
     planning the deadline. The trade-off: a timed task moved in Google moves its day, like a reschedule.
+  - **The exception: a series deadline occurrence** (2026-11-18, [recurring.md](recurring.md) D8). A
+    recurring occurrence whose due day is after its work day (`seriesDay`) — "pre-lab every Tuesday, due
+    Wednesday 2pm" — is planned on its work day like an untimed task; its time is only its deadline
+    (display, urgency, reminders, calendar). One predicate pair in `machines.ts` carries it to every site
+    that applies D13: `timeDecidesDay` (the plan-write refusals, the sweep's filter, `addToDay`, "+ Today",
+    the add-to-today picker, Home's backlog count, the editor's "planned today", the planned ping) and
+    `byTimeOn` (`todayRows`, `placeOf`, Today's sort, MCP `get_day`). A calendar-date compare, no clock:
+    an offset-1 02:00 deadline (4am day start) stays planned and reads "due tonight 2am". On its due day
+    it is By time unless it has a row there — then the row wins (Unplan offered, listed once). Unplanned,
+    it sits in Week with "+ Today"; past due, overdue in Week, "+ Today" still offered. It is never
+    cancelled as superseded (it has a deadline). Moving its due day onto or before its work day, or a
+    Google drag that does, makes it plain D13 on the next `getDay`; clearing the time makes it untimed.
+    Behaviour change: an untimed "due next day" occurrence that gains a time now stays planned.
   - **One write rule, one healer:** `upsertPlan` refuses a timed task; a planned task that gains a time
     (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
     back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its

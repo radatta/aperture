@@ -1,10 +1,10 @@
 # Recurring tasks — cadences, ends, and the respawn fix
 
 **Area:** tasks · **Branch:** `school-cadences` · prod tasks `01M4FJH9JZDK98QD1W607EEMRR` (cadences),
-`01M387QB2BW4TZZBGXDYM45AWC` (respawn).
+`01M387QB2BW4TZZBGXDYM45AWC` (respawn); `series-due-time` · `01M6YNPT024NPTS0YT117JMX9W` (due time, D8).
 
-**Status: built 2026-11-04.** The design of record for recurring series: the model, the decisions D1–D7, the
-respawn record. Where this doc and the code disagree, fix whichever is wrong and say so here. The one-line
+**Status: built 2026-11-04; due time (D8) built 2026-11-18.** The design of record for recurring series: the
+model, the decisions D1–D8, the respawn record. Where this doc and the code disagree, fix whichever is wrong and say so here. The one-line
 summary and the storage shape live in [TECH.md](../../arch/TECH.md) → _taskSeries_; MCP's three tools in
 [mcp/index.md](../mcp/index.md).
 
@@ -20,14 +20,17 @@ every week. And unplanning an occurrence respawned it (§4), which made a recurr
 ## 2. Model
 
 A series is still a template; each occurrence is still a real task with `seriesId`, its own estimate and
-actual, its own calibration point. Three fields are new (`packages/shared/src/types.ts`):
+actual, its own calibration point. Four fields are new (`packages/shared/src/types.ts`):
 
 - `TaskSeries.dueOffsetDays: number | null` — the cadence. An occurrence spawns **planned on its day** with
-  `dueDay = day + offset` (0 = the same day, 1 = the next day …), **untimed**. `null` = no due date.
+  `dueDay = day + offset` (0 = the same day, 1 = the next day …), untimed unless the series has a time.
+  `null` = no due date.
+- `TaskSeries.dueTime: string | null` — the deadline's clock (`HH:MM`), only with an offset (D8). Each
+  occurrence carries it as its `dueTime`.
 - `TaskSeries.until: string | null` — the last day it spawns (inclusive). `null` = open-ended.
 - `Task.seriesDay?: string | null` — the day the series spawned this occurrence for: its identity within the series.
 
-Rows from before read back `undefined` for all three → readers use `?? null` / `== null`. No migration.
+Rows from before read back `undefined` for all four → readers use `?? null` / `== null`. No migration.
 
 Materialization is still **lazy**: an occurrence exists once `getDay(today)` runs — the app's first load of the
 day, not a clock. A consequence timed reminders accept and document: a day whose first app open comes after
@@ -35,15 +38,16 @@ the morning ping has no "planned today" reminder for that occurrence ([reminders
 
 The shared helpers (`packages/shared/src/recurrence.ts`) are the one rule both impls run, so the stub and the
 Lambda spawn identical occurrences: `seriesDueOn` (the rule within `[anchorDate, until]`),
-`occurrenceDueDay`, `seriesHasOccurrence` (D4), `occurrenceFields` (the spawned task's literal) and
-`seriesCadence` (the upsert's validation — a bad offset or `until` throws before any write).
+`occurrenceDueDay`, `seriesHasOccurrence` (D4), `occurrenceFields` (the spawned task's literal),
+`occurrencePlanned` (whether it gets a plan row, D8) and `seriesCadence` (the upsert's validation — a bad
+offset, `until` or time throws before any write).
 
 ## 3. Decision log
 
-- **D1. Cadence = a day offset, no series due _time_.** A timed task is never planned
-  ([lenses.md](lenses.md) D13), so a timed series would land its occurrences in Backlog, not on Tuesday's
-  plan — the opposite of what a cadence is for; and the course site treats 11:59pm as all-day anyway. Later, if
-  wanted: a `dueTime` on the series spawns timed occurrences unplanned.
+- **D1. Cadence = a day offset, no series due _time_** (2026-11-04; **revisited by D8**, 2026-11-18). A
+  timed task is never planned ([lenses.md](lenses.md) D13), so a timed series would land its occurrences in
+  Backlog, not on Tuesday's plan — the opposite of what a cadence is for; and the course site treats 11:59pm
+  as all-day anyway. D8 adds the time without that cost: D13 gained an exception instead.
 - **D2. `until` ends spawning, not the row.** Past `until` the series stays `active` and its row reads
   "ended Nov 30" with Stop still offered — the user sees it ran out and retires it when ready, rather than a
   row vanishing on a date. Nothing spawns after `until`, whatever the rule says.
@@ -71,6 +75,30 @@ until}`. The anchor is the user's today (`USER_TIME_ZONE`, the day boundary from
   reads `seriesSummary`: "Mon, Wed · due next day · until Nov 30" / "· ended Nov 30" (a year other than
   today's is spelled out). A refused save shows inline and keeps the draft (never a silent failure). The
   Due/Until values persist across Cancel like the rule does — a term's courses share an end.
+- **D8. A series due time: a deadline, not a day** (2026-11-18, the maintainer's option (a); task
+  `01M6YNPT024NPTS0YT117JMX9W`). "Pre-lab every Tuesday, due Wednesday 2pm" = weekly Tue, offset 1,
+  `dueTime` 14:00. The rule by offset:
+  - **Offset ≥ 1:** the occurrence spawns planned on its day with a row, as before; its time is only its
+    deadline — "due tomorrow 2pm" on the card, urgency colour, the deadline ping, the calendar block. This
+    is D13's one exception, a **deadline occurrence** (`isDeadlineOccurrence`: `seriesId`, `seriesDay`,
+    timed, `dueDay > seriesDay`); every D13 site reads `timeDecidesDay` / `byTimeOn` instead of `isTimed`
+    (the sites, its due day and the other cases: [lenses.md](lenses.md) D13 → _The exception_).
+  - **Offset 0:** a plain timed task (D13): spawned `backlog` with no row, on Today by its time
+    (`occurrencePlanned`). Its work day is its due day, so there is nothing to reconcile. A time before the
+    day start is refused (`SERIES_TIME_SMALL_HOURS_ERROR`, form inline and MCP `-32602`): with a 4am start a
+    same-day 02:00 deadline would spawn already past. Offset 1 at 02:00 is fine ("due tonight 2am").
+  - **Validation** (`seriesCadence`, both impls, before any write): a time must be `HH:MM`
+    (`SERIES_TIME_ERROR`) and needs an offset (`SERIES_TIME_NEEDS_DUE_ERROR`). The Lambda reads settings
+    for the day start only when a time is asked for.
+  - **Calendar** (the maintainer, 2026-11-18): each timed occurrence gets its Google Calendar event like
+    any timed task — the prep block ending at the deadline — made by `getDay` as it spawns
+    (`syncCalendar(null, task)`; the Lambda's `syncCreated`, shared with `createTasks`, so several on one
+    `getDay` stay inside the bulk budget: a failure stops the rest, marked for Retry). The task read before
+    a spawn is consistent, since a duplicate spawn would now also duplicate an event. Residual race: two
+    `getDay`s at the same instant on two devices can still both spawn (a deterministic occurrence id with
+    put-if-absent closes it — a follow-up). A `getDay` for a past day can make a past-dated event, as a
+    timed create with a past time does. Cleanup: deleting an occurrence deletes its event first.
+  - Replace-all `upsertSeries`: an edit that omits `dueTime` clears it (like the offset, §7).
 - **D7. `deleteSeries(id)` in the contract — API only.** A tombstone of the template (occurrences stay);
   no UI or MCP surface. It exists for the dev check's cleanup by recorded id (§6): `stop_series` would
   leave one inactive row per run in the test user's partition forever.
@@ -100,13 +128,16 @@ recurrence_, the contract case).
 
 ## 5. Surfaces
 
-- **Recurring tab** (`/tasks?lens=recurring`, `RecurringSection.tsx`): the form (D6) and the rows.
-- **Today / Week / Backlog:** an occurrence is an ordinary task card — "due tomorrow" from its `dueDay`.
+- **Recurring tab** (`/tasks?lens=recurring`, `RecurringSection.tsx`): the form (D6) and the rows. A
+  **Due time** field (native `<input type="time">`, 16px) shows once Due isn't "No due date"; picking "No
+  due date" clears it; Cancel keeps it with the offset. The row reads "Tue · due next day 2pm · until Dec 5".
+- **Today / Week / Backlog:** an occurrence is an ordinary task card — "due tomorrow" from its `dueDay`,
+  "due tomorrow 2pm" with a time.
 - **Task editor:** "Recurs · <rule>" is unchanged (the cadence shows on the Recurring tab's row).
 - **MCP:** D5. `list_tasks` shows occurrences (with `seriesId`, `seriesDay`, `dueDay`); `list_series` the
   templates.
-- **Stub seed:** one "Weekly report" series (weekly on today's weekday, due next day, until +42 days), so
-  the tab and Today show a cadence on first load.
+- **Stub seed:** one "Weekly report" series (weekly on today's weekday, due next day 2pm, until +42 days),
+  so the tab and Today show a timed cadence on first load.
 
 ## 6. Dev check
 
@@ -115,8 +146,14 @@ tomorrow"; a reload keeps one; Unplan → backlog status (on Week, it's due tomo
 searched list has one row offering "+ Today" and no Unplan — no planned copy; "+ Today" brings the same one back; an Until of yesterday reads "ended" and spawns nothing; a series with no Due spawns undated; the
 neighbour is untouched; `create_series` → `list_series` → Today; `create_series` with a past `until`
 refused with nothing written; `stop_series` (inactive, out of the list, occurrence kept); `stop_series` on
-no such id → Not found. Off dev: `getDay` twice after `removePlan` and `deleteSeries`'s tombstone (the
-Lambda's own tests, `backend.test.ts`) and another user's id (two users on one table, `seriesTools.test.ts`).
+no such id → Not found. The due time (D8): the form's time field (revealed by Due, cleared by "No due
+date", Cancel writes nothing), its row, Today "due tomorrow 2pm" with Unplan, the server fields and no
+calendar state without Google, Unplan → "+ Today" back, a same-day 23:59 series By time with neither Unplan
+nor "+ Today", `upsertSeries` and `create_series` refusals, `create_series` with a time. Off dev: `getDay` twice after `removePlan` and `deleteSeries`'s tombstone (the
+Lambda's own tests, `backend.test.ts`) and another user's id (two users on one table, `seriesTools.test.ts`);
+for D8, the due day (the contract), the superseded guard (`machines.test.ts`) and the planned ping
+(`dispatch.test.ts`). The Google event is _needs you_ — the test user has no Google account — and proven by
+`backend.calendar.test.ts` → _series occurrences_.
 
 Cleanup by recorded id, as every scenario: a series is ledgered from its create response (the browser's
 `upsertSeries`, `recorder.ts`; the API's; MCP's `create_series`) with the `series` ledger kind, and
@@ -126,7 +163,7 @@ the server refuses as a param error resolves its `intent` with a `refused` line 
 
 ## 7. Deferred
 
-- A series `dueTime` (timed occurrences, unplanned) — D1.
+- A deterministic occurrence id (put-if-absent) to close D8's residual double-spawn race.
 - Editing a series' cadence from its row (the API takes `id` + the fields; MCP has no `update_series`).
   Note for whoever builds it: `upsertSeries` is replace-all — an edit sends every field, since an omitted
   `dueOffsetDays` or `until` resets to `null` (like `active ?? true`).

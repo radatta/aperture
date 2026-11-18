@@ -300,6 +300,33 @@ describe('get_day', () => {
     expect(d5.tasks.planned).toEqual([expect.objectContaining({ id: t.id, byTime: true })]);
   });
 
+  it('a series deadline occurrence (recurring D8): its work day by plan row; its due day by time unless rowed', async () => {
+    await backend.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'weekly', daysOfWeek: [4] }, // 2026-11-05 is a Thursday
+      anchorDate: '2026-11-05',
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    await backend.getDay('2026-11-05');
+    const [occ] = (await backend.listTasks()).filter((t) => t.seriesId);
+    const d5 = (await run('get_day', { day: '2026-11-05' })) as DayOut;
+    expect(d5.tasks.planned).toEqual([
+      expect.objectContaining({ id: occ!.id, byTime: false, plannedMinutes: 45 }),
+    ]);
+    const d6 = (await run('get_day', { day: '2026-11-06' })) as DayOut;
+    expect(d6.tasks.planned).toEqual([
+      expect.objectContaining({ id: occ!.id, byTime: true, plannedMinutes: null }),
+    ]);
+    await backend.upsertPlan({ taskId: occ!.id, day: '2026-11-06', plannedMinutes: 30, order: 1 });
+    const rowed = (await run('get_day', { day: '2026-11-06' })) as DayOut;
+    expect(rowed.tasks.planned).toEqual([
+      expect.objectContaining({ id: occ!.id, byTime: false, plannedMinutes: 30 }),
+    ]);
+  });
+
   it('a day the app never opened, or a future one, has dayPlan null and no error', async () => {
     const out = (await run('get_day', { day: '2026-11-08' })) as DayOut;
     expect(out.dayPlan).toBeNull();

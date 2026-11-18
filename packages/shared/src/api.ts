@@ -145,6 +145,7 @@ export interface UpsertSeriesInput {
   active?: boolean;
   dueOffsetDays?: number | null; // omitted = none (recurring.md D1); an integer ≥ 0 or it throws before any write
   until?: string | null; // omitted = open-ended (D2); a day key or it throws before any write
+  dueTime?: string | null; // omitted = untimed (D8); "HH:MM" with a due offset, or it throws before any write
 }
 
 export interface StartSessionInput {

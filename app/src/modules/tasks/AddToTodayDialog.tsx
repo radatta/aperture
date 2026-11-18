@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { fmtDueDay, isTimed, lifeFrom, todayKey } from '@aperture/shared';
+import { fmtDueDay, lifeFrom, timeDecidesDay, todayKey } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Field } from '../../components/Field';
@@ -150,7 +150,7 @@ function DialogBody({
       matchesText(t, text, labelOf, false),
   );
   // A timed task's day is its time (lenses.md D13) — it lands on Today on its day, never added early.
-  const matches = byDueHint(candidates.filter((t) => !isTimed(t)));
+  const matches = byDueHint(candidates.filter((t) => !timeDecidesDay(t)));
   const hidTimed = candidates.length > matches.length;
   const typed = text.trim();
   const exact =

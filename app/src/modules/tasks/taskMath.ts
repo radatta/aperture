@@ -1,4 +1,4 @@
-import { fmtMonthShortDay } from '@aperture/shared';
+import { fmtClock12, fmtMonthShortDay } from '@aperture/shared';
 import type { RecurrenceRule, Task, TaskSeries, TaskStatus } from '@aperture/shared';
 
 // Human label for a status. "Dropped" for cancelled — the product word for abandoning a task (the
@@ -115,16 +115,17 @@ export function ruleSummary(rule: RecurrenceRule): string {
   }
 }
 
-// The series row's one line: the rule, then the cadence's due offset and end when set (recurring.md D6) —
-// "Mon, Wed · due next day · until Nov 30", "ended Nov 30" once `today` is past it. A year other than
-// today's is spelled out.
+// The series row's one line: the rule, then the cadence's due offset (and time, D8) and end when set
+// (recurring.md D6) — "Mon, Wed · due next day 2pm · until Nov 30", "ended Nov 30" once `today` is past
+// it. A year other than today's is spelled out.
 export function seriesSummary(series: TaskSeries, today: string): string {
   const parts = [ruleSummary(series.rule)];
   const offset = series.dueOffsetDays ?? null;
-  if (offset !== null)
-    parts.push(
-      offset === 0 ? 'due same day' : offset === 1 ? 'due next day' : `due in ${offset} days`,
-    );
+  if (offset !== null) {
+    const due =
+      offset === 0 ? 'due same day' : offset === 1 ? 'due next day' : `due in ${offset} days`;
+    parts.push(series.dueTime ? `${due} ${fmtClock12(series.dueTime)}` : due);
+  }
   const until = series.until ?? null;
   if (until !== null) {
     const year = until.slice(0, 4) === today.slice(0, 4) ? '' : `, ${until.slice(0, 4)}`;
