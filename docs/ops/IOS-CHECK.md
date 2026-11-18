@@ -222,12 +222,12 @@ lock: `pnpm bot lock wait --slot dev` while another branch holds it, then `pnpm 
 `pnpm bot lock release` after. Rerun it after an AXe bump or a new Xcode, and re-order the ladder by its rates.
 
 **Measured (2026-11-18, AXe 1.8.0, iOS 27.0):** 24 of 24 kills over the four jobs, every one on rung 1 (`flick`), the
-process gone 0–0.5 s after the swipe; the card's frame held still by the second read each time (239,136 305×664). Rungs 2
+process gone 0–0.5 s after the swipe; the card's frame held still by the second read each time (`239,136 305x664`). Rungs 2
 and 3 were never reached, so they stay as untried fallbacks; trim them once relaunch notes show they never fire.
 
 ## Proving the Mac side (a PR that changes `jobs/sim.sh`)
 
-Mac bash is outside lint and typecheck, so its proof is the fixtures plus a real run, all of it while holding slot A's lock (the fixtures job shares the Mac's slow lane, so beside another branch's devcheck it starves that branch's sim jobs): on the Mac, the fixture suite from GitHub's tarball at the sha under `/bin/bash` 3.2 (`pnpm mailroom fixtures --sha <sha>`, sandboxed in the slow lane: MAILROOM.md → _The fixtures job_; a branch touching `install.sh` or the plist runs it by hand, _Trial_ step 2; cases run in shards, `MAILROOM_FIXTURE_JOBS`: MAILROOM.md → _Tests_), then `install.sh --ref <sha>` (MAILROOM.md → _Install_), then from the container `pnpm mailroom sim-probe` (add `--sign-in` if it reports signed out; give the Bash call a 300 s timeout) and a full devcheck, each step finished before the next starts (nothing heavy beside a sim job: _Runtime_). The fixtures stub `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` as exported shell functions answering from a per-case tape (MAILROOM.md → _Tests_).
+Mac bash is outside lint and typecheck, so its proof is the fixtures plus a real run, all of it while holding slot A's lock (`lock wait` / `lock acquire --slot dev` first, `lock release` after: _Switcher kill_ → _The trial_; the fixtures job shares the Mac's slow lane, so beside another branch's devcheck it starves that branch's sim jobs): on the Mac, the fixture suite from GitHub's tarball at the sha under `/bin/bash` 3.2 (`pnpm mailroom fixtures --sha <sha>`, sandboxed in the slow lane: MAILROOM.md → _The fixtures job_; a branch touching `install.sh` or the plist runs it by hand, _Trial_ step 2; cases run in shards, `MAILROOM_FIXTURE_JOBS`: MAILROOM.md → _Tests_), then `install.sh --ref <sha>` (MAILROOM.md → _Install_), then from the container `pnpm mailroom sim-probe` (add `--sign-in` if it reports signed out; give the Bash call a 300 s timeout) and a full devcheck, each step finished before the next starts (nothing heavy beside a sim job: _Runtime_). The fixtures stub `axe`, `xcrun`, `open`, `pgrep`, `caffeinate` and `xcodebuild` as exported shell functions answering from a per-case tape (MAILROOM.md → _Tests_).
 
 ## Input-gap trial
 
