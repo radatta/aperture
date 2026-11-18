@@ -8,6 +8,9 @@ import { setFluxEngineFactory } from '../../modules/flux/engine/engine';
 import { createFakeEngine, type FakeControls } from '../../modules/flux/engine/fakeEngine';
 import { initialState } from '../../modules/flux/engine/evaluate';
 import { getExercise, type ExerciseId, type ExerciseState } from '@aperture/shared/flux';
+import { stubCanvas2d } from '../../test/canvas';
+
+stubCanvas2d();
 
 // The Flux pages are a lazy chunk (routes.tsx): load it once here, so the first render in this file
 // isn't a cold import inside a findBy's timeout.

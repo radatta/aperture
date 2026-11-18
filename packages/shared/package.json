@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./contract": "./src/contractTests.ts",
-    "./flux": "./src/flux/index.ts"
+    "./flux": "./src/flux/index.ts",
+    "./console-guard": "./src/consoleGuard.ts"
   },
   "types": "./src/index.ts",
   "scripts": {

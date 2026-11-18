@@ -80,11 +80,22 @@ can only show up in a local run, and only when vitest's workers happen to pair t
 (`docs/ops/GATE.md` → _What is weaker_; `pnpm gate:fast --full` runs them all). So:
 
 - **New module-level state in `app/src`** (a singleton, cache, or `let`) needs a reset in
-  `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file.
+  `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file — and its module joins the gate's
+  setup-imports rule (`scripts/src/gate/rules.ts`; `rules.test.ts` names it if missed).
 - **A test file that uses `vi.resetModules` / `vi.doMock`** belongs in the `isolated` project in
   `app/vitest.config.ts`.
 - **File order is shuffled every run.** A failure that comes and goes is order-dependence; the seed is
   printed — reproduce with `--sequence.seed=<n>`.
+
+**The console guard: in `app` and `lambdas`, a test that reaches `console.error` or `console.warn` fails** —
+jsdom's own errors ("Not implemented: …") included, which `app/src/test/guard.ts` routes in (the guard:
+`packages/shared/src/consoleGuard.ts`). It sees only those two console methods — `process.emitWarning` and a direct `process.stderr.write` still print
+unguarded — and a call after a worker's last check is recorded and dropped, never shown. A test that expects the output spies it with `mockImplementation` and
+asserts on it; jsdom-only gaps get a per-file stub (`app/src/test/canvas.ts`). `lambdas` prints its handlers'
+`console.log` lines only for a failing test (`silent: 'passed-only'`). React's act() checking stays off in `app`
+(no vitest globals); a file that drives `act()` itself sets `IS_REACT_ACT_ENVIRONMENT`, and setup resets it after
+every test. Locally under Claude Code, vitest picks its `agent` reporter, which hides a passing test's logs: pass
+`--reporter=default` to see what CI prints.
 
 **Testing Library queries: `within()` changes what a query asserts.** `getBy…`/`findBy…` assert
 "exactly one on the page" and a null `queryBy…` asserts "absent everywhere"; scoped, they only check

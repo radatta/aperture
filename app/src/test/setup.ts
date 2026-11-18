@@ -10,6 +10,13 @@ import { resetFluxEngineFactory } from '../modules/flux/engine/engine';
 import { resetFluxOutboxStore } from '../modules/flux/fluxOutbox';
 import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
 import { resetPushSync } from '../modules/push/browserPush';
+import { failOnConsoleNoise } from '@aperture/shared/console-guard';
+
+// React's act() checking stays off here (Testing Library turns it on only under vitest globals, which this suite
+// doesn't use); a file that drives act() itself sets IS_REACT_ACT_ENVIRONMENT in its beforeEach. Reset after every
+// test so that never leaks into the next file, where it surfaced act() warnings that came and went with the shuffle.
+const resetActEnv = () =>
+  delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
 
 // findBy*/waitFor wait 3 s, not Testing Library's 1 s: under CPU plus memory pressure, opening a Flux
 // exercise outran 1 s, and a worker cap alone didn't clear it (docs/ops/SESSION-BOARD.md). No assertion is
@@ -38,13 +45,21 @@ afterEach(() => {
   sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');
   window.history.replaceState(null, '', '/');
+  resetActEnv();
+  // Last, after the unmount and the resets, so their noise counts and a throw skips none of them.
+  failOnConsoleNoise(
+    'by this test — or left by an earlier test or file still running a timer or promise (files share one jsdom; rerun with the printed seed)',
+  );
 });
 
 // TanStack delivers observer updates on a setTimeout(0), so a test's last update can still be queued
 // after it unmounts. Drain one macrotask per file so it lands while jsdom is alive — after the last file
 // the shared jsdom is torn down immediately, and the straggler hits React with no `window`. Covers one
 // hop only — a straggler that schedules another timer, or a longer timer left running, isn't drained.
-afterAll(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+afterAll(async () => {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  failOnConsoleNoise('after the last test in this file');
+});
 
 // jsdom doesn't implement ResizeObserver, and AppShell uses one to size the bottom dock's content
 // reserve. A no-op stub is the honest shape here: jsdom has no layout engine, so a real

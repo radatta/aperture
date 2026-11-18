@@ -53,6 +53,7 @@ const http = (
   headers,
   body: body ?? null,
 });
+const FAIL_CLOSED_LOG = /^\{"event":"(?:auth_misconfigured|origin_secret_unset)"/;
 const untouched = () => expect(deps.doc.gets.length + deps.doc.queries.length).toBe(0);
 
 beforeEach(() => {
@@ -62,7 +63,11 @@ beforeEach(() => {
     jwks: jwks as never,
   });
   process.env.AWS_LAMBDA_FUNCTION_NAME = 'aperture-test';
-  vi.spyOn(console, 'error').mockImplementation(() => {});
+  // Failing closed logs one of these on purpose (auth/strict.ts); anything else still reaches the console guard.
+  const guarded = console.error;
+  vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+    if (!(typeof args[0] === 'string' && FAIL_CLOSED_LOG.test(args[0]))) guarded(...args);
+  });
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 afterEach(() => {

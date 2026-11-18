@@ -17,13 +17,24 @@ const DAY = todayKey(4);
 function setup() {
   const api = createStubClient({ seed: false, storageKey: `use-plans-${Math.random()}` });
   const calls: string[] = [];
+  // hold() parks every plans read until its release runs: what lands meanwhile can only be the write-through.
+  let held: Promise<void> | null = null;
+  const hold = () => {
+    let release!: () => void;
+    held = new Promise<void>((resolve) => (release = resolve));
+    return () => {
+      held = null;
+      release();
+    };
+  };
   const proxied = new Proxy(api, {
     get(target, prop, receiver) {
       const v = Reflect.get(target, prop, receiver) as unknown;
       if (typeof v !== 'function') return v;
       return (...args: unknown[]) => {
         calls.push(String(prop));
-        return (v as (...a: unknown[]) => unknown).apply(target, args);
+        const call = () => (v as (...a: unknown[]) => unknown).apply(target, args);
+        return held && prop === 'listPlansForDay' ? held.then(call) : call();
       };
     },
   });
@@ -39,32 +50,35 @@ function setup() {
   );
   const settled = () => waitFor(() => expect(qc.isFetching()).toBe(0));
   const reads = (method: string) => calls.filter((c) => c === method).length;
-  return { api, qc, hook, calls, settled, reads };
+  return { api, qc, hook, calls, settled, reads, hold };
 }
 
 describe('usePlans: write-through, one refetch', () => {
   it('an upsert appends the row to its day and refetches the plans once — nothing else', async () => {
-    const { api, qc, hook, calls, settled, reads } = setup();
+    const { api, qc, hook, calls, settled, reads, hold } = setup();
     const t = await api.createTask({ title: 'pset' });
     await settled();
     calls.length = 0;
+    const release = hold();
 
-    let listed = false;
-    await act(async () => {
-      const p = hook.result.current.upsert.mutateAsync({
+    let p!: Promise<unknown>;
+    act(() => {
+      p = hook.result.current.upsert.mutateAsync({
         taskId: t.id,
         day: DAY,
         plannedMinutes: 30,
         order: 0,
       });
-      // Written through before any refetch lands: the row is in the list as soon as the write answers.
-      await waitFor(() => expect(qc.getQueryData(qk.plans(DAY))).toHaveLength(1));
-      listed = reads('listPlansForDay') <= 1;
+    });
+    // Written through before any refetch lands: every plans read is held, so the row can only be the write's.
+    // waitFor runs outside act — nested inside it, it switches React's act environment off mid-scope.
+    await waitFor(() => expect(qc.getQueryData(qk.plans(DAY))).toHaveLength(1));
+    await act(async () => {
+      release();
       await p;
     });
     await settled();
 
-    expect(listed).toBe(true);
     expect(reads('listPlansForDay')).toBe(1);
     expect(reads('listTasks')).toBe(0);
     expect(reads('getDay')).toBe(0);

@@ -6,6 +6,9 @@ import { initialState } from './engine/evaluate';
 import { getExercise, type ExerciseState } from '@aperture/shared/flux';
 import { useFluxEngine, type FluxEngineOptions } from './useFluxEngine';
 import type { VoiceControl } from './useVoice';
+import { stubCanvas2d } from '../../test/canvas';
+
+stubCanvas2d();
 
 function voice(): VoiceControl {
   return {

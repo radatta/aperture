@@ -77,6 +77,7 @@ describe('plan', () => {
     ['scripts/vitest.config.ts', 'scripts'],
     ['app/vite.config.ts', 'app'],
     ['app/src/test/setup.ts', 'app'],
+    ['lambdas/src/test/setup.ts', 'lambdas'],
   ])('%s → %s whole, the rest by rule', (path, dir) => {
     const p = plan(ch(path), TESTS);
     expect(p.full).toEqual([]);
@@ -158,6 +159,18 @@ describe('plan', () => {
     const v = plan(ch('app/pwa/extensionVersion.ts'), TESTS);
     expect(pkg(v, 'app').tests).toContain('app/src/pages/Settings/Settings.test.tsx');
     expect(pkg(v, 'scripts').tests).toContain('scripts/src/devcheck/scenarios/index.test.ts');
+  });
+
+  it('what a setupFile imports runs its packages whole: no test imports a setupFile, so the graph never sees it', () => {
+    expect(fullPkgs(plan(ch('packages/shared/src/consoleGuard.ts'), TESTS)).sort()).toEqual([
+      'app',
+      'lambdas',
+    ]);
+    expect(fullPkgs(plan(ch('app/src/modules/push/browserPush.ts'), TESTS))).toEqual(['app']);
+    // A rule's `pkgs` replaces the owning package: shared isn't run whole for a guard change.
+    expect(
+      modeOf(plan(ch('packages/shared/src/consoleGuard.ts'), TESTS), 'packages/shared'),
+    ).not.toBe('full');
   });
 
   it('app sources run the raw-glob scanners', () => {

@@ -129,26 +129,44 @@ describe('the CLI under plain node', () => {
   });
 });
 
+// The refusal goes to stderr, named: captured here (and asserted), so a green run prints nothing.
+const refusal = async (argv: string[]) => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    const code = await main(argv);
+    return { code, said: err.mock.calls.map((c) => String(c[0])).join('\n') };
+  } finally {
+    err.mockRestore();
+  }
+};
+
 describe('prune-branches flags', () => {
-  it.each([['--dry-run=1'], ['--dryrun'], ['--dry-run', 'x'], ['--force'], ['extra']])(
-    'refuses %s as a usage error, before any git call or delete',
-    async (...args) => {
-      expect(await main(['prune-branches', ...args])).toBe(2);
-    },
-  );
+  it.each([
+    [['--dry-run=1'], '--dry-run takes no value'],
+    [['--dryrun'], 'unknown flag --dryrun'],
+    [['--dry-run', 'x'], '--dry-run takes no value'],
+    [['--force'], 'unknown flag --force'],
+    [['extra'], 'unexpected argument extra'],
+  ])('refuses %j as a usage error, before any git call or delete', async (args, why) => {
+    const r = await refusal(['prune-branches', ...args]);
+    expect(r.code).toBe(2);
+    expect(r.said).toContain(`prune-branches: ${why}`);
+  });
 });
 
 describe('run flags', () => {
   it.each([
-    ['cancel', '42', '--falied'],
-    ['rerun', '42', '--failed=1'],
-    ['rerun', '42', 'extra'],
-    ['rerun'],
-    ['cancel', 'x42'],
-    ['foo', '42'],
-    ['cancel', '42', '--failed'],
-  ])('refuses %s %s %s as a usage error, before any token is minted', async (...args) => {
-    expect(await main(['run', ...args])).toBe(2);
+    [['cancel', '42', '--falied'], 'run cancel: unknown flag --falied'],
+    [['rerun', '42', '--failed=1'], 'run rerun: --failed takes no value'],
+    [['rerun', '42', 'extra'], 'run rerun: unexpected argument 42 extra'],
+    [['rerun'], 'run takes cancel|rerun <run-id> [--failed]'],
+    [['cancel', 'x42'], 'run takes cancel|rerun <run-id> [--failed]'],
+    [['foo', '42'], 'unknown run subcommand "foo"'],
+    [['cancel', '42', '--failed'], 'run cancel: unknown flag --failed'],
+  ])('refuses %j as a usage error, before any token is minted', async (args, why) => {
+    const r = await refusal(['run', ...args]);
+    expect(r.code).toBe(2);
+    expect(r.said).toContain(why);
   });
 });
 
