@@ -43,6 +43,15 @@ async function until<T>(fn: () => T | null | undefined | false, ms = 3000): Prom
     await vi.advanceTimersByTimeAsync(STEP);
   }
 }
+// Real turns only, the fake clock held: what lands with no timer at all (the relay's crypto, storage, messages).
+async function turns<T>(fn: () => T | null | undefined | false, n = 200): Promise<T> {
+  for (let i = 0; i < n; i++) {
+    await io();
+    const v = fn();
+    if (v) return v;
+  }
+  throw new Error(`turns: not within ${n} real turns: ${String(fn)}`);
+}
 const settle = async (ms: number) => {
   for (let t = 0; t < ms; t += STEP) {
     await io();
@@ -578,6 +587,29 @@ describe('the overlay on a LeetCode problem', () => {
     expect(messages(ext, 'dismiss')).toHaveLength(2);
     expect(messages(ext, 'undismiss')).toHaveLength(1);
   }, 20_000);
+
+  it('a nav its doc noticed before the 500 ms poll did still counts: straight back, the pill returns', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('look');
+    await until(() => !!p.pill());
+    await settle(1000); // the load's own page messages land first, so none is left to notice the way back
+    // Next, then its doc (the one page message), and the new prompt, all with the clock held: the nav is the
+    // doc's, the poll never sees Add Two Numbers' path...
+    const t0 = Date.now();
+    p.fake().slowNext = true;
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    p.fake().finishNext();
+    await turns(() => p.phase() === 'prompt' && p.text().includes('Add Two Numbers'));
+    await io(); // the doc itself, after the nav it waited for
+    expect(Date.now()).toBe(t0);
+    // ...and no message is left to notice going straight back: only the poll can (F238).
+    p.w.history.pushState({}, '', '/problems/two-sum/');
+    await until(() => !!p.pill());
+    expect(p.phase()).toBe('hidden');
+  });
 
   it('a pill over a binding Aperture already ended prompts, rather than doing nothing', async () => {
     const bg = fakeBackground();

@@ -986,7 +986,10 @@
   // One nav at a time: a second call for the same path (the poll, a popstate and a page message can all
   // notice it) waits for the one in flight, so nobody reads a half-loaded binding.
   let navDone = Promise.resolve();
+  let lastPath = null; // the path the last nav was for, whoever noticed it: the poll compares against it
+  let lastTitle = null;
   function onNav() {
+    lastPath = location.pathname;
     const slug = relayLib.slugOf(location.pathname);
     if (navigated && slug === screenSlug) return navDone;
     navDone = navTo(slug);
@@ -1020,14 +1023,9 @@
     debug.log('nav', { slug, bound: !!binding, dismissed });
     act({ type: 'nav', slug, binding: binding && { status: 'active' }, dismissed });
   }
-  let lastPath = null;
-  let lastTitle = null;
   setInterval(() => {
     view.ensureAttached();
-    if (location.pathname !== lastPath) {
-      lastPath = location.pathname;
-      onNav();
-    }
+    if (location.pathname !== lastPath) onNav();
     if (document.title !== lastTitle) {
       lastTitle = document.title;
       if (state.phase !== 'hidden') paint();
@@ -1035,7 +1033,6 @@
   }, 500);
   window.addEventListener('popstate', (e) => {
     if (!e.isTrusted) return; // a page's synthetic popstate waits for the poll
-    lastPath = location.pathname;
     onNav();
   });
 
@@ -1110,12 +1107,8 @@
       sel = selLib.merge(got.selectors);
       coachOn = coachLib.settingsOf(got);
       status = got.status || null;
-      lastPath = location.pathname;
       onNav();
     },
-    () => {
-      lastPath = location.pathname;
-      onNav();
-    },
+    () => onNav(),
   );
 })();
