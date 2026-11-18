@@ -69,7 +69,7 @@ Raycast ─ parse_task ┘     (RPC / MCP)    runQuickParse └─ else → Anth
 
 The model call: `claude-sonnet-5-5` (Haiku until 2026-11-17), structured outputs (`categoryId` an enum of
 active ids), thinking off (`between_tools` — Sonnet 5.5 refuses `disabled`), `effort: low`, `max_tokens 2048`
-(512 on the capture route), one attempt, 4s budget +1s per 400 chars (cap 8s; Lambda is 15s). Input capped at 2,500 characters (the overflow comes back as notes, so a longer line can't fit the
+(512 on the capture route), one attempt, 6s budget +1s per 400 chars (cap 8s; Lambda is 15s; 4s under Haiku, raised for Sonnet's p95 3.1s on dev, 2026-11-18; the capture route caps it at 5s). Input capped at 2,500 characters (the overflow comes back as notes, so a longer line can't fit the
 output or the budget). One JSON log line per call (`event: parse_task`, ok/reason, HTTP status,
 stop_reason, ms, model, voice, tokens) — never the text or the key.
 

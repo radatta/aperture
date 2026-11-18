@@ -145,10 +145,12 @@ export type ModelOutcome =
   | { ok: true; fields: unknown }
   | { ok: false; reason: Exclude<ParseFailReason, 'empty-title' | 'grammar'>; detail?: string };
 
-// The model's time budget: 4s, +1s per 400 characters (long lines come back as long notes), capped at 8s
-// — well inside the Lambda's 15s with the SSM + DynamoDB reads in front of it.
+// The model's time budget: 6s, +1s per 400 characters (long lines come back as long notes), capped at 8s
+// — well inside the Lambda's 15s with the SSM + DynamoDB reads in front of it. 6s, not Haiku's 4s: Sonnet's
+// parses ran p95 3.1s, max 3.6s, and 1 in 52 passed 4s (dev, 2026-11-18). The capture route caps it at
+// CAPTURE_PARSE_DEADLINE_MS.
 export const parseBudgetMs = (text: string): number =>
-  Math.min(4_000 + Math.floor(text.length / 400) * 1_000, 8_000);
+  Math.min(6_000 + Math.floor(text.length / 400) * 1_000, 8_000);
 
 const str = (v: unknown): v is string => typeof v === 'string';
 

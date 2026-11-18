@@ -205,10 +205,11 @@ describe('validateParsedTask', () => {
 });
 
 describe('parseBudgetMs', () => {
-  it('4s, +1s per 400 characters, capped at 8s', () => {
-    expect(parseBudgetMs('')).toBe(4_000);
-    expect(parseBudgetMs('x'.repeat(399))).toBe(4_000);
-    expect(parseBudgetMs('x'.repeat(400))).toBe(5_000);
+  it('6s, +1s per 400 characters, capped at 8s', () => {
+    expect(parseBudgetMs('')).toBe(6_000);
+    expect(parseBudgetMs('x'.repeat(399))).toBe(6_000);
+    expect(parseBudgetMs('x'.repeat(400))).toBe(7_000);
+    expect(parseBudgetMs('x'.repeat(800))).toBe(8_000);
     expect(parseBudgetMs('x'.repeat(1_600))).toBe(8_000);
     expect(parseBudgetMs('x'.repeat(40_000))).toBe(8_000);
   });
