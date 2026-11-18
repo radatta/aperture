@@ -21,13 +21,16 @@ export function warmCaches(d: Deps, wt: string): void {
     }
     return;
   }
+  // The worktree's copy, not main's: bash reads a script as it runs, and sync-main moves the main checkout next.
+  const script = `${wt}/scripts/board/warm.sh`;
+  // setsid -f returns 0 once it forked, so a missing script would only fail where nobody looks.
+  if (!d.fs.exists(script)) return d.log(`warning: the cache warm didn't start: no ${script}`);
   try {
-    // The worktree's copy, not main's: bash reads a script as it runs, and sync-main moves the main checkout next.
-    d.run('setsid', ['-f', 'bash', `${wt}/scripts/board/warm.sh`, log], {
+    d.run('setsid', ['-f', 'bash', script, log], {
       cwd: wt,
       timeoutMs: SPAWN_TIMEOUT_MS,
     });
-    d.log(`warm: typecheck + lint started in the background (${WARM_LOG})`);
+    d.log(`warm: typecheck + lint spawned in the background (${WARM_LOG})`);
   } catch (err) {
     d.log(`warning: the cache warm didn't start: ${(err as Error).message}`);
   }

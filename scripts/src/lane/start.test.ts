@@ -40,6 +40,8 @@ function script(w: World, over: [string, Answer][] = [], trees: string[] = []): 
         const wt = join(w.main, '.claude/worktrees', B);
         mkdirSync(wt, { recursive: true });
         writeFileSync(join(wt, '.git'), `gitdir: ../../../.git/worktrees/${B}\n`);
+        mkdirSync(join(wt, 'scripts/board'), { recursive: true });
+        writeFileSync(join(wt, 'scripts/board/warm.sh'), "# the checkout's copy\n");
         return '';
       },
     ],
@@ -905,8 +907,21 @@ describe('lane start: the cache warm', () => {
   it("spawns the worktree's warm.sh detached once the session is live, before the lane file and sync-main", async () => {
     const w = world();
     claudeSession(w);
-    const t = deps(w, script(w));
+    let laneAtSpawn: boolean | null = null;
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'setsid',
+          () => {
+            laneAtSpawn = existsSync(join(w.board, 'lanes', `${B}.json`));
+            return '';
+          },
+        ],
+      ]),
+    );
     expect(await start(t.d, args())).toBe(0);
+    expect(laneAtSpawn).toBe(false); // the lane file comes after the spawn
     const wt = wtOf(w);
     const s = spawns(t.calls);
     expect(s.map((c) => c.args)).toEqual([
@@ -917,7 +932,7 @@ describe('lane start: the cache warm', () => {
     expect(lines.indexOf(s[0]!.line)).toBe(lines.indexOf('tmux send-keys -t %9 Enter') + 1);
     expect(t.sync.ran).toContain(s[0]!.line);
     expect(t.out()).toMatch(
-      /warm: typecheck \+ lint started in the background \(localNotes\/warm.log\)/,
+      /warm: typecheck \+ lint spawned in the background \(localNotes\/warm.log\)/,
     );
     expect(t.logs.findIndex((l) => l.startsWith('warm:'))).toBeLessThan(
       t.logs.findIndex((l) => /started in window/.test(l)),
@@ -971,6 +986,17 @@ describe('lane start: the cache warm', () => {
     );
     expect(existsSync(join(w.board, 'lanes', `${B}.json`))).toBe(true);
     expect(t.sync.calls).toBe(1);
+  });
+
+  it('a checkout without warm.sh warns and spawns nothing: setsid -f would succeed and the error land nowhere', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w));
+    const orig = t.d.fs.exists.bind(t.d.fs);
+    t.d.fs = { ...t.d.fs, exists: (p: string) => !p.endsWith('/scripts/board/warm.sh') && orig(p) };
+    expect(await start(t.d, args())).toBe(0);
+    expect(spawns(t.calls)).toEqual([]);
+    expect(t.out()).toMatch(/warning: the cache warm didn't start: no .*\/scripts\/board\/warm.sh/);
   });
 
   it.each([

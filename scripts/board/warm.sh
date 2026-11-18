@@ -2,10 +2,12 @@
 # Warm a new lane's tsc -b and eslint caches in the background, so its first typecheck and lint don't pay the cold
 # run (docs/ops/LANES.md → Start, step 9):
 #   warm.sh <log>      `pnpm lanes start` runs this detached (setsid -f), cwd = the new worktree: output to <log>,
-#                      then one heavy.sh slot (class warm, --wait 0: a busy box skips, logged as gaveUp)
+#                      then one heavy.sh slot (class warm, --wait 0: a busy box skips, logged as gaveUp), stopped
+#                      after WARM_MAX_SEC (whole seconds, default 300)
 #   warm.sh --steps    heavy.sh's command: `pnpm typecheck`, then `pnpm lint`, each niced, one at a time
-# It yields: once a heavy slot of this worktree's own (its gate, a typecheck under heavy.sh) is live, it stops its
-# heavy.sh, so two tsc -b or two eslint never write one cache at once. A bare `pnpm typecheck` isn't seen.
+# It yields: within about a second of a heavy slot of this worktree's own going live (its gate, a typecheck under
+# heavy.sh), it stops its heavy.sh, which stops this whole subtree. A bare `pnpm typecheck` isn't seen, nor is a
+# heavy.sh still waiting for its slot.
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -14,14 +16,18 @@ if [ "${1:-}" != --steps ]; then
   mkdir -p "$(dirname "$log")" || exit 1
   exec </dev/null >>"$log" 2>&1
   for v in "${!HEAVY_@}"; do unset "$v"; done  # a caller's class, slot or noslot must not reach this run
-  echo "warm: $(date -u +%Y-%m-%dT%H:%M:%SZ) typecheck + lint in $PWD"
+  case "${WARM_MAX_SEC:-}" in '' | *[!0-9]* | 0) max=300 ;; *) max=$WARM_MAX_SEC ;; esac
+  echo "warm: $(date -u +%Y-%m-%dT%H:%M:%SZ) typecheck + lint in $PWD (cap $max s)"
   # CLAUDE_PID=0: no Claude owns this job, so heavy.sh names it by the cwd's branch, not the hub's session.
   CLAUDE_PID=0 HEAVY_CLASS=warm HEAVY_LABEL="warm:$(git branch --show-current 2>/dev/null)" \
-    HEAVY_DURATION="${WARM_MAX_SEC:-300}" exec "$here/heavy.sh" --wait 0 -- bash "$here/warm.sh" --steps
+    HEAVY_DURATION="$max" exec "$here/heavy.sh" --wait 0 -- bash "$here/warm.sh" --steps
 fi
 
 . "$here/lib.sh"
+# Our own heavy.sh, and only when it is our parent: HEAVY_WRAPPER is inherited by everything under any heavy run.
 me="${HEAVY_WRAPPER:-}"
+[ "$me" = "$PPID" ] || me=
+step=
 
 # A live slot whose heavy.sh runs in this worktree, other than ours: the lane is at work.
 lane_busy() {
@@ -35,9 +41,15 @@ lane_busy() {
   return 1
 }
 
+# heavy.sh's TERM (a yield, or its duration stop) reaches this script with the rest of its subtree: say so, since a
+# duration stop's event reads exit 0.
+trap 'echo "warm: ${step:-the run} stopped (a yield or the cap)"; exit 143' TERM
+
+# Stay alive until heavy.sh has stopped the subtree: exiting first would orphan the running step, which its
+# kill_tree then can't find (the yield's whole point is that two tsc -b or two eslint don't share a cache).
 yield() {
   echo "warm: yielding to $1"
-  [ -n "$me" ] && kill -TERM "$me"  # heavy.sh stops its whole subtree, frees the slot and logs exit 143
+  if [ -n "$me" ]; then kill -TERM "$me"; wait; fi
   exit 143
 }
 

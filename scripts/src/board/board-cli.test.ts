@@ -1447,27 +1447,51 @@ describe('heavy.sh test cap', () => {
 });
 
 describe('warm.sh (the cache warm at lanes start)', () => {
-  // A stub pnpm on PATH: records each call, and `typecheck` sleeps WARM_TC_SLEEP s (a slow cold tsc).
+  // A stub pnpm on PATH: records each call; `typecheck` exits WARM_TC_EXIT and, with WARM_TC_SLEEP, runs a child
+  // sleep (a cold tsc under pnpm) and writes its own and the child's pid, so a test can check nothing outlives a stop.
   function stub() {
     const bin = join(tmp, 'bin');
     mkdirSync(bin, { recursive: true });
     writeFileSync(
       join(bin, 'pnpm'),
-      `#!/bin/bash\necho "$*" >>"${join(tmp, 'pnpm.calls')}"\ncase "$*" in *typecheck*) sleep "\${WARM_TC_SLEEP:-0}" ;; esac\nexit 0\n`,
+      [
+        '#!/bin/bash',
+        `echo "$*" >>"${join(tmp, 'pnpm.calls')}"`,
+        'case "$*" in *typecheck*)',
+        '  if [ -n "${WARM_TC_SLEEP:-}" ]; then',
+        `    sleep "$WARM_TC_SLEEP" & echo "$$ $!" >"${join(tmp, 'stub.pids')}"; wait`,
+        '  fi',
+        '  exit "${WARM_TC_EXIT:-0}" ;;',
+        'esac',
+        'exit 0',
+        '',
+      ].join('\n'),
     );
     chmodSync(join(bin, 'pnpm'), 0o755);
     return { ...env, PATH: `${bin}:${env.PATH}` };
   }
   const calls = () => readFileSync(join(tmp, 'pnpm.calls'), 'utf8').trim().split('\n');
   const log = () => readFileSync(join(tmp, 'warm.log'), 'utf8');
+  const jobs = () => events().filter((e) => e.kind === 'job');
+  const heavyDir = () => join(tmp, 'board/leases/heavy');
+  const warmCost = () =>
+    JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).classes.warm as {
+      pids: number;
+      anonMiB: number;
+    };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  async function until(what: string, ok: () => boolean, ms = 20_000) {
+    for (const t0 = Date.now(); !ok(); await sleep(100))
+      if (Date.now() - t0 > ms) throw new Error(`timed out after ${ms} ms waiting for ${what}`);
+  }
+  const gone = (pid: number) => !existsSync(`/proc/${pid}`) || ['Z', 'X'].includes(stateOf(pid));
   // a live heavy slot whose wrapper runs in `cwd` (a lane's gate, or another checkout's)
   function slotIn(cwd: string, label: string) {
     const c = spawn('sleep', ['300'], { cwd, stdio: 'ignore' });
     children.push(c);
-    const dir = join(tmp, 'board/leases/heavy');
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(heavyDir(), { recursive: true });
     writeFileSync(
-      join(dir, `1-${c.pid}.json`),
+      join(heavyDir(), `1-${c.pid}.json`),
       JSON.stringify({
         v: 1,
         pid: 1,
@@ -1479,78 +1503,122 @@ describe('warm.sh (the cache warm at lanes start)', () => {
       }),
     );
   }
+  // warm.sh in the background, once its typecheck step is running (the stub wrote its pids)
+  async function warmRunning(wt: string, extra: NodeJS.ProcessEnv) {
+    const c = spawn('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
+      env: { ...stub(), WARM_TC_SLEEP: '30', ...extra },
+      cwd: wt,
+      stdio: 'ignore',
+    });
+    children.push(c);
+    const exited = new Promise<number | null>((r) => c.on('exit', (n) => r(n)));
+    await until('the warm typecheck to start', () => existsSync(join(tmp, 'stub.pids')));
+    const pids = readFileSync(join(tmp, 'stub.pids'), 'utf8').trim().split(' ').map(Number);
+    return { exited, pids };
+  }
 
   it('runs typecheck then lint in one warm slot, logged as the cwd branch with no owner', () => {
     const wt = repo('lane-x');
     slotIn(tmp, 'gate:other-lane'); // another checkout's job: no yield
     const r = spawnSync('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
-      env: { ...stub(), HEAVY_CLASS: 'test', HEAVY_NOSLOT: '1' }, // a caller's HEAVY_* never reaches it
+      env: { ...stub(), HEAVY_CLASS: 'test' }, // a caller's HEAVY_* never reaches it
       cwd: wt,
       encoding: 'utf8',
     });
     expect(r.status).toBe(0);
     expect(r.stdout + r.stderr).toBe(''); // all of it goes to the log
     expect(calls()).toEqual(['--silent typecheck', '--silent lint']);
-    expect(log()).toMatch(/^warm: \S+ typecheck \+ lint in .*lane-x\n/);
+    expect(log()).toMatch(/^warm: \S+ typecheck \+ lint in .*lane-x \(cap 300 s\)\n/);
     expect(log()).toMatch(/warm: typecheck exit 0 · \d+\.\d s\nwarm: lint exit 0 · \d+\.\d s\n/);
-    expect(events().filter((e) => e.kind === 'job')).toEqual([
+    expect(jobs()).toEqual([
       expect.objectContaining({
         pid: 0,
         class: 'warm',
         label: 'warm:lane-x',
         branch: 'lane-x',
         exit: 0,
+        stop: null,
       }),
     ]);
-    expect(readdirSync(join(tmp, 'board/leases/heavy'))).toHaveLength(1); // its own slot released
+    expect(readdirSync(heavyDir())).toHaveLength(1); // its own slot released; the other lane's stays
   });
 
-  it('yields to a heavy job of its own worktree: stops before lint, exit 143, slot freed', async () => {
-    const wt = repo('lane-y');
-    const c = spawn('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
-      env: { ...stub(), WARM_TC_SLEEP: '30' },
+  it('a failed typecheck still runs lint, and the warm exits with the first failure', () => {
+    const wt = repo('lane-f');
+    const r = spawnSync('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
+      env: { ...stub(), WARM_TC_EXIT: '2' },
       cwd: wt,
-      stdio: 'ignore',
+      encoding: 'utf8',
     });
-    children.push(c);
-    const heavyDir = join(tmp, 'board/leases/heavy');
-    // typecheck is running (so the slot is there too): the yield must cut a step short, not just skip one
-    for (let i = 0; i < 100 && !existsSync(join(tmp, 'pnpm.calls')); i++)
-      await new Promise((r) => setTimeout(r, 100));
-    const own = JSON.parse(readFileSync(join(heavyDir, readdirSync(heavyDir)[0]!), 'utf8'));
-    const cost = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).classes.warm;
-    expect(own).toMatchObject({ pid: 0, class: 'warm', label: 'warm:lane-y' });
-    expect(own.cost).toEqual({ pids: cost.pids, anonMiB: cost.anonMiB });
-    slotIn(wt, 'gate:lane-y');
-    const code = await new Promise<number | null>((r) => c.on('exit', (n) => r(n)));
-    expect(code).toBe(143);
-    expect(log()).toMatch(/warm: yielding to gate:lane-y \(pid \d+\)/);
+    expect(r.status).toBe(2);
+    expect(calls()).toEqual(['--silent typecheck', '--silent lint']);
+    expect(log()).toMatch(/warm: typecheck exit 2 .*\nwarm: lint exit 0/);
+    expect(jobs()[0]).toMatchObject({ class: 'warm', exit: 2 });
+  });
+
+  it.each([
+    ['the worktree', ''],
+    ['a directory under it', 'app'],
+  ])(
+    "yields mid-step to a heavy job run from %s: the step's whole tree stops, exit 143, no lint",
+    async (_, sub) => {
+      const wt = repo('lane-y');
+      mkdirSync(join(wt, sub), { recursive: true });
+      const { exited, pids } = await warmRunning(wt, {});
+      const own = readdirSync(heavyDir()).map((f) =>
+        JSON.parse(readFileSync(join(heavyDir(), f), 'utf8')),
+      );
+      expect(own).toEqual([
+        expect.objectContaining({
+          pid: 0,
+          class: 'warm',
+          label: 'warm:lane-y',
+          cost: { pids: warmCost().pids, anonMiB: warmCost().anonMiB },
+        }),
+      ]);
+      slotIn(join(wt, sub), 'gate:lane-y');
+      expect(await exited).toBe(143);
+      await until('the stub and its sleep to stop', () => pids.every(gone), 5000);
+      expect(log()).toMatch(/warm: yielding to gate:lane-y \(pid \d+\)/);
+      expect(log()).toMatch(/warm: typecheck stopped \(a yield or the cap\)/);
+      expect(calls()).toEqual(['--silent typecheck']);
+      expect(jobs()).toEqual([expect.objectContaining({ class: 'warm', exit: 143, signal: 15 })]);
+      expect(readdirSync(heavyDir())).toHaveLength(1); // only the lane's slot is left
+    },
+    30_000,
+  );
+
+  it('stops at the cap: the event says stop duration (exit 0), the log says which step, nothing outlives it', async () => {
+    const wt = repo('lane-c');
+    const { exited, pids } = await warmRunning(wt, { WARM_MAX_SEC: '2' });
+    expect(await exited).toBe(0); // heavy.sh reads its own duration stop as a pass
+    await until('the stub and its sleep to stop', () => pids.every(gone), 5000);
+    expect(log()).toMatch(/\(cap 2 s\)/);
+    expect(log()).toMatch(/warm: typecheck stopped \(a yield or the cap\)/);
     expect(calls()).toEqual(['--silent typecheck']);
-    expect(events().find((e) => e.kind === 'job')).toMatchObject({
-      class: 'warm',
-      exit: 143,
-      signal: 15,
-    });
-    expect(readdirSync(heavyDir)).toHaveLength(1); // only the lane's slot is left
-  }, 30000);
+    expect(jobs()).toEqual([expect.objectContaining({ class: 'warm', exit: 0, stop: 'duration' })]);
+  }, 30_000);
 
   it('a box past the hard line skips it at once: exit 75, a gaveUp barrier, no run', () => {
     const wt = repo('lane-z');
-    cgroup(3760, 2 * GiB); // + the warm class's 30 pids: past the 3768 hard line
+    const lim = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8'));
+    const hard = Math.floor(4096 * lim.container.pidsHardFrac);
+    cgroup(hard - warmCost().pids + 1, 2 * GiB); // the warm's own cost tips it over
     limits({ enforce: true });
     const r = spawnSync('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
-      env: stub(),
+      env: { ...stub(), WARM_MAX_SEC: 'soon' }, // not whole seconds: the default cap
       cwd: wt,
       encoding: 'utf8',
     });
     expect(r.status).toBe(75);
     expect(existsSync(join(tmp, 'pnpm.calls'))).toBe(false);
-    expect(events().filter((e) => e.kind === 'job')).toEqual([]);
+    expect(jobs()).toEqual([]);
     expect(events().find((e) => e.kind === 'lease')).toMatchObject({
       action: 'gaveUp',
       class: 'warm',
     });
-    expect(log()).toMatch(/tell the user|hard/);
+    expect(log()).toMatch(/\(cap 300 s\)/);
+    expect(log()).toMatch(/heavy: still past the measured edge after 0s — .* — tell the user/);
   });
 });
 

@@ -124,16 +124,19 @@ Then it runs these steps, each registering an undo:
    spacing this start just stamped, runs the worktree's `scripts/board/warm.sh` detached (`setsid -f`, the
    worktree's copy, since bash reads a script as it runs and step 12 moves the main checkout). It runs
    `pnpm typecheck`, then `pnpm lint`, each under `nice`, in one `heavy.sh --wait 0` slot of class `warm`,
-   labelled `warm:<branch>`, stopped after 300 s, so the lane's first gate finds `tsc -b`'s buildinfo and eslint's
+   labelled `warm:<branch>`, stopped after 300 s (`WARM_MAX_SEC`, whole seconds; heavy.sh logs that stop as exit 0 with
+   `stop: "duration"`, and `warm.log` names the step it cut), so the lane's first gate finds `tsc -b`'s buildinfo and eslint's
    cache warm (the measurement: `docs/ops/SESSION-BOARD.md` → _Results_ → the warm-caches A/B). `CLAUDE_PID=0`
    leaves the job with no owner, so its event names the worktree's branch, not the hub's session. Output goes to
    `<worktree>/localNotes/warm.log`. A box that isn't calm (an `--over-pace` start on a hot box, a missing or
    stale `pace.json`) skips it, saying why in the start's output and in `warm.log`; a full box at the slot is
-   `heavy.sh`'s exit 75 and a `gaveUp` barrier. **It yields:** once a live heavy slot runs in the worktree (the
-   lane's gate, a typecheck under `heavy.sh`), it stops its own `heavy.sh` (exit 143), so two `tsc -b` or two
-   eslint runs never write one cache at once; a bare `pnpm typecheck` there isn't seen. Never re-run after a
+   `heavy.sh`'s exit 75 and a `gaveUp` barrier. **It yields:** within about a second of a live heavy slot running in
+   the worktree or under it (the lane's gate, a typecheck under `heavy.sh`), it stops its own `heavy.sh`, which
+   stops the running step's whole tree (exit 143), so two `tsc -b` or two eslint runs don't share a cache. Not
+   seen: a bare `pnpm typecheck`, or a `heavy.sh` still waiting for its slot (no slot file yet; it would wait
+   only past the hard line, which the warm's own cost rarely decides on a box that was calm). Never re-run after a
    rebase: the gate follows the rebase at once, so there is no idle window to fill (the A/B's rebase arm). A
-   failed spawn only warns.
+   failed spawn, or a checkout with no `warm.sh`, only warns.
 10. Writes the board lane: phase `plan`, step `kickoff sent`, after clearing a past same-name file (`writeLane` would
     carry its PR number on).
 11. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a
