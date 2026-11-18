@@ -234,7 +234,7 @@ describe('outcomes', () => {
     const quick = sit({ slug: 'two-sum', on: day(-1), minutes: 2, help: 'solution' });
     expect(countsAsPractice(quick, NOW)).toBe(true);
     const [r] = listRecords({ now: NOW, sittings: [quick], attempts: [] });
-    expect(r).toMatchObject({ peeked: true, schedule: { track: 'peeked', dueDay: TODAY } });
+    expect(r).toMatchObject({ peeked: true, schedule: { track: 'retry', dueDay: TODAY } });
   });
 });
 
@@ -253,9 +253,9 @@ describe('resolveState — every transition', () => {
       dueDay: '2026-11-04',
     });
   });
-  it('none → first failed: peeked track, step 0, due +1', () => {
+  it('none → first failed: retry track, step 0, due +1', () => {
     expect(s(['2026-11-01', 'failed'])).toMatchObject({
-      track: 'peeked',
+      track: 'retry',
       step: 0,
       dueDay: '2026-11-02',
     });
@@ -281,9 +281,9 @@ describe('resolveState — every transition', () => {
       dueDay: '2026-11-19',
     });
   });
-  it('a failed re-solve restarts the peeked track', () => {
+  it('a failed re-solve restarts the retry track', () => {
     expect(s(['2026-11-01', 'clean'], ['2026-11-04', 'failed'])).toMatchObject({
-      track: 'peeked',
+      track: 'retry',
       step: 0,
       dueDay: '2026-11-05',
     });
@@ -292,7 +292,7 @@ describe('resolveState — every transition', () => {
     const last = s(['2026-11-01', 'clean'], ['2026-11-04', 'clean'], ['2026-11-11', 'clean']);
     expect(last).toMatchObject({ step: 2, dueDay: '2026-11-25', dueBy: '2026-12-02' });
   });
-  it('a graduated problem that fails again restarts the peeked track', () => {
+  it('a graduated problem that fails again restarts the retry track', () => {
     const g = s(
       ['2026-11-01', 'clean'],
       ['2026-11-04', 'clean'],
@@ -300,7 +300,7 @@ describe('resolveState — every transition', () => {
       ['2026-11-25', 'clean'],
       ['2026-12-01', 'failed'],
     );
-    expect(g).toMatchObject({ graduated: false, track: 'peeked', step: 0, dueDay: '2026-12-02' });
+    expect(g).toMatchObject({ graduated: false, track: 'retry', step: 0, dueDay: '2026-12-02' });
   });
   it('a graduated problem stays dormant', () => {
     const g = s(
@@ -822,7 +822,7 @@ describe('records', () => {
     expect(b.find((r) => r.slug === 'two-sum')!.schedule).toEqual(a[0]!.schedule);
     expect(b.find((r) => r.slug === 'valid-anagram')).toMatchObject({
       peeked: true,
-      schedule: { track: 'peeked', dueDay: day(1) },
+      schedule: { track: 'retry', dueDay: day(1) },
     });
   });
   it('a non-catalog problem keeps its own title and a tag pattern', () => {
@@ -967,11 +967,13 @@ describe('stats', () => {
         outcome: 'failed',
         help: 'solution',
         cause: null,
+        accepted: false,
         minutes: null,
         note: null,
         historical: false,
         sittingIds: [],
         attemptIds: [peek.id],
+        sources: ['peek-seed'],
       },
     ]);
   });
@@ -991,7 +993,14 @@ describe('inputs', () => {
       [{ slug: 'Counting Bits', outcome: 'clean' }, /slug/],
       [{ slug: 'counting-bits', outcome: 'great' }, /outcome/],
       [{ slug: 'counting-bits', outcome: 'clean', help: 'hint' }, /no help/],
-      [{ slug: 'counting-bits', outcome: 'solved', help: 'solution' }, /failed/],
+      [{ slug: 'counting-bits', outcome: 'clean', help: 'solution' }, /no help/],
+      [{ slug: 'counting-bits', outcome: 'solved', accepted: true }, /only for a peek/],
+      [
+        { slug: 'counting-bits', help: 'solution', outcome: 'solved', accepted: false },
+        /contradicts/,
+      ],
+      [{ slug: 'counting-bits' }, /outcome/],
+      [{ slug: 'counting-bits', outcome: 'clean', difficulty: 'Brutal' }, /difficulty/],
       [{ slug: 'counting-bits', outcome: 'clean', day: day(1) }, /after today/],
       [{ slug: 'counting-bits', outcome: 'clean', day: day(-61) }, /60 days/],
       [{ slug: 'counting-bits', outcome: 'clean', cause: 'tired' }, /cause/],
@@ -999,6 +1008,38 @@ describe('inputs', () => {
       [{ slug: 'counting-bits', outcome: 'clean', extra: 1 }, /Unknown/],
     ];
     for (const [v, re] of bad) expect(() => normalizeCoachAttempt(v, TODAY)).toThrow(re);
+  });
+  it('a peek in one call: help solution lands failed, and a solved peek keeps its accept', () => {
+    expect(normalizeCoachAttempt({ slug: 'counting-bits', help: 'solution' }, TODAY)).toMatchObject(
+      {
+        outcome: 'failed',
+        help: 'solution',
+      },
+    );
+    const solved = normalizeCoachAttempt(
+      { slug: 'counting-bits', help: 'solution', outcome: 'solved' },
+      TODAY,
+    );
+    expect(solved).toMatchObject({ outcome: 'failed', accepted: true });
+    expect(
+      normalizeCoachAttempt({ slug: 'counting-bits', help: 'solution', accepted: true }, TODAY),
+    ).toMatchObject({ outcome: 'failed', accepted: true });
+    expect(
+      normalizeCoachAttempt({ slug: 'counting-bits', help: 'solution', outcome: 'failed' }, TODAY),
+    ).not.toHaveProperty('accepted');
+  });
+  it('an off-catalog title and difficulty are kept', () => {
+    expect(
+      normalizeCoachAttempt(
+        {
+          slug: 'made-up-problem',
+          outcome: 'solved',
+          title: 'Made Up Problem',
+          difficulty: 'Hard',
+        },
+        TODAY,
+      ),
+    ).toMatchObject({ title: 'Made Up Problem', difficulty: 'Hard' });
   });
   it('the focus pattern and the review patch', () => {
     expect(normalizeFocusPattern('graphs')).toBe('graphs');
@@ -1053,9 +1094,10 @@ describe('pattern detail (the Patterns tab)', () => {
     ...s,
     summary: { ...s.summary, runs: runsBeforeFirstSubmit, runsBeforeFirstSubmit },
   });
-  const withTrace = (s: Sitting, trace: 'traced' | 'partial' | 'skipped' | 'none') => ({
+  // The trace comment's fold (sittings.ts commentTrace): the only traced/untraced source.
+  const withTrace = (s: Sitting, trace: 'traced' | 'none') => ({
     ...s,
-    summary: { ...s.summary, coach: { config: null, trace, nudges: 0 } },
+    summary: { ...s.summary, commentTrace: trace },
   });
   const statsOf = (sittings: Sitting[], manualRows: CoachAttempt[] = [], range = {}) =>
     coachStats(attemptsOf(sittings, manualRows, NOW, undefined, TODAY), TODAY, range);
@@ -1068,7 +1110,7 @@ describe('pattern detail (the Patterns tab)', () => {
         withRuns(sit({ slug: tp[0]!, on: day(-5), submits: ['wrong_answer', 'accepted'] }), 2),
         'traced',
       ),
-      withTrace(withRuns(sit({ slug: tp[1]!, on: day(-4), submits: ['accepted'] }), 0), 'skipped'),
+      withTrace(withRuns(sit({ slug: tp[1]!, on: day(-4), submits: ['accepted'] }), 0), 'none'),
       sit({ slug: tp[2]!, on: day(-3), minutes: 20 }), // never submitted: no submit, run or trace data
     ]);
     expect(pat(s, 'two-pointers')).toMatchObject({
@@ -1080,24 +1122,11 @@ describe('pattern detail (the Patterns tab)', () => {
     });
   });
 
-  it('a partial trace or an untraced submit is a miss; no coach data, or the card off, counts nowhere', () => {
-    const none = withTrace(clean(tp[3]!, day(-1)), 'none');
-    const off = {
-      ...none,
-      summary: {
-        ...none.summary,
-        coach: {
-          config: { trace: false, hold: false, nudge: true },
-          trace: 'none' as const,
-          nudges: 0,
-        },
-      },
-    };
+  it('an untraced submit is a miss; a sitting with no comment data counts nowhere', () => {
     const s = statsOf([
-      withTrace(clean(tp[0]!, day(-3)), 'partial'),
+      withTrace(clean(tp[0]!, day(-3)), 'none'),
       withTrace(clean(tp[1]!, day(-2)), 'none'),
       clean(tp[2]!, day(-1)),
-      off,
     ]);
     expect(pat(s, 'two-pointers').traced).toEqual({ hit: 0, of: 2 });
   });

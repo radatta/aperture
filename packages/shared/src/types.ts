@@ -6,7 +6,7 @@ import type { AttachmentStatus } from './attachments';
 import type { Area } from './areas';
 import type { ExerciseId } from './flux/definitions';
 import type { CompetencyTag } from './stories';
-import type { PatternId } from './neetcode150';
+import type { Difficulty, PatternId } from './neetcode150';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 
 // Every stored item carries these. `deletedAt` is a soft-delete tombstone — we never hard-delete.
@@ -297,6 +297,9 @@ export interface Settings extends BaseEntity {
   // LeetCode coach: Opus picks the day's problems from the rules' candidates (coachAi.ts). Rows from before read
   // back undefined and count as on (coachAiPickOn). Off → the rule plan, no call.
   coachAiPick: boolean; // default true
+  // LeetCode coach: the plan's slot mix (coach.md → Plan mode). Rows from before read back undefined and count as
+  // 'auto' (coachPlanModeOf).
+  coachPlanMode: CoachPlanMode; // default 'auto'
 }
 
 // One device's Web Push subscription (reminders.ts). Never exported or returned: endpoint + p256dh + auth
@@ -390,6 +393,10 @@ export interface SittingSummary {
   lastEventAt: number | null;
   headEvents: number; // how many head rows this summary folds — a recompute never writes over a larger one
   coach?: SittingCoach; // only once a coach event folds: read it as `summary.coach ?? null`
+  firstJudgedAt?: number | null; // the first Run's or Submit's `at`; absent on summaries folded before it
+  // The trace (docs/areas/recruiting/index.md → The trace comment): `traced` when a snapshot before the first Run or
+  // Submit held a trace comment, `none` once judged without one; absent until then and on sittings folded before it.
+  commentTrace?: 'traced' | 'none';
 }
 
 // The user's LeetCode Start gate (one row): the day it counts (the user's zone, never the client's), that
@@ -409,7 +416,8 @@ export interface LcStartGate extends BaseEntity {
 export interface SittingHeadRow {
   id: string;
   sittingId: string;
-  type: 'run' | 'submit' | 'note' | 'timer' | 'coach';
+  // `trace-comment` is the server's own row (traceCommentRow), never an extension event.
+  type: 'run' | 'submit' | 'note' | 'timer' | 'coach' | 'trace-comment';
   at: number;
   verdict: SittingVerdict | null; // runs and submits
   timer: LcTimerState | null; // timer reads
@@ -485,6 +493,13 @@ export interface Sitting extends BaseEntity {
   // The user's review (setSittingReview), on the head so the list and list_sittings read it free; a refold spreads the
   // head, so it survives ingest. Absent on heads written before reviews existed — read it as `review ?? null`.
   review?: SittingReview | null;
+  // Claude's own notes on how the sitting went (set_claude_notes), never mixed into the user's review. Absent on
+  // heads from before them; null once cleared.
+  claudeNotes?: ClaudeNotes | null;
+}
+export interface ClaudeNotes {
+  text: string; // ≤ CLAUDE_NOTES_MAX, newlines kept
+  updatedAt: number;
 }
 
 // How much help a sitting took: none, a hint (a nudge, a topic), or the solution read.
@@ -523,6 +538,36 @@ export interface CoachAttempt extends BaseEntity {
   note: string | null;
   source: 'manual' | 'peek-seed';
   historical?: true; // a solve from before the coach (log_attempt historical): seen, never scheduled or counted
+  // An off-catalog problem's difficulty as logged; absent on rows from before. The catalog's wins.
+  difficulty?: Difficulty | null;
+  // Accepted that day even though the outcome is failed (a peek after an accept): absent → outcome !== 'failed'.
+  accepted?: boolean;
+}
+// The plan's slot mix (coach.md → Plan mode): balanced is one of each kind; catch-up fills with re-solves; auto
+// switches between them on the due count, with hysteresis.
+export type CoachPlanMode = 'auto' | 'balanced' | 'catch-up';
+// A legacy (day, slug) group's stored void state (coach.md → Legacy history): every group counts until `void: true`;
+// `void: false` counts it again. id = `<day>#<slug>`.
+export interface CoachVoid extends BaseEntity {
+  day: string;
+  slug: string;
+  void: boolean;
+}
+// One submission the pre-sittings extension captured (until PR 147, 2026-11-10), under the legacy `lc#` SK.
+// Read-only: nothing writes these any more; the coach folds them as `legacy` attempts (coach.ts legacyAttempts).
+export interface LegacyLeetcodeAttempt extends BaseEntity {
+  day: string; // YYYY-MM-DD, bucketed via dayStartHour + the client's reported tz offset
+  problemSlug: string;
+  problemTitle: string;
+  verdict: LeetcodeVerdict;
+  submittedAt: number; // epoch ms from LeetCode
+  lang: string;
+  runtimeMs: number | null;
+  memory: number | null; // bytes
+  leetcodeSubmissionId: string;
+  frontendId: string | null;
+  difficulty: string | null; // 'Easy' | 'Medium' | 'Hard' | null
+  topicTags: string[] | null;
 }
 export type SlotKind = 'carry-over' | 'new' | 're-solve' | 'stretch';
 // One change the user made to a day's plan: a slot (by the engine's pick, `from`) swapped to `to`, or skipped.
@@ -561,6 +606,8 @@ export interface CoachDayAi {
   note: string | null;
   focus: { from: PatternId; to: PatternId; why: string } | null;
   oldestDue: string | null; // the oldest due re-solve when picked — tomorrow's guardrail reads it
+  // The plan mode's mix the pick kept (coach.md → Plan mode); absent on picks from before it, which were balanced.
+  mode?: 'balanced' | 'catch-up';
   reason: CoachAiReason | null;
   detail: string | null; // a guardrail code or an HTTP status, never model text
   usage: { input: number; output: number } | null;

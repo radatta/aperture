@@ -2,6 +2,7 @@ import { useId, useRef, useState } from 'react';
 import {
   CAUSE_NAMES,
   CAUSE_TAGS,
+  hasReviewWords,
   normalizePrepTarget,
   normalizeSittingReview,
   REVIEW_HOW_MAX,
@@ -56,21 +57,23 @@ const focusOnMount = (el: HTMLTextAreaElement | null) => el?.focus();
 // Help and the cause are also Claude's to set over MCP (mark_peeked, set_cause_tag), maybe after this form
 // opened. So until the user touches one, it follows the stored review as it refreshes, and Save doesn't send it —
 // the server keeps what's stored (mergeReview), never the stale value the form opened on (F169). Help and the cause
-// are only suggested while there's no review at all: once one is stored, its own values (none included) show.
+// are only suggested while there's no review of the user's own: once one is stored, its own values (none included)
+// show. A review that only voids the sitting (Doesn't count) is none (hasReviewWords).
 const startCause = (s: Sitting): CauseTag | null =>
-  s.review ? (s.review.cause ?? null) : suggestedCause(s);
+  hasReviewWords(s.review) ? (s.review!.cause ?? null) : suggestedCause(s);
 
 export function ReviewForm({ sitting }: { sitting: Sitting }) {
   const saved = sitting.review ?? null;
+  const own = hasReviewWords(saved) ? saved : null; // the suggestions show while this is null
   const [insight, setInsight] = useState(saved?.insight ?? '');
-  const [help, setHelp] = useState<HelpLevel>(saved?.help ?? suggestedHelp(sitting));
+  const [help, setHelp] = useState<HelpLevel>(own?.help ?? suggestedHelp(sitting));
   const [cause, setCause] = useState<CauseTag | null>(startCause(sitting));
   const [touched, setTouched] = useState({ help: false, cause: false });
   const [syncedAt, setSyncedAt] = useState(saved?.updatedAt ?? null);
   if ((saved?.updatedAt ?? null) !== syncedAt) {
     // The stored review moved (a save here, or Claude's write elsewhere): untouched fields follow it.
     setSyncedAt(saved?.updatedAt ?? null);
-    if (!touched.help) setHelp(saved?.help ?? suggestedHelp(sitting));
+    if (!touched.help) setHelp(own?.help ?? suggestedHelp(sitting));
     if (!touched.cause) setCause(startCause(sitting));
   }
   const readReview = useReadSittingReview();
@@ -168,9 +171,8 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       // A first review sends the untouched suggestions (a hint, No trace) — but only if there's still no review
       // as of now: one Claude wrote since the form opened wins. Help and the cause refuse taps while this runs, so
       // `touched` is the one Save was pressed on.
-      const suggests =
-        !saved && ((!touched.help && help !== 'none') || (!touched.cause && !!cause));
-      if (suggests && !(await readReview(sitting.id)))
+      const suggests = !own && ((!touched.help && help !== 'none') || (!touched.cause && !!cause));
+      if (suggests && !hasReviewWords(await readReview(sitting.id)))
         Object.assign(input, {
           ...(touched.help ? {} : { help }),
           ...(touched.cause || !cause ? {} : { cause }),
@@ -247,7 +249,7 @@ export function ReviewForm({ sitting }: { sitting: Sitting }) {
       <div className="flex flex-col gap-1">
         <Text size="sm" tone="muted" id={`${id}-cause`}>
           Cause
-          {!touched.cause && !saved && cause && (
+          {!touched.cause && !own && cause && (
             <Text as="span" size="xs" tone="subtle">
               {' '}
               · suggested

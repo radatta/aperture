@@ -735,3 +735,93 @@ describe('the stub’s sittings', () => {
     expect(screen.getByLabelText<HTMLInputElement>('One-liner').value).toBe('keep me');
   });
 });
+
+describe('void and Claude’s notes', () => {
+  it('Doesn’t count voids the sitting (a notice, the list marks it), survives a reload, and Count it again undoes it', async () => {
+    const user = userEvent.setup();
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    const before = (await api.listProblemRecords()).some((r) => r.sittingIds.includes(id));
+    expect(before).toBe(true);
+    const view = await open(api);
+    const btn = await screen.findByRole('button', { name: 'Doesn’t count' });
+    await user.click(btn);
+    expect(await screen.findByText(/Doesn’t count — left out of the plan/)).toBeTruthy();
+    const again = screen.getByRole('button', { name: 'Count it again' });
+    expect(document.activeElement).toBe(again); // the same button, its label flipped
+    await waitFor(async () =>
+      expect((await api.listProblemRecords()).some((r) => r.sittingIds.includes(id))).toBe(false),
+    );
+    view.unmount();
+    await open(api);
+    expect(await screen.findByText(/Doesn’t count — left out of the plan/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Count it again' }));
+    await waitFor(() => expect(screen.queryByText(/left out of the plan/)).toBeNull());
+    expect((await api.getSitting(id)).sitting.review?.test ?? false).toBe(false);
+  });
+
+  it('a voided sitting with no review words shows no reviewed mark, but says Doesn’t count', async () => {
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    await api.patchSittingReview(id, { test: true });
+    const review = (await api.getSitting(id)).sitting.review;
+    // The precondition: the seed's Two Sum has no review words, so the void wrote the only review.
+    expect(review).toMatchObject({ insight: null, mistakes: [], help: 'none', test: true });
+    renderApp({ api, path: '/recruiting' });
+    const row = await screen.findByRole('link', { name: /Two Sum/ });
+    expect(within(row).getByText('Doesn’t count')).toBeTruthy();
+    expect(within(row).queryByLabelText('reviewed')).toBeNull();
+  });
+
+  it('Claude’s notes show under the review, apart from it, and only when written', async () => {
+    const api = seeded();
+    const id = await idOf(api, 'two-sum');
+    const view = await open(api);
+    await screen.findByRole('heading', { name: 'Two Sum' });
+    expect(screen.queryByRole('heading', { name: 'Claude’s notes' })).toBeNull();
+    view.unmount();
+    await api.setSittingClaudeNotes([
+      { sittingId: id, text: 'Traced the empty case first.\nFirst submit failed on duplicates.' },
+    ]);
+    await open(api);
+    const h = await screen.findByRole('heading', { name: 'Claude’s notes' });
+    const section = h.closest('section')!;
+    expect(within(section).getByText(/Traced the empty case first\./)).toBeTruthy();
+    expect(screen.getByLabelText<HTMLInputElement>('One-liner')).toBeTruthy();
+  });
+});
+
+describe('void keeps the review form’s suggestions', () => {
+  it('a sitting with no review keeps its suggested help and cause after Doesn’t count', async () => {
+    const user = userEvent.setup();
+    const api = createStubClient({ seed: false, storageKey: `sit-${Math.random()}` });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const { sitting } = await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZY',
+      problemSlug: 'valid-anagram',
+      problemTitle: 'Valid Anagram',
+      difficulty: 'Easy',
+      lang: 'python3',
+      startedAt: Date.now(),
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    });
+    // A failed first Submit with no Run before it: the form suggests No trace.
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: '01HZZZZZZZZZZZZZZZZZZZZZZX',
+          type: 'submit',
+          at: Date.now(),
+          payload: { result: { status_code: 11, status_msg: 'Wrong Answer' } },
+        },
+      ],
+    });
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText(/· suggested/)).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: 'Doesn’t count' }));
+    expect(await screen.findByText(/Doesn’t count — left out of the plan/)).toBeTruthy();
+    expect(screen.getByText(/· suggested/)).toBeTruthy();
+  });
+});

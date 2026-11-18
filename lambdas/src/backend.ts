@@ -116,6 +116,17 @@ import {
   coachAiPickOn,
   settleAiRow,
   listRecords,
+  legacyGroups,
+  normalizeCoachVoids,
+  normalizeClaudeNotes,
+  coachVoidId,
+  COACH_PLAN_MODES,
+  COACH_PLAN_MODE_ERROR,
+  CLAUDE_NOTES_OPEN_ERROR,
+  peekFill,
+  traceCommentIn,
+  traceCommentRow,
+  snapshotCode,
   coachStats,
   normalizeStatsRange,
   attemptsOf,
@@ -158,6 +169,10 @@ import type {
   CoachAttempt,
   CoachAttemptInput,
   CoachDay,
+  CoachVoid,
+  CoachVoidInput,
+  ClaudeNotesInput,
+  LegacyGroup,
   CoachFocus,
   CoachInput,
   CoachSlotInput,
@@ -250,6 +265,7 @@ import type {
   SittingEventsInput,
   SittingEventsResult,
   SittingReplayChunk,
+  SittingSummary,
   SittingStartInput,
   SittingStartResult,
   ReviewDraft,
@@ -602,6 +618,7 @@ export class BackendClient implements ApiClient {
       leetcodeRollId: null,
       coachAiPick: true,
       leetcodePremium: true,
+      coachPlanMode: 'auto',
       ...REMINDER_SETTINGS_DEFAULTS,
     };
     const row = await this.repo.getSettingsRow(opts);
@@ -1068,8 +1085,9 @@ export class BackendClient implements ApiClient {
             );
       if (written) fresh.add(e.id);
     }
+    const traced = await this.traceCommentRow(sittingId, events, sitting.summary, now);
     let status = sitting.status;
-    if (events.some((e) => isHeadEvent(e.type)))
+    if (events.some((e) => isHeadEvent(e.type)) || traced)
       status = (await this.refoldHead(sittingId, now)).status;
     const bulk = events.filter((e) => !isHeadEvent(e.type));
     const fold = (l: SittingLive) => bulk.reduce((x, e) => foldLive(x, e, now, fresh.has(e.id)), l);
@@ -1082,6 +1100,38 @@ export class BackendClient implements ApiClient {
     const duplicates = events.length - fresh.size;
     logIngest(fresh.size, duplicates, bytes);
     return { accepted: fresh.size, duplicates, skipped, version: live?.version ?? 0, status };
+  }
+  // A trace comment (docs/areas/recruiting/index.md → Coach events): the earliest snapshot before the sitting's first
+  // judged event (stored, or in this batch) whose code holds one becomes the server's own head row, once per sitting.
+  // Every snapshot in the batch, a repeat too: a call that died after storing its snapshot but before this row is
+  // finished by the retry (the put is by the snapshot's id). Only a batch with a snapshot before the stored first
+  // judged event reads the head rows. True when it wrote one.
+  private async traceCommentRow(
+    sittingId: string,
+    events: readonly { id: string; type: string; at: number; payload?: unknown }[],
+    summary: SittingSummary,
+    now: number,
+  ): Promise<boolean> {
+    const judgedAt = summary.firstJudgedAt;
+    const snaps = events.filter(
+      (e) => e.type === 'snapshot' && (judgedAt == null || e.at < judgedAt),
+    );
+    if (!snaps.length) return false;
+    const rows = await this.repo.listSittingHeadRows(sittingId);
+    // Already written: refold only if the summary hasn't taken it yet (a call that died before its refold).
+    if (rows.some((r) => r.type === 'trace-comment')) return summary.commentTrace !== 'traced';
+    const judged = [...rows, ...events].filter((x) => x.type === 'run' || x.type === 'submit');
+    const cut = Math.min(...judged.map((x) => x.at));
+    const hit = snaps
+      .filter((e) => e.at < cut)
+      .sort((a, b) => a.at - b.at)
+      .find((e) => traceCommentIn(snapshotCode(e.payload) ?? ''));
+    if (!hit) return false;
+    return this.repo.putSittingTraceRowIfAbsent(traceCommentRow(sittingId, hit), {
+      userId: this.userId,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
   // The summary from every head row, strongly consistent after this call's own writes, so a later call's set
   // contains an earlier one's; written only when it folds more rows than the stored one (never rolled back).
@@ -1459,11 +1509,13 @@ export class BackendClient implements ApiClient {
     const { dayStartHour, leetcodePremium } = settings;
     const now = this.now();
     const opts = { consistent };
-    const [sittings, attempts, days, focus] = await Promise.all([
+    const [sittings, attempts, days, focus, legacy, voids] = await Promise.all([
       this.repo.listSittings(opts),
       this.repo.listCoachAttempts(opts),
       this.repo.listCoachDays(opts),
       this.repo.getCoachFocus(opts),
+      this.repo.listLegacyLeetcode(opts),
+      this.repo.listCoachVoids(opts),
     ]);
     const today = day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
     return {
@@ -1477,6 +1529,9 @@ export class BackendClient implements ApiClient {
       aiPick: coachAiPickOn(settings),
       aiCanStart: day === undefined && this.coachPick.enabled,
       premium: leetcodePremium !== false,
+      legacy,
+      voids,
+      planMode: settings.coachPlanMode ?? 'auto',
     };
   }
   // Consistent: a read right after a coach write (a focus, a floor, a logged attempt) must see it.
@@ -1545,13 +1600,15 @@ export class BackendClient implements ApiClient {
       today: ci.today,
       sittings: ci.sittings,
       attempts: ci.attempts,
+      legacy: ci.legacy,
+      voids: ci.voids,
     });
   }
   async getCoachStats(range?: CoachStatsRange): Promise<CoachStats> {
     const r = normalizeStatsRange(range);
     const ci = await this.coachInput(undefined, true); // read right after a log or a delete, as the tools do
     return coachStats(
-      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+      attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today, ci),
       ci.today,
       r,
       coachScope(ci),
@@ -1646,7 +1703,18 @@ export class BackendClient implements ApiClient {
     for (const n of list) {
       const dup = n.help === 'solution' && peekOf(stored, n);
       if (dup) {
-        out.push(dup);
+        // A repeated peek fills what the stored one lacks (a title, a difficulty, an accept): one call is enough.
+        const fill = peekFill(dup, n);
+        const row = fill
+          ? await this.repo.casUpdate(
+              this.repo.coachAttemptShape(dup.id),
+              dup.id,
+              (cur) => ({ ...cur, ...fill }),
+              now,
+            )
+          : dup;
+        stored.splice(stored.indexOf(dup), 1, row);
+        out.push(row);
         continue;
       }
       const row = await this.repo.putCoachAttempt({
@@ -1658,6 +1726,62 @@ export class BackendClient implements ApiClient {
       stored.push(row); // a second peek on it in the same list is the same peek
       out.push(row);
     }
+    return out;
+  }
+  // The legacy history's groups (read-only), with why each doesn't count.
+  async listLegacyGroups(slug?: string): Promise<LegacyGroup[]> {
+    if (slug !== undefined && typeof slug !== 'string') throw new Error('slug must be text');
+    const [rows, voids] = await Promise.all([
+      this.repo.listLegacyLeetcode({ consistent: true }),
+      this.repo.listCoachVoids({ consistent: true }),
+    ]);
+    return legacyGroups(rows, voids).filter((g) => slug === undefined || g.slug === slug);
+  }
+  // Every target checked against the legacy rows before any write (all or nothing); each void row is a whole put
+  // of its explicit state, so a lift (void: false) and a void read the same way.
+  async setCoachVoids(inputs: CoachVoidInput[]): Promise<LegacyGroup[]> {
+    const list = normalizeCoachVoids(inputs);
+    const rows = await this.repo.listLegacyLeetcode({ consistent: true });
+    for (const v of list)
+      if (!rows.some((r) => r.day === v.day && r.problemSlug === v.slug))
+        throw new Error(`No legacy history for ${v.slug} on ${v.day}`);
+    const now = this.now();
+    for (const v of list) {
+      const id = coachVoidId(v.day, v.slug);
+      const fresh: CoachVoid = { ...this.baseAt(now), id, day: v.day, slug: v.slug, void: v.void };
+      await this.repo.casUpdate(
+        this.repo.coachVoidShape(id),
+        id,
+        (cur) => ({ ...fresh, createdAt: cur.createdAt }),
+        now,
+        { allowDeleted: true, create: () => fresh, consistent: true },
+      );
+    }
+    const touched = new Set(list.map((v) => coachVoidId(v.day, v.slug)));
+    return (await this.listLegacyGroups()).filter((g) => touched.has(coachVoidId(g.day, g.slug)));
+  }
+  // Claude's notes on ended sittings: every sitting read and checked first (exists, not open), then one CAS each on
+  // the head — never the review, which stays the user's words.
+  async setSittingClaudeNotes(items: ClaudeNotesInput[]): Promise<Sitting[]> {
+    const list = normalizeClaudeNotes(items);
+    const now = this.now();
+    // An idle sitting is ended (the close is written here, as any write's read would): Claude reads it closed.
+    for (const n of list)
+      if (isSittingOpen(await this.closeIdle(await this.mustSitting(n.sittingId), now, true), now))
+        throw new Error(CLAUDE_NOTES_OPEN_ERROR);
+    const out: Sitting[] = [];
+    for (const n of list)
+      out.push(
+        await this.repo.casUpdate(
+          this.repo.sittingShape(n.sittingId),
+          n.sittingId,
+          (cur) => ({
+            ...cur,
+            claudeNotes: n.text === null ? null : { text: n.text, updatedAt: now },
+          }),
+          now,
+        ),
+      );
     return out;
   }
   async deleteCoachAttempt(id: string): Promise<void> {
@@ -3003,6 +3127,8 @@ export class BackendClient implements ApiClient {
       const v = (patch as Record<string, unknown>)[k];
       if (v !== undefined && typeof v !== 'boolean') throw new Error(`${k} must be true or false`);
     }
+    if (patch.coachPlanMode !== undefined && !COACH_PLAN_MODES.includes(patch.coachPlanMode))
+      throw new Error(COACH_PLAN_MODE_ERROR);
     const current = await this.ensureSettings({ consistent: true });
     const now = this.now();
     // A kind switched back on pings from now on: nothing that fell due while it was off (reminders.md → §3).
@@ -3401,6 +3527,8 @@ export class BackendClient implements ApiClient {
       coachDays: await this.repo.listCoachDays(),
       coachAttempts: await this.repo.listCoachAttempts(),
       coachFocus: await this.repo.getCoachFocus(),
+      legacyLeetcodeAttempts: await this.repo.listLegacyLeetcode(),
+      coachVoids: await this.repo.listCoachVoids(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
       fluxSets: inRange(await this.repo.listAllFluxSets()),
       ...(await this.finance.exportCollections()),

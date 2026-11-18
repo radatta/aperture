@@ -10,6 +10,7 @@ import {
 // a snapshot diff in review. Synthetic context only.
 const ctx: CoachPickContext = {
   today: '2026-11-16',
+  planMode: { mode: 'balanced', due: 1 },
   candidates: [
     {
       slug: 'two-sum',

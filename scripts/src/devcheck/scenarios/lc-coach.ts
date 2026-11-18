@@ -917,7 +917,7 @@ export const lcCoach: Scenario = {
         const p = await ctx.mcp.writes.markPeeked({ sittingId: state.offId });
         if (p.sittingId !== state.offId || p.attemptId)
           fail(`mark_peeked on a sitting: ${JSON.stringify(p)}`);
-        if (p.nextDue?.dueDay !== addDays(today(), 1) || p.nextDue.track !== 'peeked')
+        if (p.nextDue?.dueDay !== addDays(today(), 1) || p.nextDue.track !== 'retry')
           fail(`mark_peeked's due: ${JSON.stringify(p.nextDue)}`);
         const c = await ctx.mcp.writes.setCauseTag({ sittingId: state.offId, cause: 'boundary' });
         const review = c.review as { cause?: string; help?: string } | null;
@@ -963,7 +963,7 @@ export const lcCoach: Scenario = {
         if (
           !a.attemptId ||
           a.nextDue?.dueDay !== addDays(today(), 1) ||
-          a.nextDue.track !== 'peeked'
+          a.nextDue.track !== 'retry'
         )
           fail(`mark_peeked: ${JSON.stringify(a)}`);
         const b = await ctx.mcp.writes.markPeeked({ slug });
@@ -1320,7 +1320,7 @@ export const lcCoach: Scenario = {
         const want: [string, { dueDay: string; track: string } | null][] = [
           [step!, { dueDay: today(), track: 'clean' }],
           [solved!, { dueDay: today(), track: 'clean' }],
-          [failed!, { dueDay: d(-2), track: 'peeked' }],
+          [failed!, { dueDay: d(-2), track: 'retry' }],
           [grad!, null],
         ];
         for (const [slug, w] of want) {

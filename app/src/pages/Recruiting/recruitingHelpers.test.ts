@@ -107,13 +107,14 @@ describe('verdict presentation', () => {
 });
 
 describe('the coach’s view helpers', () => {
-  it('suggests No trace when the trace was skipped or missing, or the first submit failed with no run', () => {
-    expect(suggestedCause(mk({}, { coach: { config: null, trace: 'skipped', nudges: 0 } }))).toBe(
-      'no-trace',
-    );
-    expect(suggestedCause(mk({}, { coach: { config: null, trace: 'none', nudges: 0 } }))).toBe(
-      'no-trace',
-    );
+  it('suggests No trace after a failed first submit: no trace comment, or no run before it', () => {
+    expect(
+      suggestedCause(
+        mk({}, { commentTrace: 'none', firstSubmit: v('wrong_answer'), runsBeforeFirstSubmit: 2 }),
+      ),
+    ).toBe('no-trace');
+    // A clean accept has no cause, traced or not.
+    expect(suggestedCause(mk({}, { commentTrace: 'none', firstSubmit: v('accepted') }))).toBeNull();
     expect(
       suggestedCause(mk({}, { firstSubmit: v('wrong_answer'), runsBeforeFirstSubmit: 0 })),
     ).toBe('no-trace');
@@ -123,9 +124,7 @@ describe('the coach’s view helpers', () => {
     expect(
       suggestedCause(mk({}, { firstSubmit: v('accepted'), runsBeforeFirstSubmit: 0 })),
     ).toBeNull();
-    expect(
-      suggestedCause(mk({}, { coach: { config: null, trace: 'traced', nudges: 0 } })),
-    ).toBeNull();
+    expect(suggestedCause(mk({}, { commentTrace: 'traced' }))).toBeNull();
     expect(suggestedCause(mk())).toBeNull();
   });
 

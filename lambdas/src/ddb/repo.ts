@@ -16,6 +16,8 @@ import type {
   HabitCheck,
   Idea,
   LeetcodeProblem,
+  LegacyLeetcodeAttempt,
+  CoachVoid,
   Sitting,
   SittingBudget,
   SittingEvent,
@@ -263,6 +265,17 @@ export class Repo {
       throw err;
     }
   }
+  // The server's own head row (a trace comment seen in a snapshot, sittings.ts traceCommentRow), once by its id.
+  async putSittingTraceRowIfAbsent(
+    row: SittingHeadRow,
+    meta: { userId: string; createdAt: number; updatedAt: number },
+  ): Promise<boolean> {
+    return this.putChildIfAbsent(
+      sk.sittingHeadRow(row.sittingId, row.id),
+      { ...row, ...meta },
+      null,
+    );
+  }
   // A sitting's head rows (what its summary is recomputed from), strongly consistent: the call that just wrote
   // one must see it. Compact, so the recompute stays cheap however large the payloads.
   async listSittingHeadRows(id: string): Promise<SittingHeadRow[]> {
@@ -450,6 +463,28 @@ export class Repo {
   async putCoachAttempt(a: CoachAttempt): Promise<CoachAttempt> {
     await this.writes.put(entityItem(this.userId, sk.coachAttempt(a.id), a));
     return a;
+  }
+  // The legacy capture's rows (`lc#`): read-only — no put exists, and none may (coach.md → Legacy history).
+  async listLegacyLeetcode(opts?: { consistent?: boolean }): Promise<LegacyLeetcodeAttempt[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.legacyLcPrefix(), opts)).map((i) =>
+        toEntity<LegacyLeetcodeAttempt>(i),
+      ),
+    );
+  }
+  async listCoachVoids(opts?: { consistent?: boolean }): Promise<CoachVoid[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.coachVoidPrefix(), opts)).map((i) =>
+        toEntity<CoachVoid>(i),
+      ),
+    );
+  }
+  coachVoidShape(id: string): CasShape<CoachVoid> {
+    return {
+      sk: sk.coachVoid(id),
+      read: (i) => toEntity<CoachVoid>(i),
+      toItem: (v) => entityItem(this.userId, sk.coachVoid(id), v),
+    };
   }
   async getCoachFocus(opts?: { consistent?: boolean }): Promise<CoachFocus | null> {
     const it = await this.doc.get(this.p(), sk.coachFocus(), opts);

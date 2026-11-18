@@ -18,10 +18,10 @@ export function useUpdateSettings() {
       // The finance overview is computed from the budget and payment day — re-read it.
       if ('financeBudgetCents' in patch || 'financePaymentDay' in patch)
         void qc.invalidateQueries({ queryKey: qk.finance() });
-      // The AI pick switch changes the day's plan (a stored pick shows or not; a pick may now be due).
-      if ('coachAiPick' in patch) void qc.invalidateQueries({ queryKey: qk.coach() });
-      // LeetCode Premium moves the coach's picks — re-read the plan, the stats and the records.
-      if ('leetcodePremium' in patch) void qc.invalidateQueries({ queryKey: qk.coach() });
+      // The AI pick switch, the plan mode and Premium move the day's plan (a stored pick shows or not, the slot mix,
+      // the candidates) — re-read the plan, the stats and the records.
+      if ('coachAiPick' in patch || 'coachPlanMode' in patch || 'leetcodePremium' in patch)
+        void qc.invalidateQueries({ queryKey: qk.coach() });
     },
   });
 }

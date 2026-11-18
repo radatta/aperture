@@ -26,12 +26,14 @@ export interface CoachPickDeps {
 // What the plan reads, for `day`, strongly consistent (the claim was written a moment ago).
 export async function readCoachInput(repo: Repo, day: string, now: number): Promise<CoachInput> {
   const opts = { consistent: true };
-  const [settings, sittings, attempts, days, focus] = await Promise.all([
+  const [settings, sittings, attempts, days, focus, legacy, voids] = await Promise.all([
     repo.getSettingsRow(opts),
     repo.listSittings(opts),
     repo.listCoachAttempts(opts),
     repo.listCoachDays(opts),
     repo.getCoachFocus(opts),
+    repo.listLegacyLeetcode(opts),
+    repo.listCoachVoids(opts),
   ]);
   return {
     today: day,
@@ -43,6 +45,10 @@ export async function readCoachInput(repo: Repo, day: string, now: number): Prom
     focus,
     aiPick: settings?.coachAiPick !== false, // switched off after the claim: no call
     aiCanStart: false,
+    premium: settings?.leetcodePremium !== false, // as getCoachToday reads it: on by default
+    legacy,
+    voids,
+    planMode: settings?.coachPlanMode ?? 'auto', // the pick keeps the mode's mix (validateCoachPick → 'mix')
   };
 }
 

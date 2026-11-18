@@ -1,4 +1,10 @@
-import { fmtDayHeading, fmtDuration, sittingMinutes, todayKey } from '@aperture/shared';
+import {
+  fmtDayHeading,
+  fmtDuration,
+  hasReviewWords,
+  sittingMinutes,
+  todayKey,
+} from '@aperture/shared';
 import type { Sitting } from '@aperture/shared';
 import { Link } from 'react-router';
 import { EmptyState } from '../../components/EmptyState';
@@ -93,7 +99,7 @@ function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
           <Text weight="medium" className="truncate">
             {sitting.problemTitle}
           </Text>
-          {sitting.review && (
+          {hasReviewWords(sitting.review) && (
             <span
               role="img"
               aria-label="reviewed"
@@ -104,6 +110,11 @@ function SittingRow({ sitting, now }: { sitting: Sitting; now: number }) {
           {sitting.difficulty && (
             <Text size="xs" tone="subtle">
               {sitting.difficulty}
+            </Text>
+          )}
+          {sitting.review?.test === true && (
+            <Text size="xs" tone="subtle" className="shrink-0">
+              Doesn’t count
             </Text>
           )}
         </div>

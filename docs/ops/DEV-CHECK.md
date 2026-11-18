@@ -361,7 +361,8 @@ user's history each run. Sessions have no delete method, so they're not ledgered
 is stopped or discarded through the dock before the timer steps, judged by the server's list.
 `timer-credit`'s `done-stop` step shortens the test user's work block to 1 minute. The settings row isn't ledgered: the step restores it in its `finally`, and because a killed run skips that, each run also puts `DEV_WORK_MIN` back right after the sweep. The same write turns the coach's AI pick off
 (`coachAiPick: false`), so no other scenario's Home or coach read starts one; `lc-coach-ai` turns it on per step and
-off in each step's `finally`.
+off in each step's `finally`. It also puts the coach's plan mode back to `auto` (`coach-fixes` sets one per step and
+restores it in its `finally`), so a killed run never leaves a later scenario's plan in another mix.
 `plan-write-refetch` starts three work timers on its own tasks through the API (`startSession`, on a ledgered task only), right before its timer steps, and stops them
 through the night rows; a failed step skips the rest of its scenario, so a timer it leaves running is cleared by
 `timer-credit`'s `clearTimers` later in the run, and the run's ledger cleanup deletes the task beneath it.

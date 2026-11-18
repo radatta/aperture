@@ -244,12 +244,16 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // would have every later timer hit Done at 60 s. The coach's AI pick goes off too (absent reads as on): the
     // first plan read of a pickable day starts the day's one Opus pick, so no scenario's Home or coach read may —
     // only lc-coach-ai's steps, which turn it on for themselves. LeetCode Premium goes back on (lc-coach's progress
-    // step switches it off and back on).
+    // step switches it off and back on), and the plan mode back to auto (coach-fixes sets one per step).
     const settings = await api.reads.getSettings();
     const base = {
       ...(settings.pomodoroWorkMin !== DEV_WORK_MIN ? { pomodoroWorkMin: DEV_WORK_MIN } : {}),
       ...(settings.coachAiPick !== false ? { coachAiPick: false } : {}),
       ...(settings.leetcodePremium === false ? { leetcodePremium: true } : {}),
+      // coach-fixes sets a plan mode for its own steps; a killed run would leave every later plan in that mix.
+      ...(settings.coachPlanMode !== undefined && settings.coachPlanMode !== 'auto'
+        ? { coachPlanMode: 'auto' as const }
+        : {}),
     };
     if (Object.keys(base).length) await api.writes.updateSettings(base);
     baseline = new Set((await api.reads.listTasks()).map((t) => t.id));

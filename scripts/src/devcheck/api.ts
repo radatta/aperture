@@ -282,6 +282,8 @@ export interface DevSettings extends Required<DevReminderSettings> {
   // read starts the day's one pick; lc-coach-ai turns it on for its own steps and off again in their `finally`.
   coachAiPick?: boolean;
   leetcodePremium?: boolean; // lc-coach's progress step switches it off and back on (absent = on)
+  // The coach's plan mode (absent = auto). coach-fixes sets it for its own steps and puts the prior one back.
+  coachPlanMode?: DevCoachPlanMode;
 }
 
 // The slices of a Roll and a LeetCode sitting the lc-sittings scenario writes and reads
@@ -321,7 +323,7 @@ export interface DevSitting {
   closedBy?: 'idle' | null; // idle close — absent on heads from before it
   reopenedAt?: number | null;
   idleMs?: number;
-  review?: DevSittingReview | null; // PR C — absent on heads from before reviews
+  review?: (DevSittingReview & { cause?: string | null; test?: boolean }) | null; // PR C — absent on heads from before reviews; `test` is the void
   summary: {
     runs: number;
     submits: number;
@@ -338,7 +340,9 @@ export interface DevSitting {
       trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
       nudges: number;
     };
+    commentTrace?: 'traced' | 'none'; // coach-fixes: the trace comment before the first judged event
   };
+  claudeNotes?: { text: string; updatedAt: number } | null; // coach-fixes: Claude's notes, beside the review
 }
 export interface DevSittingReview {
   insight: string | null;
@@ -418,6 +422,8 @@ export interface DevCoachAttemptInput {
   outcome: 'clean' | 'solved' | 'failed';
   minutes?: number | null;
   note?: string | null;
+  title?: string | null; // a problem off the roadmap (coach-fixes)
+  difficulty?: 'Easy' | 'Medium' | 'Hard';
 }
 export interface DevCoachToday {
   day: string;
@@ -426,11 +432,29 @@ export interface DevCoachToday {
   slots: DevCoachSlot[];
   floor: { slug: string; on: boolean; done: boolean } | null;
   offPlan: { sittingId: string; slug: string }[];
-  due: { slug: string; dueDay: string }[];
-  next48h: { slug: string; dueDay: string }[];
+  due: { slug: string; dueDay: string; track?: string }[];
+  next48h: { slug: string; dueDay: string; track?: string }[];
   momentum: { activeDays: number; lastActiveDay: string | null };
   unreviewed: { sittingId: string; slug: string }[];
   ai?: DevCoachAiView | null; // null: the AI pick is off, or nothing to pick from
+  // coach-fixes: ended sittings with no Claude's notes yet, and the day's slot mix.
+  unnoted?: { sittingId: string; slug: string; title: string; day: string }[];
+  planMode?: DevCoachPlanModeView;
+}
+// The coach's plan mode (packages/shared/src/coach.ts CoachPlanMode, CoachPlanModeView).
+export type DevCoachPlanMode = 'auto' | 'balanced' | 'catch-up';
+export interface DevCoachPlanModeView {
+  setting: DevCoachPlanMode;
+  mode: 'balanced' | 'catch-up';
+  due: number;
+  line: string; // "Catch-up: 10 due · auto"
+}
+// A legacy group's stored void state (packages/shared/src/types.ts CoachVoid), as exportData answers it.
+export interface DevCoachVoid {
+  id: string; // `${day}#${slug}`
+  day: string;
+  slug: string;
+  void: boolean;
 }
 // What getCoachStats answers — the fields the Patterns tab's steps read.
 export interface DevCoachStats {
@@ -450,10 +474,12 @@ export interface DevCoachAttempt {
 export interface DevProblemRecord {
   slug: string;
   title: string;
+  difficulty?: string | null;
+  everAccepted?: boolean;
   lastDay: string;
   sittingIds: string[];
   peeked: boolean;
-  schedule: { track: string; dueDay: string; graduated: boolean } | null;
+  schedule: { track: string; step?: number; dueDay: string; graduated: boolean } | null;
   historical?: { tries: number; firstDay: string; lastDay: string } | null;
   lists?: string[];
 }
@@ -789,6 +815,10 @@ export function createApiClient({
           coachFocus: { pattern: string; sinceDay: string; source?: 'override' | 'ai' } | null;
         }>('exportData', [])
       ).coachFocus,
+    // The legacy groups' stored void states (coach-fixes) — the export's. Dev has no legacy rows (nothing writes
+    // lc# since PR 147), so set_void on a legacy day is refused there and this stays empty.
+    listCoachVoids: async () =>
+      (await call<{ coachVoids?: DevCoachVoid[] }>('exportData', [])).coachVoids ?? [],
     // One day's stored coach row (the floor, the slot changes, the AI pick) — the export's; null when none.
     getCoachDay: async (day: string) =>
       (await call<{ coachDays: DevCoachDay[] }>('exportData', [])).coachDays.find(

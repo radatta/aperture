@@ -118,7 +118,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **sittings** — one go at one LeetCode problem, written by the browser extension through the ingest methods; the model, its folds and its caps live in [recruiting](../areas/recruiting/index.md) → _Sittings_ (`packages/shared/src/sittings.ts`).
 
-**leetcodeAttempts** — **dormant** (lc-redesign, 2026-11): no reader since A1, no writer since PR D (2026-11) removed `recordLeetcodeAttempt`. The rows stay in both tables as data at rest — no migration, no delete, not exported, SK prefix `lc#` reserved (`keys.ts`). As written: one row per LeetCode submission, accepted **and** wrong, by the v1 browser extension (device token), never by the app.
+**leetcodeAttempts** — **read-only history**: no writer since PR D (2026-11) removed `recordLeetcodeAttempt`; read again since coach-fixes, by the coach's fold as legacy attempts ([coach.md](../areas/recruiting/coach.md) → _Legacy history_), and exported (`legacyLeetcodeAttempts`). No migration, no delete, no put in `repo.ts`; SK prefix `lc#` (`keys.ts`). As written: one row per LeetCode submission, accepted **and** wrong, by the v1 browser extension (device token), never by the app.
 
 - `id · day · problemSlug · problemTitle · verdict · submittedAt · lang · runtimeMs? · memory? · leetcodeSubmissionId · frontendId? · difficulty? · topicTags?`
 - `verdict`: `accepted | wrong_answer | time_limit | runtime_error | compile_error | memory_limit | other`, normalized server-side from LeetCode's raw `status_code`/`status_msg` (`normalizeVerdict`, which the sittings still use).
@@ -146,7 +146,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **gcalSyncStates** — the two-way calendar cursor, one per connected Google account (`id = sub`): `calendarId · syncToken · lastPulledAt · lastSyncedAt · lastPullError · lastPullErrorAt`. Exported, no credentials; a null token means a full resync ([calendar](../areas/calendar/index.md) → Two-way sync).
 
-**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc. Also the calendar wiring — `googleAccounts` (up to two, `sub · email`; `sub` is the key and the refresh token lives in SSM under it; written server-side only, never client-patched), `calendarShapeRefs`, `calendarWriteDefault`, `autoCalendar`, the waking window `dayFocusStart` / `dayEndHour` — and the Roll links `fluxRollId` / `leetcodeRollId`, and `leetcodePremium` (default on: the LeetCode coach may pick Premium problems).
+**settings** — singleton: `dayStartHour` (default 4), pomodoro work/break durations, theme override, `financeBudgetCents` and `financePaymentDay` (defaults in `finance.ts`), the reminder toggles `remindTimed` / `remindDueDay` / `remindPlanned` (default on), etc. Also the calendar wiring — `googleAccounts` (up to two, `sub · email`; `sub` is the key and the refresh token lives in SSM under it; written server-side only, never client-patched), `calendarShapeRefs`, `calendarWriteDefault`, `autoCalendar`, the waking window `dayFocusStart` / `dayEndHour` — and the Roll links `fluxRollId` / `leetcodeRollId`, and `leetcodePremium` (default on: the LeetCode coach may pick Premium problems), `coachPlanMode` (default `auto`: the coach's slot mix).
 
 ### 2.3 Rules distilled (from the poke-holes pass)
 
@@ -171,7 +171,7 @@ SK (type-prefixed range keys):
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
-  lc#<day>#<ulid>               legacy LeetCode attempts — dormant since PR D (2026-11): no reader, no writer; prefix reserved
+  lc#<day>#<ulid>               legacy LeetCode attempts — no writer since PR D (2026-11); read by the coach (coach-fixes)
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts
   lcs#<id>#budget               a sitting's capture budget (reserved before every events write; internal)

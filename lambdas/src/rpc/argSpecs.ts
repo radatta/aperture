@@ -22,6 +22,8 @@ import type {
   SittingReviewPatch,
   CoachSlotInput,
   CoachAttemptInput,
+  CoachVoidInput,
+  ClaudeNotesInput,
   PatternId,
   SubscribePushInput,
   UpdateCategoryInput,
@@ -174,6 +176,8 @@ const SITTING_REVIEW_KEYS = keysOf<SittingReviewInput>({
 });
 const REVIEW_PATCH_KEYS = keysOf<SittingReviewPatch>({ cause: true, help: true, test: true });
 const SLOT_KEYS = keysOf<CoachSlotInput>({ slug: true, action: true, toSlug: true });
+const VOID_KEYS = keysOf<CoachVoidInput>({ day: true, slug: true, void: true });
+const NOTES_KEYS = keysOf<ClaudeNotesInput>({ sittingId: true, text: true });
 const ATTEMPT_KEYS = keysOf<CoachAttemptInput>({
   slug: true,
   title: true,
@@ -184,6 +188,8 @@ const ATTEMPT_KEYS = keysOf<CoachAttemptInput>({
   minutes: true,
   note: true,
   historical: true,
+  difficulty: true,
+  accepted: true,
 });
 const PUSH_KEYS = keysOf<SubscribePushInput>({ endpoint: true, keys: true, label: true });
 
@@ -397,6 +403,7 @@ export const RPC_ARGS = {
         remindDueDay: opt(bool),
         remindPlanned: opt(bool),
         coachAiPick: opt(bool),
+        coachPlanMode: opt(lit('auto', 'balanced', 'catch-up')),
       },
       { notObject: 'settings patch must be an object' },
     ),
@@ -457,6 +464,12 @@ export const RPC_ARGS = {
     arr(owned<CoachAttemptInput>('attempt', ATTEMPT_KEYS, { object: true }), BATCH_MAX),
   ],
   deleteCoachAttempt: [id],
+  listLegacyGroups: [opt(str(KEY_MAX))],
+  // The normalizers (coach.ts) check every field and the batch caps with their own messages.
+  setCoachVoids: [arr(owned<CoachVoidInput>('void', VOID_KEYS, { object: true }), BATCH_MAX)],
+  setSittingClaudeNotes: [
+    arr(owned<ClaudeNotesInput>('note', NOTES_KEYS, { object: true }), BATCH_MAX),
+  ],
 
   // Flux — fluxSetError checks every field of a set and the row is rebuilt from them.
   recordFluxSet: [owned('flux set', undefined, { object: true })],

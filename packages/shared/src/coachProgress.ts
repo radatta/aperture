@@ -12,7 +12,8 @@ import type { CatalogProblem, PatternId } from './neetcode150';
 
 // --- One problem's status ---
 // untried; earlier = only history-only solves, one accepted; else the newest live try's: clean, solved, peeked (the
-// solution read), not-yet (not accepted, no peek). A history-only problem never accepted reads not-yet. Done is a
+// solution read), not-yet (not accepted, no peek). A history-only problem accepted only with the solution read reads
+// peeked; never accepted, not-yet. Done is a
 // clean or solved try (a peek never counts), so a failed re-solve shows in the square (gold) but never takes a solved
 // problem off the count.
 export type ProblemState = 'untried' | 'earlier' | 'clean' | 'solved' | 'peeked' | 'not-yet';
@@ -37,7 +38,9 @@ export function problemStatus(r: ProblemRecord | null, today: string): ProblemSt
   const state: ProblemState = !last
     ? r.tries.some((t) => t.outcome !== 'failed')
       ? 'earlier'
-      : 'not-yet'
+      : r.tries.some((t) => t.accepted && t.help === 'solution')
+        ? 'peeked'
+        : 'not-yet'
     : last.outcome === 'failed'
       ? last.help === 'solution'
         ? 'peeked'

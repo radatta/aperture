@@ -32,9 +32,12 @@ import type {
   CoachDay,
   CoachDayAi,
   CoachFocus,
+  CoachPlanMode,
   CoachSlotChange,
+  CoachVoid,
   HelpLevel,
   LeetcodeVerdict,
+  LegacyLeetcodeAttempt,
   Sitting,
   SlotKind,
 } from './types';
@@ -51,22 +54,26 @@ export const ATTEMPT_OUTCOMES: readonly AttemptOutcome[] = ['clean', 'solved', '
 
 // --- Parameters (never inline, so a later A/B arm is a parameter) ---
 export interface CoachParams {
-  gaps: { clean: readonly number[]; peeked: readonly number[] }; // days to the next re-solve, per step
+  // Days to the next re-solve, per step. `retry` is the track a failed attempt lands on (never accepted, or the
+  // solution read) — named apart from the peeked flag, which only says the solution was read.
+  gaps: { clean: readonly number[]; retry: readonly number[] };
   lastStepWindowDays: number; // the last step's due window
   capMin: number; // a slot's time cap
   carryOverDays: number; // a carry-over comes from the last active day only this recently
   blockDays: number; // active days a focus pattern holds
   swappedBackDays: number; // a problem swapped out this recently goes to the back of `new`
   minPracticeMin: number; // shorter, with no accepted submit, is a test sitting
+  catchUp: { enterDue: number; exitDue: number }; // Auto plan mode: catch-up from enterDue due, balanced below exitDue
 }
 export const COACH_PARAMS: CoachParams = {
-  gaps: { clean: [3, 7, 14], peeked: [1, 3, 7, 14] },
+  gaps: { clean: [3, 7, 14], retry: [1, 3, 7, 14] },
   lastStepWindowDays: 7,
   capMin: 30,
   carryOverDays: 2,
   blockDays: 3,
   swappedBackDays: 3,
   minPracticeMin: 3,
+  catchUp: { enterDue: 10, exitDue: 5 },
 };
 const MAX_PER_KIND = 2;
 const MAX_SLOTS = 4;
@@ -127,10 +134,10 @@ export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help:
   if (!accepted || help === 'solution') return 'failed' as const;
   return firstSubmitAccepted && help === 'none' ? ('clean' as const) : ('solved' as const);
 }
-// The trace state the extension's card left at the first submit (sittings.ts foldCoach): only all three inputs is a
-// hit; a sitting with no coach data, or with the card switched off in its config, counts nowhere.
-const tracedAtFirstSubmit = (c: Sitting['summary']['coach']): boolean | null =>
-  !c?.trace || c.config?.trace === false ? null : c.trace === 'traced';
+// The trace before the first judged event: the trace comment (sittings.ts commentTrace) is the only source; a sitting
+// folded before the rule counts nowhere.
+const tracedOf = (s: Sitting['summary']): boolean | null =>
+  s.commentTrace ? s.commentTrace === 'traced' : null;
 // A sitting's minutes on its problem: to the first accept (both on the extension's clock), else the whole sitting
 // once it ended; null while it's open with no accept. At least 1.
 export function sittingTryMinutes(
@@ -166,7 +173,7 @@ export function sittingAttempt(s: Sitting): Attempt {
     submits: s.summary.submits,
     runs: s.summary.runs,
     runFirst: first ? s.summary.runsBeforeFirstSubmit > 0 : null,
-    traced: first ? tracedAtFirstSubmit(s.summary.coach) : null,
+    traced: first ? tracedOf(s.summary) : null,
     lastError:
       last && last.verdict !== 'accepted'
         ? { verdict: last.verdict, statusMsg: last.statusMsg }
@@ -185,13 +192,13 @@ export function manualAttempt(a: CoachAttempt): Attempt {
     slug: a.slug,
     title: a.title ?? cat?.title ?? a.slug,
     pattern: cat?.pattern ?? 'other',
-    difficulty: cat?.difficulty ?? null,
+    difficulty: cat?.difficulty ?? a.difficulty ?? null,
     day: a.day,
     at: a.at,
     outcome: a.outcome,
     help: a.help,
     cause: a.cause,
-    accepted: a.outcome !== 'failed',
+    accepted: a.accepted ?? a.outcome !== 'failed', // a peek after an accept stays failed, but accepted
     firstSubmitAccepted: a.outcome === 'clean', // a manual solved or failed was no first-try accept
     submits: 0,
     runs: 0,
@@ -228,8 +235,9 @@ export interface Attempt {
   historical: boolean; // a history-only solve (CoachAttempt.historical): seen, never scheduled or counted
   sittingIds: string[]; // newest first
   attemptIds: string[]; // the logged attempts' (CoachAttempt) ids, newest first
-  sources: ('sitting' | CoachAttempt['source'])[];
+  sources: AttemptSource[];
 }
+export type AttemptSource = 'sitting' | 'legacy' | CoachAttempt['source'];
 const HELP_RANK: Record<HelpLevel, number> = { none: 0, hint: 1, solution: 2 };
 // Same-day pieces on one problem fold into one attempt, judged as one first try: clean only when the earliest
 // piece with a submit was a first-submit accept and no help was taken all day; accepted anywhere → solved; else
@@ -246,7 +254,12 @@ function foldDay(parts: Attempt[]): Attempt {
   const outcome = outcomeOf(accepted, first?.firstSubmitAccepted === true, help);
   return {
     ...last,
-    title: sorted.find((p) => p.sources.includes('sitting'))?.title ?? last.title,
+    // A captured title (a sitting's, then the legacy capture's) over a logged one, and any over the bare slug.
+    title:
+      sorted.find((p) => p.sources.includes('sitting'))?.title ??
+      sorted.find((p) => p.sources.includes('legacy'))?.title ??
+      [...sorted].reverse().find((p) => p.title !== p.slug)?.title ??
+      last.title,
     pattern: sorted.find((p) => p.pattern !== 'other')?.pattern ?? last.pattern,
     difficulty: sorted.find((p) => p.difficulty)?.difficulty ?? null,
     outcome,
@@ -273,17 +286,20 @@ function foldDay(parts: Attempt[]): Attempt {
 // Every counted attempt, oldest first. An open sitting is not an attempt yet (it's today's `in-progress`) — except
 // one from before `today`: a sitting left open overnight counts on its own day, so the day's plan doesn't move
 // when a later Start ends it.
+// `more`: the legacy capture's rows and the stored voids (legacyAttempts) — every coach read passes its input's.
 export function attemptsOf(
   sittings: readonly Sitting[],
   manual: readonly CoachAttempt[],
   now: number,
   params: CoachParams = COACH_PARAMS,
   today?: string,
+  more: Pick<CoachInput, 'legacy' | 'voids'> = {},
 ): Attempt[] {
   const settled = (s: Sitting) => !isSittingOpen(s, now) || (today !== undefined && s.day < today);
   return foldDays([
     ...sittings.filter((s) => settled(s) && countsAsPractice(s, now, params)).map(sittingAttempt),
     ...manual.filter((a) => a.deletedAt === null && a.historical !== true).map(manualAttempt),
+    ...legacyAttempts(more.legacy ?? [], more.voids ?? []),
   ]);
 }
 // The history-only solves (logged with `historical`), folded by day the same way, oldest first. They never reach
@@ -304,9 +320,110 @@ function foldDays(parts: Attempt[]): Attempt[] {
     .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.at - b.at));
 }
 
+// --- Legacy history: the pre-sittings extension's submissions (lc#, read-only; coach.md → Legacy history) ---
+export const COACH_VOIDS_MAX = 50;
+export const coachVoidId = (day: string, slug: string) => `${day}#${slug}`;
+export interface LegacyGroup {
+  day: string;
+  slug: string;
+  title: string;
+  difficulty: Difficulty | null;
+  submits: number;
+  accepted: boolean;
+  firstSubmitAccepted: boolean;
+  counted: boolean;
+  voidedBy: 'you' | null; // a stored void: true
+}
+// Whether a legacy (day, slug) group counts: every one does until a stored void row says void: true.
+export function legacyVoidedBy(
+  day: string,
+  slug: string,
+  voids: readonly CoachVoid[],
+): LegacyGroup['voidedBy'] {
+  const row = voids.find((v) => v.deletedAt === null && v.day === day && v.slug === slug);
+  return row?.void ? 'you' : null;
+}
+// Every legacy (day, slug) group, oldest day first, with whether it counts.
+export function legacyGroups(
+  rows: readonly LegacyLeetcodeAttempt[],
+  voids: readonly CoachVoid[],
+): LegacyGroup[] {
+  const groups = new Map<string, LegacyLeetcodeAttempt[]>();
+  for (const r of rows) {
+    if (r.deletedAt !== null) continue;
+    const k = `${r.day} ${r.problemSlug}`;
+    groups.set(k, [...(groups.get(k) ?? []), r]);
+  }
+  return [...groups.values()]
+    .map((list) => {
+      const sorted = [...list].sort((a, b) => a.submittedAt - b.submittedAt);
+      const first = sorted[0]!;
+      const cat = catalogProblem(first.problemSlug);
+      const voidedBy = legacyVoidedBy(first.day, first.problemSlug, voids);
+      return {
+        day: first.day,
+        slug: first.problemSlug,
+        title: cat?.title ?? (first.problemTitle || first.problemSlug),
+        difficulty: cat?.difficulty ?? asDifficulty(first.difficulty),
+        submits: sorted.length,
+        accepted: sorted.some((r) => r.verdict === 'accepted'),
+        firstSubmitAccepted: first.verdict === 'accepted',
+        counted: voidedBy === null,
+        voidedBy,
+      };
+    })
+    .sort((a, b) => a.day.localeCompare(b.day) || a.slug.localeCompare(b.slug));
+}
+// The counted legacy groups as attempt pieces: judged like a sitting's submits (the earliest one decides the first
+// try), no help (the capture couldn't see a peek; a logged peek the same day still wins in foldDay), no runs.
+export function legacyAttempts(
+  rows: readonly LegacyLeetcodeAttempt[],
+  voids: readonly CoachVoid[],
+): Attempt[] {
+  if (!rows.length) return [];
+  const bySlugDay = new Map<string, LegacyLeetcodeAttempt[]>();
+  for (const r of rows) {
+    if (r.deletedAt !== null || legacyVoidedBy(r.day, r.problemSlug, voids) !== null) continue;
+    const k = `${r.day} ${r.problemSlug}`;
+    bySlugDay.set(k, [...(bySlugDay.get(k) ?? []), r]);
+  }
+  return [...bySlugDay.values()].map((list) => {
+    const sorted = [...list].sort((a, b) => a.submittedAt - b.submittedAt);
+    const first = sorted[0]!;
+    const last = sorted[sorted.length - 1]!;
+    const cat = catalogProblem(first.problemSlug);
+    const accepted = sorted.some((r) => r.verdict === 'accepted');
+    const firstSubmitAccepted = first.verdict === 'accepted';
+    return {
+      slug: first.problemSlug,
+      title: cat?.title ?? (first.problemTitle || first.problemSlug),
+      pattern: cat?.pattern ?? patternOfTags(first.topicTags),
+      difficulty: cat?.difficulty ?? asDifficulty(first.difficulty),
+      day: first.day,
+      at: first.submittedAt,
+      outcome: outcomeOf(accepted, firstSubmitAccepted, 'none'),
+      help: 'none',
+      cause: null,
+      accepted,
+      firstSubmitAccepted,
+      submits: sorted.length,
+      runs: 0,
+      runFirst: null,
+      traced: null,
+      lastError: last.verdict !== 'accepted' ? { verdict: last.verdict, statusMsg: null } : null,
+      minutes: null, // the capture kept no clock
+      note: null,
+      historical: false,
+      sittingIds: [],
+      attemptIds: [],
+      sources: ['legacy'],
+    };
+  });
+}
+
 // --- The re-solve scheduler ---
 export interface ResolveState {
-  track: 'clean' | 'peeked';
+  track: 'clean' | 'retry';
   step: number; // index into the track's gaps
   lastDay: string;
   dueDay: string;
@@ -335,7 +452,7 @@ function nextState(
   a: Pick<Attempt, 'day' | 'outcome'>,
   params: CoachParams,
 ): ResolveState {
-  if (a.outcome === 'failed') return stepState('peeked', 0, a.day, params);
+  if (a.outcome === 'failed') return stepState('retry', 0, a.day, params);
   if (!st) return stepState('clean', 0, a.day, params);
   if (st.graduated) return { ...st, lastDay: a.day };
   if (a.outcome === 'solved') return stepState(st.track, st.step, a.day, params);
@@ -344,8 +461,8 @@ function nextState(
   return { ...st, lastDay: a.day, dueBy: null, graduated: true };
 }
 // One problem's attempts, oldest first → its schedule. A first try clean or solved starts the clean track, a
-// failed one the peeked track; a clean re-solve steps on (past the last → graduated), a solved one repeats the
-// same gap from its day, a failed one restarts the peeked track.
+// failed one the retry track; a clean re-solve steps on (past the last → graduated), a solved one repeats the
+// same gap from its day, a failed one restarts the retry track.
 export function resolveState(
   attempts: readonly Pick<Attempt, 'day' | 'outcome'>[],
   params: CoachParams = COACH_PARAMS,
@@ -386,11 +503,13 @@ export interface ProblemTry {
   outcome: AttemptOutcome;
   help: HelpLevel;
   cause: CauseTag | null;
+  accepted: boolean; // accepted that day, a peek too (outcome stays failed with the solution read)
   minutes: number | null;
   note: string | null;
   historical: boolean;
   sittingIds: string[];
   attemptIds: string[];
+  sources: AttemptSource[]; // where the try came from: a sitting, a logged attempt, the legacy capture
 }
 // The base fields come from the live tries when there are any, else from the history-only ones; the schedule only
 // ever from live tries, so a history-only problem never comes due. `history` is historyAttemptsOf's.
@@ -417,9 +536,12 @@ export function problemRecords(
     );
     return {
       slug,
-      title: cat?.title ?? last.title,
+      // Off the catalog: the newest real title (a later untitled log must not revert it to the slug), the newest
+      // difficulty known.
+      title: cat?.title ?? [...list].reverse().find((a) => a.title !== slug)?.title ?? last.title,
       pattern: cat?.pattern ?? last.pattern,
-      difficulty: cat?.difficulty ?? last.difficulty,
+      difficulty:
+        cat?.difficulty ?? [...list].reverse().find((a) => a.difficulty)?.difficulty ?? null,
       inCatalog: !!cat,
       attempts: list.length,
       firstDay: first.day,
@@ -448,11 +570,13 @@ export function problemRecords(
         outcome: a.outcome,
         help: a.help,
         cause: a.cause,
+        accepted: a.accepted,
         minutes: a.minutes,
         note: a.note,
         historical: a.historical,
         sittingIds: a.sittingIds,
         attemptIds: a.attemptIds,
+        sources: a.sources,
       })),
     };
   });
@@ -621,8 +745,22 @@ export interface CoachToday {
     missedYesterday: boolean;
   };
   unreviewed: { sittingId: string; slug: string; title: string }[];
+  // Ended sittings with no Claude's notes yet (the last NOTES_CATCHUP_DAYS days, newest first, ≤ 20): a new thread
+  // offers to write them (set_claude_notes) — the catch-up when the user left without telling it.
+  unnoted: { sittingId: string; slug: string; title: string; day: string }[];
   ai: CoachAiView | null; // null: the AI pick is off, or nothing to pick from
+  planMode: CoachPlanModeView;
 }
+// The day's slot mix: the setting, the mode it resolved to today, the due count it read, and the one line a
+// client shows ("Catch-up: 31 due").
+export interface CoachPlanModeView {
+  setting: CoachPlanMode;
+  mode: 'balanced' | 'catch-up';
+  due: number;
+  line: string;
+}
+export const NOTES_CATCHUP_DAYS = 14;
+const NOTES_CATCHUP_MAX = 20;
 // The day's AI pick as the plan shows it. `due`: a pick should start (startCoachPick); `pending`: it's running —
 // the slots are the rules' until it lands, and a client shows neither; `fallback`: the rules, said out loud.
 export interface CoachAiView {
@@ -653,7 +791,15 @@ export interface CoachInput {
   aiPick?: boolean; // the setting (and the feature) is on: a stored AI pick overlays the rule slots
   aiCanStart?: boolean; // and a pick may start now: the server's today, with a worker to run it
   premium?: boolean; // Settings.leetcodePremium: Premium problems can be picked; absent = never
+  legacy?: readonly LegacyLeetcodeAttempt[]; // the pre-sittings capture (read-only), alive
+  voids?: readonly CoachVoid[]; // legacy groups' stored void states
+  planMode?: CoachPlanMode; // the setting; absent → auto
 }
+// The CoachInput fields attemptsOf reads beyond the sittings and logged attempts.
+const moreOf = (ci: Pick<CoachInput, 'legacy' | 'voids'>) => ({
+  legacy: ci.legacy,
+  voids: ci.voids,
+});
 
 const UP: Record<Difficulty, Difficulty | null> = { Easy: 'Medium', Medium: 'Hard', Hard: null };
 const DIFF_RANK: Record<Difficulty, number> = { Easy: 0, Medium: 1, Hard: 2 };
@@ -691,7 +837,7 @@ export function easierIn(
 const resolveReason = (r: ProblemRecord, today: string) => {
   const due = r.schedule!.dueDay;
   const when = due === today ? 'Due today' : `Due since ${fmtSpokenDay(due, today)}`;
-  return `Re-solve today: blank editor, no hints. ${when} (${r.schedule!.track === 'peeked' ? 'peeked or failed' : 'clean'} track, step ${r.schedule!.step + 1}); last tried ${fmtSpokenDay(r.lastDay, today)}`;
+  return `Re-solve today: blank editor, no hints. ${when} (${r.schedule!.track} track, step ${r.schedule!.step + 1}); last tried ${fmtSpokenDay(r.lastDay, today)}`;
 };
 const queueItem = (r: ProblemRecord, h: number): QueueItem => ({
   slug: r.slug,
@@ -720,14 +866,15 @@ export interface CoachPools {
   stretch: CatalogProblem[];
   cands: Record<SlotKind, { slug: string; reason: string }[]>; // each kind's, in the rules' order
   row: CoachDay | null; // today's
+  planMode: CoachPlanModeView;
 }
 // From state as of the start of the day: carry-over (the last active day's unaccepted, unpeeked problem, if
 // within carryOverDays), new (the focus pattern's next unseen problem), re-solve (the oldest due, other patterns
-// first, peeked track first), stretch (one difficulty up in the focus pattern, else an unseen Medium from the
+// first, retry track first), stretch (one difficulty up in the focus pattern, else an unseen Medium from the
 // next-ranked pattern).
 export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS): CoachPools {
   const { today, now } = input;
-  const all = attemptsOf(input.sittings, input.attempts, now, params, today).filter(
+  const all = attemptsOf(input.sittings, input.attempts, now, params, today, moreOf(input)).filter(
     (a) => a.day <= today,
   );
   const before = all.filter((a) => a.day < today);
@@ -768,7 +915,7 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
     .sort(
       (a, b) =>
         a.schedule!.dueDay.localeCompare(b.schedule!.dueDay) ||
-        (a.schedule!.track === b.schedule!.track ? 0 : a.schedule!.track === 'peeked' ? -1 : 1) ||
+        (a.schedule!.track === b.schedule!.track ? 0 : a.schedule!.track === 'retry' ? -1 : 1) ||
         a.slug.localeCompare(b.slug),
     );
   // The carry-over leaves the re-solve list (and the due list) for the day: it's already a slot.
@@ -790,6 +937,7 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
       : []),
   ];
 
+  const planMode = planModeOf(input.planMode ?? 'auto', before, today, due.length, params);
   const cands: CoachPools['cands'] = {
     'carry-over': carry.map((a) => ({
       slug: a.slug,
@@ -803,10 +951,14 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
       slug: r.slug,
       reason: resolveReason(r, today),
     })),
-    stretch: stretch.map((c) => ({
-      slug: c.slug,
-      reason: `Stretch: ${c.difficulty} in ${PATTERN_NAMES[c.pattern]}`,
-    })),
+    // Catch-up takes no stretch: the slots go to the re-solves.
+    stretch:
+      planMode.mode === 'catch-up'
+        ? []
+        : stretch.map((c) => ({
+            slug: c.slug,
+            reason: `Stretch: ${c.difficulty} in ${PATTERN_NAMES[c.pattern]}`,
+          })),
   };
   const row = input.days.find((d) => d.day === today) ?? null;
   return {
@@ -822,7 +974,50 @@ export function coachPools(input: CoachInput, params: CoachParams = COACH_PARAMS
     stretch,
     cands,
     row,
+    planMode,
   };
+}
+
+// --- Plan mode (coach.md → Plan mode) ---
+// Auto's state, derived by replay so a read writes nothing: day by day from the first attempt, count the problems
+// due (not graduated, due that day or earlier, from attempts before the day); catch-up from enterDue, back to
+// balanced below exitDue, unchanged in between. Reads only attempts before `today`, so it holds still all day.
+export function autoCatchUp(
+  before: readonly Attempt[],
+  today: string,
+  params: CoachParams = COACH_PARAMS,
+): boolean {
+  if (!before.length) return false;
+  const states = new Map<string, ResolveState>();
+  let i = 0;
+  let on = false;
+  for (let d = before[0]!.day; d <= today; d = addDays(d, 1)) {
+    for (; i < before.length && before[i]!.day < d; i++) {
+      const a = before[i]!;
+      states.set(a.slug, nextState(states.get(a.slug) ?? null, a, params));
+    }
+    let n = 0;
+    for (const st of states.values()) if (!st.graduated && st.dueDay <= d) n += 1;
+    if (n >= params.catchUp.enterDue) on = true;
+    else if (n < params.catchUp.exitDue) on = false;
+  }
+  return on;
+}
+export const COACH_PLAN_MODES: readonly CoachPlanMode[] = ['auto', 'balanced', 'catch-up'];
+export const COACH_PLAN_MODE_ERROR = 'coachPlanMode must be auto, balanced or catch-up';
+export const coachPlanModeOf = (s: { coachPlanMode?: CoachPlanMode }): CoachPlanMode =>
+  s.coachPlanMode ?? 'auto';
+function planModeOf(
+  setting: CoachPlanMode,
+  before: readonly Attempt[],
+  today: string,
+  due: number,
+  params: CoachParams,
+): CoachPlanModeView {
+  const mode =
+    setting === 'auto' ? (autoCatchUp(before, today, params) ? 'catch-up' : 'balanced') : setting;
+  const line = `${mode === 'catch-up' ? 'Catch-up' : 'Balanced'}: ${due} due${setting === 'auto' ? ' · auto' : ''}`;
+  return { setting, mode, due, line };
 }
 
 // The rules' pick: one of each kind; an empty kind lets the next kind (stretch wraps to new) take a second; at
@@ -846,21 +1041,30 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     stretch: [],
   };
   const used = new Set<string>();
-  const take = (k: SlotKind) => {
+  const take = (k: SlotKind, max = MAX_PER_KIND) => {
     const c = cands[k].find((x) => !used.has(x.slug));
-    if (!c || picked[k].length >= MAX_PER_KIND) return false;
+    if (!c || picked[k].length >= max) return false;
     used.add(c.slug);
     picked[k].push(c);
     return true;
   };
-  for (const k of SLOT_KINDS) take(k);
-  const nextKind: Record<SlotKind, SlotKind> = {
-    'carry-over': 'new',
-    new: 're-solve',
-    're-solve': 'stretch',
-    stretch: 'new',
-  };
-  for (const k of SLOT_KINDS) if (!picked[k].length) take(nextKind[k]);
+  if (pools.planMode.mode === 'catch-up') {
+    // The carry-over, one new (the focus still advances), then re-solves in every free slot; no stretch, never
+    // padded.
+    take('carry-over');
+    take('new');
+    while (SLOT_KINDS.reduce((n, k) => n + picked[k].length, 0) < MAX_SLOTS)
+      if (!take('re-solve', MAX_SLOTS)) break;
+  } else {
+    for (const k of SLOT_KINDS) take(k);
+    const nextKind: Record<SlotKind, SlotKind> = {
+      'carry-over': 'new',
+      new: 're-solve',
+      're-solve': 'stretch',
+      stretch: 'new',
+    };
+    for (const k of SLOT_KINDS) if (!picked[k].length) take(nextKind[k]);
+  }
 
   const endOfDay = dayStartAt(addDays(today, 1), h);
   let slots: CoachSlot[] = SLOT_KINDS.flatMap((kind) =>
@@ -1011,6 +1215,19 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     )
     .sort((a, b) => b.startedAt - a.startedAt)
     .map((s) => ({ sittingId: s.id, slug: s.problemSlug, title: s.problemTitle }));
+  const unnoted = input.sittings
+    .filter(
+      (s) =>
+        s.day >= addDays(today, -NOTES_CATCHUP_DAYS) &&
+        s.day <= today &&
+        !isSittingOpen(s, now) &&
+        s.review?.test !== true &&
+        (countsAsPractice(s, now, params) || s.summary.runs + s.summary.submits > 0) &&
+        !s.claudeNotes?.text,
+    )
+    .sort((a, b) => b.startedAt - a.startedAt)
+    .slice(0, NOTES_CATCHUP_MAX)
+    .map((s) => ({ sittingId: s.id, slug: s.problemSlug, title: s.problemTitle, day: s.day }));
 
   return {
     day: today,
@@ -1033,7 +1250,23 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       missedYesterday: !!lastActive && lastActive < yesterday,
     },
     unreviewed,
+    unnoted,
     ai,
+    planMode: dayMode(pools.planMode, ai?.status === 'ok' ? row?.ai : undefined),
+  };
+}
+// A stored AI pick holds its day (one pick a day): the day's mix is the one it kept, and a setting changed since
+// applies from tomorrow — the line says so, so it never reads Catch-up over a stretch slot.
+function dayMode(view: CoachPlanModeView, ai: CoachDayAi | undefined): CoachPlanModeView {
+  if (!ai) return view;
+  const kept = ai.mode ?? 'balanced';
+  if (kept === view.mode) return view;
+  const name = (m: CoachPlanModeView['mode']) => (m === 'catch-up' ? 'Catch-up' : 'Balanced');
+  return {
+    ...view,
+    mode: kept,
+    // Under auto, tomorrow's mix is the replay's call, not a promise.
+    line: `${name(kept)}: ${view.due} due · today’s pick; ${view.setting === 'auto' ? 'auto' : name(view.mode)} from tomorrow`,
   };
 }
 
@@ -1095,7 +1328,7 @@ export function listRecords(
   },
 ) {
   return problemRecords(
-    attemptsOf(input.sittings, input.attempts, input.now, COACH_PARAMS, input.today),
+    attemptsOf(input.sittings, input.attempts, input.now, COACH_PARAMS, input.today, moreOf(input)),
     COACH_PARAMS,
     historyAttemptsOf(input.attempts),
   ).sort((a, b) => b.lastDay.localeCompare(a.lastDay) || a.slug.localeCompare(b.slug));
@@ -1322,16 +1555,28 @@ export interface CoachAttemptInput {
   slug: string;
   title?: string | null;
   day?: string; // the user's today when absent
-  outcome: AttemptOutcome;
+  outcome?: AttemptOutcome; // optional only with help 'solution' (a peek: failed)
   help?: HelpLevel;
   cause?: CauseTag | null;
   minutes?: number | null;
   note?: string | null;
   historical?: boolean; // a solve from before the coach: lights up Progress, never scheduled or counted
+  difficulty?: Difficulty | null; // an off-catalog problem's; the catalog's wins
+  accepted?: boolean; // a peek that also got accepted that day (help 'solution' only)
 }
 export type NormalizedAttempt = Pick<
   CoachAttempt,
-  'slug' | 'title' | 'day' | 'outcome' | 'help' | 'cause' | 'minutes' | 'note' | 'historical'
+  | 'slug'
+  | 'title'
+  | 'day'
+  | 'outcome'
+  | 'help'
+  | 'cause'
+  | 'minutes'
+  | 'note'
+  | 'historical'
+  | 'difficulty'
+  | 'accepted'
 >;
 const KNOWN_ATTEMPT_KEYS = new Set([
   'slug',
@@ -1343,10 +1588,14 @@ const KNOWN_ATTEMPT_KEYS = new Set([
   'minutes',
   'note',
   'historical',
+  'difficulty',
+  'accepted',
 ]);
+const DIFFICULTIES: readonly Difficulty[] = ['Easy', 'Medium', 'Hard'];
 // One manual attempt, validated: a problem slug, an outcome, a day no later than today and at most
-// ATTEMPT_BACKDATE_DAYS back (a history-only one ATTEMPT_HISTORY_DAYS); `failed` with help `solution` is a peek.
-// A clean attempt took no help.
+// ATTEMPT_BACKDATE_DAYS back (a history-only one ATTEMPT_HISTORY_DAYS). A clean attempt took no help. Help `solution`
+// is a peek in one call: it stores `failed` (the retry track), and `outcome: 'solved'` or `accepted: true` keeps that
+// day's accept.
 export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAttempt {
   if (!v || typeof v !== 'object' || Array.isArray(v))
     throw new Error('An attempt must be an object');
@@ -1355,14 +1604,27 @@ export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAtte
     if (!KNOWN_ATTEMPT_KEYS.has(k)) throw new Error(`Unknown attempt field: ${k}`);
   if (!isProblemSlug(r.slug))
     throw new Error('slug must be a LeetCode problem slug (lowercase letters, digits, dashes)');
-  if (!ATTEMPT_OUTCOMES.includes(r.outcome as AttemptOutcome))
-    throw new Error('outcome must be clean, solved or failed');
-  const outcome = r.outcome as AttemptOutcome;
   const help = (r.help ?? 'none') as HelpLevel;
   if (!HELP_LEVELS.includes(help)) throw new Error('help must be none, hint or solution');
-  if (outcome === 'clean' && help !== 'none') throw new Error('A clean attempt took no help');
-  if (help === 'solution' && outcome !== 'failed')
-    throw new Error('An attempt that read the solution is failed');
+  if (r.outcome === undefined && help !== 'solution')
+    throw new Error('outcome must be clean, solved or failed');
+  if (r.outcome !== undefined && !ATTEMPT_OUTCOMES.includes(r.outcome as AttemptOutcome))
+    throw new Error('outcome must be clean, solved or failed');
+  if (r.accepted !== undefined && typeof r.accepted !== 'boolean')
+    throw new Error('accepted must be true or false');
+  if (r.accepted !== undefined && help !== 'solution')
+    throw new Error('accepted is only for a peek (help solution); otherwise the outcome says it');
+  const asked = (r.outcome ?? 'failed') as AttemptOutcome;
+  if (asked === 'clean' && help !== 'none') throw new Error('A clean attempt took no help');
+  // A peek is failed whatever was asked; a solved one (or accepted: true) keeps that it was accepted.
+  const outcome: AttemptOutcome = help === 'solution' ? 'failed' : asked;
+  const accepted =
+    help === 'solution' && (asked === 'solved' || r.accepted === true) ? true : undefined;
+  if (r.accepted === false && asked === 'solved')
+    throw new Error('accepted: false contradicts outcome solved');
+  const difficulty = r.difficulty ?? null;
+  if (difficulty !== null && !DIFFICULTIES.includes(difficulty as Difficulty))
+    throw new Error('difficulty must be Easy, Medium or Hard');
   const cause = r.cause ?? null;
   if (cause !== null && !isCauseTag(cause))
     throw new Error(`cause must be one of ${CAUSE_TAGS.join(', ')}`);
@@ -1405,6 +1667,8 @@ export function normalizeCoachAttempt(v: unknown, today: string): NormalizedAtte
     minutes: minutes as number | null,
     note: text(r.note, 'note', ATTEMPT_NOTE_MAX),
     ...(historical ? { historical: true as const } : {}),
+    ...(difficulty !== null ? { difficulty: difficulty as Difficulty } : {}),
+    ...(accepted ? { accepted } : {}),
   };
 }
 // A peek already logged for that problem and day (logCoachAttempts returns it instead of a second row).
@@ -1420,6 +1684,17 @@ export const peekOf = (
       a.day === n.day &&
       (a.historical === true) === (n.historical === true),
   ) ?? null;
+// What a repeated peek adds to the stored one: a title, a difficulty or an accept it lacks; null when nothing.
+export function peekFill(
+  had: CoachAttempt,
+  n: NormalizedAttempt,
+): Partial<Pick<CoachAttempt, 'title' | 'difficulty' | 'accepted'>> | null {
+  const fill: Partial<Pick<CoachAttempt, 'title' | 'difficulty' | 'accepted'>> = {};
+  if (!had.title && n.title) fill.title = n.title;
+  if (!had.difficulty && n.difficulty) fill.difficulty = n.difficulty;
+  if (!had.accepted && n.accepted) fill.accepted = true;
+  return Object.keys(fill).length ? fill : null;
+}
 export function normalizeCoachAttempts(v: unknown, today: string): NormalizedAttempt[] {
   if (!Array.isArray(v) || !v.length) throw new Error('attempts must be a non-empty list');
   if (v.length > LOG_ATTEMPTS_MAX) throw new Error(`At most ${LOG_ATTEMPTS_MAX} attempts at once`);
@@ -1486,7 +1761,7 @@ export function applySlotChange(
 // run out). Once the engine has moved on, the same pattern re-stamps from today.
 export function focusHolds(ci: CoachInput, cur: CoachFocus, pattern: PatternId): boolean {
   if (cur.deletedAt !== null || cur.pattern !== pattern) return false;
-  const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
+  const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today, moreOf(ci));
   return focusOn(all, cur, ci.today, COACH_PARAMS, coachScope(ci)).source === 'override';
 }
 // What a slot change reads: the problems seen before today (live and history-only), and whether a slug is a
@@ -1495,7 +1770,7 @@ export function slotChangeInputs(ci: CoachInput): {
   seen: Set<string>;
   known: (slug: string) => boolean;
 } {
-  const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today);
+  const all = attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today, moreOf(ci));
   const scope = coachScope(ci);
   const seen = seenBefore(all, scope, ci.today);
   const tried = new Set([...all.map((a) => a.slug), ...scope.history.keys()]);
@@ -1505,7 +1780,7 @@ export function slotChangeInputs(ci: CoachInput): {
 export function focusRoomError(ci: CoachInput, pattern: PatternId): string | null {
   const scope = coachScope(ci);
   const seen = seenBefore(
-    attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today),
+    attemptsOf(ci.sittings, ci.attempts, ci.now, COACH_PARAMS, ci.today, moreOf(ci)),
     scope,
     ci.today,
   );
@@ -1541,4 +1816,74 @@ export function normalizeReviewPatch(v: unknown): SittingReviewPatch {
   if (r.cause === undefined && r.help === undefined && r.test === undefined)
     throw new Error('patch must set cause, help or test');
   return r as SittingReviewPatch;
+}
+
+// --- Legacy voids' input (setCoachVoids) ---
+export interface CoachVoidInput {
+  day: string;
+  slug: string;
+  void: boolean;
+}
+export function normalizeCoachVoids(v: unknown): CoachVoidInput[] {
+  if (!Array.isArray(v) || !v.length) throw new Error('voids must be a non-empty list');
+  if (v.length > COACH_VOIDS_MAX) throw new Error(`At most ${COACH_VOIDS_MAX} voids at once`);
+  const seen = new Set<string>();
+  return v.map((x) => {
+    if (!x || typeof x !== 'object' || Array.isArray(x))
+      throw new Error('A void must be an object');
+    const r = x as Record<string, unknown>;
+    for (const k of Object.keys(r))
+      if (k !== 'day' && k !== 'slug' && k !== 'void') throw new Error(`Unknown void field: ${k}`);
+    if (typeof r.day !== 'string' || !isDayKey(r.day)) throw new Error('day must be YYYY-MM-DD');
+    if (!isProblemSlug(r.slug)) throw new Error('slug must be a LeetCode problem slug');
+    if (typeof r.void !== 'boolean') throw new Error('void must be true or false');
+    const id = coachVoidId(r.day, r.slug);
+    if (seen.has(id)) throw new Error(`${r.slug} on ${r.day} is listed twice`);
+    seen.add(id);
+    return { day: r.day, slug: r.slug, void: r.void };
+  });
+}
+
+// --- Claude's notes on a sitting (setSittingClaudeNotes) ---
+export const CLAUDE_NOTES_MAX = 800;
+export const CLAUDE_NOTES_BATCH_MAX = 20;
+export const CLAUDE_NOTES_OPEN_ERROR =
+  "Claude's notes go on an ended sitting — this one is still open";
+export interface ClaudeNotesInput {
+  sittingId: string;
+  text: string | null; // null or blank clears
+}
+// Line breaks kept (3–5 lines is the shape), runs of spaces and blank lines folded; ≤ CLAUDE_NOTES_MAX.
+export function claudeNotesText(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'string') throw new Error('text must be text, or null to clear');
+  const t = v
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+    .filter((l, i, all) => l !== '' || (i > 0 && all[i - 1] !== ''))
+    .join('\n')
+    .trim();
+  if (t.length > CLAUDE_NOTES_MAX)
+    throw new Error(`Claude's notes are limited to ${CLAUDE_NOTES_MAX} characters`);
+  return t || null;
+}
+export function normalizeClaudeNotes(v: unknown): ClaudeNotesInput[] {
+  if (!Array.isArray(v) || !v.length) throw new Error('notes must be a non-empty list');
+  if (v.length > CLAUDE_NOTES_BATCH_MAX)
+    throw new Error(`At most ${CLAUDE_NOTES_BATCH_MAX} sittings' notes at once`);
+  const seen = new Set<string>();
+  return v.map((x) => {
+    if (!x || typeof x !== 'object' || Array.isArray(x))
+      throw new Error('A note must be an object');
+    const r = x as Record<string, unknown>;
+    for (const k of Object.keys(r))
+      if (k !== 'sittingId' && k !== 'text') throw new Error(`Unknown note field: ${k}`);
+    if (typeof r.sittingId !== 'string' || !r.sittingId) throw new Error('sittingId is required');
+    if (seen.has(r.sittingId)) throw new Error(`Sitting ${r.sittingId} is listed twice`);
+    seen.add(r.sittingId);
+    // A missing text is a mistake, never a clear: only an explicit null (or blank) clears.
+    if (!('text' in r)) throw new Error('text is required — null clears the notes');
+    return { sittingId: r.sittingId, text: claudeNotesText(r.text) };
+  });
 }

@@ -12,10 +12,10 @@ Rows are written by a **browser extension**, not by the app. There is no authori
 
 **Redesign in progress (lc-redesign, 2026-11).** A1 — sittings: contract, server, list page — is the section
 below; A2 — the extension rebuilt around sittings — is _The shape_. The old per-submission capture is gone
-from the extension, and its rows (`leetcodeAttempts`, SK `lc#<day>#<id>`) lie dormant: PR D (2026-11) removed the
-method that wrote them (`recordLeetcodeAttempt`: a device token now gets a 401, a JWT a 404 at the origin, which
-CloudFront serves as `index.html`), nothing reads them, the export leaves them out, and nothing migrates or deletes
-them. The redesign's evidence (what LeetCode exposes, from a HAR capture on 2026-11-08) is archived with the branch's
+from the extension, and its rows (`leetcodeAttempts`, SK `lc#<day>#<id>`) are read-only history: PR D (2026-11)
+removed the method that wrote them (`recordLeetcodeAttempt`: a device token now gets a 401, a JWT a 404 at the origin,
+which CloudFront serves as `index.html`), and nothing migrates or deletes them. Since coach-fixes the coach folds
+them as legacy attempts and the export carries them ([coach.md](coach.md) → _Legacy history_). The redesign's evidence (what LeetCode exposes, from a HAR capture on 2026-11-08) is archived with the branch's
 notes (`/workspace/localNotes/archive/lc-redesign/lc-capture/`); durable decisions are recorded here.
 
 ## Sittings
@@ -160,6 +160,23 @@ a nudge count. A kind the server doesn't know is stored (its payload in full) an
 `kind: null` for good, so an extension that ships a kind first loses that kind's fold on those sittings unless a
 backfill re-reads the payloads. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
 extension that sends none — so readers take `summary.coach ?? null`.
+
+**The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
+the code itself is the only traced/untraced source (the card is going: extension-tidy removes it; nothing here reads
+it). At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in
+the same batch) whose code holds a trace comment becomes the server's own head row — type `trace-comment` (never an
+extension event), at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`). The rule
+(`traceComment.ts`, no model): a block is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or
+`//` lines; it is a trace when it has an input line (`name = <literal>`, or one opening with input / example /
+trace) and at least 2 other step lines (a digit and one of `->`, `=>`, `→`, `=`, `:`, `|`); LeetCode's starter
+comments (`:type`, `@param`, "Definition for") never count; a block not yet closed isn't one. Known limit: three
+commented-out literal assignments read as a trace.
+
+The fold sets `summary.commentTrace`: `traced` from a `trace-comment` row with nothing judged before it; the first
+Run or Submit sets `summary.firstJudgedAt` and `commentTrace` `none` unless already traced. Absent until judged, and
+on sittings folded before the rule, which count nowhere — except a sitting open across the deploy: its next fold reads
+`none`, its earlier snapshots never scanned (at most one, accepted). The coach's `traced` (stats, the Patterns tab),
+`live_sitting.trace`, `get_sitting.trace`, the review's suggested cause and the draft's trace signal all read it.
 
 ### Claude watches live
 
@@ -433,7 +450,7 @@ storage — a different risk class from a JWT. A device token sent to any other 
 | `lambdas/src/auth/verify.ts`                             | `resolveDeviceUserId`                                                                                                                                                                                                                                    |
 | `lambdas/src/backend.ts`                                 | the sitting methods, the rep's end hooks, `pullLiveSitting`                                                                                                                                                                                              |
 | `lambdas/src/mcp/leetcodeTools.ts`                       | `live_sitting` — _Claude watches live_; `get_sitting`, `list_sittings` — _Reading a sitting back_                                                                                                                                                        |
-| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#` stays reserved for the dormant legacy rows                                                                                                                                                                  |
+| `lambdas/src/ddb/keys.ts`, `repo.ts`                     | `lcsit#` / `lcs#<id>#…` / `lcq#` keys; `lc#` holds the legacy rows, read-only (no writer)                                                                                                                                                                |
 | `cdk/src/lib/data-stack.ts`                              | TTL on `expiresAt` (both stages)                                                                                                                                                                                                                         |
 | `packages/shared/src/coach.ts`, `neetcode150.ts`         | the LeetCode coach's engine and catalog — [coach.md](coach.md) (its own files table)                                                                                                                                                                     |
 | `scripts/src/devcheck/scenarios/lc-sittings.ts`          | the dev check's rows for sittings                                                                                                                                                                                                                        |

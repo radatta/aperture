@@ -1,4 +1,5 @@
 import {
+  hasReviewWords,
   isDayKey,
   msToMin,
   isUlid,
@@ -108,9 +109,9 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
     runCount: s.summary.runs,
     submitCount: s.summary.submits,
     outcome: outcomeOf(s),
-    // The extension's trace card (summary.coach): traced / partial / skipped / none before the first submit, null
-    // until any — don't ask for a trace they already wrote.
-    trace: s.summary.coach?.trace ?? null,
+    // The trace before the first Run or Submit (summary.commentTrace): traced when their code held a trace comment,
+    // none once judged without one, null until then — don't ask for a trace they already wrote.
+    trace: s.summary.commentTrace ?? null,
     lastRun: judged(s.summary.lastRun, pull.lastRun, 'run', now),
     lastSubmit: judged(s.summary.lastSubmit, pull.lastSubmit, 'submit', now),
     lcTimer: t
@@ -182,7 +183,7 @@ function sittingRow(s: Sitting, now: number) {
     submitCount: s.summary.submits,
     outcome: outcomeOf(s),
     prepTarget: s.prepTarget,
-    reviewed: !!s.review,
+    reviewed: hasReviewWords(s.review),
     tags: s.review?.tags ?? [],
   };
 }
@@ -252,7 +253,11 @@ function sittingRead(d: SittingDetail, now: number) {
           }
         : null,
     review: s.review ? { ...s.review, updatedAt: iso(s.review.updatedAt) } : null,
-    note: 'Snapshots between submits are kept 14 days, so an older sitting may have no "codeChanged" markers. `review` is their own words.',
+    trace: s.summary.commentTrace ?? null,
+    claudeNotes: s.claudeNotes
+      ? { text: s.claudeNotes.text, updatedAt: iso(s.claudeNotes.updatedAt) }
+      : null,
+    note: 'Snapshots between submits are kept 14 days, so an older sitting may have no "codeChanged" markers. `review` is their own words; `claudeNotes` are yours (set_claude_notes), kept apart.',
   };
 }
 
@@ -265,7 +270,7 @@ export const LEETCODE_TOOLS: Tool[] = [
       'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are their Mac’s clock, so their ages can be off by its skew.',
       'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste their code back at them — point at a line, a name or a case.',
       '`slot` says where the open sitting sits in today’s plan (leetcode_today): its kind (re-solve, carry-over, new, stretch, or off-plan), reason, the 30-minute cap and whether it is past it, and the coaching `rules` for that kind — follow them.',
-      '`trace` is what the extension’s trace card recorded before the first submit (traced, partial, skipped, none; null until then) — don’t ask for a trace already written.',
+      '`trace` is whether they traced before the first Run or Submit: `traced` when their code held a trace comment (a multi-line comment or docstring that names an input and walks it), `none` once judged with no trace; null until then. Don’t ask for a trace already written — read the comment in the code.',
       'A sitting with no activity for 45 minutes (no extension event, no live pull) is closed automatically by the next read, at its last activity + 5 minutes (`closedBy: "idle"`, its rep left in progress) — here it reads closed, and the app writes the close; coming back to the problem the same day reopens it, and so does the Reopen button in the app. Each pull counts as activity, so talking it through keeps it open.',
       '`active: false` carries `lastSitting`, the most recent one.',
       '`expired: true` marks a last sitting left open past its 24 h window (no longer capturing; the next Start ends it).',
@@ -312,7 +317,7 @@ export const LEETCODE_TOOLS: Tool[] = [
     name: 'get_sitting',
     description: [
       'One LeetCode sitting, read back whole — for talking it through afterwards ("how did that sitting go?"). With no `id`, the most recent sitting.',
-      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, their final code in full, editing facts, and their review (their own words — never rewrite them back to them as yours).',
+      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, their final code in full, editing facts, the trace before the first judged event (`trace`), their review (their own words — never rewrite them back to them as yours), and your own notes on it (`claudeNotes`, set_claude_notes).',
       'Talk from this data, not from memory, and never paste their code back at them — point at a line, a name or a case.',
       '`closedBy: "idle"` means Aperture closed it after 45 minutes with no activity, at the last activity + 5 minutes (its rep left in progress).',
       'Read-only.',

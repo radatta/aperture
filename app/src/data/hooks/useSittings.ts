@@ -39,6 +39,22 @@ export function useSetSittingReview() {
   });
 }
 
+// Void or un-void a sitting (its review's test flag, patchSittingReview): out of the plan, stats and re-solves, or
+// back in. The list (its marks), the detail and the coach's day refresh.
+export function useVoidSitting() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, test }: { id: string; test: boolean }) =>
+      api.patchSittingReview(id, { test }),
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['sittings'] }),
+        qc.invalidateQueries({ queryKey: qk.coach() }),
+      ]),
+  });
+}
+
 // The stored review as the server has it right now — a first review's Save reads it before sending its
 // suggestions, so a review Claude wrote over MCP since the page loaded wins (F169).
 export function useReadSittingReview() {

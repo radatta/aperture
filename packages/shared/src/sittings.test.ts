@@ -63,6 +63,7 @@ import {
   headRowOf,
   payloadError,
   summarizeHeadRows,
+  traceCommentRow,
   utf8Bytes,
 } from './sittings';
 import type { NormalizedSittingEvent, SittingStartInput } from './sittings';
@@ -976,5 +977,45 @@ describe('idle close', () => {
     expect(() => reclaimStart(held, 'A', [closed, open], T)).toThrow(SITTING_ACTIVE_ERROR);
     expect(() => reclaimStart(held, 'A', [closed], T)).toThrow(SITTING_ACTIVE_ERROR);
     expect(reclaimStart(held, 'A', [closed], T + 2 * M)?.openSittingId).toBe('A');
+  });
+});
+
+describe('the trace comment fold (commentTrace)', () => {
+  const judged = (type: 'run' | 'submit', id: string, at: number) =>
+    headRowOf('s', { id, type, at, payload: { result: { status_code: 11 } } });
+  it('absent until judged; the first judged event with no comment reads none', () => {
+    expect(summarizeHeadRows([]).commentTrace).toBeUndefined();
+    const s = summarizeHeadRows([judged('submit', 'a', 5)]);
+    expect(s).toMatchObject({ commentTrace: 'none', firstJudgedAt: 5 });
+    expect(summarizeHeadRows([judged('run', 'r', 3), judged('submit', 'a', 5)]).firstJudgedAt).toBe(
+      3,
+    );
+  });
+  it('a trace comment before the first judged event reads traced; after it, nothing changes', () => {
+    expect(
+      summarizeHeadRows([traceCommentRow('s', { id: 'c', at: 1 }), judged('run', 'r', 2)])
+        .commentTrace,
+    ).toBe('traced');
+    expect(summarizeHeadRows([traceCommentRow('s', { id: 'c', at: 1 })]).commentTrace).toBe(
+      'traced',
+    );
+    expect(
+      summarizeHeadRows([judged('run', 'r', 1), traceCommentRow('s', { id: 'c', at: 2 })])
+        .commentTrace,
+    ).toBe('none');
+  });
+  it('only its own row moves it: another head row before the first judged event changes nothing', () => {
+    const other = headRowOf('s', {
+      id: 'k',
+      type: 'coach',
+      at: 1,
+      payload: { kind: 'not-a-kind' },
+    });
+    const s = summarizeHeadRows([other, judged('submit', 'a', 2)]);
+    expect(s.commentTrace).toBe('none');
+  });
+  it('a tie on time folds by id, so a retry lands the same way', () => {
+    const rows = [judged('submit', 'b', 2), traceCommentRow('s', { id: 'a', at: 2 })];
+    expect(summarizeHeadRows(rows)).toEqual(summarizeHeadRows([...rows].reverse()));
   });
 });

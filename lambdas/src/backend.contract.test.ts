@@ -1,7 +1,9 @@
 import { API_METHODS, dayKeyInZone, USER_TIME_ZONE } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { runApiContract } from '@aperture/shared/contract';
+import type { ContractSeed } from '@aperture/shared/contract';
 import { InMemoryDoc } from './ddb/DocClient';
+import { entityItem } from './ddb/mapping';
 import type { DocClient } from './ddb/DocClient';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
@@ -72,8 +74,14 @@ function coachDeps(doc: DocClient, now: () => number) {
   return { anthropic, coachPickInvoker };
 }
 
-runApiContract('lambda (direct)', (now) => {
+// The legacy capture's rows, put where the old writer left them (`lc#<day>#<id>`): nothing writes them any more.
+async function seedLegacy(doc: DocClient, seed?: ContractSeed) {
+  for (const r of seed?.legacy ?? []) await doc.put(entityItem('local', `lc#${r.day}#${r.id}`, r));
+}
+
+runApiContract('lambda (direct)', async (now, seed) => {
   const doc = new InMemoryDoc();
+  await seedLegacy(doc, seed);
   return new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
     userId: 'local',
     now,
@@ -88,8 +96,9 @@ runApiContract('lambda (direct)', (now) => {
   });
 });
 
-runApiContract('lambda (via handleRpc dispatch)', (now) => {
+runApiContract('lambda (via handleRpc dispatch)', async (now, seed) => {
   const doc = new InMemoryDoc();
+  await seedLegacy(doc, seed);
   const deps = {
     presigner: fakePresigner(),
     objects: fakeObjectStore(),

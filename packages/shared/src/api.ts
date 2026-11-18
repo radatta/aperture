@@ -40,6 +40,8 @@ import type {
   CoachAttempt,
   CoachDay,
   CoachFocus,
+  CoachVoid,
+  LegacyLeetcodeAttempt,
 } from './types';
 import type { Area } from './areas';
 import type {
@@ -48,6 +50,9 @@ import type {
   CoachStats,
   CoachStatsRange,
   CoachToday,
+  CoachVoidInput,
+  ClaudeNotesInput,
+  LegacyGroup,
   ProblemRecord,
   SittingReviewPatch,
 } from './coach';
@@ -309,6 +314,9 @@ export interface ExportBundle {
   coachDays: CoachDay[];
   coachAttempts: CoachAttempt[];
   coachFocus: CoachFocus | null;
+  // The pre-sittings extension's submissions (read-only, folded as legacy attempts) and their void states.
+  legacyLeetcodeAttempts: LegacyLeetcodeAttempt[];
+  coachVoids: CoachVoid[];
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
   fluxSets: FluxSet[];
   // Finances. Access tokens never leave SSM, so they're never exported.
@@ -344,6 +352,7 @@ export const SETTINGS_PATCH_KEYS = [
   'remindDueDay',
   'remindPlanned',
   'coachAiPick',
+  'coachPlanMode',
 ] as const satisfies readonly (keyof Settings)[];
 export type SettingsPatch = Partial<Pick<Settings, (typeof SETTINGS_PATCH_KEYS)[number]>>;
 
@@ -673,6 +682,15 @@ export interface ApiClient {
   // Attempts outside the extension, ≤ LOG_ATTEMPTS_MAX at once (normalizeCoachAttempt).
   logCoachAttempts(inputs: CoachAttemptInput[]): Promise<CoachAttempt[]>;
   deleteCoachAttempt(id: string): Promise<void>; // idempotent
+  // The legacy history (coach.md → Legacy history): every (day, slug) group of the pre-sittings extension's
+  // submissions, whether it counts and why not; `slug` narrows it. Derived, writes nothing.
+  listLegacyGroups(slug?: string): Promise<LegacyGroup[]>;
+  // Void or un-void legacy groups, ≤ COACH_VOIDS_MAX at once, all validated before any write (a group must have
+  // rows). Returns the groups after. A sitting's void is its review's test flag (patchSittingReview).
+  setCoachVoids(inputs: CoachVoidInput[]): Promise<LegacyGroup[]>;
+  // Claude's notes on ended sittings, ≤ CLAUDE_NOTES_BATCH_MAX at once, all validated before any write; null or
+  // blank text clears. Never touches the review. Returns the sittings after.
+  setSittingClaudeNotes(items: ClaudeNotesInput[]): Promise<Sitting[]>;
 
   // Flux — one row per finished set (D47). record is idempotent on the client's id (a retry returns the
   // stored row) and refuses per fluxSetError; list is alive, completedAt desc, from/to both or neither;

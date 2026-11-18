@@ -102,7 +102,11 @@ describe('createMcpClient', () => {
       'markPeekedUnknown',
       'setCauseTag',
       'setCauseTagUnknown',
+      'setClaudeNotes',
+      'setClaudeNotesRefused',
       'setFocusPattern',
+      'setVoid',
+      'setVoidRefused',
       'splitTask',
       'stopSeries',
       'stopSeriesUnknown',
@@ -141,6 +145,75 @@ describe('createMcpClient', () => {
       'set_focus_pattern',
       'set_focus_pattern',
     ]);
+  });
+
+  it('set_void and set_claude_notes go only to recorded sittings, with the args as given (coach-fixes)', async () => {
+    const ledger = memLedger([
+      ...recorded,
+      { run: 'r0', op: 'created', id: 'S1', via: 'api:lcSittingStart' },
+    ]);
+    const fetch = server({
+      set_void: json({ sittings: [{ sittingId: 'S1', void: true }], legacy: [] }),
+      set_claude_notes: json({ saved: [{ sittingId: 'S1', claudeNotes: 'n' }] }),
+    });
+    const c = client(fetch, ledger);
+    await expect(c.writes.setVoid([{ sittingId: 'T1', void: true }])).rejects.toThrow(
+      /LEDGER_GUARD|never recorded/,
+    ); // a task id, not a sitting
+    await expect(c.writes.setClaudeNotes([{ sittingId: 'S9', text: 'n' }])).rejects.toThrow(
+      /never recorded/,
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect((await c.writes.setVoid([{ sittingId: 'S1', void: true }])).sittings[0]!.void).toBe(
+      true,
+    );
+    await c.writes.setClaudeNotes([{ sittingId: 'S1', text: 'n' }]);
+    const args = fetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse(init.body as string) as { params: { arguments: unknown } }).params.arguments,
+    );
+    expect(args).toEqual([
+      { targets: [{ sittingId: 'S1', void: true }] },
+      { notes: [{ sittingId: 'S1', text: 'n' }] },
+    ]);
+  });
+
+  it('a refusal call sends an unrecorded sitting id only once the server says it has none', async () => {
+    const ledger = memLedger([{ run: 'r0', op: 'created', id: 'S1', via: 'api:lcSittingStart' }]);
+    const fetch = server({
+      get_sitting: result('Not found: 01UNKNOWN', true),
+      set_void: result('No sitting 01UNKNOWN — list_sittings gives the ids', true),
+      set_claude_notes: result('Not found: 01UNKNOWN', true),
+    });
+    const c = client(fetch, ledger);
+    const r = await c.writes.setVoidRefused([
+      { sittingId: 'S1', void: true },
+      { sittingId: '01UNKNOWN', void: true },
+      { day: '2026-11-01', slug: 'two-sum', void: true },
+    ]);
+    expect(r).toEqual({
+      text: 'No sitting 01UNKNOWN — list_sittings gives the ids',
+      isError: true,
+    });
+    await c.writes.setClaudeNotesRefused([{ sittingId: '01UNKNOWN', text: 'n' }]);
+    expect(sentTools(fetch)).toEqual([
+      'get_sitting',
+      'set_void',
+      'get_sitting',
+      'set_claude_notes',
+    ]);
+
+    // An unrecorded id the server HAS is never sent; nor is a recorded id of another kind.
+    const has = server({ get_sitting: json({ sitting: { id: 'S7' } }) });
+    await expect(
+      client(has, ledger).writes.setVoidRefused([{ sittingId: 'S7', void: true }]),
+    ).rejects.toThrow(/LEDGER_GUARD|server has it/);
+    await expect(
+      client(has, memLedger(recorded)).writes.setClaudeNotesRefused([
+        { sittingId: 'T1', text: 'n' },
+      ]),
+    ).rejects.toThrow(/never recorded/);
+    expect(sentTools(has)).toEqual(['get_sitting']);
   });
 
   it('set_focus_pattern refused at the param check resolves the record it made', async () => {

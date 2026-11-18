@@ -386,7 +386,8 @@ const verdictOrOther = (payload: unknown, at: number, type: 'run' | 'submit'): S
     total: null,
     at,
   };
-export type HeadEventType = SittingHeadRow['type'];
+// The extension's head events; the server's own `trace-comment` row is never one.
+export type HeadEventType = Exclude<SittingHeadRow['type'], 'trace-comment'>;
 const timerWithoutRaw = (t: LcTimerState | null): LcTimerState | null =>
   t ? { ...t, raw: null } : null;
 // The compact row a head event is folded from, taken from its payload once, at write.
@@ -420,6 +421,12 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     total: null,
     at: r.at,
   };
+  // The trace comment (traceComment.ts): a server row before the first judged event reads traced; the first Run or
+  // Submit closes the window, so with none by then the sitting reads untraced. The only traced/untraced source.
+  if ((r.type === 'run' || r.type === 'submit') && s.runs + s.submits === 0) {
+    next.firstJudgedAt = r.at;
+    next.commentTrace = s.commentTrace ?? 'none';
+  }
   if (r.type === 'run') {
     next.runs = s.runs + 1;
     if (s.submits === 0) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
@@ -435,6 +442,7 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
   } else if (r.type === 'note') next.notes = s.notes + 1;
   else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
   else if (r.type === 'coach' && r.coach?.kind) next.coach = foldCoach(s.coach, r.coach, s.submits);
+  else if (r.type === 'trace-comment' && s.runs + s.submits === 0) next.commentTrace = 'traced';
   return next;
 }
 
@@ -482,6 +490,20 @@ function foldCoach(c: SittingCoach | undefined, m: CoachMark, submits: number): 
       m.kind === 'trace-skip' || !m.inputs ? 'skipped' : m.inputs === 3 ? 'traced' : 'partial';
   return next;
 }
+// The server's head row for a snapshot whose code holds a trace comment (traceComment.ts): its own type, at the
+// snapshot's time, keyed by its event id so a retry writes it once. Never an extension event (isHeadEvent).
+export const traceCommentRow = (
+  sittingId: string,
+  e: { id: string; at: number },
+): SittingHeadRow => ({
+  id: e.id,
+  sittingId,
+  type: 'trace-comment',
+  at: e.at,
+  verdict: null,
+  timer: null,
+  deletedAt: null,
+});
 // The head's summary, recomputed from every stored head row in time order — never an increment, so a retry
 // or a lost write can't skew it: the next call carrying any head event, fresh or a repeat, rebuilds it, and the
 // write is skipped when the stored one already folds more rows (headEvents) — a slower call never rolls it back.
@@ -1074,6 +1096,16 @@ export const isEmptyReview = (r: SittingReviewInput): boolean =>
   (r.help ?? 'none') === 'none' &&
   !r.cause &&
   r.test !== true;
+// Whether a stored review says anything of the user's own: a review that only voids the sitting (the test flag) is
+// no review — the list's reviewed mark and list_sittings' `reviewed` read this.
+export const hasReviewWords = (r: SittingReview | null | undefined): boolean =>
+  !!r &&
+  (!!r.insight ||
+    !!r.howItWent ||
+    r.mistakes.length > 0 ||
+    r.tags.length > 0 ||
+    !!r.cause ||
+    r.help !== 'none');
 const EMPTY_REVIEW: SittingReviewInput = {
   insight: null,
   help: 'none',

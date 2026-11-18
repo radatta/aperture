@@ -118,6 +118,7 @@ describe('createApiClient', () => {
       'listBacklog',
       'listCategories',
       'listCoachAttempts',
+      'listCoachVoids',
       'listFinanceRules',
       'listFinanceTransactions',
       'listFluxSets',
@@ -346,6 +347,21 @@ describe('createApiClient', () => {
       expect((await api.reads.getCoachDay('2026-11-17'))?.day).toBe('2026-11-17');
       expect(await api.reads.getCoachDay('2026-11-16')).toBeNull();
     });
+  });
+
+  it('reads the legacy void states from the export; an export without them reads empty (coach-fixes)', async () => {
+    let body: unknown = {
+      coachVoids: [{ id: '2026-11-01#two-sum', day: '2026-11-01', slug: 'two-sum', void: false }],
+    };
+    const fetch = vi.fn<FetchLike>(async () => reply(200, body));
+    const api = createApiClient({ fetch, token: () => 't', ledger: memLedger(), run: 'r1' });
+    expect((await api.reads.listCoachVoids()).map((v) => v.id)).toEqual(['2026-11-01#two-sum']);
+    body = {};
+    expect(await api.reads.listCoachVoids()).toEqual([]);
+    expect(fetch).toHaveBeenLastCalledWith(
+      `${DEV_ORIGIN}/api/exportData`,
+      expect.objectContaining({ body: '{"args":[]}' }),
+    );
   });
 
   it('records intent before the create and created after, with the server id', async () => {

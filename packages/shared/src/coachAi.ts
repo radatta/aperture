@@ -37,6 +37,7 @@ export const AI_PICK_QUEUE_MS = 20_000;
 const CAPS = { due: 15, fresh: 5, stretch: 3, ifFocus: 3 };
 const RECENT_DAYS = 14;
 const NOTE_MAX = 160; // each attempt's notes sent
+const CLAUDE_NOTES_SENT_MAX = 300; // each attempt's Claude's notes sent
 
 // A slot change while the pick is still landing (the slots are about to be replaced).
 export const AI_PICK_BUSY_ERROR = 'Today’s problems are still being picked — try again in a moment';
@@ -72,6 +73,7 @@ export interface CoachAiRecent {
   minutes: number | null;
   capMin: number;
   notes: string | null;
+  claudeNotes: string | null; // Claude's own notes on the day's sittings (set_claude_notes), cut
 }
 export interface CoachPickContext {
   today: string;
@@ -90,6 +92,8 @@ export interface CoachPickContext {
     rank: number | null;
   }[];
   recent: CoachAiRecent[]; // the last RECENT_DAYS days, oldest first
+  // The plan mode as the rules read it today: a catch-up pick keeps the mix (validateCoachPick → 'mix').
+  planMode: { mode: 'balanced' | 'catch-up'; due: number };
 }
 
 const cut = (s: string, max: number) => {
@@ -149,8 +153,10 @@ export function coachPickContext(
   for (const r of pools.due.slice(0, CAPS.due))
     add(r.slug, 're-solve', null, ruleOf('re-solve', r.slug));
   for (const c of pools.fresh.slice(0, CAPS.fresh)) add(c.slug, 'new', null, ruleOf('new', c.slug));
-  for (const c of pools.stretch.slice(0, CAPS.stretch))
-    add(c.slug, 'stretch', null, ruleOf('stretch', c.slug));
+  // Catch-up takes no stretch (coach.ts → Plan mode), so none is offered.
+  if (pools.planMode.mode !== 'catch-up')
+    for (const c of pools.stretch.slice(0, CAPS.stretch))
+      add(c.slug, 'stretch', null, ruleOf('stretch', c.slug));
   if (!locked)
     for (const p of top3.filter((p) => p !== focus.pattern))
       for (const c of NEETCODE_150.filter(
@@ -186,6 +192,7 @@ export function coachPickContext(
           [s.review?.insight ?? [], ...(s.review?.mistakes ?? []).slice(0, 3)].flat(),
         ),
       ].filter(Boolean);
+      const claude = sits.flatMap((s) => s.claudeNotes?.text ?? []);
       return {
         day: a.day,
         slug: a.slug,
@@ -198,6 +205,7 @@ export function coachPickContext(
         minutes,
         capMin: params.capMin,
         notes: words.length ? cut(words.join(' · '), NOTE_MAX) : null,
+        claudeNotes: claude.length ? cut(claude.join(' · '), CLAUDE_NOTES_SENT_MAX) : null,
       };
     });
   const stats = coachStats(pools.all, today, {}, coachScope(input));
@@ -218,6 +226,7 @@ export function coachPickContext(
       rank: p.rank,
     })),
     recent,
+    planMode: { mode: pools.planMode.mode, due: pools.planMode.due },
   };
 }
 
@@ -278,13 +287,26 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   const note = typeof r.note === 'string' && r.note.trim() ? cut(r.note, AI_NOTE_MAX) : null;
   if (r.note !== undefined && r.note !== null && typeof r.note !== 'string') return fail('shape');
   const full = fillToFull(picks, ctx, focus);
+  // Catch-up's mix, on the day as filled: at most one new, no stretch, and no fewer re-solves than the rules' plan.
+  if (ctx.planMode.mode === 'catch-up') {
+    const n = (k: SlotKind, list: readonly { kind: SlotKind }[]) =>
+      list.filter((x) => x.kind === k).length;
+    const ruleKinds = ctx.rules.flatMap((slug) => byslug.get(slug) ?? []);
+    if (
+      n('new', full) > 1 ||
+      n('stretch', full) > 0 ||
+      n('re-solve', full) < n('re-solve', ruleKinds)
+    )
+      return fail('mix');
+  }
   return { ok: true, picks: full, note, focus, filled: full.length - picks.length };
 }
 
 // The day is four problems (fewer only when fewer may be picked): a short answer keeps the model's picks in its order
 // and takes the rest from the rules' own pick, then the other candidates — each with its rule reason as its why. After a
 // focus change, the new focus's problems come before the rest, and the old focus's new ones are out (the day follows
-// the move). Never a slot dropped; never anything but a candidate the answer may take.
+// the move). Never a slot dropped; never anything but a candidate the answer may take. In catch-up the fill keeps the
+// mix: no stretch, and a new only while the day has none.
 export function fillToFull(
   picks: readonly CoachAiPick[],
   ctx: CoachPickContext,
@@ -302,9 +324,15 @@ export function fillToFull(
   ].filter(left);
   const taken = new Set(picks.map((p) => p.slug));
   const out = [...picks];
+  const catchUp = ctx.planMode.mode === 'catch-up';
   for (const c of pool) {
     if (out.length >= want) break;
     if (taken.has(c.slug)) continue;
+    if (
+      catchUp &&
+      (c.kind === 'stretch' || (c.kind === 'new' && out.some((p) => p.kind === 'new')))
+    )
+      continue;
     taken.add(c.slug);
     out.push({ slug: c.slug, kind: c.kind, why: cut(c.rule || c.kind, AI_WHY_MAX) });
   }
@@ -361,6 +389,7 @@ export type CoachPickResult =
       note: string | null;
       focus: CoachDayAi['focus'];
       filled?: number; // slots the rules filled (logged, not stored)
+      mode?: CoachPickContext['planMode']['mode']; // the mix it kept, stored on the day
       oldestDue: string | null;
       model: string | null;
       usage: CoachDayAi['usage'];
@@ -396,7 +425,15 @@ export function settleAiRow(
     ...cur,
     ai:
       res.ok && !late
-        ? { ...cur.ai, ...common, status: 'ok', picks: res.picks, note: res.note, focus: res.focus }
+        ? {
+            ...cur.ai,
+            ...common,
+            status: 'ok',
+            picks: res.picks,
+            note: res.note,
+            focus: res.focus,
+            ...(res.mode ? { mode: res.mode } : {}),
+          }
         : {
             ...cur.ai,
             ...common,
@@ -421,6 +458,7 @@ export function pickResultOf(
         note: v.note,
         focus: v.focus,
         filled: v.filled,
+        mode: ctx.planMode.mode,
         ...meta,
         oldestDue: ctx.oldestDue,
       }
