@@ -33,7 +33,7 @@ export const CATALOGS: Record<CatalogId, Catalog> = {
   },
   leetcode: {
     id: 'leetcode',
-    label: 'LeetCode',
+    label: 'All LeetCode', // beside the page's “LeetCode ↗” link, a bare “LeetCode” read as a repeat
     source: 'github.com/noworneverev/leetcode-api (LeetCode metadata, MIT)',
     get problems() {
       return loaded?.rows ?? [];
