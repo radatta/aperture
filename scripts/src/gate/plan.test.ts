@@ -77,6 +77,7 @@ describe('plan', () => {
     ['scripts/vitest.config.ts', 'scripts'],
     ['app/vite.config.ts', 'app'],
     ['app/src/test/setup.ts', 'app'],
+    ['lambdas/src/test/setup.ts', 'lambdas'],
   ])('%s → %s whole, the rest by rule', (path, dir) => {
     const p = plan(ch(path), TESTS);
     expect(p.full).toEqual([]);
@@ -158,6 +159,16 @@ describe('plan', () => {
     const v = plan(ch('app/pwa/extensionVersion.ts'), TESTS);
     expect(pkg(v, 'app').tests).toContain('app/src/pages/Settings/Settings.test.tsx');
     expect(pkg(v, 'scripts').tests).toContain('scripts/src/devcheck/scenarios/index.test.ts');
+  });
+
+  it('the console guard runs every app and lambdas test: their setupFiles load it, and no test imports those', () => {
+    const p = plan(ch('packages/shared/src/consoleGuard.ts'), TESTS);
+    expect(pkg(p, 'app').tests).toEqual(
+      expect.arrayContaining(TESTS.filter((t) => t.startsWith('app/'))),
+    );
+    expect(pkg(p, 'lambdas').tests).toEqual(
+      expect.arrayContaining(TESTS.filter((t) => t.startsWith('lambdas/'))),
+    );
   });
 
   it('app sources run the raw-glob scanners', () => {

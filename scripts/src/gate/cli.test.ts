@@ -2,7 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fakeRun } from '../bot/fakes.ts';
 import {
   BUDGET,
@@ -510,7 +510,13 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
       }),
     ).toBe(75);
     expect(readFileSync(join(dir, 'seen'), 'utf8').trim()).toBe('--wait 5 -- x 1');
-    expect(await spawnOuter(join(dir, 'missing.sh'), dir, [], {})).toBe(127);
+    const said: unknown[] = [];
+    const err = vi.spyOn(console, 'error').mockImplementation((s) => void said.push(s));
+    const code = await spawnOuter(join(dir, 'missing.sh'), dir, [], {}).finally(() =>
+      err.mockRestore(),
+    );
+    expect(code).toBe(127);
+    expect(String(said[0])).toMatch(/couldn't start heavy\.sh: .*ENOENT/);
   });
 
   it('the outer run: a signal to the gate is passed on to heavy.sh, and the gate exits 128+n', async () => {

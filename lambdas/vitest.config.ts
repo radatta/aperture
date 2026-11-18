@@ -12,5 +12,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
+    setupFiles: ['./src/test/setup.ts'],
+    // The handlers' structured logs (rpc_failed and the rest, ~800 blocks a run from tests that hit error paths on
+    // purpose) print only for a failing test, where they help. console.error/warn fail the test (setup.ts).
+    silent: 'passed-only',
   },
 });

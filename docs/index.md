@@ -9,7 +9,7 @@ Docs are grouped: **product/** (what & why + rules), **arch/** (how it's built),
 ## product/ — what Aperture is, and the rules
 
 - **[product/PRODUCT.md](product/PRODUCT.md)** — what Aperture is and how it feels: identity, capture mechanic, glanceable home, modules, aesthetic, v1 non-goals. Product is the source of truth.
-- **[product/CONVENTIONS.md](product/CONVENTIONS.md)** — cross-cutting rules: **pnpm only**, first-principles dependency discipline, page-first build order, monorepo-from-source, no personal identifiers in tracked text, the shared-jsdom test contract (module state resets in `setup.ts`, shuffled file order), and the UI contracts (colour tiers, the single bottom dock, focus-return on dismiss, page keyboard shortcuts, empty states).
+- **[product/CONVENTIONS.md](product/CONVENTIONS.md)** — cross-cutting rules: **pnpm only**, first-principles dependency discipline, page-first build order, monorepo-from-source, no personal identifiers in tracked text, the shared-jsdom test contract (module state resets in `setup.ts`, shuffled file order), the console guard (a test that logs an error or warning fails), and the UI contracts (colour tiers, the single bottom dock, focus-return on dismiss, page keyboard shortcuts, empty states).
 - **[product/EvaluatingChanges.md](product/EvaluatingChanges.md)** — how to judge a change: **simulate real day-to-day use**, not just architectural fit. Read before proposing features or business-logic changes. Holds the usage baseline (one entry so far), so fit judgments are provisional.
 
 ## arch/ — how it's built

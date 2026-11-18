@@ -5,6 +5,9 @@ import { createFakeEngine, eulerToMatrix, syntheticPose } from './fakeEngine';
 import { matrixToEuler } from './headPose';
 import type { FluxEngineEvent } from './engine';
 import { mirrorForSide, type Side } from './side';
+import { stubCanvas2d } from '../../../test/canvas';
+
+stubCanvas2d();
 
 const STAGE = {
   video: document.createElement('video'),

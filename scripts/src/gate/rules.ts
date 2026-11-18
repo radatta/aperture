@@ -63,7 +63,7 @@ export const PACKAGE_FULL: FullRule[] = [
     ],
     why: 'the package’s dependencies, compiler or test config',
   },
-  { match: ['app/src/test/'], why: 'the app’s shared test setup (setupFiles) and harness' },
+  { match: ['<pkg>/src/test/'], why: 'the package’s shared test setup (setupFiles) and harness' },
 ];
 
 export interface InputRule {
@@ -75,6 +75,11 @@ export interface InputRule {
 // Tests whose real inputs the graph can't see (file reads, raw imports, spawned processes). A changed path matching
 // `inputs` adds `tests`. Every graph-blind test file is named in a rule's `tests`, ALWAYS_RUN or SELF_CONTAINED.
 export const INPUT_RULES: InputRule[] = [
+  {
+    inputs: ['packages/shared/src/consoleGuard.ts'],
+    tests: ['app/src/', 'app/pwa/', 'lambdas/src/'],
+    why: 'the console guard runs around every app and lambdas test, from their setupFiles, which no test imports',
+  },
   {
     inputs: ['extension/manifest.json', 'app/pwa/extensionVersion.ts'],
     tests: ['app/src/pages/Settings/Settings.test.tsx', 'scripts/src/devcheck/scenarios/'],

@@ -49,17 +49,20 @@ describe('usePlans: write-through, one refetch', () => {
     await settled();
     calls.length = 0;
 
-    let listed = false;
-    await act(async () => {
-      const p = hook.result.current.upsert.mutateAsync({
+    let p!: Promise<unknown>;
+    act(() => {
+      p = hook.result.current.upsert.mutateAsync({
         taskId: t.id,
         day: DAY,
         plannedMinutes: 30,
         order: 0,
       });
-      // Written through before any refetch lands: the row is in the list as soon as the write answers.
-      await waitFor(() => expect(qc.getQueryData(qk.plans(DAY))).toHaveLength(1));
-      listed = reads('listPlansForDay') <= 1;
+    });
+    // Written through before any refetch lands: the row is in the list as soon as the write answers. waitFor runs
+    // outside act — nested inside it, it switches React's act environment off mid-scope and React warns.
+    await waitFor(() => expect(qc.getQueryData(qk.plans(DAY))).toHaveLength(1));
+    const listed = reads('listPlansForDay') <= 1;
+    await act(async () => {
       await p;
     });
     await settled();
