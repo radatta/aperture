@@ -6,28 +6,41 @@
 // (docs/ops/CI-BOT.md → Dev deploys → A merge waits for the lock). The bot's other half refuses the slot to every other
 // branch while main's run is pending there (bot/main-pending.ts), so nothing slips in after the wait.
 //
-// Never a reason not to deploy: prod waits behind dev. After CEILING_MS of waiting (a lock renewed past its TTL), or
+// Never a reason not to deploy: prod waits behind dev. At the run's cap (below; a lock renewed past its TTL), or after
 // MAX_ERRORS failed reads in a row, it says so — a ::warning:: and the step summary — and exits 0, so the deploy goes
 // (the old behaviour, which the devcheck's build-marker check catches). Only misuse exits non-zero, and deploy.yml's
 // deploy `if:`s never read this job's result anyway.
 //
+// The cap is shared by the merges a run carries, not a fresh hour per run: CEILING_MS from the oldest merge riding in
+// this run — this run's own push, or an older one superseded while pending (deploy.yml's concurrency keeps one pending
+// run and cancels the one it replaces before any job starts, so its commit rides here) — but never less than FLOOR_MS
+// from this wait's start, so a lane that took the slot after a long wait still gets a devcheck's worth, and a failed
+// read still has MAX_ERRORS tries. A re-run, or a runs listing that fails, counts CEILING_MS from this wait's start
+// (the old rule), the second with a ::warning:: (CI-BOT.md → Dev deploys → A merge waits for the lock).
+//
 // The holder JSON is anyone-with-contents-write's text printed to a public log: every line is stripped of control
 // characters, and the annotation and summary carry only the branch through a name charset and a 7-hex sha.
 //
-// Run: `node scripts/src/main-dev-wait.ts <dev|devb> [--once]` with GITHUB_TOKEN (contents: read) and
-// GITHUB_REPOSITORY set; GITHUB_STEP_SUMMARY when there is one. `--once` reads the lock once and prints it (the probe in
-// deploy-dev.yml's verify: this module loads on the runner and the job token reads the lock). Same no-install
-// constraint as deploy-base.ts, but a wider import chain: bot/lock.ts brings bot/config.ts → identifiers.ts (reads the
-// tracked identifiers.json at import) → mac-root.ts, and bot/sh.ts — node: builtins only, as the bot CLI already
-// runs them under plain node.
+// Run: `node scripts/src/main-dev-wait.ts <dev|devb> [--once]` with GITHUB_TOKEN (contents: read, actions: read) and
+// GITHUB_REPOSITORY set; GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT (the runner's own) for the cap; GITHUB_STEP_SUMMARY when
+// there is one. `--once` reads the lock once and main's Deploy runs once, and prints both (the probe in deploy-dev.yml's
+// verify: this module loads on the runner and the job token reads the lock and the runs). Same no-install constraint
+// as deploy-base.ts, but a wider import chain: bot/lock.ts brings bot/config.ts → identifiers.ts (reads the tracked
+// identifiers.json at import) → mac-root.ts, and bot/sh.ts; bot/dispatch.ts — node: builtins only, as the bot CLI
+// already runs them under plain node.
 import { appendFileSync } from 'node:fs';
 import { makeApi } from './bot/api.ts';
+import type { Api } from './bot/api.ts';
 import { OWNER, REPO } from './bot/config.ts';
-import type { Clock } from './bot/dispatch.ts';
+import { listJobs, listRuns } from './bot/dispatch.ts';
+import type { Clock, Run } from './bot/dispatch.ts';
 import { SLOTS, isExpired, readLock, waitForLock } from './bot/lock.ts';
 import type { Holder } from './bot/lock.ts';
 
-export const CEILING_MS = 60 * 60_000;
+export const CEILING_MS = 60 * 60_000; // from the oldest merge riding in the run
+export const FLOOR_MS = 15 * 60_000; // from this wait's start, whatever the oldest merge's age
+const RUNS = 30; // main's newest Deploy runs: this one, at most one pending behind it, and the superseded ones before
+export const WALK_MAX = 10; // superseded runs checked for jobs; past that, the oldest found (a later deadline)
 // Before the first read: the bot refuses the slot once it sees this job running (bot/main-pending.ts); a lane that
 // wrote its lock just before that sighting must be read here, so the first read comes after any jobs-API lag.
 export const SETTLE_MS = 20_000;
@@ -40,6 +53,52 @@ const safeBranch = (b: string) => b.replace(/[^A-Za-z0-9._/-]/g, '?').slice(0, 8
 const sha7 = (s: string) => /^[0-9a-f]{7}/.exec(s)?.[0] ?? '???????';
 export const who = (h: Holder | null) =>
   h ? `${safeBranch(h.branch)} @ ${sha7(h.sha)}` : 'an unreadable holder';
+
+// The runs just before `selfId`, newest first, for as long as each is completed and cancelled: the candidates for
+// "superseded while pending" (mergeAnchor keeps those with no jobs). Sorted by id, not trusting the listing's order.
+export function cancelledBefore(runs: Run[], selfId: number): Run[] {
+  const out: Run[] = [];
+  for (const r of runs.filter((x) => x.id < selfId).sort((a, b) => b.id - a.id)) {
+    if (r.status !== 'completed' || r.conclusion !== 'cancelled') break;
+    out.push(r);
+  }
+  return out;
+}
+
+export interface Anchor {
+  at: number; // the oldest riding merge's created_at (ms)
+  sha: string;
+  superseded: number; // runs whose commits ride in this one
+}
+
+// The oldest merge riding in run `selfId`: its own push, or the zero-job cancelled runs just before it. A cancelled run
+// with jobs (cancelled mid-run by hand) ended the queue there, and so does any finished run: a failed or long-past
+// predecessor never shortens this wait. Throws when `selfId` isn't listed or a date won't parse.
+export async function anchorIn(api: Api, runs: Run[], selfId: number): Promise<Anchor> {
+  const self = runs.find((r) => r.id === selfId);
+  if (!self) throw new Error(`run ${selfId} isn't among main's newest ${RUNS} Deploy runs`);
+  const riding = [self];
+  for (const r of cancelledBefore(runs, selfId).slice(0, WALK_MAX)) {
+    if ((await listJobs(api, r.id)).length) break;
+    riding.push(r);
+  }
+  const oldest = riding.at(-1) ?? self;
+  const at = Date.parse(oldest.created_at);
+  if (Number.isNaN(at)) throw new Error(`run ${oldest.id} has no readable created_at`);
+  return { at, sha: oldest.head_sha ?? '', superseded: riding.length - 1 };
+}
+
+export const mainRuns = (api: Api) =>
+  listRuns(api, 'deploy.yml', `per_page=${RUNS}&event=push&branch=main`);
+
+// CEILING_MS from the oldest riding merge (an anchor in the future counts as now), at least FLOOR_MS from the wait's
+// start; with no anchor, CEILING_MS from the start.
+export const deadlineOf = (anchorAt: number | null, start: number) =>
+  anchorAt === null
+    ? start + CEILING_MS
+    : Math.max(Math.min(anchorAt, start) + CEILING_MS, start + FLOOR_MS);
+
+const utc = (ms: number) => `${new Date(ms).toISOString().slice(11, 16)} UTC`;
 
 export interface Deps {
   argv: string[];
@@ -89,17 +148,54 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
     } catch (err) {
       log(`::warning title=${slot} lock probe failed::${clean((err as Error).message)}`);
     }
+    // The cap's half: main's Deploy runs, and the anchor the newest of them would wait from.
+    try {
+      const runs = await mainRuns(api);
+      const newest = runs.reduce<Run | null>((m, r) => (!m || r.id > m.id ? r : m), null);
+      if (!newest) log('wait-cap probe: no main Deploy runs listed — read with the job token');
+      else {
+        const a = await anchorIn(api, runs, newest.id);
+        log(
+          `wait-cap probe: ${runs.length} main Deploy runs listed; the newest (${sha7(newest.head_sha ?? '')}) would wait from ${sha7(a.sha)}'s merge at ${utc(a.at)}, ${a.superseded} superseded riding — read with the job token`,
+        );
+      }
+    } catch (err) {
+      log(`::warning title=wait-cap probe failed::${clean((err as Error).message)}`);
+    }
     return 0;
   }
-  log(`${slot}: waiting while refs/locks/${slot} is held (ceiling ${CEILING_MS / 60_000} min)`);
+  log(`${slot}: waiting while refs/locks/${slot} is held`);
   await clock.sleep(SETTLE_MS);
   const start = clock.now();
+  // The cap (header): from the oldest merge riding here, else — a re-run, no run id, a failed listing — from now.
+  const runId = Number(env.GITHUB_RUN_ID);
+  let anchor: Anchor | null = null;
+  if (!Number.isSafeInteger(runId) || runId <= 0)
+    log(`${slot}: no GITHUB_RUN_ID — the cap counts from this wait's start`);
+  else if (env.GITHUB_RUN_ATTEMPT !== '1')
+    log(`${slot}: a re-run — the cap counts from this wait's start`);
+  else
+    try {
+      anchor = await anchorIn(api, await mainRuns(api), runId);
+    } catch (err) {
+      log(
+        `::warning title=${slot} wait cap fell back::${clean((err as Error).message)} — the cap counts ${CEILING_MS / 60_000} min from this wait's start`,
+      );
+    }
+  const deadline = deadlineOf(anchor?.at ?? null, start);
+  const floored = anchor !== null && deadline === start + FLOOR_MS;
+  const cap = !anchor
+    ? `${CEILING_MS / 60_000} min of waiting`
+    : floored
+      ? `the ${FLOOR_MS / 60_000}-minute minimum (the oldest merge riding here, ${sha7(anchor.sha)}, merged at ${utc(anchor.at)})`
+      : `${CEILING_MS / 60_000} min from the oldest merge riding here, ${sha7(anchor.sha)} at ${utc(anchor.at)}${anchor.superseded ? ` (${anchor.superseded} superseded run${anchor.superseded > 1 ? 's' : ''} ride here)` : ''}`;
+  log(`${slot}: cap ${utc(deadline)} — ${cap}`);
   let slept = false;
   const timed: Clock = { now: clock.now, sleep: (ms) => ((slept = true), clock.sleep(ms)) };
   const mins = () => Math.round((clock.now() - start) / 60_000);
   try {
     const r = await waitForLock(api, 'main', timed, {
-      maxMs: CEILING_MS,
+      maxMs: Math.max(0, deadline - clock.now()),
       slots: [slot],
       maxErrors: MAX_ERRORS,
       log,
@@ -107,7 +203,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
     if (r.outcome === 'gave-up')
       loud(
         `${slot} deploy waited ${mins()} min and went anyway`,
-        `The ${slot} lock was still held by ${who(r.holder)} after the ${CEILING_MS / 60_000}-minute ceiling (renewed past its TTL): this deploy replaces that branch on ${slot} mid-test. Its devcheck's build-marker check will say so; re-run its \`pnpm bot deploy-dev\` after this run's ${slot} job.`,
+        `The ${slot} lock was still held by ${who(r.holder)} at this run's cap, ${cap} (a lock renewed past its TTL): this deploy replaces that branch on ${slot} mid-test. Its devcheck's build-marker check will say so; re-run its \`pnpm bot deploy-dev\` after this run's ${slot} job.`,
       );
     else if (!slept && r.outcome === 'free') log(`${slot} lock free — deploying`);
     else
