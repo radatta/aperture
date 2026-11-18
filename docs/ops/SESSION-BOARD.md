@@ -533,6 +533,38 @@ What it means:
   local checks (2.4–6.9 GiB, partly neighbours' noise; a `--feature` local check is unmeasured solo)); `build`
   wasn't measured.
 
+**The warm-caches A/B** (2026-11-18, `pnpm lanes start`'s cache warm: `docs/ops/LANES.md` → _Start_, step 9). In a
+scratch clone on the `/workspace` mount (the lanes' filesystem), 8 merged PRs since the lockfile's last change: the
+cold arm clears the caches (each package's `node_modules/.tmp`, `packages/shared/dist`, the eslint cache) and runs
+`tsc -b` then `pnpm lint` at the PR's head; the warm arm runs the warm at the PR's parent, checks the head out (only
+the PR's files change, as a lane's edits do) and runs them again. Arm order alternated; every arm started on a calm
+`pace.json` (CPU PSI at start median 0.25). Seconds, wall:
+
+| PR       | cold tc / lint | the warm (tc + lint) | warmed tc (projects rebuilt) / lint | saved | net CPU vs cold |
+| -------- | -------------- | -------------------- | ----------------------------------- | ----- | --------------- |
+| ee4eddb0 | 35.5 / 19.0    | 46.1                 | 3.2 (1) / 3.2                       | 48.1  | +3 %            |
+| a5778716 | 21.6 / 13.4    | 42.5                 | 5.4 (2) / 9.5                       | 20.1  | +34 %           |
+| 78460c32 | 21.6 / 14.4    | 34.0                 | 15.4 (5) / 5.3                      | 15.3  | +56 %           |
+| 1ec67c6a | 21.6 / 13.5    | 34.0                 | 2.2 (1) / 3.2                       | 29.7  | +11 %           |
+| f21276b7 | 21.6 / 13.4    | 35.0                 | 13.4 (5) / 4.2                      | 17.4  | +48 %           |
+| c5797521 | 30.6 / 18.0    | 36.1                 | 7.3 (2) / 8.4                       | 32.9  | +8 %            |
+| ed18ecc6 | 26.2 / 13.5    | 40.6                 | 21.4 (4) / 5.3                      | 13.0  | +59 %           |
+| 6304cd23 | 20.6 / 13.4    | 33.0                 | 14.4 (5) / 4.2                      | 15.4  | +51 %           |
+
+- **Saved:** median 18.8 s of a lane's first typecheck + lint (mean 24, min 13): typecheck 12.2, lint 9.2. A
+  no-change repeat is 1.2 s. Lanes' history (since 11-17) has first runs at a median 27.5 s / 18.5 s and repeats at
+  5.3 / 5.6 (n = 42 / 52), so live first runs sit nearer the cold arm than the warm one.
+- **Added CPU:** median +41 % of the cold run (+19 CPU-s), almost all typecheck (+44 %; lint +18 %). The bad case is
+  an edit to `packages/shared`: 4–5 projects recheck after the warm anyway. The pre-set bar was +20 %; it shipped
+  past it because the extra runs niced and only on a box judged calm (warm-caches `decisions.md` 15).
+- **After a rebase** onto a moved main (7 real ones): tc + lint median 20.8 s against ~4 s for a repeat, so a rebase
+  costs ~16 s whether or not the lane was warmed. No re-warm: the gate follows the rebase at once.
+- **Safety probes**: two `tsc -b` or two `eslint --cache` at once in one checkout both exit 0, and the next run still
+  catches a planted type error; a half-truncated buildinfo or eslint cache is rebuilt (exit 0), never trusted. The
+  real spawn (`execFileSync` of `setsid -f bash warm.sh`) returned in 5 ms; the warm took 36.3 s, 2139 MiB subtree
+  RSS, +111 container pids — `classes.warm` is 30 pids (the subtree's 25 threads; the pids delta carries neighbours)
+  / 2200 MiB / 120 s.
+
 ## Control tower
 
 `scripts/board/tower.sh` — a full-screen board for its own tmux window (it replaces a
