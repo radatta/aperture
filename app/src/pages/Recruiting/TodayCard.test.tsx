@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { focusManager } from '@tanstack/react-query';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_COACH_PICK_KEY } from '../../data/stubClient';
 import { ApiError } from '../../data/retry';
@@ -674,6 +675,32 @@ describe('the Today card’s mocks', () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' })),
     );
+  });
+
+  it('a cancel whose read-back failed pends no move: the row going on a later read leaves focus alone', async () => {
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    await api.upsertMock({ status: 'planned', day: addDays(today, 1) });
+    renderApp({ api, path: '/recruiting' });
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    const cancel = await within(queue).findByRole('button', {
+      name: 'Cancel — mock tomorrow, with a person',
+    });
+    const read = vi
+      .spyOn(api, 'getCoachToday')
+      .mockRejectedValueOnce(new ApiError('Bad gateway', 502));
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(within(queue).getByText('Mock interview')).toBeTruthy(); // the failed read left the row
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true); // a later read
+    });
+    await waitFor(() => expect(within(queue).queryByText('tomorrow')).toBeNull());
+    focusManager.setFocused(undefined);
+    expect(document.activeElement).toBe(document.body);
   });
 
   it('Log it opened on a mock whose cancel then lands closes with it', async () => {
