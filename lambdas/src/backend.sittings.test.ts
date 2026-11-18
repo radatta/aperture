@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
@@ -20,7 +20,20 @@ import { BackendClient } from './backend';
 // sitting's raw bulk (snapshots, replay, submit details), 14 days past its ingest window; everything kept
 // forever carries none. And a double-fired Start makes one sitting, one rep.
 const T0 = 1_700_000_000_000;
-function setup(stage = 'prod', opts: { sittingStartsPerDay?: number } = {}) {
+// The Start gate's caps default by the process's STAGE: every test starts with none (prod's caps), whatever
+// the shell running vitest exports; a test that wants one sets it (withStage).
+const STAGE_BEFORE = process.env.STAGE;
+beforeEach(() => {
+  delete process.env.STAGE;
+});
+afterAll(() => {
+  if (STAGE_BEFORE === undefined) delete process.env.STAGE;
+  else process.env.STAGE = STAGE_BEFORE;
+});
+function setup(
+  stage = 'prod',
+  opts: { sittingStartsPerDay?: number; lcStartAttemptsPerDay?: number } = {},
+) {
   const doc = new InMemoryDoc();
   const now = { t: T0 };
   const backend = new BackendClient(new Repo(doc, liveWrites(doc, stage), 'u1'), {
@@ -265,8 +278,19 @@ describe('sittings on the table', () => {
           backend.lcSittingStart({ ...start(), problemSlug: 'a-2', problemTitle: 'A' }),
         ).rejects.toThrow(LC_START_ATTEMPT_CAP_ERROR);
       }));
-    it('an explicit cap wins over the stage', () =>
+    it('an explicit Starts cap wins over the stage', () =>
       withStage('dev', () => startsUntilRefused(3, 5, { sittingStartsPerDay: 5 })));
+    it('an explicit attempts cap wins over the stage', () =>
+      withStage('dev', async () => {
+        const { doc, backend } = setup('prod', { lcStartAttemptsPerDay: 5 });
+        await linked(backend);
+        await startDone(backend, 'first');
+        await seedGate(doc, { attempts: 4 });
+        await startDone(backend, 'a-1');
+        await expect(
+          backend.lcSittingStart({ ...start(), problemSlug: 'a-2', problemTitle: 'A' }),
+        ).rejects.toThrow(LC_START_ATTEMPT_CAP_ERROR);
+      }));
   });
 });
 

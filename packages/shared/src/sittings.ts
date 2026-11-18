@@ -42,7 +42,7 @@ export const SITTING_EVENTS_PER_CALL = 50;
 export const SITTING_CALL_BYTES = 256 * 1024;
 export const SITTING_MAX_EVENTS = 3000;
 export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
-// Starts a day: well above real use (a handful); a leaked token's ceiling is this many visible junk reps a day.
+// Starts a day: well above real use (a handful), a backstop on any caller's Starts.
 // The dev slots get 10×: a full dev check starts ~20–25 sittings on one test user, so a few runs spent prod's cap.
 // Any stage that isn't a dev slot — unset or unknown included — gets prod's.
 export const SITTING_STARTS_PER_DAY = 100;
