@@ -789,6 +789,14 @@ run_sim_ci() (
   }
   # the runner boots in 67–287 s (phase 1), past sim.sh's 90 s cap for its re-arm and sign-in reboots
   # shellcheck disable=SC2034
+  # Rows run 2: sim.sh's sign-in waits are the Mac's. On the runner the Cognito sheet was still loading at its one
+  # host check, 3 s after the tap (COGNITO_HOST), and the app's reload after submit outlasted its ~60-100 s of Home
+  # reads (AUTH_REJECTED, the bar already back on the app's origin). Same checks, more patience: the host check retried
+  # for ~30 s (the password is still typed only after it passes, at both checks), each Home read 3 s further apart.
+  eval "ci_orig_on_cognito() $(declare -f sim_on_cognito | sed 1d)"
+  sim_on_cognito() { local i; for i in 1 2 3 4 5 6 7 8 9 10; do ci_orig_on_cognito "$@" && return 0; sleep 3; done; return 1; }
+  eval "ci_orig_landmark() $(declare -f sim_landmark | sed 1d)"
+  sim_landmark() { local r; r="$(ci_orig_landmark)" || return 1; [ "$r" = already ] || sleep 3; printf '%s\n' "$r"; }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
