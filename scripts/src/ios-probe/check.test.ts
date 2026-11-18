@@ -6,6 +6,7 @@ import {
   checkJob,
   DEV_DATA,
   NAV_MARKS,
+  NAV_READS,
   NAV_XS,
   NAV_Y,
   SKIP,
@@ -24,8 +25,10 @@ function fakePage(els: (Omit<AxEl, 'enabled'> & { enabled?: boolean })[], fixedL
     calls: string[];
     move: (label: string, dy: number) => void;
     drop: (label: string) => void;
+    add: (el: Omit<AxEl, 'enabled'>) => void;
   } = {
     calls: [],
+    add: (el) => void layout.push({ enabled: true, ...el, frame: { ...el.frame } }),
     move: (label, dy) => layout.filter((x) => x.label === label).forEach((x) => (x.frame.y += dy)),
     drop: (label) => {
       const at = layout.findIndex((x) => x.label === label);
@@ -395,6 +398,101 @@ describe('checkJob mirrors sim.sh', () => {
     expect((await checkJob(moved, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]!.note).toMatch(
       /^NAV_UNCONFIRMED: no Bulk add \(AXButton\) at 369 × 232\/212\/252/,
     );
+  });
+
+  describe("nav's read-back ladder, as sim_op_nav's (F198)", () => {
+    const TAB = {
+      role: 'AXLink',
+      label: 'Tasks',
+      value: '',
+      frame: { x: 110, y: 155, w: 50, h: 26 },
+    };
+    const BULK = {
+      role: 'AXButton',
+      label: 'Bulk add',
+      value: '',
+      frame: { x: 318, y: 212, w: 102, h: 34 },
+    };
+    // The landmark shows after `after` settles (counting from the first tap), only from the top if `onTop`, or only
+    // after a second tap; `dropTab` takes the tab away after the first tap.
+    const slow = (o: {
+      after?: number;
+      onTop?: boolean;
+      secondTap?: boolean;
+      dropTab?: boolean;
+    }) => {
+      const page = fakePage([TAB]);
+      let settles = 0;
+      let taps = 0;
+      let shown = false;
+      const show = () => {
+        if (shown) return;
+        shown = true;
+        page.add(BULK);
+      };
+      const { click, settle, scrollTop } = page;
+      page.click = async (p) => {
+        await click(p);
+        taps++;
+        if (o.dropTab && taps === 1) page.drop('Tasks');
+        if (o.secondTap && taps === 2) show();
+      };
+      page.settle = async () => {
+        await settle();
+        if (taps > 0 && ++settles === o.after) show();
+      };
+      page.scrollTop = async () => {
+        await scrollTop();
+        if (o.onTop && taps > 0) show();
+      };
+      return { page, taps: () => taps };
+    };
+    const nav = async (page: ReturnType<typeof fakePage>) =>
+      (await checkJob(page, job([{ op: 'nav', tab: 'Tasks' }]))).ops[1]!;
+    it('the landmark within the first window: plain "on Tasks"', async () => {
+      expect(await nav(slow({ after: NAV_READS }).page)).toMatchObject({
+        status: 'pass',
+        note: 'on Tasks',
+      });
+    });
+    it('within the second: "the page came up late"', async () => {
+      expect((await nav(slow({ after: NAV_READS + 1 }).page)).note).toBe(
+        'on Tasks; the page came up late',
+      );
+    });
+    it('only from the top of the page: its own note', async () => {
+      expect((await nav(slow({ onTop: true }).page)).note).toBe(
+        'on Tasks; its landmark showed once the page was scrolled to the top',
+      );
+    });
+    it('only after a second tap: "tapped again", and exactly two taps', async () => {
+      const s = slow({ secondTap: true });
+      expect((await nav(s.page)).note).toBe(
+        "on Tasks; tapped again (the page wasn't Tasks after the first tap)",
+      );
+      expect(s.taps()).toBe(2);
+    });
+    it('never: NAV_UNCONFIRMED after two taps; the tab gone at the re-tap: NAV_UNCONFIRMED too', async () => {
+      const never = slow({});
+      expect(await nav(never.page)).toMatchObject({ status: 'fail' });
+      expect((await nav(slow({}).page)).note).toMatch(/^NAV_UNCONFIRMED: .*; tapped twice$/);
+      expect(never.taps()).toBe(2);
+      expect((await nav(slow({ dropTab: true }).page)).note).toMatch(
+        /^NAV_UNCONFIRMED: .*; the tab wasn't there to tap again$/,
+      );
+    });
+    it("its notes are sim.sh's, word for word", () => {
+      const sh = readFileSync(
+        new URL('../../../tools/mailroom/jobs/sim.sh', import.meta.url),
+        'utf8',
+      );
+      for (const n of [
+        '; the page came up late',
+        '; its landmark showed once the page was scrolled to the top',
+        "; tapped again (the page wasn't $tab after the first tap)",
+      ])
+        expect(sh).toContain(n);
+    });
   });
 
   it("models sim.sh's nav landmarks exactly (sim_nav_mark)", () => {

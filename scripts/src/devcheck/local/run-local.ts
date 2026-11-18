@@ -4,8 +4,8 @@
 // with locally signed tokens; the app from `vite dev`. No dev lock, no deploy, no network past 127.0.0.1.
 // A pre-flight before `pnpm bot deploy-dev`: a red run blocks the lock, a green one proves nothing about dev.
 import { execFile } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
@@ -23,7 +23,7 @@ import { parseArgs, shasFor } from '../run';
 import { SCENARIOS, selectFeature, selectScenarios, slowScenarios } from '../scenarios/index';
 import { DevcheckError } from '../errors';
 import { runProbes } from '../../ios-probe/run';
-import { freePort, startLocalServer, startVite, type Proc } from './server';
+import { freePort, startLocalServer, startVite, viteReloads, type Proc } from './server';
 import { localSkip } from './skips';
 import {
   LOCAL_CLAUDE_CLIENT,
@@ -69,6 +69,28 @@ async function main(): Promise<number> {
     !!(await git(['--no-optional-locks', 'status', '--porcelain', '--', ':/scripts/src/devcheck'])),
   );
   const dirty = !!(await git(['--no-optional-locks', 'status', '--porcelain']));
+  // The tree's uncommitted state, to tell whether it changed under the run (Vite no longer reloads on an edit, but
+  // a module first requested after one is served edited).
+  // A stamp that can't be taken (a diff past the buffer) is null and compares as unchanged.
+  const treeStamp = async (): Promise<string | null> => {
+    const out = (a: string[]) =>
+      exec('git', ['--no-optional-locks', ...a], { cwd: worktree, maxBuffer: 64 << 20 }).then(
+        (r) => r.stdout,
+      );
+    try {
+      const h = createHash('sha256').update(await out(['diff', 'HEAD', '--binary']));
+      // Untracked files by name, size and mtime: an edit to one (a new test between rounds) moves the stamp too.
+      for (const f of (await out(['ls-files', '-z', '--others', '--exclude-standard'])).split('\0'))
+        if (f) {
+          const st = statSync(join(worktree, f), { throwIfNoEntry: false });
+          h.update(`${f}\0${st?.size}\0${st?.mtimeMs}\n`);
+        }
+      return h.digest('hex');
+    } catch {
+      return null;
+    }
+  };
+  const treeAtStart = await treeStamp();
   const scenarios = selectScenarios(args.tier, args.scenarios, SCENARIOS);
   const feature = selectFeature(args.feature, scenarios);
   const changed = await Promise.all([
@@ -139,6 +161,8 @@ async function main(): Promise<number> {
         VITE_BUILD_SHA: head,
       },
     });
+    const viteLog = join(out, 'vite.log');
+    let viteMark: number | null = null; // vite.log's bytes once signed in: the first load's optimizer reload comes before
     useLocalOrigin(origin);
     log(
       `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} — server :${server.port} (pid ${server.proc.pid}), app ${origin}, up in ${Date.now() - t0} ms → ${out}`,
@@ -179,6 +203,7 @@ async function main(): Promise<number> {
               await page.goto(`${origin}/tasks`, { waitUntil: 'domcontentloaded' });
               await page.locator(SHELL).waitFor({ timeout: 60_000 });
             }
+            viteMark = statSync(viteLog).size;
             const s = await readCheckedSession(page, auth.env);
             if (!s)
               throw new DevcheckError(
@@ -201,9 +226,29 @@ async function main(): Promise<number> {
       now: Date.now,
       log,
     });
+    // What a step failing mid-run may have failed on instead of the code: a reload Vite did, or the tree moving.
+    // Never signed in: no step ran on the page, and the first load's reload is expected.
+    const reloads =
+      viteMark === null
+        ? []
+        : viteReloads(readFileSync(viteLog).subarray(viteMark).toString('utf8'));
+    const treeAtEnd = await treeStamp();
+    const treeChanged = !!treeAtStart && !!treeAtEnd && treeAtEnd !== treeAtStart;
+    const notes = [
+      ...(reloads.length
+        ? [
+            `**Vite reloaded the page mid-run** (${reloads.length}): ${reloads.map((l) => `\`${l}\``).join(', ')} — a step failing near one failed on the reload`,
+          ]
+        : []),
+      ...(treeChanged
+        ? [
+            '**The working tree changed during the run** — a module first loaded after the edit was served edited; rerun on a still tree',
+          ]
+        : []),
+    ];
     const md = toLocalReport(renderReport(result)).replace(
       /^(Run `.*)$/m,
-      `$1\nTarget: local (HEAD \`${head.slice(0, 7)}\` served by vite dev${dirty ? ', working tree dirty' : ''}) — dev remains the proof`,
+      `$1\nTarget: local (HEAD \`${head.slice(0, 7)}\` served by vite dev${dirty ? ', working tree dirty' : ''}) — dev remains the proof${notes.map((n) => `\n${n}`).join('')}`,
     );
     const write = (probe?: { ok: boolean; text: string; results: unknown[] }) => {
       writeFileSync(
@@ -213,7 +258,11 @@ async function main(): Promise<number> {
       const iosProbe = probe ? { iosProbe: { ok: probe.ok, results: probe.results } } : {};
       writeFileSync(
         join(out, 'report.json'),
-        JSON.stringify({ ...result, target: 'local', ...iosProbe }, null, 2) + '\n',
+        JSON.stringify(
+          { ...result, target: 'local', viteReloads: reloads, treeChanged, ...iosProbe },
+          null,
+          2,
+        ) + '\n',
       );
     };
     write();
@@ -221,12 +270,20 @@ async function main(): Promise<number> {
     // first, so a probe crash can't lose it; the crash is the probe's failure, reported as one.
     const probes = await (async () => {
       const port = await freePort();
-      await startVite({ worktree, track, port, env: {}, logPath: join(out, 'vite-probe.log') });
-      return runProbes({
+      const probeLog = join(out, 'vite-probe.log');
+      await startVite({ worktree, track, port, env: {}, logPath: probeLog });
+      const p = await runProbes({
         origin: `http://127.0.0.1:${port}`,
         shotsDir,
         log: (m) => log(`ios-probe ${m}`),
       });
+      // open()'s first-load optimizer reload is expected; an edit's reload isn't.
+      const edits = viteReloads(readFileSync(probeLog, 'utf8')).filter((l) =>
+        /page reload/i.test(l),
+      );
+      return edits.length
+        ? { ...p, text: `${p.text}\nVite reloaded the probe's page: ${edits.join('; ')}` }
+        : p;
     })().catch((err: unknown) => ({
       ok: false,
       text: `iOS probe check: FAIL — it couldn't run: ${err instanceof Error ? err.message : String(err)}`,

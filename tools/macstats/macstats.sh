@@ -66,9 +66,11 @@ power() {
 # render HOST T → the JSON on stdout, from $VM, $SYSCTL, $PS
 render() {
   local page free active inactive spec wired comp mem ncpu load swap_total swap_used level vm pw
-  page=$(printf '%s\n' "$VM" | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "of") { print $(i + 1); exit } }')
+  # An awk that exits early reads a here-string, never a pipe: bash's printf writes a line at a time, and one write
+  # after awk exited is SIGPIPE, a failed render under pipefail (F205: seen under load).
+  page=$(awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "of") { print $(i + 1); exit } }' <<<"$VM")
   [ -n "$page" ] || { echo "macstats: no page size in vm_stat" >&2; return 1; }
-  pages() { printf '%s\n' "$VM" | awk -F: -v k="$1" '$1 == k { gsub(/[ .]/, "", $2); print $2; exit }'; }
+  pages() { awk -F: -v k="$1" '$1 == k { gsub(/[ .]/, "", $2); print $2; exit }' <<<"$VM"; }
   free=$(pages 'Pages free'); active=$(pages 'Pages active'); inactive=$(pages 'Pages inactive')
   spec=$(pages 'Pages speculative'); wired=$(pages 'Pages wired down'); comp=$(pages 'Pages occupied by compressor')
   for v in "$free" "$active" "$inactive" "$wired" "$comp"; do

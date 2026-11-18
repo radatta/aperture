@@ -30,6 +30,7 @@ import {
   DEFER_NOTE,
   exitCode,
   runPipeline,
+  transient,
   type BrowserSession,
   type PipelineDeps,
 } from './pipeline';
@@ -564,6 +565,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       deleteCategory: async (id) => {
+        // As the server: refused while a task is on it (backend.ts deleteCategory, no reassign).
+        if ([...tasks.values()].some((t) => t.categoryId === id))
+          throw new Error('deleteCategory → HTTP 400: {"error":"Category has references"}');
         categoriesDeleted.push(id);
         categories.delete(id);
       },
@@ -716,6 +720,7 @@ function deps(
     makeMcp: w.mcp,
     now: () => (t += 10),
     log: () => undefined,
+    sleep: async () => undefined,
     ...over,
   };
 }
@@ -1345,7 +1350,7 @@ describe('runPipeline', () => {
     expect(w.placesDeleted).toEqual([]);
   });
 
-  it('deletes a category this run created (after its tasks — cleanup is newest-first), by its recorded id only', async () => {
+  it('deletes a category this run created (after every other kind), by its recorded id only', async () => {
     const w = world();
     const ledger = memLedger();
     const cat = (id: string): DevCategory => ({
@@ -1372,6 +1377,198 @@ describe('runPipeline', () => {
       [taskId, 'deleted'],
     ]);
     expect(r.status).toBe('PASS');
+  });
+
+  describe('categories go last (F203)', () => {
+    const cat = (id: string): DevCategory => ({
+      id,
+      label: id,
+      isWork: true,
+      order: 0,
+      active: true,
+      area: null,
+    });
+    it('the sweep removes a killed run’s tasks before their category, whichever was made first', async () => {
+      // old1 predates c0 and was moved onto it; old2 was made on it: neither creation order works alone.
+      const w = world({ existing: ['old1', 'old2'] });
+      w.tasks.get('old1')!.categoryId = 'c0';
+      w.tasks.get('old2')!.categoryId = 'c0';
+      w.categories.set('c0', cat('c0'));
+      const ledger = memLedger([
+        { run: 'run0', op: 'created', id: 'old1' },
+        { run: 'run0', op: 'created', id: 'c0', via: CATEGORY_VIA, title: 'Garden' },
+        { run: 'run0', op: 'created', id: 'old2' },
+      ]);
+      const r = await runPipeline(deps(w, [], ledger));
+      expect(w.deleted).toEqual(['old1', 'old2']);
+      expect(w.categoriesDeleted).toEqual(['c0']);
+      expect(r.swept).toEqual(['old1', 'old2', 'c0']);
+      expect(r.failedDeletes).toEqual([]);
+      expect(r.status).toBe('PASS');
+    });
+    it('cleanup removes this run’s category after a task made before it and moved onto it', async () => {
+      const w = world();
+      const ledger = memLedger();
+      const early = 'a1';
+      const sc = scenario(async (x) => {
+        ledger.append({ run: 'run1', op: 'created', id: early, via: 'api:createTask' });
+        x.tasks.set(early, { id: early, title: 'before the category' });
+        ledger.append({ run: 'run1', op: 'created', id: 'c1', via: CATEGORY_VIA, title: 'c1' });
+        x.categories.set('c1', cat('c1'));
+        x.tasks.get(early)!.categoryId = 'c1'; // moved onto it: newest-first alone would try c1 first
+      })(w);
+      const r = await runPipeline(deps(w, [sc], ledger));
+      expect(w.deleted).toEqual([early]);
+      expect(w.categoriesDeleted).toEqual(['c1']);
+      expect(r.created.map((c) => c.final)).toEqual(['deleted', 'deleted']);
+      expect(r.failedDeletes).toEqual([]);
+      expect(r.status).toBe('PASS');
+    });
+    it('a category an unledgered task still holds is kept, the refusal names it, and that task is never touched', async () => {
+      const w = world({ existing: ['old1', 'users-own'] });
+      w.tasks.get('old1')!.categoryId = 'c0';
+      w.tasks.get('users-own')!.categoryId = 'c0';
+      w.categories.set('c0', cat('c0'));
+      const series = {
+        id: 's9',
+        title: 's9',
+        rule: { kind: 'daily' },
+        active: true,
+        anchorDate: '2026-11-17',
+      };
+      w.api.reads.listSeries = async () => [{ ...series, categoryId: 'c0' }];
+      const ledger = memLedger([
+        { run: 'run0', op: 'created', id: 'c0', via: CATEGORY_VIA },
+        { run: 'run0', op: 'created', id: 'old1' },
+      ]);
+      const r = await runPipeline(deps(w, [], ledger));
+      expect(w.deleted).toEqual(['old1']);
+      expect(w.categoriesDeleted).toEqual([]);
+      expect(w.tasks.has('users-own')).toBe(true);
+      expect(r.failedDeletes).toEqual([
+        'c0: deleteCategory → HTTP 400: {"error":"Category has references"} — still referenced by ledgered: none; not in the ledger (never touched): task users-own, series s9',
+      ]);
+      expect(r.retried).toEqual([]);
+      expect(r.codes).toContain('LEFTOVERS');
+    });
+  });
+
+  describe('a dropped connection during cleanup is retried, and says so (F177)', () => {
+    const terminated = () => new TypeError('terminated');
+    it('transient() is a dropped socket, never an answer or the harness’s own refusal', () => {
+      expect(transient(terminated())).toBe(true);
+      expect(transient(new TypeError('fetch failed', { cause: { code: 'ECONNRESET' } }))).toBe(
+        true,
+      );
+      expect(transient(new Error('x', { cause: { code: 'UND_ERR_SOCKET' } }))).toBe(true);
+      expect(transient(new TypeError('fetch failed', { cause: { code: 'ENOTFOUND' } }))).toBe(
+        false,
+      );
+      expect(transient(new Error('deleteTask → HTTP 400: nope'))).toBe(false);
+      expect(transient(new DevcheckError('LEDGER_GUARD', 'refusing'))).toBe(false);
+      expect(transient('terminated')).toBe(false);
+    });
+    it('a delete dropped once is tried again: removed, one retry line, PASS', async () => {
+      const w = world();
+      const del = w.api.writes.deleteTask;
+      let drops = 1;
+      w.api.writes.deleteTask = async (id) => {
+        if (drops-- > 0) throw terminated();
+        await del(id);
+      };
+      const waits: number[] = [];
+      const r = await runPipeline(
+        deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)], memLedger(), {
+          sleep: async (ms) => void waits.push(ms),
+        }),
+      );
+      expect(r.retried).toEqual(['t1: terminated (attempt 1 of 3)']);
+      expect(waits).toEqual([500]);
+      expect(r.created.map((c) => c.final)).toEqual(['deleted']);
+      expect(r.status).toBe('PASS');
+    });
+    it('a delete that landed but whose answer was lost reads deleted (swept), not gone', async () => {
+      const w = world({ existing: ['old1'] });
+      const del = w.api.writes.deleteTask;
+      let drops = 1;
+      w.api.writes.deleteTask = async (id) => {
+        await del(id);
+        if (drops-- > 0) throw terminated();
+      };
+      const ledger = memLedger([{ run: 'run0', op: 'created', id: 'old1' }]);
+      const r = await runPipeline(deps(w, [], ledger));
+      expect(r.swept).toEqual(['old1']);
+      expect(ledger.entries.find((e) => e.id === 'old1' && e.run === 'run1')?.op).toBe('swept');
+      expect(r.status).toBe('PASS');
+    });
+    it('dropped every time: three tries, two retry lines, then reported and left pending', async () => {
+      const w = world({ existing: ['old1'] });
+      w.api.writes.deleteTask = async () => {
+        throw terminated();
+      };
+      const ledger = memLedger([{ run: 'run0', op: 'created', id: 'old1' }]);
+      const r = await runPipeline(deps(w, [], ledger));
+      expect(r.retried).toEqual([
+        'old1: terminated (attempt 1 of 3)',
+        'old1: terminated (attempt 2 of 3)',
+      ]);
+      expect(r.failedDeletes).toEqual(['old1: terminated']);
+      expect(r.codes).toContain('LEFTOVERS');
+      expect(ledger.entries.filter((e) => e.id === 'old1').map((e) => e.op)).toEqual(['created']);
+    });
+    it('an HTTP error is never retried', async () => {
+      const w = world({ existing: ['old1'] });
+      let calls = 0;
+      w.api.writes.deleteTask = async () => {
+        calls++;
+        throw new Error('deleteTask → HTTP 500: boom');
+      };
+      const r = await runPipeline(
+        deps(w, [], memLedger([{ run: 'run0', op: 'created', id: 'old1' }])),
+      );
+      expect(calls).toBe(1);
+      expect(r.retried).toEqual([]);
+    });
+    it('a read-back dropped once is read again and proves the delete', async () => {
+      const w = world();
+      const get = w.api.reads.getTask;
+      let deletedOnce = false;
+      let drops = 1;
+      const del = w.api.writes.deleteTask;
+      w.api.writes.deleteTask = async (id) => {
+        await del(id);
+        deletedOnce = true;
+      };
+      w.api.reads.getTask = async (id) => {
+        if (deletedOnce && drops-- > 0) throw terminated();
+        return get(id);
+      };
+      const r = await runPipeline(deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)]));
+      expect(r.retried).toEqual(['t1: terminated (attempt 1 of 3)']);
+      expect(r.created[0]!.final).toBe('deleted');
+      expect(r.failedDeletes).toEqual([]);
+      expect(r.status).toBe('PASS');
+    });
+  });
+
+  it('a killed earlier run’s orphan intent is listed once, never fails the run, and is marked reported before run-end', async () => {
+    const w = world();
+    const ledger = memLedger([
+      { run: 'run0', op: 'run-start' },
+      { run: 'run0', op: 'intent', via: 'api:createTask', title: 'devcheck x' },
+    ]);
+    const r = await runPipeline(deps(w, [], ledger));
+    expect(r.earlierOrphans).toEqual(['run0: api:createTask "devcheck x"']);
+    expect(r.orphanIntents).toEqual([]);
+    expect(r.status).toBe('PASS');
+    expect(ledger.entries.slice(-2).map((e) => e.op)).toEqual(['reported', 'run-end']);
+    expect(ledger.entries.at(-2)).toMatchObject({
+      of: 'run0',
+      via: 'api:createTask',
+      title: 'devcheck x',
+    });
+    const again = await runPipeline(deps(world(), [], ledger, { runId: 'run2' }));
+    expect(again.earlierOrphans).toEqual([]);
   });
 
   it('a category that appears during the run without a ledger entry fails it; one from before is reported', async () => {

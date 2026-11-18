@@ -54,6 +54,24 @@ describe('report', () => {
     expect(md).toContain('| fin | Rows | needs you | 0.0s | link it |');
   });
 
+  it('lists cleanup retries and a killed earlier run’s possible leaks under Data, and neither when none', () => {
+    const md = renderReport({
+      ...base,
+      retried: ['01A: terminated (attempt 1 of 3)'],
+      earlierOrphans: ['2026-11-17T20-27-12-full: api:createTask "devcheck x"'],
+    });
+    expect(md).toContain(
+      '- Retried after a dropped connection (each then went through, or is listed as threw above): 01A: terminated (attempt 1 of 3)',
+    );
+    expect(md).toContain(
+      '- **Possible leak from a killed earlier run** (create sent, id never recorded — check by hand; listed once): 2026-11-17T20-27-12-full: api:createTask "devcheck x"',
+    );
+    for (const r of [base, { ...base, retried: [], earlierOrphans: [] }]) {
+      expect(renderReport(r)).not.toContain('Retried after');
+      expect(renderReport(r)).not.toContain('killed earlier run');
+    }
+  });
+
   it('leads with the status line', () => {
     expect(renderReport(base).split('\n')[0]).toBe('# Dev check — PASS');
     expect(

@@ -640,9 +640,13 @@ export class Repo {
   }
 
   // --- Series ---
+  // Strongly consistent: the app refetches it right after a write (an eventual read missed a new series,
+  // F159), getDay spawns from it, and deleteCategory writes its rows back. A small prefix.
   async listSeries(): Promise<TaskSeries[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.seriesPrefix())).map((i) => toEntity<TaskSeries>(i)),
+      (await this.doc.query(this.p(), sk.seriesPrefix(), { consistent: true })).map((i) =>
+        toEntity<TaskSeries>(i),
+      ),
     );
   }
   async getSeries(id: string, opts?: { consistent?: boolean }): Promise<TaskSeries | null> {

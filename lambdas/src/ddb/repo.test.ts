@@ -57,6 +57,26 @@ describe('Repo persistence', () => {
     expect(got as unknown as { SK?: string }).not.toHaveProperty('SK');
   });
 
+  it('listSeries reads consistently: a series just put is listed while an eventual query would miss it', async () => {
+    const { doc, repo: rr } = repo();
+    const s = await rr.putSeries({
+      id: 's1',
+      userId: U,
+      createdAt: 0,
+      updatedAt: 0,
+      deletedAt: null,
+      title: 'water the plants',
+      categoryId: null,
+      defaultEstimateMin: null,
+      rule: { kind: 'daily' },
+      active: true,
+      anchorDate: '2026-11-17',
+    });
+    doc.staleNextQueries(`u#${U}`, sk.series(s.id), null, 5); // not visible to an eventual query yet
+    expect((await rr.listSeries()).map((x) => x.id)).toEqual(['s1']);
+    expect(doc.queries.at(-1)).toMatchObject({ prefix: sk.seriesPrefix(), consistent: true });
+  });
+
   it('list filters soft-deleted rows (alive semantics)', async () => {
     await r.putTask(task({ id: 'a' }));
     await r.putTask(task({ id: 'b', deletedAt: 123 }));

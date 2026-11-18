@@ -71,6 +71,8 @@ export interface RunResult {
   orphanIntents: string[]; // API creates that may have landed without their id — check by hand
   blockedDeletes: string[]; // ledger ids NOT deleted because the server showed parts the ledger doesn't know
   failedDeletes: string[]; // `<id>: <error>` — a removal (still pending, the sweep retries) or read-back that threw; the loop went on
+  retried?: string[]; // `<id>: <error> (attempt n of m)` — a dropped connection a removal or read-back was retried after
+  earlierOrphans?: string[]; // `<run>: <via> "<title>"` — a killed earlier run's create sent, id never recorded; listed once
   consoleErrors: string[];
   failedLoads: string[]; // every failed load the page saw, in order: `<status|net error> <METHOD> <host/path>` (no query)
   throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
@@ -317,6 +319,14 @@ export function renderReport(r: RunResult): string {
   if (r.orphanIntents.length)
     lines.push(
       `- **Possible leak** (create sent, id never recorded): ${r.orphanIntents.join('; ')}`,
+    );
+  if (r.earlierOrphans?.length)
+    lines.push(
+      `- **Possible leak from a killed earlier run** (create sent, id never recorded — check by hand; listed once): ${r.earlierOrphans.join('; ')}`,
+    );
+  if (r.retried?.length)
+    lines.push(
+      `- Retried after a dropped connection (each then went through, or is listed as threw above): ${r.retried.join('; ')}`,
     );
   lines.push(
     '',

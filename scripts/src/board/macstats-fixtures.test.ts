@@ -241,6 +241,16 @@ describe('macstats.sh --render: power', () => {
     expect(pm(' lowpowermode         0\n powermode            1\n')).toBe(false);
   });
 
+  // F205: bash's printf writes a line at a time, so an awk that exits early on a pipe from it can SIGPIPE a later
+  // write — exit 141 under pipefail (9 of 2,000 renders under load, 2026-11-17). Such an awk reads a here-string.
+  it('no awk that exits early reads a pipe from printf', () => {
+    const sh = readFileSync(AGENT, 'utf8');
+    const fed = [...sh.matchAll(/printf '%s\\n' "\$\w+" \| awk[^']*'([^']*)'/g)];
+    expect(fed.filter((m) => /\bexit\b/.test(m[1]!)).map((m) => m[0].slice(0, 60))).toEqual([]);
+    // the anchor: the page-size and page-count awks read $VM as a here-string (a rename would hide them above)
+    expect(sh.match(/<<<"\$VM"/g)).toHaveLength(2);
+  });
+
   // macOS runs the one true awk, not this container's mawk/gawk: the same fixtures through it, when installed
   it.skipIf(!ONE_TRUE_AWK)('BSD awk (original-awk) renders the same power', () => {
     const t = mkdtempSync(join(tmpdir(), 'oawk-'));

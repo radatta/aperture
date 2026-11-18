@@ -196,8 +196,16 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   appear mid-run around the 4am day start. Before any delete the server is asked for parts the ledger doesn't
   know; a task with one is never deleted (deleting a parent deletes its parts) and the run fails. A crashed or
   killed run (Ctrl-C, a timeout — its cleanup doesn't run) leaves its recorded ids pending, and the next run
-  sweeps them first; a create still in flight at the kill was never recorded, so the next run lists it as not in
-  the ledger. Loading the app writes server-side too (`getDay` materialises the day), always as the test user —
+  sweeps them first. A create still in flight at the kill was never recorded: a task, place, category or capture
+  token the next run lists as not in the ledger; an API create of any kind, from its `intent` line, once under
+  _Possible leak from a killed earlier run_ (never failing the run; a `reported` line marks it shown).
+  **Categories go last**, in the sweep and in cleanup alike: the server refuses `deleteCategory` while a task, habit,
+  series or roll is on one, and a task can predate the category it was moved to, so no creation order is enough
+  (F203: a sweep that took them oldest-first left a killed run's `Garden`, and the next category-suggest saw two).
+  A category still refused after every ledgered row went names what holds it, and a row the ledger never recorded
+  is never touched. **A dropped connection is retried**: a removal or read-back that hits one (`terminated`, a
+  socket-level `fetch failed`) is tried again after 0.5 s and 2 s, each retry listed under _Retried after a dropped
+  connection_; only then is it a failure (F177). Never a create — one whose answer died may have landed. Loading the app writes server-side too (`getDay` materialises the day), always as the test user —
   the cached session is checked before any page loads.
 - **A row is proven only through its own entry point.** A UI row proven only through the API is a gap, not
   a pass. Every scenario's rows are checked when the run loads, before the deploy wait — a row no step proves
@@ -237,10 +245,11 @@ The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](
 | `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) |
 | `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`              |
 
-Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?}`, `op`
+Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?, of?}`, `op`
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` or `refused` after it is
 reported as a possible leak; `refused` is a param error, or a domain normalizer's refusal, the server raised before any write), `created`,
-`deleted`, `gone`, `swept`, `run-end`; `title` is for the report only. A `created`
+`deleted`, `gone`, `swept`, `reported` (a killed earlier run's orphan `intent`, shown once; `of` names that
+run), `run-end`; `title` is for the report only. A `created`
 line's `via` names what cleanup reads back and removes (`api.ts` `ledgerKind`): a task, a Flux set, a place, the
 place token (`place-token:<run>`), a finance rule, a recurring series (deleted with the occurrences `getDay`
 spawned for it — the series id is their record, [tasks/recurring](../areas/tasks/recurring.md) §6), and on the fixture bank's rows a bucket set
