@@ -538,6 +538,28 @@ run_sim_ci() (
     fi
     command security "$@"
   }
+  # A sign-in failure, at the moment sim.sh decides it (it then quits the app): only derived facts leave — which known
+  # control labels sit at which y down the centre, and whether the address bar's host is dev's Cognito. Labels and
+  # yes/no only, never a value (a filled field's value is the password's length at least).
+  sim_diag() {
+    local y e l out="" x0 y0 v
+    for y in $(seq 60 20 940); do
+      e="$(SIM_SENSITIVE=true sim_point "$SIM_X" "$y")" || continue
+      l="$(jq -r '.label // ""' <<<"$e")"
+      case "$l" in Capture* | "Sign in" | "Sign In" | submit | Email* | Password* | Address | "Search tasks"* | Tasks | Home) out="$out $l@$y($(jq -r .role <<<"$e"))" ;; esac
+    done
+    read -r x0 y0 <<<"$SIM_PT_ADDRESS"
+    e="$(SIM_SENSITIVE=false sim_point "$x0" "$y0")" || e="{}"
+    v="$(jq -r '.value // "" | gsub("^[\u200e\u200f\u202a-\u202e\u2066-\u2069]+"; "")' <<<"$e")"
+    if [[ "$v" =~ $SIM_COGNITO_RE ]]; then v=dev-cognito; elif [ -z "$v" ]; then v=empty; else v=other; fi
+    printf 'labels:%s; bar at %s: %s/%s host=%s' "${out:- none}" "$SIM_PT_ADDRESS" "$(jq -r '.role // "-"' <<<"$e")" "$(jq -r '.label // "-"' <<<"$e")" "$v"
+  }
+  sim_err() {
+    # shellcheck disable=SC2034 # read by the sourced sim.sh
+    SIM_ST=error SIM_RS="$1" SIM_DT="${2:-}" SIM_NOTE="${3:-}"
+    case "$1" in SIGNIN_FAILED | PASSWORD_MISSING) sim_diag >"$WORK/diag.txt" 2>/dev/null || true ;; esac
+    return 1
+  }
   # the runner boots in 67–287 s (phase 1), past sim.sh's 90 s cap for its re-arm and sign-in reboots
   # shellcheck disable=SC2034
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
@@ -567,8 +589,10 @@ lock_ok() {
 }
 # The real rows: ios-standalone's own plans, in its order. Only op, status, ms and reason codes leave the runner.
 s_rows() {
-  local sha j job out st rs js t left last="${ROW_JOBS##* }" bad=""
+  local sha j job out st rs js t left try dt last="${ROW_JOBS##* }" bad=""
   [ -n "$PW" ] || { note "no DEVCHECK_PASSWORD from the ios-probe environment: rows can't run"; return 1; }
+  # yes/no facts about the secret's shape (devcheck's parser trims the line; a CR or quotes would ride along here)
+  note "secret: $([[ "$PW" =~ ^[[:space:]] || "$PW" =~ [[:space:]]$ ]] && echo edge-space || echo no-edge-space), $([[ "$PW" == *$'\r'* ]] && echo cr || echo no-cr), $([[ "$PW" =~ ^[\"\'] || "$PW" =~ [\"\']$ ]] && echo quoted || echo unquoted)"
   lock_ok || return 1
   SIGNIN_RAN=1
   sha="$(curl -s --max-time 15 "$ORIGIN/" | sed -n 's/.*<meta name="aperture-build" content="\([0-9a-f]\{40\}\)".*/\1/p' | head -1)"
@@ -586,12 +610,23 @@ s_rows() {
        | {job: "sim", params: {sha: $sha, timeoutSec: $to, shutdown: $last, steps: $j.steps}}' \
       "$REPO/tools/mailroom/bench/plans.json" >"$job" || { note "no $j job in plans.json"; return 1; }
     t=$(now_ms)
-    out="$(run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j" 2>>"$WORK/sim.err")" || true
-    read -r st rs js <<<"$out"
-    [ -n "$js" ] || js="{}"
-    # only known shapes reach the artifact, whatever run_sim printed
-    case "$st" in pass | fail | error | rejected) ;; *) st=error rs=BAD_OUT js="{}" ;; esac
-    [[ "$rs" =~ ^(-|[A-Z_]+(\([0-9A-Za-z.-]{0,16}\))?)$ ]] || rs=BAD_OUT
+    # IOS-CHECK.md → Failures: these are dropped input ("rerun the step"), so a job that ends on one runs once more
+    for try in 1 2; do
+      : >"$WORK/diag.txt"
+      out="$(run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j-$try" 2>>"$WORK/sim.err")" || true
+      read -r st rs js <<<"$out"
+      [ -n "$js" ] || js="{}"
+      # only known shapes reach the artifact, whatever run_sim printed
+      case "$st" in pass | fail | error | rejected) ;; *) st=error rs=BAD_OUT js="{}" ;; esac
+      [[ "$rs" =~ ^(-|[A-Z_]+(\([0-9A-Za-z.-]{0,16}\))?)$ ]] || rs=BAD_OUT
+      dt="$(jq -r '.detail // ""' <<<"$js" 2>/dev/null | tr -cd 'A-Z_')"
+      [ -s "$WORK/diag.txt" ] && note "$j diag: $(tr -cd '[:print:]' <"$WORK/diag.txt" | cut -c1-400)"
+      case "$st:$dt" in
+        fail:ICON_SCROLL_DROPPED | fail:ICON_TAP_DROPPED | fail:HOME_PRESS_DROPPED | fail:TAP_DROPPED | fail:ERASED | fail:SWITCHER_FAILED | fail:NAV_UNCONFIRMED)
+          [ "$try" = 1 ] && { note "$j: $dt (dropped input), rerun"; continue; } ;;
+      esac
+      break
+    done
     printf 'job\t%s\t%s\t%s\t%s\n' "$j" "${st:-error}" "${rs:--}" "$(($(now_ms) - t))" >>"$OUT/rows.tsv"
     jq -r '.steps[] | "op\t\(.i)\t\(.op)\t\(.status)\t\(.ms)"' <<<"$js" >>"$OUT/rows.tsv" 2>/dev/null || true
     log "  rows: $j → ${st:-error} ${rs:--} in $(($(now_ms) - t)) ms"
