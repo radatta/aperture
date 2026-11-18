@@ -28,6 +28,23 @@ const of = (jobs: Job[], cls: string) => sd(jobs).classes.find((c) => c.cls === 
 const ALL = ['typecheck', 'lint', 'test', 'ui', 'gate-lint', 'gate-narrow', 'gate-wide'];
 
 describe('slowdown', () => {
+  it('leaves cold-cache runs out of both windows (F314): a first typecheck is the cache, not the box', () => {
+    const jobs = [
+      ...base('typecheck', 6, 4),
+      job('typecheck', 70, 40, { cold: true }), // a baseline cold run would lower the ratio
+      job('typecheck', 5, 4.4),
+      job('typecheck', 10, 4.4),
+      job('typecheck', 15, 45, { cold: true }), // a recent one would raise it
+    ];
+    expect(of(jobs, 'typecheck')).toMatchObject({
+      recentSec: 4.4,
+      baseSec: 4,
+      nRecent: 2,
+      nBase: 6,
+      ratio: 1.1,
+    });
+  });
+
   it('median of the last 30 min over the 24 h before it, per class', () => {
     const jobs = [
       ...base('typecheck', 6, 4),

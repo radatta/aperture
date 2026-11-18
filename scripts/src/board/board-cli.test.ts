@@ -176,7 +176,8 @@ describe('sampler.sh', () => {
       env: { ...env, APERTURE_SAMPLER_PREV: prev },
       encoding: 'utf8',
     });
-    expect(readFileSync(prev, 'utf8')).toMatch(/^T\t\d+\t1000\t\d+\.\d+$/m); // epoch, usage, µs clock
+    // epoch, usage, µs clock, steal ticks (the live /proc/stat's: perf-fields.test.ts fakes it)
+    expect(readFileSync(prev, 'utf8')).toMatch(/^T\t\d+\t1000\t\d+\.\d+\t\d*$/m);
   });
 
   // The real bad pair from 2026-11-08T05:38:53Z: the live counter (~6.28e10 µs) against a test's

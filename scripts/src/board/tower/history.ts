@@ -55,6 +55,7 @@ export function compactJob(raw: unknown): Job | null {
     wallSec,
     verdict: text(r.verdict),
     excluded: r.loadTest === true || r.guard === true,
+    ...((r.cache as { cold?: unknown } | null)?.cold === true ? { cold: true } : {}),
   };
 }
 

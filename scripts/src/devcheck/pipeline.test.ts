@@ -807,6 +807,22 @@ describe('runPipeline', () => {
     expect(exitCode(r)).toBe(0);
   });
 
+  it('splits its time into phases (heavy.sh’s devcheck field), which never add up past durationMs', async () => {
+    const w = world();
+    const r = await runPipeline(
+      deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)], memLedger()),
+    );
+    const p = r.phases!;
+    expect(Object.keys(p)).toEqual(['deployWaitMs', 'openMs', 'setupMs', 'stepsMs', 'cleanupMs']);
+    for (const v of Object.values(p)) expect(v).toBeGreaterThanOrEqual(0);
+    expect(p.setupMs).toBeGreaterThan(0); // sign-in and baselines read the clock
+    expect(p.stepsMs).toBeGreaterThan(0);
+    expect(p.cleanupMs).toBeGreaterThan(0);
+    const sum = Object.values(p).reduce((a, b) => a + b, 0);
+    expect(sum).toBeLessThanOrEqual(r.durationMs);
+    expect(r.durationMs - sum).toBeLessThanOrEqual(10); // the one tick of the fake clock after the last phase
+  });
+
   it('a leftover short work block from a killed run is put back before any step', async () => {
     const w = world();
     await w.api.writes.updateSettings({ pomodoroWorkMin: 1 });

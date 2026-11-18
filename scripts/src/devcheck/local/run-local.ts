@@ -18,6 +18,7 @@ import { matrixProblems } from '../matrix';
 import { createMcpClient } from '../mcp';
 import { assertMcpTestUser } from '../mcp-login';
 import { exitCode, runPipeline, type BrowserSession } from '../pipeline';
+import { writeHeavyDetail } from '../heavy-detail';
 import { renderReport, statusLine, type RunResult } from '../report';
 import { parseArgs, shasFor } from '../run';
 import { SCENARIOS, selectFeature, selectScenarios, slowScenarios } from '../scenarios/index';
@@ -268,6 +269,7 @@ async function main(): Promise<number> {
       );
     };
     write();
+    writeHeavyDetail(result, join(out, 'report.json'));
     // Then the iOS probe check (IOS-CHECK.md → Probe check) on its own stub Vite. The scenarios' report is written
     // first, so a probe crash can't lose it; the crash is the probe's failure, reported as one.
     const probes = await (async () => {

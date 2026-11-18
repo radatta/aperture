@@ -522,7 +522,9 @@ and `pmset -g batt`, `pmset -g` and `pmset -g therm` (none needs sudo), and writ
   "mem": { "freeMiB": …, "activeMiB": …, "inactiveMiB": …, "wiredMiB": …, "compressedMiB": …, "usedMiB": …,
            "freePct": …, "pressure": "normal|warn|critical" },
   "swap": { "totalMiB": …, "usedMiB": … }, "load": [1, 5, 15], "cpus": 12,
-  "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": … },
+  "vm": { "pid": …, "comm": "com.apple.Virtualization.VirtualMachine", "rssMiB": …, "cpuPct": 312.4 },
+  "top": [{ "comm": "com.apple.Virtualization.Virtual", "cpuPct": 312.4 }, { "comm": "Safari", "cpuPct": 19.7 }],
+  "sim": false,
   "power": { "source": "ac|battery|ups|null", "batteryPct": 12, "state": "charging", "remainingMin": 542,
              "lowPowerMode": false,
              "thermal": { "warningLevel": null, "performanceWarningLevel": null, "cpuSpeedLimit": null,
@@ -532,7 +534,8 @@ and `pmset -g batt`, `pmset -g` and `pmset -g therm` (none needs sudo), and writ
 - `usedMiB` is active + wired + compressor.
 - `freeMiB` is free + speculative.
 - `vm` is the largest resident process named like a hypervisor (`Virtualization`, `limactl`, `qemu`, `vfkit`,
-  `krunkit`), or `null`.
+  `krunkit`), or `null`. Its `cpuPct`, `top` and `sim` are perf fields, defined with the `mac-load` row that keeps
+  them (SESSION-BOARD.md → _Watchers_); the page doesn't show them.
 - `power` (F120): from `pmset -g batt`'s `Now drawing from 'AC Power'` / `'Battery Power'` and its
   `-InternalBattery-0 (id=…)<tab>12%; charging; 9:02 remaining present: true` line. `state` is `charging`,
   `discharging`, `charged`, `finishing` (finishing charge) or `not-charging` (`AC attached; not charging`).

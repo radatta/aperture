@@ -78,11 +78,13 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
 ```
 {"t":"…","v":1,"cg":{"anonMiB":1851,"fileMiB":136,"currentMiB":2091,"highMiB":18432,"pids":255,"pidsMax":4096,
   "cpuCores":0.3,"psiMemSome10":0,"psiMemFull10":0,"psiCpuSome10":0,"oomKill":0,"highEvents":0},
- "cats":{"claude":{"n":7,"thr":110,"rssMiB":2675},"vitest":{…},"vite":{…},"chromium":{…},"tsc":{…},
-         "eslint":{…},"pnpm":{…},"system":{…},"other":{…},"unattributed":{"thr":0}},
+ "cats":{"claude":{"n":7,"thr":110,"rssMiB":2675,"cpu":0.24},"vitest":{…},"vite":{…},"chromium":{…},"tsc":{…},
+         "eslint":{…},"pnpm":{…},"system":{…},"other":{…},"unattributed":{"thr":0},"unseen":{"cpu":0.21}},
  "sessions":[{"pid":2180,"name":"dev-e2e","sid":"…","branch":"dev-e2e","state":"working","stateSrc":"hook",
-              "thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test","phase":"gate"}],
- "mix":{"working":2,"idle":5,"heavy":1},"gapSec":null}
+"thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test","phase":"gate"}],
+"mix":{"working":2,"idle":5,"heavy":1},"gapSec":null,
+"sys":{"steal":0.00,"load1":3.25,"run":1,"upSec":901247},
+"net":{"ageSec":12,"dnsMs":43,"connMs":60,"ttfbMs":158,"code":301}}
 ```
 
 - A **session** is a `claude` process; every other process is attributed to the nearest `claude` ancestor
@@ -167,7 +169,9 @@ HH:MM` (`no data in N h` from 20 h, `in N d` from 2 days, `in 7 d` when the load
 outer runs each count against their own baseline, never pooled with each other or the plain commands, and so does its
 eslint step, which runs beside tsc in either gate. `gate-typecheck` stays out: tsc cache hits make it bimodal (p10 0.8
 s, p90 47 s, 2026-11-15..18), as they do plain `typecheck`, and `gate-lint` already speaks for the gate. Cache hits
-spread `lint` and `gate-lint` too (eslint `--cache`), so a red tile can be a cold cache as much as load. `×1.5` is amber
+spread `lint` and `gate-lint` too (eslint `--cache`), so a red tile could be a cold cache as much as load: since the
+perf fields (F314), a run whose `cache.cold` is true is left out of both windows (`compactJob` → `Job.cold`); rows from
+before the field stay in. `×1.5` is amber
 and `×2` red on the tower. It answers "is it slow now", whatever the cause: the Mac on battery or in Low Power Mode,
 heat, or a crowded container (the `mac:` line beside it tells the first two apart). `test` mixes whole suites with
 filtered runs, `ui` dev checks with short captures, and a gate's wall time follows its diff, so only `typecheck`, `lint`
@@ -175,6 +179,48 @@ and `gate-lint` set the tower's colour and "slow ×…" headline — `gate-lint`
 run the plain two; all show in the line. The status line (TOWER.md → _Status line_) shows `typecheck`, `lint` and the
 three gate classes as `tc lint gl gn gw`, the stale ones grouped at the newest of their last runs. Measured 2026-11-17
 in a low-power window: typecheck ×1.8, lint ×2, test ×1.2.
+
+### Perf fields
+
+What the 2026-11-18 perf fit (`localNotes/reports/perf-factors-2026-11-18.md` §9) couldn't explain, logged so the next
+fit can: each is a field on an existing job event, sample or `mac-load` row, additive (`v` stays 1), and **null when
+unknown, never 0**. Readers pick named keys, so none broke; only slowdown reads one (`cache.cold`, above).
+
+**Job events** (`heavy.sh`; `HEAVY_DETAIL=0` drops them all — the A/B switch their cost was measured with):
+
+| Field      | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waitSec`  | heavy.sh's start to the command's start, 0.1 s: the slot wait plus the wrapper's own setup (~0.1–0.2 s), so a job's real time is `waitSec + wallSec`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `slot`     | the slot class held (`test` for a wide gate's outer run), null for a slotless run (`test-file`, `other`, a gate step).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `boot`     | `{upSec, first}`: the container's uptime (lxcfs `/proc/uptime`) and whether this is the first job of its class since the container started or the VM booted (`boot_id`), from `board/boot/<class>`. The first of each class after this field landed reads `first: true` once.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `cache`    | classes `typecheck`, `gate-typecheck`, `lint`, `gate-lint`, `warm` only: `{sha, tsc?, eslint?, cold}`. Per tool: `lastSha` and `lastAgeSec` of this worktree's last finished run of that tool (`node_modules/.cache/aperture-heavy/<tool>.last`, "sha start"; a stopped or signalled run doesn't move it), `first` (none yet), `changed` (paths differing from `lastSha` or untracked, and missing or modified since that run's start; null without a last run or its commit), `changedSrc` (`.ts/.tsx/.mts/.cts/.js/.jsx/.mjs/.cjs`), `changedCfg` (`tsconfig*.json`, `package.json`, `pnpm-lock.yaml`, `eslint.config.*`). `tsc` adds `of` (the 7 projects, lib.sh `SB_TSBUILDINFO`), `existed` (buildinfo files there at the start) and `rewritten` (written during the run — a rebuilt project, or packages/shared's timestamp touch: the one project that emits); `eslint` adds `existed` (its cache file; eslint rewrites it every run, so a rewrite count says nothing). `cold`: a buildinfo or the eslint cache was missing. Null outside a git checkout with `node_modules`. Missed: a file dirty at the last run and reverted since. |
+| `vitest`   | `{runs, files, tests, failed, skipped, ms: {wall, transform, setup, import, tests, environment, prepare}, pkgs: {<pkg>: {files, tests, wallMs}}}`, summed over the vitest processes the command ran (`scripts/src/board/vitest-stats.ts`: a `globalSetup` every vitest config loads only while `HEAVY_DETAIL_DIR` is set — not a reporter, which would replace the `agent` reporter lane shells get from `CLAUDECODE=1`). The `ms` sums are vitest's own summary line's (per-file sums, so past wall time with workers; `transform` is vitest's internal running sum, null if it moves); `wall` is the longest process's. Null when no vitest ran or none reached its teardown. A gate's outer run has none: each step's own heavy.sh has its own.                                                                                                                                                                                                                                                                                                                                                                                             |
+| `devcheck` | `{tier, status, ms: {total, deployWaitMs, openMs, setupMs, stepsMs, cleanupMs}, scenarios: {<id>: {ms, steps, failed}}, slow: [{step, ms}] (the 10 slowest), report}` (`scripts/src/devcheck/heavy-detail.ts`); each step's own time stays in `report`'s `report.json`. `wallSec − ms.total` is the CLI's own start and the report write.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+
+`heavy.sh` exports `HEAVY_DETAIL_DIR` (not for tsc and eslint classes, which leave nothing) and folds what the command
+left there — `vitest-<pid>.json` lines, `devcheck.json` — skipping a torn file. The cache's git half (`git rev-parse`,
+`ls-files -o`, `diff --name-only`, each under `timeout 5`, `GIT_OPTIONAL_LOCKS=0`) runs beside the command, never in
+`wallSec`.
+
+**Samples** (`sampler.sh` / `sample.awk`; a sampler started before them prints these null until `board.sh sampler
+restart`, since it keeps the old `sampler.sh` and `lib.sh` in memory but re-reads `sample.awk` each tick):
+
+| Field                  | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cats.<c>.cpu`         | cores over the tick, from each process's own utime + stime (lib.sh `sb_procs`' two trailing columns; not cutime/cstime, which re-count reaped children) since the last tick, keyed by pid + start tick (a reused pid counts as new: all its own time). Null on the first tick.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `cats.unseen.cpu`      | `cg.cpuCores` minus every category: processes born and gone between two ticks (a warm tsc, a git). Can dip slightly under 0.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `sys.steal`            | cores stolen from the VM (`/proc/stat`'s steal column). **0 so far, unproven:** lxcfs serves `/proc/stat` and its cpuview hard-codes steal to 0, and whether Virtualization.framework gives the guest PV steal time is undocumented (2026-11-18 search). The host's view is `mac-load`'s `vmCpuPct`.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `sys.load1`, `sys.run` | the VM's load1 and running tasks (`/proc/loadavg` — lxcfs passes the VM's through: 1266 tasks against the container's 637 threads, probed 2026-11-18).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `sys.upSec`            | the container's uptime.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `net`                  | the dev origin's RTT probe: `{ageSec, dnsMs, connMs, ttfbMs, code}`; RTT ≈ `connMs − dnsMs`. One `HEAD http://<dev domain>/` per tick, run after it in the background (≤ 5 s), only on the real board in a coi container. Plain http on purpose: CloudFront answers it with its own redirect (`301`, x-cache `Redirect from cloudfront`), so no origin, S3 or Lambda request is ever made — a CloudFront request, ~86k a month against its always-free 10M (the no-fixed-cost rule). Any other answer turns the probe off (`/tmp/aperture-sampler.prev.net.off`, one `sampler.log` line) until the sampler restarts. `code: 0` with null times is no answer; null once the reading is over 90 s old. |
+
+**`mac-load` rows** add `vmCpuPct`, `top`, `sim` and `jobs` (_Watchers_).
+
+**Measured cost** (2026-11-18, interleaved A/B on the live box; medians): a sampler tick 27 → 28 ms (+1 ms of a 30 s
+period; the three lxcfs reads are ~0.5 ms of it); a heavy.sh run around a 1 s command +6–8 ms end to end, all outside
+`wallSec` (the background git job's fork and wait, the post-run buildinfo stats and the `.last` write); a warm
+`pnpm typecheck`'s `wallSec` unchanged at its 0.1 s resolution; the vitest `globalSetup` one import and one small
+write per process; `macstats.sh` the same single `ps` with one more column.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 
@@ -198,6 +244,8 @@ in a low-power window: typecheck ×1.8, lint ×2, test ×1.2.
     the inner pass and each step (run through `scripts/src/gate/step.sh`) report their own exit codes (GATE.md).
   - `HEAVY_NOSLOT` is honoured only while that pid is an ancestor holding a live slot. Otherwise the run takes a slot
     as usual, so it is never a way past the cap.
+- **Perf fields** (_History_ → _Perf fields_): the command also gets `HEAVY_DETAIL_DIR`, whose files the event folds
+  in; `HEAVY_DETAIL=0` turns every perf field off.
 - Takes a **heavy slot** (below), runs the command in the background, and samples at 1 Hz: container
   pids / anon / current / PSI / cores, and the command's own process subtree (threads, RSS). Renews the slot
   every 30 s.
@@ -735,10 +783,19 @@ tick and **exits only when the hub should wake**, so the hub spends nothing whil
 `watch-lib.sh` (on `lib.sh`), read every threshold from `limits.json` → `watchers` at startup (an edit takes effect at
 the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
 has one home. A bad argument or env override is exit 2. History files are named by local day with local-offset `t`. A
-`mac-load` row is `{t, mac, cpus, memFreePct, vm, power}`: `t` is `mac-stats.json`'s own UTC stamp (it repeats while
-the Mac agent is stale), `mac` the Mac's load 1/5/15, `cpus` its cores, `memFreePct` its free memory, `vm` the
-**container's** load5 from `/proc/loadavg` as a JSON string, and `power` the agent's power object (`docs/ops/TOWER.md`
-→ _Mac stats_: AC or battery, charge, Low Power Mode, thermal) or null from an agent older than it. Tests: `scripts/src/board/watchers.test.ts`
+`mac-load` row is `{t, mac, cpus, memFreePct, vm, power, vmCpuPct, top, sim, jobs}`: `t` is `mac-stats.json`'s own
+UTC stamp (it repeats while the Mac agent is stale), `mac` the Mac's load 1/5/15, `cpus` its cores, `memFreePct` its
+free memory, `vm` the **VM's** load5 from `/proc/loadavg` as a JSON string (lxcfs passes the VM's through — not the
+container's, as this said before 2026-11-18), and `power` the agent's power object (`docs/ops/TOWER.md` → _Mac stats_:
+AC or battery, charge, Low Power Mode, thermal). From the agent too (`vm.cpuPct`, `top`, `sim`; null from one older
+than them): `vmCpuPct`, the VM process's %CPU on the Mac (macOS `ps` `pcpu`, a decaying average over about a minute;
+100 = one Mac core) — the host's view of how much CPU the VM got, which `sys.steal` can't show; `top`, the Mac's 5
+busiest process names by summed %CPU (≥ 1; basenames cut to 32 printable ASCII characters — the Mac's app names reach
+the board's history, untracked); `sim`, whether a Simulator device is booted (`launchd_sim`) or `xcodebuild` runs.
+`jobs` is the container's own read of the mailroom's shared folder (`.hostjobs/` beside the real board's checkout, else
+`APERTURE_HOSTJOBS`; null without it): `{ios, fx, other, queued}`, the jobs the Mac took (a `results/<id>/` dir) with no
+`result.json` yet and an id stamped in the last 15 min, by lane name (`…Z-ios-…`, `…Z-fx-…`; docs/ops/MAILROOM.md →
+_Lanes_), plus the inbox's waiting entries. Tests: `scripts/src/board/watchers.test.ts`
 (PATH shims for `sleep` and `date` drive a file clock over a fake cgroup, loadavg and meter dir).
 
 | Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                     | Exits                                                              |
@@ -809,8 +866,16 @@ carry the same list.
   with the worktree's absolute hook paths. Remove the paste after merge, or every hook runs twice.
 - **Status line:** two lines appended to `~/.claude/statusline-command.sh` (container-local) source the
   snippet from the main checkout, else the worktree.
+- **Perf fields, after merge** (_History_ → _Perf fields_): the hub runs `scripts/board/board.sh sampler restart` from
+  the main checkout and restarts `pace-watch.sh`; the user re-runs the Mac stats install line (`docs/ops/TOWER.md` →
+  _Mac stats_ → _Install_) so the agent writes `vm.cpuPct`, `top` and `sim`.
 
 ## Known limitations
+
+- **Perf fields after a merge:** the running sampler logs `sys`, `net` and `cats.*.cpu` as null until `board.sh
+sampler restart`, `pace-watch.sh` adds the `mac-load` keys from its next restart, the Mac agent's `vmCpuPct`, `top`
+  and `sim` from its reinstall (_Operator steps_), and a worktree's job events carry the new fields only once it has
+  this branch (heavy.sh runs from the worktree).
 
 - CPU-inferred state (no hooks yet) misreads a session waiting on the model as idle.
 - Session identity relies on `CLAUDE_PID` in the Bash env (observed, undocumented, Claude Code 2.1.296) and

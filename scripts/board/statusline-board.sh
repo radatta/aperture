@@ -31,7 +31,7 @@ if [ -r "$_bl_f" ]; then
     done
   } <"$_bl_f"
 fi
-# the container's load (1/5/15 min) over its cores: live, so it needs no tower
+# the VM's load (1/5/15 min: lxcfs passes /proc/loadavg through, SESSION-BOARD.md → Watchers) over its cores: live, so it needs no tower
 if [ -n "$_bl_own" ] && read -r _bl_l1 _bl_l5 _bl_l15 _bl_x 2>/dev/null <"${APERTURE_LOADAVG:-/proc/loadavg}"; then
   _bl_re='^[0-9]+(\.[0-9]+)?$'
   if [[ "$_bl_l1" =~ $_bl_re ]] && [[ "$_bl_l5" =~ $_bl_re ]] && [[ "$_bl_l15" =~ $_bl_re ]]; then

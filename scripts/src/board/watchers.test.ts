@@ -371,8 +371,30 @@ describe('pace-watch.sh', () => {
     const ml = lines(m, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l));
     // an agent from before power (PR 198) reports none: the row says null, never drops the key
     expect(ml).toEqual([
-      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3', power: null },
-      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3', power: null },
+      {
+        t: 'x',
+        mac: [1, 2, 3],
+        cpus: 12,
+        memFreePct: 30,
+        vm: '3',
+        power: null,
+        vmCpuPct: null,
+        top: null,
+        sim: null,
+        jobs: null,
+      },
+      {
+        t: 'x',
+        mac: [1, 2, 3],
+        cpus: 12,
+        memFreePct: 30,
+        vm: '3',
+        power: null,
+        vmCpuPct: null,
+        top: null,
+        sim: null,
+        jobs: null,
+      },
     ]);
     // the power reading rides along whole: battery, Low Power Mode and thermal told apart in history (F120)
     const power = {
@@ -386,7 +408,60 @@ describe('pace-watch.sh', () => {
     const withPower = JSON.stringify({ ...JSON.parse(mac), power });
     const p2 = pace(T10, 1, all({ files: { 'board/mac-stats.json': withPower } }));
     expect(lines(p2, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l))).toEqual([
-      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3', power },
+      {
+        t: 'x',
+        mac: [1, 2, 3],
+        cpus: 12,
+        memFreePct: 30,
+        vm: '3',
+        power,
+        vmCpuPct: null,
+        top: null,
+        sim: null,
+        jobs: null,
+      },
+    ]);
+  });
+
+  it('mac-load rows carry the agent’s top, VM cpu and sim flag, and the mailroom jobs the Mac is running', () => {
+    const mac = JSON.stringify({
+      t: 'x',
+      load: [1, 2, 3],
+      cpus: 12,
+      mem: { freePct: 30 },
+      vm: { pid: 1, rssMiB: 2, comm: 'v', cpuPct: 312.4 },
+      top: [{ comm: 'Safari', cpuPct: 19.7 }],
+      sim: false,
+    });
+    const dir = paceFake(T10, 1, all({ files: { 'board/mac-stats.json': mac } }));
+    const hj = join(dir, 'hostjobs');
+    // the first row is 10:01 PST = 18:01Z: a running job is one stamped since 17:46Z with no result.json
+    const job = (id: string, done = false) => {
+      mkdirSync(join(hj, 'results', id), { recursive: true });
+      if (done) writeFileSync(join(hj, 'results', id, 'result.json'), '{}');
+    };
+    job('20261117T175500Z-ios-lane-ab12');
+    job('20261117T174600Z-fx-lane-cd34'); // at the cut: still counts
+    job('20261117T180000Z-edit-lane-ef56');
+    job('20261117T175000Z-lane-done-0001', true);
+    job('20261117T170000Z-ios-stale-0002'); // older than a sim's deadline: abandoned, not running
+    job('20261116T235900Z-ios-yesterday-0003');
+    mkdirSync(join(hj, 'inbox'));
+    writeFileSync(join(hj, 'inbox', 'q.json'), '{}');
+    const r = run(dir, 'pace-watch.sh', [], { APERTURE_HOSTJOBS: hj });
+    expect(lines(r, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l))).toEqual([
+      {
+        t: 'x',
+        mac: [1, 2, 3],
+        cpus: 12,
+        memFreePct: 30,
+        vm: '3',
+        power: null,
+        vmCpuPct: 312.4,
+        top: [{ comm: 'Safari', cpuPct: 19.7 }],
+        sim: false, // false stays false (not jq's `// null`)
+        jobs: { ios: 1, fx: 1, other: 1, queued: 1 },
+      },
     ]);
   });
 

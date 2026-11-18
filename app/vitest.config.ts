@@ -18,6 +18,8 @@ process.env.VITE_LC_EXTENSION_VERSION = lcExtensionVersion();
 export default defineConfig({
   plugins: [react()],
   test: {
+    // Run totals for heavy.sh's job event, only under heavy.sh (docs/ops/SESSION-BOARD.md → Perf fields).
+    globalSetup: process.env.HEAVY_DETAIL_DIR ? ['../scripts/src/board/vitest-stats.ts'] : [],
     environment: 'jsdom',
     setupFiles: ['./src/test/guard.ts', './src/test/setup.ts'],
     // Shuffled every run so an order dependence between files shows up as a red run, not a false pass.

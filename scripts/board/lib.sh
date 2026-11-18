@@ -19,6 +19,15 @@ else SB_HOME_BOARD="$(cd "$(git -C "$SB_REPO" rev-parse --path-format=absolute -
 BOARD_DIR="${APERTURE_BOARD_DIR:-$SB_HOME_BOARD}"
 BOARD_LOCK="${APERTURE_BOARD_LOCK:-/tmp/aperture-board.lock}"
 CG="${APERTURE_CGROUP_DIR:-/sys/fs/cgroup}"
+# The VM-wide /proc files the perf fields read (stat, uptime, loadavg, sys/kernel/random/boot_id); tests point it at a
+# fake. The per-process /proc walk (sb_procs, sb_stat) always reads the real one.
+SB_PROC="${APERTURE_PROC_DIR:-/proc}"
+# Every tsc -b project's tsBuildInfoFile, relative to the repo root (heavy.sh's `cache` field; a test checks it
+# against the tsconfigs).
+SB_TSBUILDINFO=(app/node_modules/.tmp/tsconfig.app.tsbuildinfo app/node_modules/.tmp/tsconfig.node.tsbuildinfo
+  cdk/node_modules/.tmp/tsconfig.tsbuildinfo extension/node_modules/.tmp/tsconfig.tsbuildinfo
+  lambdas/node_modules/.tmp/tsconfig.tsbuildinfo packages/shared/node_modules/.tmp/tsconfig.tsbuildinfo
+  scripts/node_modules/.tmp/tsconfig.tsbuildinfo)
 LIMITS_JSON="${APERTURE_LIMITS_JSON:-$SB_SCRIPTS/limits.json}"
 # The sampler singleton (one per container) and where it records its pid; tests point both elsewhere.
 SAMPLER_LOCK="${APERTURE_SAMPLER_LOCK:-/tmp/aperture-sampler.lock}"
@@ -100,8 +109,10 @@ sb_live_slots() {
   return 0
 }
 
-# One TSV line per process: pid ppid comm threads rssPages cpuTicks [args]. Builtins only — no fork per
-# process. `$1 = args` adds the first 3 cmdline args (≤200 chars); without it the column is empty.
+# One TSV line per process: pid ppid comm threads rssPages cpuTicks [args] ownTicks startTick. Builtins only — no
+# fork per process. `$1 = args` adds the first 3 cmdline args (≤200 chars); without it the column is empty.
+# cpuTicks counts reaped children too (cutime + cstime); ownTicks is utime + stime alone, which per-category CPU
+# needs (sample.awk), keyed by pid + start tick so a reused pid isn't read as the old process.
 sb_procs() {
   local d pid s r comm a0 a1 a2 args= mode="${1:-}"
   for d in /proc/[0-9]*; do
@@ -115,8 +126,8 @@ sb_procs() {
       args="$a0 $a1 $a2"; args=${args//$'\t'/ }; args=${args//$'\n'/ }
     fi
     set -- $r
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$2" "${comm//$'\t'/ }" "${18}" "${22}" \
-      "$(( ${12} + ${13} + ${14} + ${15} ))" "${args:0:200}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$pid" "$2" "${comm//$'\t'/ }" "${18}" "${22}" \
+      "$(( ${12} + ${13} + ${14} + ${15} ))" "${args:0:200}" "$(( ${12} + ${13} ))" "${20}"
   done
 }
 

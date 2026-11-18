@@ -12,7 +12,9 @@
 #      HEAVY_SLOT_CLASS=test|test-fast (the slot's class when it differs from the event's: pnpm gate:fast's outer
 #      run logs gate-wide but holds a `test` slot), HEAVY_NOSLOT=<pid> (a step inside that run: measured and logged,
 #      no slot — honoured only while <pid> is a live slot's heavy.sh and an ancestor, else it takes a slot).
-#      The command gets HEAVY_WRAPPER=<this heavy.sh's pid>, for its own steps' HEAVY_NOSLOT.
+#      The command gets HEAVY_WRAPPER=<this heavy.sh's pid>, for its own steps' HEAVY_NOSLOT, and HEAVY_DETAIL_DIR, a
+#      dir whose vitest-*.json / devcheck.json it may leave for the event (SESSION-BOARD.md → Perf fields).
+#      HEAVY_DETAIL=0 turns every perf field off (the A/B switch that measures their cost).
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 . "$SB_SCRIPTS/lease.sh"
@@ -27,6 +29,7 @@ while [ $# -gt 0 ]; do
 done
 [ $# -gt 0 ] || { echo "usage: heavy.sh [--wait SEC] -- <cmd…>" >&2; exit 2; }
 
+ts0=${EPOCHREALTIME:-}; ts0=${ts0/[.,]/}  # µs, before the slot wait (waitSec); empty before bash 5
 cmd="$*"
 class="${HEAVY_CLASS:-$(sb_classify "$cmd")}"
 label="${HEAVY_LABEL:-$class}"
@@ -34,7 +37,9 @@ me=$$
 read -r _ me_start < <(sb_stat "$me")
 owner=$( [ -n "${CLAUDE_PID:-}" ] && echo "$CLAUDE_PID" || sb_claude_pid "$PPID" ) || owner=0
 work="${TMPDIR:-/tmp}/aperture-heavy.$me"
-rm -f "$work".*  # a reused pid's leftovers (a stale `duration` stop would turn a failure into exit 0)
+# a reused pid's leftovers (a stale `duration` stop would turn a failure into exit 0)
+[ -d "$work.d" ] && { rm -f "$work.d"/*; rmdir "$work.d"; }
+rm -f "$work".*
 eval "$(sb_thresholds)"
 
 # Container-only tuning, per limits.json `tuning.test` (`maxWorkers: 4` since 2026-11-13 — SESSION-BOARD.md → Results).
@@ -110,6 +115,29 @@ kill_tree() {
   done
 }
 
+# Perf fields (SESSION-BOARD.md → Perf fields). Before the fork: builtins plus one mkdir, so the run starts from the
+# caches as they were; the git half runs beside the command, outside wallSec.
+detail=1; [ "${HEAVY_DETAIL:-1}" = 0 ] && detail=0
+kinds=
+case "$class" in typecheck | gate-typecheck) kinds=tsc ;; lint | gate-lint) kinds=eslint ;; warm) kinds="tsc eslint" ;; esac
+top= cdir= tsc_ex=0 eslint_ex=false
+if [ "$detail" = 1 ] && [ -n "$kinds" ]; then
+  d=$PWD
+  while [ -n "$d" ] && [ ! -e "$d/.git" ]; do d=${d%/*}; done
+  [ -n "$d" ] && [ -d "$d/node_modules" ] && top=$d
+fi
+# The detail dir is for what a test or devcheck run leaves; a tsc or eslint run leaves nothing, so it gets none.
+dd= mk=()
+[ "$detail" = 1 ] && [ -z "$kinds" ] && dd="$work.d" mk+=("$dd")
+[ -n "$top" ] && cdir="$top/node_modules/.cache/aperture-heavy" && { [ -d "$cdir" ] || mk+=("$cdir"); }
+if [ "${#mk[@]}" -eq 0 ] || mkdir -p "${mk[@]}" 2>/dev/null; then
+  [ -n "$dd" ] && export HEAVY_DETAIL_DIR="$dd"
+else dd= cdir= top=; fi
+if [ -n "$top" ]; then
+  : >"$work.run"  # this run's start, as an mtime: what a rewritten buildinfo is newer than
+  tstart=${EPOCHREALTIME/,/.}
+fi
+
 pids0=$(cg_pids); anon0=$(cg_anon); oom0=$(cg_oom_kill); high0=$(cg_high_events)
 t0=$(date +%s%3N)
 
@@ -123,6 +151,46 @@ trap 'on_signal; trap - HUP; sig=1' HUP
 HEAVY_WRAPPER=$me "$@" &
 child=$!
 [ -n "$sig" ] && kill_tree "$child"  # signalled before $child was known
+
+# Beside the command: which caches exist (read in its first milliseconds: tsc and eslint take over 100 ms to start, and
+# write their caches at the end), the sha and, per cache, the paths changed since this worktree's last run of that
+# kind (changed since its tracked state, or untracked, and missing or newer than the last run's start). Lines:
+# "E tscExisted eslintExisted", "S sha", "K kind lastSha lastAgeSec changed changedSrc changedCfg" ("-" unknown).
+cj=
+if [ -n "$top" ]; then
+  (
+    cd "$top" || exit 0
+    te=0 ee=false
+    for f in "${SB_TSBUILDINFO[@]}"; do [ -e "$f" ] && te=$((te + 1)); done
+    [ -e node_modules/.cache/eslint/.eslintcache ] && ee=true
+    echo "E $te $ee"
+    export GIT_OPTIONAL_LOCKS=0
+    sha=$(timeout 5 git rev-parse HEAD 2>/dev/null)
+    echo "S ${sha:--}"
+    untracked=$(timeout 5 git ls-files -o --exclude-standard 2>/dev/null)
+    for k in $kinds; do
+      # <kind>.last: "sha startEpoch" of this worktree's last finished run of that kind; ref gets that start as an mtime
+      last= ls= age=- n=- src=- cfg=- ref="$work.ref.$k"
+      read -r last ls 2>/dev/null <"$cdir/$k.last"
+      if [[ "$last" =~ ^[0-9a-f]{40}$ && "$ls" =~ ^[0-9]+\.[0-9]+$ ]] && touch -d "@$ls" "$ref" 2>/dev/null; then
+        age=$(( EPOCHSECONDS - ${ls%.*} ))
+        if timeout 5 git cat-file -e "$last^{commit}" 2>/dev/null &&
+          list=$(timeout 5 git diff --name-only "$last" -- 2>/dev/null); then
+          n=0 src=0 cfg=0
+          while IFS= read -r p; do
+            [ -n "$p" ] || continue
+            [ -e "$p" ] && ! [ "$p" -nt "$ref" ] && continue
+            n=$((n + 1))
+            case "$p" in *.ts | *.tsx | *.mts | *.cts | *.js | *.jsx | *.mjs | *.cjs) src=$((src + 1)) ;; esac
+            case "${p##*/}" in tsconfig*.json | package.json | pnpm-lock.yaml | eslint.config.*) cfg=$((cfg + 1)) ;; esac
+          done < <(printf '%s\n%s\n' "$list" "$untracked" | sort -u)
+        fi
+      else last=-; fi
+      echo "K $k $last $age $n $src $cfg"
+    done
+  ) >"$work.cache" 2>/dev/null </dev/null &
+  cj=$!
+fi
 
 # 1 Hz sampler (subshell): tracks peaks, renews the slot, enforces stop conditions under HEAVY_GUARD=1.
 (
@@ -172,10 +240,35 @@ t1=$(date +%s%3N)
 # A guard/duration stop is the monitor's own kill_tree — let it finish its KILL pass rather than cut it short.
 if [ -e "$work.stop" ]; then wait "$mon" 2>/dev/null; else kill "$mon" 2>/dev/null; wait "$mon" 2>/dev/null; fi
 [ -n "$slot" ] && rm -f "$slot"
+[ -n "$cj" ] && wait "$cj" 2>/dev/null  # its git calls are each under timeout 5
 
 read -r pk_pids pk_anon pk_cur pk_thr pk_rss pk_psi pk_cores 2>/dev/null <"$work.peak" ||
   { pk_pids=$pids0 pk_anon=$anon0 pk_cur=0 pk_thr=0 pk_rss=0 pk_psi=0 pk_cores=0; }
 stop=$(cat "$work.stop" 2>/dev/null)
+# What the command left in HEAVY_DETAIL_DIR: vitest-<pid>.json lines (scripts/src/board/vitest-stats.ts, one per vitest
+# process, summed here) and devcheck.json (scripts/src/devcheck/heavy-detail.ts, passed through). A bad file is skipped.
+vitest=null devcheck=null
+if [ -n "$dd" ] && [ -d "$dd" ]; then
+  vf=("$dd"/vitest-*.json)
+  [ -e "${vf[0]}" ] && vitest=$(cat "${vf[@]}" 2>/dev/null | jq -cRn '[inputs | fromjson? | objects | select(.files | type == "number")]
+    | if length == 0 then null else
+      {runs: length, files: (map(.files) | add), tests: (map(.tests // 0) | add), failed: (map(.failed // 0) | add),
+       skipped: (map(.skipped // 0) | add),
+       ms: ({wall: (map(.wallMs // 0) | max)} + reduce (.[].ms // {} | to_entries[]) as $e ({}; .[$e.key] += ($e.value // 0))),
+       pkgs: (reduce .[] as $r ({}; .[$r.pkg // "?"] |= {files: ((.files // 0) + $r.files), tests: ((.tests // 0) + ($r.tests // 0)),
+                                                        wallMs: ([.wallMs // 0, $r.wallMs // 0] | max)}))} end' 2>/dev/null)
+  [ -s "$dd/devcheck.json" ] && devcheck=$(jq -c 'objects' "$dd/devcheck.json" 2>/dev/null)
+  rmdir "$dd" 2>/dev/null || { rm -f "$dd"/*; rmdir "$dd" 2>/dev/null; }
+fi
+[ -n "$vitest" ] || vitest=null
+[ -n "$devcheck" ] || devcheck=null
+csha=-; rew=0; declare -A cline=()
+if [ -n "$top" ]; then
+  [ -f "$work.cache" ] && while read -r a b c; do
+    case "$a" in E) tsc_ex=$b eslint_ex=$c ;; S) csha=$b ;; K) cline[$b]=$c ;; esac
+  done <"$work.cache"
+  for f in "${SB_TSBUILDINFO[@]}"; do [ "$top/$f" -nt "$work.run" ] && rew=$((rew + 1)); done
+fi
 rm -f "$work".*
 oomd=$(( $(cg_oom_kill) - oom0 )); highd=$(( $(cg_high_events) - high0 ))
 signal=null; [ "$code" -gt 128 ] && signal=$((code - 128))
@@ -188,6 +281,52 @@ elif awk -v a="$pk_psi" -v k="$PSI_KILL" 'BEGIN{exit !(a > k)}' || [ "$highd" -g
 fi
 [ "$stop" = duration ] && code=0 && signal=null
 [ -n "$stop" ] && [ "$stop" != duration ] && verdict=guard-stop
+
+# The perf fields' JSON (SESSION-BOARD.md → Perf fields), merged into the event; {} under HEAVY_DETAIL=0.
+jn() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$1" || printf null; }
+perf='{}'
+if [ "$detail" = 1 ]; then
+  wait_sec=null
+  [ -n "$ts0" ] && w=$(( t0 - ts0 / 1000 )) && [ "$w" -ge 0 ] && wait_sec="$((w / 1000)).$((w % 1000 / 100))"
+  # First job of this class since the container (its uptime, lxcfs) or the VM (boot_id) started: cold page cache.
+  up= bid= first=null
+  read -r up _ 2>/dev/null <"$SB_PROC/uptime"; up=${up%.*}
+  read -r bid 2>/dev/null <"$SB_PROC/sys/kernel/random/boot_id"; bid=${bid:--}
+  if [[ "$up" =~ ^[0-9]+$ ]]; then
+    st=$(( $(sb_epoch) - up )) mb= ms=
+    read -r mb ms 2>/dev/null <"$BOARD_DIR/boot/$class"
+    if [ "$mb" = "$bid" ] && [[ "$ms" =~ ^[0-9]+$ ]] && [ $(( st > ms ? st - ms : ms - st )) -le 120 ]; then first=false
+    else
+      first=true
+      { [ -d "$BOARD_DIR/boot" ] || mkdir -p "$BOARD_DIR/boot"; } && printf '%s %s\n' "$bid" "$st" >"$BOARD_DIR/boot/$class"
+    fi
+  else up=; fi
+  cache=null
+  if [ -n "$top" ]; then
+    [[ "$csha" =~ ^[0-9a-f]{40}$ ]] && cache="{\"sha\":\"$csha\"" || { csha=; cache='{"sha":null'; }
+    cold=false
+    for k in $kinds; do
+      read -r last age n src cfg <<<"${cline[$k]:-- - - - -}"
+      [[ "$last" =~ ^[0-9a-f]{40}$ ]] && lj="\"$last\"" fk=false || lj=null fk=true
+      cache+=",\"$k\":{\"lastSha\":$lj,\"lastAgeSec\":$(jn "$age"),\"first\":$fk,\"changed\":$(jn "$n"),"
+      cache+="\"changedSrc\":$(jn "$src"),\"changedCfg\":$(jn "$cfg"),"
+      if [ "$k" = tsc ]; then
+        cache+="\"of\":${#SB_TSBUILDINFO[@]},\"existed\":$tsc_ex,\"rewritten\":$rew}"
+        [ "$tsc_ex" -lt "${#SB_TSBUILDINFO[@]}" ] && cold=true
+      else
+        cache+="\"existed\":$eslint_ex}"
+        [ "$eslint_ex" = false ] && cold=true
+      fi
+      # Roll forward: the next run counts changes since this run's start. Not after a stop or a signal (a cache
+      # may be half-written), nor without a sha. A builtin write: a torn read is a reader's "no last run".
+      [ -z "$stop" ] && [ "$signal" = null ] && [ -n "$csha" ] && printf '%s %s\n' "$csha" "$tstart" >"$cdir/$k.last"
+    done
+    cache+=",\"cold\":$cold}"
+  fi
+  sj=null; [ -n "$slot" ] && sj="\"$slot_class\""
+  perf="{\"waitSec\":$wait_sec,\"slot\":$sj,\"boot\":{\"upSec\":$(jn "$up"),\"first\":$first},\"cache\":$cache,"
+  perf+="\"vitest\":$vitest,\"devcheck\":$devcheck}"
+fi
 
 reg="$BOARD_DIR/sessions/$owner.json"
 name=$(jq -r '.name // empty' "$reg" 2>/dev/null); branch=$(jq -r '.branch // empty' "$reg" 2>/dev/null)
@@ -202,7 +341,7 @@ event=$(jq -nc --arg t "$(sb_now)" --argjson pid "$owner" --arg name "$name" --a
   --argjson pids0 "$pids0" --argjson anon0 "$((anon0 / 1048576))" --argjson pidsMax "$PIDS_MAX" \
   --argjson highMiB "$((MEM_HIGH / 1048576))" --argjson oomd "$oomd" --argjson highd "$highd" \
   --argjson psi "$pk_psi" --arg verdict "$verdict" --arg stop "$stop" --argjson mix "${mix:-null}" \
-  --arg guard "${HEAVY_GUARD:-0}" --arg lt "${HEAVY_LOADTEST:-0}" '
+  --arg guard "${HEAVY_GUARD:-0}" --arg lt "${HEAVY_LOADTEST:-0}" --arg perf "$perf" '
   {v: 1, t: $t, kind: "job", pid: $pid, name: $name, branch: $branch, label: $label, class: $class, cmd: $cmd,
    exit: $exit, signal: $signal, wallSec: ($wall / 10),
    peak: {dPids: $dPids, dAnonMiB: $dAnon, pids: $pkPids, anonMiB: $pkAnon, currentMiB: $pkCur,
@@ -210,7 +349,7 @@ event=$(jq -nc --arg t "$(sb_now)" --argjson pid "$owner" --arg name "$name" --a
    before: {pids: $pids0, anonMiB: $anon0}, limits: {pidsMax: $pidsMax, highMiB: $highMiB},
    oomKillDelta: $oomd, highDelta: $highd, psiFullMax: $psi, mix: $mix, verdict: $verdict,
    stop: (if $stop == "" then null else $stop end), guard: ($guard == "1"),
-   loadTest: ($guard == "1" or $lt == "1")}')
+   loadTest: ($guard == "1" or $lt == "1")} + ($perf | fromjson? // {})')
 sb_append events "$event"
 printf '%s\n' "$event" | jq -r '"heavy: \(.label) exit \(.exit) · \(.wallSec)s · pids +\(.peak.dPids) (peak \(.peak.pids)/\(.limits.pidsMax)) · anon +\(.peak.dAnonMiB) MiB (peak \(.peak.anonMiB)/\(.limits.highMiB)) · subtree \(.peak.subtreeThr) thr / \(.peak.subtreeRssMiB) MiB · \(.peak.cores) cores · psi \(.psiFullMax) · \(.verdict)"' >&2
 [ -n "$sig" ] && exit $((128 + sig))
