@@ -24,6 +24,7 @@
     "sim-bench:plans": "pnpm --filter @aperture/scripts sim-bench:plans",
     "sim-bench:seed": "pnpm --filter @aperture/scripts sim-bench:seed",
     "board": "node scripts/src/board/cli.ts",
+    "claude-edit": "node scripts/src/claude-edit/cli.ts",
     "bot": "node scripts/src/bot/cli.ts",
     "mailroom": "node scripts/src/mailroom/cli.ts",
     "lanes": "node scripts/src/lane/cli.ts",
