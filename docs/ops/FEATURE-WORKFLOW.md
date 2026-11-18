@@ -89,9 +89,15 @@ hub message (the checkpoints stay).
    _Probe check_). The plan also carries a **step plan**: build, the review (round 1 with its lenses, plus a recheck when serious findings are likely), dev test and PR, each with an
    **ETA range** derived from measured history — the board history's `heavy.sh` records (gate steps, devcheck runs)
    and archived lanes' estimate-vs-actual records — scaled by the file count, never a guess (guessed ETAs ran 2–4×
-   long, 2026-11-14); a step with no history says so and gets a wide range. Right after Plan, the lane writes the
-   step plan and its ranges to its lane status file (below). **→ hub:** `[kickoff]` — what, areas touched, open
-   questions, mode, the step plan.
+   long, 2026-11-14); a step with no history says so and gets a wide range. The plan also carries an **Unknowns**
+   list: every fact the work depends on about an outside tool, OS, platform, version, API, limit or price, each
+   _searched_ (`search-specialist` on `sonnet`, its sources named), _probed_ (a local probe or the installed tool's
+   own source settled it, how named), or marked _run-only_ with the reason neither can settle it — "none" written out
+   when there are none. A text rule to search first wasn't enough: a lane once spent hours of trial CI runs on a
+   platform-version fact one search answered. The same holds past Plan: before spending a run or an iteration on a
+   failure the environment caused, search it first, and add what the search found to the list. Right after Plan, the
+   lane writes the step plan and its ranges to its lane status file (below). **→ hub:** `[kickoff]` — what, areas
+   touched, open questions, the Unknowns, mode, the step plan.
 3. **Questions** — collaborative: `[ask-maintainer]` with each question's options and a pick. Autonomous: answer and
    log them.
 4. **Build** — only on the user's "execute". When asking for it, give a rough estimate of how many files the change

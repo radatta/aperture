@@ -61,3 +61,24 @@
 {"expect":"allow","why":"bare ls shows names and modes only","cmd":"ls -la .secrets/ci-bot"}
 {"expect":"allow","why":"bare stat","cmd":"stat .secrets/ci-bot/private-key.pem"}
 {"expect":"allow","why":"a word ending in .secrets is not the dir","cmd":"echo app.secrets"}
+{"expect":"deny","why":"cdk's dir, relative","reason":"at any depth","cmd":"cat cdk/.secrets/device-token.dev"}
+{"expect":"deny","why":"cdk's dir, ./ form","reason":"at any depth","cmd":"cat ./cdk/.secrets/device-token.dev"}
+{"expect":"deny","why":"a worktree's cdk dir, absolute","reason":"at any depth","cmd":"head -1 /workspace/.claude/worktrees/x/cdk/.secrets/origin-secret.dev"}
+{"expect":"deny","why":"a glob into cdk's dir","reason":"at any depth","cmd":"cat cdk/.secrets/*.dev"}
+{"expect":"deny","why":"the devcheck session","reason":"at any depth","cmd":"jq . .secrets/devcheck.dev.state.json"}
+{"expect":"deny","why":"upper case opens the real dir on the case-insensitive mount","reason":"at any depth","cmd":"cat .SECRETS/ci-bot/app.env"}
+{"expect":"deny","why":"a quoted path inside a heredoc is still text on the line","reason":"at any depth","cmd":"python3 - <<'EOF'\nprint(open(\"cdk/.secrets/device-token.dev\").read())\nEOF"}
+{"expect":"deny","why":"Monitor on cdk's dir","tool":"Monitor","reason":"at any depth","cmd":"tail -f cdk/.secrets/device-token.dev"}
+{"expect":"allow","why":"bare ls of cdk's dir: names and modes only","cmd":"ls -la cdk/.secrets"}
+{"expect":"allow","why":"the devcheck harness reads its secrets in-process","cmd":"pnpm devcheck --tier full"}
+{"expect":"allow","why":"the local check too","cmd":"pnpm devcheck:local --tier full"}
+{"expect":"allow","why":"the infra lens's synth carries dummy values, no dot-path","cmd":"APERTURE_ORIGIN_SECRET=synth APERTURE_DEVICE_TOKEN=synth pnpm --filter cdk exec cdk synth --output /tmp/x"}
+{"expect":"allow","why":"the sanctioned text search spells the name without the literal","cmd":"git grep -n -e '\\.secre[t]' -- docs"}
+{"expect":"allow","why":"a word char before the dot, under -i too","cmd":"echo cfg.Secret"}
+{"expect":"deny","why":"a mixed-case glob","reason":"at any depth","cmd":"cat .Secrets/*"}
+{"expect":"deny","why":"an upper-case wildcard","reason":"at any depth","cmd":"cat .SECRET*/ci-bot/app.env"}
+{"expect":"allow","why":"bare ls under any case is still names only","cmd":"ls -la .SECRETS"}
+{"expect":"deny","why":"accepted false positive under -i: a capitalised member after a quote","reason":"at any depth","cmd":"jq -r '.SecretString' out.json"}
+{"expect":"deny","why":"the secrets arm past the 64 KiB pipe buffer (the SIGPIPE fail-open)","reason":"at any depth","cmd":"cat .secrets/ci-bot/app.env\n#{PAD_200K}"}
+{"expect":"deny","why":"every arm past the pipe buffer, e.g. rm -rf","cmd":"rm -rf /tmp/x\n#{PAD_200K}"}
+{"expect":"allow","why":"known gap: a quote-split name defeats a text match (README: not a wall)","cmd":"cat .sec\"\"rets/ci-bot/app.env"}

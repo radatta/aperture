@@ -1,6 +1,6 @@
 ---
 name: review-correctness
-description: Correctness lens of the feature workflow's review round (docs/ops/REVIEW.md) — bugs, edge cases, races, failure paths, time, contracts, model output. Runs beside code-reviewer on the same diff; not for general use.
+description: Correctness lens of the feature workflow's review round (docs/ops/REVIEW.md) — bugs, edge cases, races, failure paths, time, contracts, model output, unsourced outside assumptions. Runs beside code-reviewer on the same diff; not for general use.
 tools: Read, Grep, Glob, Bash
 model: opus
 effort: high
@@ -26,6 +26,7 @@ You are the correctness lens. Others read the same diff for project rules, tests
 - **Contracts** — stub and http clients that behave differently (a shared clock, map key order, a cap); a `packages/shared` change: open both callers; a cap, a new null or a renamed field that breaks one; two parsers of one field that disagree.
 - **Model output** (when the diff touches a model call, a prompt, or code that validates model output) — a value the model can invent reaching storage unchecked; a validator that rejects good output or passes bad; the wording rules the prompt promises; what happens on a refusal, a timeout or malformed output; a cap on calls. Variance across runs goes under `Not checked:` — only dev can show it.
 - **Script and tool logic** (`scripts/src`, `tools/`) — the same questions; shell-language issues belong to the shell lens.
+- **Outside behaviour** — the code or plan assumes how a tool, OS, platform, version, API, limit or price behaves, with no source in the diff, a doc, or the plan's _Unknowns_ list (`docs/ops/FEATURE-WORKFLOW.md` → phase 2): name the assumption and what would check it (a search, a local probe or the installed tool's own source, or the one run that settles it).
 
 ## Report (`docs/ops/REVIEW.md` → _Finding shape_)
 

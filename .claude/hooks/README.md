@@ -54,12 +54,16 @@ its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → _
 ## Bot and secrets guards
 
 `gh-safety-guard.sh` also walls the bot CLI (`docs/ops/CI-BOT.md`): `pnpm bot push` aimed at
-`main`/`master`/`dev`, any `pnpm bot` force flag, `gh pr merge|review`, and any Bash line touching `.secrets/` except a bare `ls`/`stat`.
-Its push checks see through git's global options (`git -C dir push`, `git -c k=v push`) and deny
-`--all`/`--mirror`. `secrets-read-guard.sh` (Read, Grep, Glob) denies those tools a path into `.secrets/`, and a
-Grep whose glob could re-admit the gitignored dir (`*`, `*.pem`, `*.env`, brace globs) where a `.secrets` sits
-within reach; a Grep _pattern_ is content, so searching the repo for the text stays allowed. Both are second walls — the CLI
-refuses on its own, and the ruleset is the real one.
+`main`/`master`/`dev`, any `pnpm bot` force flag, `gh pr merge|review`, and any Bash line touching a `.secrets/`
+dir except a bare `ls`/`stat`. Its push checks see through git's global options (`git -C dir push`, `git -c k=v push`)
+and deny `--all`/`--mirror`. `secrets-read-guard.sh` (Read, Grep, Glob) denies those tools a path into a `.secrets/`
+dir, and a Grep whose glob could re-admit the gitignored dir where one sits within reach (depth 6). Both match every
+`.secrets/` at any depth — the root one (bot key, devcheck session) and `cdk/.secrets/` (stage secrets) — in any case.
+Catch-all globs (`*`, `**`, `*.*`, `*/`, braces) are denied near one; typed ones (`*.json`, `*.ts`) pass. A Grep
+_pattern_ is content, so searching the repo for the text stays allowed; Glob may list the dir's file names, never
+contents. The why — rg's re-admission rule, how the Grep tool splits a glob, the known gaps — is in
+`secrets-read-guard.sh`'s header. Both are second walls — the in-process readers refuse on their own, and the
+ruleset is the real one.
 
 ## Testing
 
