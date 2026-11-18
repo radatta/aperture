@@ -194,7 +194,8 @@ in a low-power window: typecheck ×1.8, lint ×2, test ×1.2.
   - It can only raise a slot: any other value is ignored, and a `test` job's slot stays `test`.
   - `heavy.sh` hands its command `HEAVY_WRAPPER=<its pid>`. A step inside the run sets `HEAVY_NOSLOT=<that pid>`:
     measured and logged under its own (`gate-*`) class, with no slot. Without this, the steps' young-slot costs would
-    stack in the prediction and the gate could wait on itself.
+    stack in the prediction and the gate could wait on itself. The gate never takes `heavy.sh`'s 0 alone as a pass:
+    the inner pass and each step (run through `scripts/src/gate/step.sh`) report their own exit codes (GATE.md).
   - `HEAVY_NOSLOT` is honoured only while that pid is an ancestor holding a live slot. Otherwise the run takes a slot
     as usual, so it is never a way past the cap.
 - Takes a **heavy slot** (below), runs the command in the background, and samples at 1 Hz: container

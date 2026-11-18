@@ -8,7 +8,7 @@
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { constants, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planWithBase, RULES_PATH } from './base.ts';
 import { modeOf, isTest, type Change, type Plan } from './plan.ts';
@@ -386,11 +386,20 @@ const STEP_SH = fileURLToPath(new URL('./step.sh', import.meta.url));
 export const spawnExec: Exec = (step, heavy, root) => {
   const dir = mkdtempSync(join(tmpdir(), 'gate-step-'));
   const result = join(dir, 'code');
-  const c = spawn(heavy, ['--', 'sh', STEP_SH, ...step.argv], {
-    cwd: root,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...stepEnv(process.env, step, !!process.stdout.isTTY), GATE_STEP_RESULT: result },
-  });
+  // relative to the root it runs from, so the history's 160-character `cmd` keeps the step's own words
+  const start = () =>
+    spawn(heavy, ['--', 'sh', relative(root, STEP_SH), ...step.argv], {
+      cwd: root,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...stepEnv(process.env, step, !!process.stdout.isTTY), GATE_STEP_RESULT: result },
+    });
+  let c: ReturnType<typeof start>;
+  try {
+    c = start();
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true });
+    throw err;
+  }
   const chunks: Buffer[] = [];
   c.stdout.on('data', (b: Buffer) => chunks.push(b));
   c.stderr.on('data', (b: Buffer) => chunks.push(b));
@@ -402,12 +411,13 @@ export const spawnExec: Exec = (step, heavy, root) => {
     });
     c.on('exit', (code, sig) => {
       const got = code ?? sigCode(sig);
+      const reported = existsSync(result);
       const r = reconcile(got, () => readFileSync(result, 'utf8'));
       rmSync(dir, { recursive: true, force: true });
       if (got === 0 && r !== 0)
         chunks.push(
           Buffer.from(
-            `\ngate:fast — heavy.sh exited 0, but ${step.label} ${r === 2 ? 'never reported' : `exited ${r}`} (a broken heavy.sh?)\n`,
+            `\ngate:fast — heavy.sh exited 0, but ${step.label} ${reported ? `exited ${r}` : 'never reported'} (a broken heavy.sh?)\n`,
           ),
         );
       const t = setTimeout(() => {

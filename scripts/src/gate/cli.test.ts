@@ -512,6 +512,13 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
     expect(r.out).toMatch(/heavy\.sh exited 0, but lint exited 1/);
   });
 
+  it('a step that really exits 2 under a swallowing heavy.sh says so, not "never reported"', async () => {
+    const { dir, f } = stub('shift; "$@"; exit 0');
+    const r = await spawnExec({ ...s, argv: ['sh', '-c', 'exit 2'] }, f, dir).done;
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/heavy\.sh exited 0, but lint exited 2/);
+  });
+
   it('a heavy.sh that exits 0 without running the step: 2, never a pass', async () => {
     const { dir, f } = stub('exit 0');
     const r = await spawnExec(s, f, dir).done;
