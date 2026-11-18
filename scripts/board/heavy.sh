@@ -9,9 +9,10 @@
 #      HEAVY_GUARD=1 (enforce the stop conditions — load tests only), HEAVY_LOADTEST=1 (a load-test run
 #      that manages its own stops, e.g. edge.sh). Either marks the event loadTest:true, which report and
 #      staleness leave out of the per-class costs.
-#      HEAVY_SLOT_CLASS (the slot's class when it differs from the event's: pnpm gate:fast's outer run logs
-#      gate-wide but holds a `test` slot), HEAVY_NOSLOT=1 (measured and logged, takes no slot: a step inside an
-#      outer run that already holds one; its caller's VITEST_MAX_WORKERS wins even for a suite).
+#      HEAVY_SLOT_CLASS=test|test-fast (the slot's class when it differs from the event's: pnpm gate:fast's outer
+#      run logs gate-wide but holds a `test` slot), HEAVY_NOSLOT=<pid> (a step inside that run: measured and logged,
+#      no slot — honoured only while <pid> is a live slot's heavy.sh and an ancestor, else it takes a slot).
+#      The command gets HEAVY_WRAPPER=<this heavy.sh's pid>, for its own steps' HEAVY_NOSLOT.
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 . "$SB_SCRIPTS/lease.sh"
@@ -37,18 +38,48 @@ rm -f "$work".*  # a reused pid's leftovers (a stale `duration` stop would turn 
 eval "$(sb_thresholds)"
 
 # Container-only tuning, per limits.json `tuning.test` (`maxWorkers: 4` since 2026-11-13 — SESSION-BOARD.md → Results).
-# test-fast (pnpm gate:fast's per-package related runs) takes the same cap, unless its caller set one (scripts: 2).
+# test-fast (a pre-gate-parallel gate:fast's per-package runs) takes the same cap, unless its caller set one.
 if { [ "$class" = test ] || [ "$class" = test-fast ]; } && sb_in_container; then
   wc=$(sb_limit '.tuning.test.workspaceConcurrency'); mw=$(sb_limit '.tuning.test.maxWorkers')
-  if [ -n "$mw" ] && { { [ "$class" = test ] && [ "${HEAVY_NOSLOT:-0}" != 1 ]; } || [ -z "${VITEST_MAX_WORKERS:-}" ]; }; then
-    export VITEST_MAX_WORKERS="$mw"
-  fi
+  if [ -n "$mw" ] && { [ "$class" = test ] || [ -z "${VITEST_MAX_WORKERS:-}" ]; }; then export VITEST_MAX_WORKERS="$mw"; fi
   if [ -n "$wc" ] && [ "$cmd" = "pnpm test" ]; then set -- pnpm -r --workspace-concurrency="$wc" test; cmd="$*"; fi
 fi
 
-# Slot: test-file and other are measured but take none, nor does a HEAVY_NOSLOT step (its outer run holds one).
-slot= slot_class="${HEAVY_SLOT_CLASS:-$class}"
-if [ "$slot_class" != test-file ] && [ "$slot_class" != other ] && [ "${HEAVY_NOSLOT:-0}" != 1 ]; then
+# A step inside a slotted run (pnpm gate:fast) names that run's heavy.sh in HEAVY_NOSLOT. Honoured only while that
+# pid is our ancestor and holds a live slot: never a way past the cap from outside one.
+noslot_held() {
+  local w="${HEAVY_NOSLOT:-}" p=$$ ps st i f
+  [[ "$w" =~ ^[0-9]+$ ]] || return 1
+  for ((i = 0; i < 32; i++)); do
+    read -r ps st < <(sb_stat "$p") || return 1
+    [ "$ps" = "$w" ] && break
+    [ "$ps" -gt 1 ] 2>/dev/null || return 1
+    p=$ps
+  done
+  [ "$ps" = "$w" ] || return 1
+  for f in "$BOARD_DIR"/leases/heavy/*.json; do
+    [ -e "$f" ] && [ "$(jq -r .wrapperPid "$f" 2>/dev/null)" = "$w" ] && sb_slot_live "$f" && return 0
+  done
+  return 1
+}
+
+# Slot: test-file and other are measured but take none, nor does a step inside a slotted run. HEAVY_SLOT_CLASS may
+# only raise a slot to `test-fast` or `test` (a `test` job's slot stays `test`).
+slot_class=$class
+case "${HEAVY_SLOT_CLASS:-}" in
+  '') ;;
+  test) slot_class=test ;;
+  test-fast) [ "$class" = test ] || slot_class=test-fast ;;
+  *) echo "heavy: HEAVY_SLOT_CLASS=${HEAVY_SLOT_CLASS} ignored (test or test-fast only)" >&2 ;;
+esac
+noslot=0
+if [ -n "${HEAVY_NOSLOT:-}" ]; then
+  if noslot_held; then noslot=1
+  else echo "heavy: HEAVY_NOSLOT=${HEAVY_NOSLOT} is no live slot above this run — taking a slot" >&2
+  fi
+fi
+slot=
+if [ "$slot_class" != test-file ] && [ "$slot_class" != other ] && [ "$noslot" = 0 ]; then
   slot="$BOARD_DIR/leases/heavy/$owner-$me.json"
   lease_heavy_acquire "$slot" "$owner" "$slot_class" "$label" "$cmd" "$me" "$me_start" "${wait_sec:-}" || exit $?
 fi
@@ -84,7 +115,8 @@ child= sig=
 on_signal() { [ -n "$child" ] && kill_tree "$child"; }
 trap 'on_signal; trap - TERM; sig=15' TERM
 trap 'on_signal; trap - INT; sig=2' INT
-"$@" &
+trap 'on_signal; trap - HUP; sig=1' HUP
+HEAVY_WRAPPER=$me "$@" &
 child=$!
 [ -n "$sig" ] && kill_tree "$child"  # signalled before $child was known
 

@@ -12,7 +12,7 @@ cores, typecheck and lint ran ×4–9 slower than their median, and a suite held
 ## What `gate:fast` runs
 
 ```
-pnpm gate:fast [--full] [--dry-run] [--base <ref>]
+pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 ```
 
 1. **The diff:** everything since the merge-base with `origin/main` — committed, staged, unstaged and untracked, with
@@ -21,34 +21,46 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
    **skip**. A fast run is `vitest related` on the changed modules plus the test files a rule names. The plan is
    printed with the reason for each choice, so a skip is never silent.
 3. **The steps, at once.** The gate re-runs itself under one outer `scripts/board/heavy.sh` slot, then starts every
-   step inside it, each under its own `heavy.sh` with `HEAVY_NOSLOT=1`: measured and logged, but taking no slot
-   (SESSION-BOARD.md → _Heavy wrapper_).
+   step inside it, each under its own `heavy.sh` with `HEAVY_NOSLOT` naming the outer one: measured and logged, but
+   taking no slot (SESSION-BOARD.md → _Heavy wrapper_).
    - **Wide** means 3+ packages' tests, or any whole suite. A wide gate counts as a full suite: its slot is a `test`
-     one, so it takes one of the 2 full-suite places, with the same wait and exit 75. It logs as `gate-wide`.
+     one, so it takes one of the 2 full-suite places, with the same wait and exit 75 (`--wait <sec>` sets the wait,
+     90 s by default). It logs as `gate-wide`.
    - **Narrow** holds an uncapped `test-fast` slot and logs as `gate-narrow`.
+   - The inner pass plans again after the slot wait. If the diff has widened past a narrow slot meanwhile, it refuses
+     with exit 2; run the gate again.
 
-   | Step                                                                | Class (event)    | Workers: wide · narrow |
-   | ------------------------------------------------------------------- | ---------------- | ---------------------- |
-   | `pnpm typecheck`                                                    | `gate-typecheck` | — (one core)           |
-   | `pnpm lint`                                                         | `gate-lint`      | — (one core)           |
-   | Per fast package: `pnpm --filter <pkg> exec vitest related --run …` | `test-fast`      | see below · 4          |
-   | Per full package: `pnpm --filter <pkg> test`                        | `test`           | see below · 4          |
-   | The whole repo: `pnpm test`, after typecheck and lint, alone        | `test`           | heavy.sh's 4 a package |
+   | Step                                                                | Class (event)    | Workers                 |
+   | ------------------------------------------------------------------- | ---------------- | ----------------------- |
+   | `pnpm typecheck`                                                    | `gate-typecheck` | — (one core)            |
+   | `pnpm lint`                                                         | `gate-lint`      | — (one core)            |
+   | Per fast package: `pnpm --filter <pkg> exec vitest related --run …` | `gate-test-fast` | below                   |
+   | Per full package (always wide): `pnpm --filter <pkg> test`          | `gate-test`      | below                   |
+   | The whole repo: `pnpm test`, after typecheck and lint, alone        | `gate-test`      | 4 a package, as a suite |
+
+   Every step logs a `gate-*` class, so the solo baselines (`typecheck`, `lint`, `test`) and the board's slot-job
+   counts stay clean. The outer run is the gate's one slot job.
+
    - **The budget** (`BUDGET`, 10 tokens) bounds what runs at once. A test step costs its workers; typecheck and lint
      cost 1 each, since `tsc -b` and eslint are single-threaded.
    - **Start order:** longest first, a smaller step filling any gap. The order is app, extension, typecheck, scripts,
      lint, cdk, lambdas, shared.
-   - **Wide workers** (`WIDE_WORKERS`): app 4; extension, lambdas, cdk and scripts 2; shared 1. Scripts always pins 2,
-     as its own test script does.
+   - **Workers** (`WIDE_WORKERS`), whenever 2+ packages besides scripts run: app 4; extension, lambdas, cdk and
+     scripts 2; shared 1. That covers every wide gate, and a narrow one that would otherwise run two 4-worker
+     packages at once, a suite's load without the cap. A single package keeps 4. Scripts always pins 2, as its own
+     test script does.
    - **The whole suite** costs the full budget, so it runs alone once typecheck and lint are done.
-   - Each step's output is held and printed as one block when it finishes, under `── <step> · ok|exit n · s ──`;
-     `▶ <step>` marks its start.
+   - **Output:** each step's output is held and printed as one block when it finishes, under
+     `── <step> · ok|exit n · s ──`. `▶ <step>` marks its start.
    - **The exit code** is the first failing step's in the printed order (typecheck, lint, then the packages), not in
-     finishing order. Every step still runs. 75 means `heavy.sh` gave up on the cap, which is a failure, never a pass.
-     INT, TERM or HUP stops every step, and the gate exits 128+n.
+     finishing order.
+     - Every step still runs.
+     - 75 means `heavy.sh` gave up on the cap, which is a failure, never a pass.
+     - INT, TERM or HUP to the gate's own pid is passed on to the outer `heavy.sh`, which stops every step. The gate
+       then exits 128+n.
    - A fast run that names tests fails if it selects no file at all (a path or include drift, since a named test
      always matches itself).
-   - The caller's `VITEST_MAX_WORKERS` and `HEAVY_*` never reach a step.
+   - The caller's `VITEST_MAX_WORKERS`, `HEAVY_*` and `GATE_*` never reach a step.
 
 `--full` runs the whole suite, e.g. to reproduce a red Branch run. `--dry-run` prints the plan and runs nothing.
 
@@ -139,7 +151,7 @@ lanes' own transcripts and archives (0 of the 30 CI runs on those branches faile
 
 The record lives in the lane archive, `faster-lanes/replay/` and `gate-replay/`.
 
-**Cost, measured** before review's wider rules (one run each under `heavy.sh`, against the full suite's median of
+**Cost, measured** with the sequential gate (before gate-parallel), before review's wider rules (one run each under `heavy.sh`, against the full suite's median of
 175 s at ~8.7 container cores). A shared change now also runs lc-e2e, the smoke test and siri-capture's ~10 devcheck
 importers; a Lambda entry-file change also runs the cdk stack tests:
 

@@ -200,6 +200,26 @@ describe('failuresByConcurrency', () => {
     expect(rows.map((r) => r.runs)).toEqual([0, 1, 0, 0]);
   });
 
+  it('counts a concurrent gate:fast once, as its outer run; its steps hold no slot', () => {
+    const gate = [
+      job(110, 40, 'gate-wide'),
+      job(112, 30, 'gate-typecheck'),
+      job(112, 10, 'gate-lint'),
+      job(112, 35, 'gate-test-fast'),
+      job(112, 20, 'gate-test'),
+    ];
+    for (const outer of ['gate-wide', 'gate-narrow']) {
+      const jobs = [
+        job(100, 60),
+        ...gate.map((j) => (j.cls === 'gate-wide' ? { ...j, cls: outer } : j)),
+      ];
+      expect(
+        failuresByConcurrency(jobs, T0).map((r) => r.runs),
+        outer,
+      ).toEqual([0, 1, 0, 0]);
+    }
+  });
+
   it('ignores suites before the window', () => {
     expect(failuresByConcurrency([job(-100, 10, 'test', 1)], T0)[0]!.runs).toBe(0);
   });
