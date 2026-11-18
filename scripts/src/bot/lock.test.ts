@@ -78,6 +78,7 @@ describe('dev lock', () => {
       branch: 'ci-bot',
       sha: SHA,
       expiresAt: new Date(NOW + TTL_MS).toISOString(),
+      takenAt: new Date(NOW).toISOString(), // main's wait counts the holder's turn from it
     });
     expect(g.holder()).toEqual(h);
     expect(g.calls.find((c) => c.method === 'POST' && c.path.endsWith('/git/refs'))?.body).toEqual({
@@ -144,6 +145,16 @@ describe('dev lock', () => {
     const h = await renew(g.api, 'ci-bot', NOW + 5 * 60_000);
     expect(h.expiresAt).toBe(new Date(NOW + 5 * 60_000 + TTL_MS).toISOString());
     await expect(renew(g.api, 'dev-e2e', NOW)).rejects.toThrow(/does not hold/);
+  });
+
+  it('a renew keeps when the lock was taken, and a lock without it (an older bot) still reads', async () => {
+    const taken = new Date(NOW - 30 * 60_000).toISOString();
+    const g = github({ ...live('ci-bot'), takenAt: taken });
+    const h = await renew(g.api, 'ci-bot', NOW + 5 * 60_000);
+    expect(h.takenAt).toBe(taken);
+    expect(g.holder()).toEqual(h);
+    const old = github(live('ci-bot'));
+    expect((await renew(old.api, 'ci-bot', NOW)).takenAt).toBeUndefined();
   });
 
   it('never revives a lapsed lock: a merge may already be deploying there', async () => {

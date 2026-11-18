@@ -20,6 +20,9 @@ export interface Holder {
   branch: string;
   sha: string;
   expiresAt: string;
+  // When this branch took the lock (acquire; renew keeps it): main's wait counts a holder's turn from it
+  // (main-dev-wait.ts). Absent on a lock an older bot wrote.
+  takenAt?: string;
 }
 export interface LockState {
   holder: Holder | null; // null: ref present but unreadable (treated as expired)
@@ -36,7 +39,12 @@ const asHolder = (v: unknown): Holder | null => {
     typeof h.branch === 'string' &&
     typeof h.sha === 'string' &&
     typeof h.expiresAt === 'string'
-    ? { branch: h.branch, sha: h.sha, expiresAt: h.expiresAt }
+    ? {
+        branch: h.branch,
+        sha: h.sha,
+        expiresAt: h.expiresAt,
+        ...(typeof h.takenAt === 'string' ? { takenAt: h.takenAt } : {}),
+      }
     : null;
 };
 
@@ -127,7 +135,12 @@ export async function acquire(
   slot: Slot = 'dev',
 ): Promise<Holder> {
   const ref = lockRef(slot);
-  const holder: Holder = { branch, sha, expiresAt: new Date(nowMs + TTL_MS).toISOString() };
+  const holder: Holder = {
+    branch,
+    sha,
+    expiresAt: new Date(nowMs + TTL_MS).toISOString(),
+    takenAt: new Date(nowMs).toISOString(), // a re-take (a holder's redeploy) restarts its turn
+  };
   const tagSha = await makeTag(api, holder, slot);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {

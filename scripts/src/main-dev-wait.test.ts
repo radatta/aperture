@@ -20,8 +20,13 @@ const R = `/repos/${OWNER}/${REPO}`;
 const T0 = Date.parse('2026-11-17T20:00:00Z');
 const MIN = 60_000;
 const sha = 'a'.repeat(40);
-const holder = (branch: string, expiresAt: number) =>
-  JSON.stringify({ branch, sha, expiresAt: new Date(expiresAt).toISOString() });
+const holder = (branch: string, expiresAt: number, takenAt?: number) =>
+  JSON.stringify({
+    branch,
+    sha,
+    expiresAt: new Date(expiresAt).toISOString(),
+    ...(takenAt === undefined ? {} : { takenAt: new Date(takenAt).toISOString() }),
+  });
 
 type Answer = { status: number; body?: unknown };
 // main's Deploy runs (the cap's anchor) and each run's job count; a bare Answer stands in for a failed listing.
@@ -67,6 +72,7 @@ const lockFetch = (
     const jobsOf = /\/actions\/runs\/(\d+)\/jobs\?per_page=50$/.exec(path);
     if (jobsOf) {
       const n = jobs[Number(jobsOf[1])] ?? 0;
+      if (n < 0) return reply({ status: 403, body: { message: 'Resource not accessible' } });
       return reply({
         status: 200,
         body: { jobs: Array.from({ length: n }, (_, i) => ({ name: `j${i}` })) },
@@ -275,7 +281,8 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     mainRun(95, T0 - 32 * MIN, 'success'), // waited, then deployed: the queue starts after it
     mainRun(94, T0 - 90 * MIN, 'cancelled'), // behind a finished run: never reached
   ];
-  const held = (_n: number, now: number) => holder('lane-x', now + 40 * MIN);
+  // taken long before any merge here and renewed ever since: the merge's hour is the cap
+  const held = (_n: number, now: number) => holder('lane-x', now + 40 * MIN, T0 - 180 * MIN);
   const jobReads = (paths: string[]) =>
     paths.flatMap((p) => /\/runs\/(\d+)\/jobs/.exec(p)?.[1] ?? []).map(Number);
 
@@ -290,12 +297,45 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     expect(cancelledBefore([mainRun(101, T0, 'cancelled')], SELF)).toEqual([]);
   });
 
-  it('deadlineOf: 60 min from the oldest merge, never under 15 from the start, 60 from the start without one', () => {
-    expect(deadlineOf(null, START)).toBe(START + CEILING_MS);
-    expect(deadlineOf(START - 10 * MIN, START)).toBe(START + 50 * MIN);
-    expect(deadlineOf(START - 50 * MIN, START)).toBe(START + FLOOR_MS);
-    expect(deadlineOf(START - 90 * MIN, START)).toBe(START + FLOOR_MS);
-    expect(deadlineOf(START + 5 * MIN, START)).toBe(START + CEILING_MS); // a runner clock behind GitHub's
+  it("deadlineOf: an hour from the later of the merge and the holder's taking, within [start + 15, start + 60]", () => {
+    const h = (expiresAt: number, takenAt?: number) => ({
+      branch: 'lane-x',
+      sha,
+      expiresAt: new Date(expiresAt).toISOString(),
+      ...(takenAt === undefined ? {} : { takenAt: new Date(takenAt).toISOString() }),
+    });
+    const at = (deadline: number, by: string) => ({ deadline, by });
+    expect(deadlineOf(null, START)).toEqual(at(START + CEILING_MS, 'start'));
+    expect(deadlineOf(null, START, h(START + 40 * MIN, START))).toEqual(
+      at(START + CEILING_MS, 'start'),
+    );
+    expect(deadlineOf(START - 10 * MIN, START)).toEqual(at(START + 50 * MIN, 'merge'));
+    expect(deadlineOf(START - 50 * MIN, START)).toEqual(at(START + FLOOR_MS, 'floor'));
+    expect(deadlineOf(START - 90 * MIN, START)).toEqual(at(START + FLOOR_MS, 'floor'));
+    // a runner clock behind GitHub's: a future merge or taking counts as the start
+    expect(deadlineOf(START + 5 * MIN, START)).toEqual(at(START + CEILING_MS, 'merge'));
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 40 * MIN, START + 5 * MIN))).toEqual(
+      at(START + CEILING_MS, 'taken'),
+    );
+    // taken after the merge: the lane's own hour
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 40 * MIN, START - 20 * MIN))).toEqual(
+      at(START + 40 * MIN, 'taken'),
+    );
+    // taken before the merge and renewed since: the merge's hour, or the floor
+    expect(deadlineOf(START - 10 * MIN, START, h(START + 40 * MIN, START - 90 * MIN))).toEqual(
+      at(START + 50 * MIN, 'merge'),
+    );
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 40 * MIN, START - 90 * MIN))).toEqual(
+      at(START + FLOOR_MS, 'floor'),
+    );
+    // an older bot's lock (no takenAt): its expiry as first read
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 30 * MIN))).toEqual(
+      at(START + 30 * MIN, 'ttl'),
+    );
+    // a lapsed holder grants nothing
+    expect(deadlineOf(START - 50 * MIN, START, h(START - MIN, START - 5 * MIN))).toEqual(
+      at(START + FLOOR_MS, 'floor'),
+    );
   });
 
   it("gives up 60 min after the oldest superseded merge, not 60 after this run's own wait starts", async () => {
@@ -318,7 +358,10 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     expect(jobReads(h.paths)).toEqual([99, 98]);
     expect(h.clock.t).toBe(T0 - 15 * MIN + CEILING_MS);
     expect(h.lines).toContain(
-      'dev: cap 20:45 UTC — 60 min from the oldest merge riding here, ccccc99 at 19:45 UTC (1 superseded run ride here)',
+      'dev: cap 20:45 UTC — 60 min from the oldest merge riding here, ccccc99 at 19:45 UTC (1 superseded run rides here)',
+    );
+    expect(h.lines).toContain(
+      'dev: run 98 was cancelled after its jobs started — the queue riding here starts after it',
     );
   });
 
@@ -353,7 +396,7 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     expect(await h.go()).toBe(0);
     expect(h.clock.t).toBe(START + FLOOR_MS);
     expect(h.lines.find((l) => l.startsWith('::warning '))).toContain(
-      'the 15-minute minimum (the oldest merge riding here, ccccc99, merged at 18:00 UTC)',
+      'the 15-minute minimum (the oldest merge riding here, ccccc99 at 18:00 UTC (1 superseded run rides here))',
     );
   });
 
@@ -369,7 +412,7 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     const runs = [mainRun(SELF, T0 - 120 * MIN, null, 'in_progress')];
     const h = harness(() => ({ status: 502 }), ['dev'], RUN_ENV, { runs });
     expect(await h.go()).toBe(0);
-    expect(h.reads()).toBe(MAX_ERRORS);
+    expect(h.reads()).toBe(MAX_ERRORS + 1); // the holder read before the wait, then the wait's own tries
     expect(h.lines.find((l) => l.startsWith('::warning '))).toContain('could not read its lock');
   });
 
@@ -408,6 +451,11 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
       { ...RUN_ENV, GITHUB_RUN_ID: '12abc' },
       "dev: no GITHUB_RUN_ID — the cap counts from this wait's start",
     ],
+    [
+      'no run attempt',
+      { ...ENV, GITHUB_RUN_ID: String(SELF) },
+      "dev: no GITHUB_RUN_ATTEMPT — the cap counts from this wait's start",
+    ],
   ])('%s: never lists runs, and counts 60 min from its own start', async (_name, env, line) => {
     const h = harness(held, ['dev'], env, { runs: tonight() });
     expect(await h.go()).toBe(0);
@@ -435,8 +483,75 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     expect(h.clock.t).toBe(T0);
     expect(h.lines).toEqual([
       'devb lock probe: free — read with the job token',
-      "wait-cap probe: 8 main Deploy runs listed; the newest (cccc101) would wait from cccc101's merge at 19:59 UTC, 0 superseded riding — read with the job token",
+      "wait-cap probe: 8 main Deploy runs listed; cccc100's run would wait from ccccc96's merge at 2026-11-17T19:29Z, 4 superseded riding — read with the job token",
     ]);
+  });
+
+  it('--once names a walk stopped at a run cancelled with jobs, and anchors the newest run when none has a cancelled predecessor', async () => {
+    const h = harness(() => null, ['dev', '--once'], ENV, { runs: tonight(), jobs: { 99: 2 } });
+    expect(await h.go()).toBe(0);
+    expect(h.lines[1]).toContain(
+      '0 superseded riding, walk stopped at run 99 (cancelled with jobs)',
+    );
+    const plain = harness(() => null, ['dev', '--once'], ENV, {
+      runs: [mainRun(7, T0 - MIN, 'success'), mainRun(6, T0 - 9 * MIN, 'success')],
+    });
+    expect(await plain.go()).toBe(0);
+    expect(plain.lines[1]).toContain("cccccc7's run would wait from cccccc7's merge");
+  });
+
+  it('a lane that took the lock after the merge gets its own hour from taking it', async () => {
+    const lane = (_n: number, now: number) => holder('lane-y', now + 40 * MIN, T0 - 5 * MIN);
+    const h = harness(lane, ['dev'], RUN_ENV, { runs: tonight() });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(T0 + 55 * MIN);
+    expect(h.lines).toContain(
+      'dev: cap 20:55 UTC — 60 min from lane-y @ aaaaaaa taking the lock at 19:55 UTC (after the oldest merge riding here, ccccc96 at 19:29 UTC (4 superseded runs ride here))',
+    );
+    expect(h.lines.find((l) => l.startsWith('::warning '))).toContain(
+      'a turn renewed past an hour',
+    );
+  });
+
+  it("an older bot's lock (no taken time) gets its expiry as first read", async () => {
+    const h = harness((_n, now) => holder('lane-z', now + 40 * MIN), ['dev'], RUN_ENV, {
+      runs: tonight(),
+    });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(START + 40 * MIN);
+    expect(h.lines).toContain(
+      "dev: cap 20:40 UTC — lane-z @ aaaaaaa's lock expiry as first read (no taken time on it; the oldest merge riding here, ccccc96 at 19:29 UTC (4 superseded runs ride here))",
+    );
+  });
+
+  it('a failed holder read before the wait falls back to the merge cap, and the wait retries', async () => {
+    const h = harness(
+      (n, now) => (n === 0 ? { status: 502 } : holder('lane-y', now + 40 * MIN, T0 - 5 * MIN)),
+      ['dev'],
+      RUN_ENV,
+      { runs: tonight() },
+    );
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(T0 - 31 * MIN + CEILING_MS);
+  });
+
+  it("falls back, with a warning, when a superseded run's jobs read fails mid-walk", async () => {
+    const f = harness(held, ['dev'], RUN_ENV, { runs: tonight(), jobs: { 98: -1 } });
+    expect(await f.go()).toBe(0);
+    expect(f.lines.find((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toContain(
+      '403',
+    );
+    expect(f.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it('falls back, with a warning, on a created_at that will not parse', async () => {
+    const runs = tonight().map((r) => (r.id === 96 ? { ...r, created_at: 'soon' } : r));
+    const h = harness(held, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toContain(
+      'run 96 has no readable created_at',
+    );
+    expect(h.clock.t).toBe(START + CEILING_MS);
   });
 
   it('--once warns, never fails, when the runs listing fails', async () => {
