@@ -1,13 +1,17 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { LC_CATALOG_COST_STOP_USD, LC_CATALOG_SOURCE, unpackCatalog } from '@aperture/shared';
+import { describe, expect, it } from 'vitest';
+import {
+  LC_CATALOG_COST_STOP_USD,
+  LC_CATALOG_SOURCE,
+  parseClasses,
+  unpackCatalog,
+} from '@aperture/shared';
 import type { LcCatalogRow } from '@aperture/shared';
 import { FakeAnthropic } from '../anthropic/gateway';
 import type { CatalogClassifyRequest } from '../anthropic/gateway';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { liveWrites } from '../ddb/writes';
 import { FIXTURE_CLASSES, FIXTURE_SOURCE } from './fixture';
-import { runCatalogImport } from './import';
-import { recheckCatalogSoon } from './loader';
+import { CALL_CEILING_USD, runCatalogImport } from './import';
 import { FakeCatalogSource } from './source';
 import { CatalogStore } from './store';
 
@@ -28,8 +32,9 @@ function setup() {
   const store = new CatalogStore(doc, liveWrites(doc));
   const source = new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE });
   const anthropic = new FakeAnthropic();
+  const logs: string[] = [];
   let t = 1_000;
-  const deps = { store, source, anthropic, now: () => t, log: () => {} };
+  const deps = { store, source, anthropic, now: () => t, log: (l: string) => logs.push(l) };
   const run = async (runId: string, limit?: number) => {
     t += 200_000; // past any earlier claim
     await store.claim(runId, t);
@@ -37,16 +42,14 @@ function setup() {
   };
   const rows = async () =>
     unpackCatalog(await store.loadLive((await store.meta(true))!)) as LcCatalogRow[];
-  return { store, source, anthropic, run, rows };
+  return { store, source, anthropic, run, rows, logs, deps };
 }
 
 describe('runCatalogImport', () => {
-  afterEach(() => recheckCatalogSoon());
-
   it('builds from the pinned source, the uploaded classes and a few model rows, then clears the upload', async () => {
     const { store, source, anthropic, run, rows } = setup();
     anthropic.nextClassify = answer;
-    await store.stagePart(1, 1, FIXTURE_CLASSES, 1);
+    await store.stagePart(1, 1, `${FIXTURE_CLASSES}\nnot a class line`, 1);
     const meta = await run('run-1');
     expect(source.urls).toEqual([
       `https://raw.githubusercontent.com/${LC_CATALOG_SOURCE.repo}/${LC_CATALOG_SOURCE.sha}/${LC_CATALOG_SOURCE.path}`,
@@ -59,10 +62,12 @@ describe('runCatalogImport', () => {
       premium: 1,
       by: { neetcode: 2, rule: 1, model: 12, tags: 0 },
       lastError: null,
+      modelError: null,
+      badClasses: 1,
       job: null,
     });
     expect(meta.costUsd).toBeCloseTo(1000 * 2e-6 + 500 * 10e-6);
-    expect(await store.stage()).toBeNull();
+    expect(await store.stage()).toMatchObject({ of: 0 });
     const by = Object.fromEntries((await rows()).map((r) => [r.slug, r]));
     expect(by['two-sum']).toMatchObject({ pattern: 'arrays-hashing', by: 'neetcode' });
     expect(by['synthetic-window-sum']).toMatchObject({
@@ -86,6 +91,28 @@ describe('runCatalogImport', () => {
     expect(await rows()).toEqual(before);
   });
 
+  it('a capped import keeps every class it was given: a full one after it loses none', async () => {
+    const { store, run } = setup();
+    await store.stagePart(1, 1, FIXTURE_CLASSES, 1);
+    expect(await run('run-1', 1)).toMatchObject({ count: 3 }); // NeetCode's two and one more
+    const full = await run('run-2');
+    expect(full.by).toMatchObject({ model: 5 }); // all five uploaded classes, though run-1 built none
+    expect(parseClasses(await store.classesText()).classes.size).toBe(5);
+  });
+
+  it('keeps an upload that began while the job ran', async () => {
+    const { store, run, deps } = setup();
+    await store.stagePart(1, 1, FIXTURE_CLASSES, 1);
+    const fetch = deps.source.fetch.bind(deps.source);
+    deps.source.fetch = async (url) => {
+      const got = await fetch(url);
+      await store.stagePart(1, 2, 'new upload', 2); // a new upload's first part lands mid-job
+      return got;
+    };
+    await run('run-1');
+    expect(await store.stage()).toMatchObject({ of: 2, have: 1 });
+  });
+
   it('keeps the live catalog and records why when the source fails', async () => {
     const { source, run } = setup();
     const ok = await run('run-1');
@@ -96,28 +123,45 @@ describe('runCatalogImport', () => {
     expect(await run('run-3')).toMatchObject({ lastError: 'The source had no usable rows' });
   });
 
-  it('leaves rows to their tags past the cost stop, and on a failed model call still counts its spend', async () => {
-    const { store, anthropic, run } = setup();
+  it('records a failed model call, keeps those rows on their tags, and charges a call with no usage at its ceiling', async () => {
+    const { anthropic, run } = setup();
     anthropic.nextClassify = {
       ok: false,
       reason: 'api',
+      detail: 'HTTP 529',
       model: 'fake',
       usage: { input: 100, output: 0 },
       ms: 1,
     };
     const failedCall = await run('run-1');
-    expect(failedCall.by).toMatchObject({ model: 0, tags: 12 });
+    expect(failedCall).toMatchObject({
+      modelError: 'api: HTTP 529',
+      by: { model: 0, tags: 12 },
+    });
     expect(failedCall.costUsd).toBeCloseTo(100 * 2e-6);
 
-    anthropic.nextClassify = answer;
-    await store.claim('spend', 10 ** 9); // spend reaches the stop
-    await store.finish('spend', 10 ** 9, {
+    anthropic.nextClassify = {
       ok: false,
-      error: 'x',
-      costUsd: LC_CATALOG_COST_STOP_USD,
-    });
-    const stopped = await run('run-2');
-    expect(anthropic.classifyCalls).toHaveLength(1);
+      reason: 'timeout',
+      model: 'fake',
+      usage: null,
+      ms: 45_000,
+    };
+    const timedOut = await run('run-2');
+    expect(timedOut.costUsd).toBeCloseTo(100 * 2e-6 + CALL_CEILING_USD);
+    expect(timedOut.modelError).toBe('timeout');
+
+    anthropic.nextClassify = answer;
+    expect((await run('run-3')).modelError).toBeNull();
+  });
+
+  it('makes no model call once spend reaches the stop; rows stay on their tags', async () => {
+    const { store, anthropic, run } = setup();
+    anthropic.nextClassify = answer;
+    await store.claim('spend', 1);
+    await store.finish('spend', 1, { ok: false, error: 'x', costUsd: LC_CATALOG_COST_STOP_USD });
+    const stopped = await run('run-1');
+    expect(anthropic.classifyCalls).toHaveLength(0);
     expect(stopped.by).toMatchObject({ model: 0, tags: 12 });
   });
 
@@ -126,11 +170,10 @@ describe('runCatalogImport', () => {
     expect(await run('run-1', 3)).toMatchObject({ count: 5, by: { neetcode: 2 } });
   });
 
-  it('refuses a run whose claim another job holds', async () => {
-    const { store, source, anthropic } = setup();
+  it('refuses, and logs, a run whose claim another job holds', async () => {
+    const { store, deps, logs } = setup();
     await store.claim('mine', 1);
-    await expect(
-      runCatalogImport({ store, source, anthropic, now: () => 2 }, { runId: 'theirs' }),
-    ).rejects.toThrow(/lost its claim/);
+    await expect(runCatalogImport(deps, { runId: 'theirs' })).rejects.toThrow(/lost its claim/);
+    expect(logs.at(-1)).toContain('lost its claim');
   });
 });

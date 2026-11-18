@@ -78,7 +78,7 @@ describe('Problem page', () => {
     expect(await screen.findByText('No problem by that name.')).toBeTruthy();
   });
 
-  it('an off-list problem the server’s full catalog knows names that list, not Off the list', async () => {
+  it('pins the full list’s label: a record on it reads All LeetCode, not Off the list', async () => {
     const api = freshApi();
     await api.logCoachAttempts([
       {

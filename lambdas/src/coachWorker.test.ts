@@ -2,11 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   handleCatalogImport,
   handleCoachPick,
+  handleWorkerEvent,
   parseCatalogImportEvent,
   parseCoachWorkerEvent,
 } from './coachWorker';
+import {
+  buildCatalog,
+  catalogCounts,
+  catalogLoaded,
+  packCatalog,
+  trimSourceRows,
+  unloadCatalog,
+} from '@aperture/shared';
 import { FIXTURE_SOURCE } from './catalog/fixture';
-import { recheckCatalogSoon } from './catalog/loader';
 import { FakeCatalogSource } from './catalog/source';
 import { CatalogStore } from './catalog/store';
 import { liveWrites } from './ddb/writes';
@@ -64,7 +72,7 @@ describe('handleCoachPick', () => {
 });
 
 describe('the catalog import on the worker', () => {
-  afterEach(() => recheckCatalogSoon());
+  afterEach(() => unloadCatalog());
 
   it('refuses a malformed event before any work', () => {
     expect(parseCatalogImportEvent({ kind: 'catalog-import', runId: 'r', limit: 3, x: 1 })).toEqual(
@@ -91,5 +99,50 @@ describe('the catalog import on the worker', () => {
       { now: () => 2 },
     );
     expect(meta).toMatchObject({ live: 'a', count: 15, job: null });
+  });
+});
+
+describe('handleWorkerEvent', () => {
+  afterEach(() => unloadCatalog());
+  const src = () => new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE });
+
+  it('routes a catalog-import event to the import and anything else to the pick', async () => {
+    const doc = new InMemoryDoc();
+    await new CatalogStore(doc, liveWrites(doc)).claim('run-1', 1);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const meta = await handleWorkerEvent(
+      doc,
+      new FakeAnthropic(),
+      src(),
+      {
+        kind: 'catalog-import',
+        runId: 'run-1',
+      },
+      { now: () => 2 },
+    );
+    expect(meta).toMatchObject({ live: 'a', count: 15 });
+    await expect(handleWorkerEvent(doc, new FakeAnthropic(), src(), EVENT)).resolves.toBe(
+      'not-ours',
+    );
+  });
+
+  it('loads the live catalog before a pick, so the pick names problems by their catalog facts', async () => {
+    const doc = new InMemoryDoc();
+    const store = new CatalogStore(doc, liveWrites(doc));
+    const rows = buildCatalog(trimSourceRows(FIXTURE_SOURCE).rows, new Map());
+    await store.claim('run-1', 1);
+    const meta = await store.finish('run-1', 2, {
+      ok: true,
+      packed: packCatalog(rows),
+      classes: '',
+      sha: 'a'.repeat(40),
+      counts: catalogCounts(rows),
+      costUsd: 0,
+      modelError: null,
+      badClasses: null,
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await handleCoachPick(doc, new FakeAnthropic(), EVENT);
+    expect(catalogLoaded()).toEqual({ rev: meta.rev, count: rows.length });
   });
 });

@@ -24,6 +24,9 @@ describe('single-table keys', () => {
     expect(catalogSk.chunk('a', 3)).toBe('slot#a#03');
     expect(catalogSk.chunk('b', 0).startsWith(catalogSk.slotPrefix('b'))).toBe(true);
     expect(catalogSk.chunk('a', 0).startsWith(catalogSk.slotPrefix('b'))).toBe(false);
+    expect(catalogSk.stagePart(3)).toBe('stagepart#03');
+    expect(catalogSk.stagePart(3).startsWith(catalogSk.stagePartPrefix())).toBe(true);
+    expect(catalogSk.stage().startsWith(catalogSk.stagePartPrefix())).toBe(false);
   });
 
   it('builds type-prefixed range keys that a prefix query can slice', () => {

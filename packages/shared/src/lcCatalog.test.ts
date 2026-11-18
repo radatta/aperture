@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildCatalog,
   catalogCounts,
-  classesOf,
+  formatClasses,
   LC_CATALOG_PART_MAX_CHARS,
   lcCatalogSourceUrl,
   normalizeCatalogImport,
@@ -164,10 +164,17 @@ describe('buildCatalog', () => {
     expect(rows.map((r) => r.slug)).toEqual(['two-sum', 'synthetic-a', 'synthetic-b']);
   });
 
-  it('turns its model rows back into classes for a re-import', () => {
-    const classes = new Map([[9001, cls('heap', [9002], [9003])]]);
-    const rows = buildCatalog(source, classes);
-    expect(classesOf(rows)).toEqual(classes);
+  it('writes the class map back as the file parseClasses reads, sorted by id', () => {
+    const classes = new Map([
+      [9002, cls('heap')],
+      [9001, cls('sliding-window', [9002, 9003], [9002])],
+    ]);
+    const text = formatClasses(classes);
+    expect(text).toBe('9001\tsliding-window\t9002,9003\t9002\n9002\theap\t-\t-');
+    expect(parseClasses(text)).toEqual({
+      classes: new Map([...classes].sort(([a], [b]) => a - b)),
+      bad: 0,
+    });
   });
 });
 

@@ -76,7 +76,7 @@ export async function handleCoachPick(
 ): Promise<CoachPickRun> {
   const e = parseCoachWorkerEvent(raw);
   // The pick names problems: the full catalog's facts, when imported (catalog/loader.ts).
-  await ensureCatalog(new CatalogStore(table, liveWrites(table)), (opts.now ?? Date.now)());
+  await ensureCatalog(new CatalogStore(table, liveWrites(table)));
   const run = await runCoachPick(
     {
       repo: new Repo(table, liveWrites(table), e.userId),
@@ -89,8 +89,19 @@ export async function handleCoachPick(
   return run;
 }
 
+// One worker, two jobs, told apart by `kind` (catalog/invoker.ts): a catalog import, else the day's pick.
+export async function handleWorkerEvent(
+  table: DocClient,
+  gateway: AnthropicGateway,
+  src: CatalogSource,
+  raw: unknown,
+  opts: { now?: () => number } = {},
+): Promise<CoachPickRun | CatalogMeta> {
+  return isCatalogImport(raw)
+    ? handleCatalogImport(table, gateway, src, raw, opts)
+    : handleCoachPick(table, gateway, raw, opts);
+}
+
 export async function handler(event: unknown): Promise<CoachPickRun | CatalogMeta> {
-  return isCatalogImport(event)
-    ? handleCatalogImport(doc, anthropic, source, event)
-    : handleCoachPick(doc, anthropic, event);
+  return handleWorkerEvent(doc, anthropic, source, event);
 }

@@ -392,6 +392,7 @@ describe('catalogClassify', () => {
     expect(body).not.toHaveProperty('thinking');
     expect(body.output_config).toMatchObject({ effort: 'low', format: { type: 'json_schema' } });
     expect(JSON.parse(logs[0]!)).toMatchObject({ event: 'catalog_classify', ok: true, rows: 1 });
+    expect(logs.join('\n')).not.toMatch(/Synthetic A|SECRET/);
   });
 
   it('keeps the usage of a failed call, so the job can price it', async () => {

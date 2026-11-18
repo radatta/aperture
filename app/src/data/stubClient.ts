@@ -1502,6 +1502,8 @@ class StubClient implements ApiClient {
       staged: null,
       costUsd: 0,
       lastError: null,
+      modelError: null,
+      badClasses: 0,
     };
   }
   async startCatalogImport(input: CatalogImportInput): Promise<CatalogStatus> {

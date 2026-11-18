@@ -1031,8 +1031,8 @@ export const COACH_TOOLS: Tool[] = [
     name: 'import_catalog',
     description: [
       ASK_FIRST,
-      `Builds the stage\u2019s full LeetCode problem catalog from the pinned public dataset (stage-wide metadata, not the user\u2019s data; their plan still picks from NeetCode 150). Optional \`classes\`: the classification file (one problem per line: number, pattern, similar numbers, harder numbers, tab-separated), at most ${LC_CATALOG_PART_MAX_CHARS} characters a call — split a longer one into \`parts\` (≤ ${LC_CATALOG_PARTS_MAX}) sent as \`part\` 1…n; the last part in starts the import. With no \`classes\` it starts an import with the classes already stored, and a few new problems are classified on the server each time.`,
-      'Returns the catalog_status after the call — read back its `state` (`staging` with parts so far, `running`, then call catalog_status until `ready` or `partial`). Calling again while one runs starts nothing.',
+      `Builds the stage\u2019s full LeetCode problem catalog from the pinned public dataset (stage-wide metadata, not the user\u2019s data; their plan still picks from NeetCode 150). Optional \`classes\`: the classification file (one problem per line: number, pattern, similar numbers, harder numbers, tab-separated), at most ${LC_CATALOG_PART_MAX_CHARS} characters a call — split a longer one into \`parts\` (≤ ${LC_CATALOG_PARTS_MAX}) sent in order as \`part\` 1…n — raw slices, joined as sent, so a split may fall anywhere; a part 1 starts over, one out of order is refused with why; the last part in starts the import. With no \`classes\` it starts an import with the classes already stored, and a few new problems are classified on the server each time.`,
+      'Returns the catalog_status after the call — read back `staged` (the parts in so far) and `state` (`running` once kicked; then call catalog_status until `ready` or `partial`, and read `modelError` and `badClasses`). Calling again while one runs starts nothing.',
     ].join(' '),
     inputSchema: {
       type: 'object',

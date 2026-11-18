@@ -18,7 +18,6 @@ import { unloadCatalog } from '@aperture/shared';
 import { FIXTURE_CLASSES, FIXTURE_SOURCE } from '../catalog/fixture';
 import { runCatalogImport } from '../catalog/import';
 import { inlineCatalogInvoker } from '../catalog/invoker';
-import { recheckCatalogSoon } from '../catalog/loader';
 import { FakeCatalogSource } from '../catalog/source';
 import { CatalogStore } from '../catalog/store';
 
@@ -723,7 +722,6 @@ describe('the full catalog over MCP', () => {
   }
   const reset = () => {
     unloadCatalog();
-    recheckCatalogSoon();
   };
   beforeEach(reset);
   afterEach(reset);
@@ -731,12 +729,12 @@ describe('the full catalog over MCP', () => {
   it('reads absent, imports from an uploaded file in parts, then reads the result', async () => {
     catalogCtx();
     expect(await call('catalog_status')).toMatchObject({ state: 'absent', count: 0 });
-    const lines = FIXTURE_CLASSES.split('\n');
+    const cut = FIXTURE_CLASSES.length - 7; // mid-line: parts are raw slices, joined as sent
     expect(
-      await call('import_catalog', { classes: lines.slice(0, 2).join('\n'), part: 1, parts: 2 }),
+      await call('import_catalog', { classes: FIXTURE_CLASSES.slice(0, cut), part: 1, parts: 2 }),
     ).toMatchObject({ state: 'staging', staged: { have: 1, of: 2 } });
     const done = await call('import_catalog', {
-      classes: lines.slice(2).join('\n'),
+      classes: FIXTURE_CLASSES.slice(cut),
       part: 2,
       parts: 2,
     });
@@ -747,7 +745,6 @@ describe('the full catalog over MCP', () => {
   it('get_problem knows an untried problem from the catalog, off the roadmap, with its related ones', async () => {
     catalogCtx();
     await call('import_catalog', { classes: FIXTURE_CLASSES });
-    recheckCatalogSoon();
     const out = await call('get_problem', { slug: 'synthetic-window-sum' });
     expect(out.problem).toMatchObject({
       title: 'Synthetic Window Sum',

@@ -497,6 +497,8 @@ export interface DevCatalogStatus {
   staged: { have: number; of: number } | null;
   costUsd: number;
   lastError: string | null;
+  modelError: string | null;
+  badClasses: number;
 }
 export interface DevSittingStart {
   clientSittingId: string;

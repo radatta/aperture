@@ -1536,7 +1536,7 @@ export class BackendClient implements ApiClient {
   private async coachInput(day?: string, consistent = false): Promise<CoachInput> {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
     const now = this.now();
-    await this.ensureCatalog(now);
+    await this.ensureCatalog();
     const settings = await this.ensureSettings();
     const { dayStartHour, leetcodePremium } = settings;
     const opts = { consistent };
@@ -1816,8 +1816,8 @@ export class BackendClient implements ApiClient {
     return out;
   }
   // The full catalog (catalog/loader.ts): loaded before any read that names problems; NeetCode 150 alone without it.
-  async ensureCatalog(now = this.now()): Promise<void> {
-    if (this.catalog) await ensureCatalog(this.catalog, now);
+  async ensureCatalog(): Promise<void> {
+    if (this.catalog) await ensureCatalog(this.catalog);
   }
   async getCatalogStatus(): Promise<CatalogStatus> {
     if (!this.catalog) return catalogStatus(null, null, this.now());

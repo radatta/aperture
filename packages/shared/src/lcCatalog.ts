@@ -146,15 +146,14 @@ export function parseClasses(tsv: string): { classes: Map<number, LcClass>; bad:
   }
   return { classes, bad };
 }
-// A catalog's model-set rows back to classes, so a re-import keeps them.
-export function classesOf(rows: readonly LcCatalogRow[]): Map<number, LcClass> {
-  const idOf = new Map(rows.map((r) => [r.slug, r.id]));
-  const ids = (slugs: string[]) => slugs.flatMap((s) => (idOf.has(s) ? [idOf.get(s)!] : []));
-  return new Map(
-    rows
-      .filter((r) => r.by === 'model')
-      .map((r) => [r.id, { pattern: r.pattern, similar: ids(r.similar), harder: ids(r.harder) }]),
-  );
+// The class map back to the file's lines (parseClasses reads them), sorted by id — how the store keeps every class
+// it has been given, whatever an import's `limit` builds.
+export function formatClasses(classes: ReadonlyMap<number, LcClass>): string {
+  const ids = (xs: number[]) => (xs.length ? xs.join(',') : '-');
+  return [...classes]
+    .sort(([a], [b]) => a - b)
+    .map(([id, c]) => `${id}\t${c.pattern}\t${ids(c.similar)}\t${ids(c.harder)}`)
+    .join('\n');
 }
 
 // The catalog: NeetCode's facts win for its problems, the non-algorithm sets are `other`, then a model's class,
@@ -293,10 +292,11 @@ export function unpackCatalog(raw: unknown): LcCatalogRow[] | null {
 }
 
 // --- The import, over the API (startCatalogImport / getCatalogStatus) ---
-// absent: never imported. staging: a classification upload has some of its parts. running: a job holds the claim.
-// ready: every algorithm problem has a pattern from NeetCode or a model. partial: some still have only their tags'
-// guess (rows the dataset added since the last classification; each kick classifies a few). failed: the newest
-// job failed and no catalog was ever built (a failure after one keeps the live catalog and sets lastError).
+// running: a job holds the claim. ready: a live catalog, every algorithm problem's pattern from NeetCode or a model.
+// partial: a live catalog with some still on their tags' guess (rows the dataset added since the last
+// classification; each kick classifies a few). staging: no live catalog yet, an upload under way. failed: no live
+// catalog, the newest job failed. absent: none of these. An upload in progress shows in `staged` whatever the
+// state; a failure after a catalog was built keeps it and sets lastError.
 export type CatalogImportState = 'absent' | 'staging' | 'running' | 'ready' | 'partial' | 'failed';
 export interface CatalogStatus {
   state: CatalogImportState;
@@ -306,11 +306,17 @@ export interface CatalogStatus {
   by: Record<LcClassifiedBy, number> | null;
   importedAt: number | null;
   staged: { have: number; of: number } | null; // the classification upload's parts so far
-  costUsd: number; // the server-side model path's spend, cumulative; it stops at LC_CATALOG_COST_STOP_USD
-  lastError: string | null;
+  // The server-side model path's spend, cumulative: no new call once it reaches LC_CATALOG_COST_STOP_USD (the last
+  // call may overshoot by one call's ceiling; a call with no usage reported is charged at that ceiling).
+  costUsd: number;
+  lastError: string | null; // the newest import's failure, cleared by the next success
+  modelError: string | null; // the newest import's model call failure (its rows kept their tags), else null
+  badClasses: number; // lines of the newest uploaded classification file that didn't parse
 }
-// One call per part of the classification file (parts in any order; a part 1 starts a new upload); the last part
-// in, or a call with no classes, kicks the import. `limit` caps the non-NeetCode problems (dev's import).
+// One call per part of the classification file, in order: a part 1 starts a new upload, part k follows parts 1…k-1
+// (anything else is refused, with why). Parts are raw slices of the file, joined as sent, so a split may fall
+// anywhere. The last part in, or a call with no classes, kicks the import. `limit` caps the non-NeetCode problems in
+// the built catalog (dev's import); every class given is kept whatever it builds.
 export interface CatalogImportInput {
   classes?: string;
   part?: number;

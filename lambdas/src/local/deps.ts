@@ -21,7 +21,7 @@ import { CatalogStore } from '../catalog/store';
 import { runCoachPick } from '../coach/pick';
 import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
-import { standInCoachPick } from '@aperture/shared';
+import { patternOfTags, standInCoachPick } from '@aperture/shared';
 import { createECDH } from 'node:crypto';
 import type { PublicKeyReader } from '../push/publicKey';
 import type { BffDeps } from '../index';
@@ -53,14 +53,32 @@ export function localDeps(auth: LocalAuth): { bff: BffDeps; mcp: McpDeps; doc: I
       e,
     ),
   );
-  // The full catalog's import runs the real job inline over the synthetic fixture source (never the network), with
-  // the model off: uploaded classes and tags only — the real source and Sonnet are dev's rows.
+  // The full catalog's import runs the real job inline over the synthetic fixture source (never the network); its
+  // model step is a stand-in that files each problem under its tags' pattern, through the real validator — the real
+  // source and Sonnet are dev's rows.
+  const catalogStandIn: AnthropicGateway = {
+    ...noopAnthropic(),
+    catalogClassify: async (req) => ({
+      ok: true,
+      fields: {
+        items: req.rows.map((r) => ({
+          id: r.id,
+          pattern: patternOfTags(r.tags),
+          similar: [],
+          harder: [],
+        })),
+      },
+      model: 'local-stand-in',
+      usage: { input: 0, output: 0 },
+      ms: 0,
+    }),
+  };
   const catalogInvoker = inlineCatalogInvoker((e) =>
     runCatalogImport(
       {
         store: new CatalogStore(doc, liveWrites(doc)),
         source: new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE }),
-        anthropic: noopAnthropic(),
+        anthropic: catalogStandIn,
         now: Date.now,
       },
       e,

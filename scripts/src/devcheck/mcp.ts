@@ -95,6 +95,10 @@ export interface DevProblemRow {
   peeked: boolean;
   reSolve: { track: string; dueDay: string | null; graduated: boolean } | null;
 }
+// catalog_status / import_catalog's answer: the API's status with the import's time as an ISO string.
+export type DevMcpCatalogStatus = Omit<DevCatalogStatus, 'importedAt'> & {
+  importedAt: string | null;
+};
 export interface DevProblemRead {
   problem: {
     slug: string;
@@ -105,6 +109,7 @@ export interface DevProblemRead {
     patternId?: string;
     lists?: string[];
     number?: number;
+    similar?: { slug: string; title: string }[];
   };
   record: {
     attempts: number;
@@ -415,7 +420,7 @@ export function createMcpClient({
         args,
       ),
     getProblem: (args: Record<string, unknown>) => data<DevProblemRead>('get_problem', args),
-    catalogStatus: () => data<DevCatalogStatus>('catalog_status', {}),
+    catalogStatus: () => data<DevMcpCatalogStatus>('catalog_status', {}),
     coachStats: (args: Record<string, unknown> = {}) => data<DevCoachStats>('coach_stats', args),
     listStories: () =>
       data<{
@@ -428,7 +433,7 @@ export function createMcpClient({
     // import_catalog (lc-catalog): the stage's full problem catalog — public metadata, not the test user's data, so
     // not ledgered (DEV-CHECK.md → Ledgers); the next run reuses it. Returns the status the tool reads back.
     importCatalog: (args: Record<string, unknown> = {}) =>
-      data<DevCatalogStatus>('import_catalog', args),
+      data<DevMcpCatalogStatus>('import_catalog', args),
     async createTask(input: {
       title: string;
       estimateMin?: number;

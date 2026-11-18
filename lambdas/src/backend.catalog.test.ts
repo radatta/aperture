@@ -6,7 +6,6 @@ import { FIXTURE_CLASSES, FIXTURE_SOURCE } from './catalog/fixture';
 import { runCatalogImport } from './catalog/import';
 import { inlineCatalogInvoker } from './catalog/invoker';
 import type { CatalogImportEvent } from './catalog/invoker';
-import { recheckCatalogSoon } from './catalog/loader';
 import { FakeCatalogSource } from './catalog/source';
 import { CatalogStore } from './catalog/store';
 import { InMemoryDoc } from './ddb/DocClient';
@@ -52,17 +51,17 @@ function setup(opts: { invoke?: boolean; fail?: boolean } = {}) {
 describe('the full catalog through the BFF', () => {
   afterEach(() => {
     unloadCatalog();
-    recheckCatalogSoon();
   });
 
   it('stages a two-part upload, kicks the import on the last part, and reads ready', async () => {
     const { client, kicks } = setup();
     const api = client('u1');
-    const [a, b] = [FIXTURE_CLASSES.split('\n').slice(0, 3), FIXTURE_CLASSES.split('\n').slice(3)];
-    const half = await api.startCatalogImport({ classes: a.join('\n'), part: 1, parts: 2 });
+    const cut = FIXTURE_CLASSES.length - 7; // mid-line: parts are raw slices, joined as sent
+    const [a, b] = [FIXTURE_CLASSES.slice(0, cut), FIXTURE_CLASSES.slice(cut)];
+    const half = await api.startCatalogImport({ classes: a, part: 1, parts: 2 });
     expect(half).toMatchObject({ state: 'staging', staged: { have: 1, of: 2 } });
     expect(kicks).toHaveLength(0);
-    const done = await api.startCatalogImport({ classes: b.join('\n'), part: 2, parts: 2 });
+    const done = await api.startCatalogImport({ classes: b, part: 2, parts: 2 });
     expect(kicks).toHaveLength(1);
     expect(done).toMatchObject({
       state: 'partial', // the fixture leaves seven problems to their tags, and the model is off
@@ -112,7 +111,6 @@ describe('the full catalog through the BFF', () => {
     expect(catalogLoaded()).toBeNull();
 
     await u1.startCatalogImport({ classes: FIXTURE_CLASSES });
-    recheckCatalogSoon();
     const after = await u1.listProblemRecords();
     expect(after[0]).toMatchObject({
       title: 'Synthetic Heap Merge',

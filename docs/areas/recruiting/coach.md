@@ -259,32 +259,42 @@ each (`packages/shared/src/lcCatalog.ts`).
   LeetCode's public problem metadata. Nothing here reads leetcode.com.
 - **Not in this repo.** The licence covers the dataset's code, not LeetCode's data, so the rows — and their
   classifications, the catalog by another name — live only in each stage's table: the stage-wide partition
-  `catalog#leetcode` (`lambdas/src/catalog/store.ts`): `meta`, a `stage` for an upload's parts, and two slots of
-  the packed catalog, gzipped in ≤ 300 k-character chunks; an import fills the idle slot and flips `meta`. Never
-  exported. Tests and the local server use a synthetic fixture (`lambdas/src/catalog/fixture.ts`).
+  `catalog#leetcode` (`lambdas/src/catalog/store.ts`): `meta`; `classes`, every class given so far (gzipped); an
+  upload under way (`stage` and a row per part); and two slots of the packed catalog, gzipped in ≤ 40 k-character
+  chunks (under dev's write ceiling); an import fills the idle slot and flips `meta`. Never exported. Tests and the
+  local server use a synthetic fixture (`lambdas/src/catalog/fixture.ts`).
 - **Classification.** Each problem's pattern comes from, in order: NeetCode's own facts (its 150 problems); `other`
-  for LeetCode's non-algorithm sets (Database, Shell, Concurrency, JavaScript, pandas); an uploaded class; the live
-  catalog's earlier model class; else its tags (`patternOfTags`). The bulk pass ran once, outside the server: Opus
+  for LeetCode's non-algorithm sets (Database, Shell, Concurrency, JavaScript, pandas); its class — the upload's,
+  else the stored `classes`; else its tags (`patternOfTags`). The bulk pass ran once, outside the server: Opus
   subagents in Claude Code classified the 3,546 algorithm problems from their title, difficulty and tags
   (2026-11-17, ~2.6 M tokens), into an untracked file uploaded through `import_catalog`. A problem the dataset adds
   later is classified on the server: each import sends at most 50 still on their tags to Sonnet 5.5
-  (`anthropic/catalogClassifyPrompt.ts`), until the stage's cumulative spend reaches $0.25
-  (`LC_CATALOG_COST_STOP_USD`). Related problems are kept only when they're on the catalog, never the problem
+  (`anthropic/catalogClassifyPrompt.ts`), and none once the stage's cumulative spend reaches $0.25
+  (`LC_CATALOG_COST_STOP_USD`). The stop is checked before a call, so the last one can overshoot by its ceiling
+  (~$0.12), and a call that reports no usage (a timeout) is charged that ceiling. Every class given is stored,
+  whatever an import's `limit` builds. Related problems are kept only when they're on the catalog, never the problem
   itself, and a harder one at least as hard.
-- **The import** runs on the coach worker (`kind: 'catalog-import'`, `lambdas/src/catalog/import.ts`): the BFF's
-  `startCatalogImport` stages a part, or — the last part in, or a call with none — claims `meta` (one job at a time;
-  a claim lapses after 120 s) and invokes the worker, which fetches the pinned file (10 s, 8 MB cap), builds,
-  packs and publishes. A failure keeps the live catalog and records `lastError`. `limit` keeps only the first n
-  problems besides NeetCode's (dev's import). No new function, grant or recurring cost: the worker's GetItem /
-  PutItem / Query cover it (an emptied stage is a put, not a delete).
+- **The upload** (`startCatalogImport` / `import_catalog` with `classes`): parts in order, each ≤ 64 k characters,
+  ≤ 8 of them, raw slices joined as sent (a split can fall mid-line); a part 1 starts a new upload, and a part out of
+  order, of another size or already in is refused with why. The last part in kicks the import, which empties the
+  upload once used — unless a new one began meanwhile. Lines that don't parse are counted (`badClasses`).
+- **The import** runs on the coach worker (`kind: 'catalog-import'`, `lambdas/src/catalog/import.ts`): a kick (the
+  last part, or a call with no classes) claims `meta` (one job at a time; a claim lapses after 180 s, longer than
+  the event's queue and the worker's timeout together) and invokes the worker, which fetches the pinned file (10 s,
+  8 MB cap, no redirect), builds, packs and publishes. A failure keeps the live catalog and records `lastError`; a
+  failed model step keeps those rows on their tags and records `modelError`. `limit` keeps only the first n
+  problems besides NeetCode's (dev's import: dev imports capped only). No new function, grant or recurring cost: the
+  worker's GetItem / PutItem / Query cover it (an emptied upload is a put, not a delete).
 - **Reads.** A Lambda loads the live catalog into `catalogs.ts` (`loadCatalog`) before any read that names problems
-  (`Backend.coachInput`, the worker's pick), re-reading `meta` at most once a minute and the chunks only when its
-  rev moves (`catalog/loader.ts`); a failed load logs and reads as before. Records are derived on the server, so a
-  problem off NeetCode 150 now takes the catalog's title, pattern and difficulty and lists `leetcode`; that can move
-  the focus once at import, as a Premium flip does. The app loads nothing: Progress and the plan stay NeetCode 150's,
-  and the Problem page names the list from the record. Related problems are read only through `get_problem` for now.
-- **Status** (`getCatalogStatus`, `catalog_status`): `absent`, `staging`, `running`, `ready`, `partial` (some
-  problems still on their tags' guess), `failed`; the counts by classifier, the source commit, the spend.
+  (`Backend.coachInput`, the worker's pick): every read reads `meta` (one consistent GetItem), the chunks only when
+  its rev moves (`catalog/loader.ts`), so a new import shows in any container on the next read; a failed load logs
+  and reads as before. Records are derived on the server, so a problem off NeetCode 150 now takes the catalog's
+  title, pattern and difficulty and lists `leetcode`; that can move the focus once at import, as a Premium flip
+  does. The app loads nothing: Progress and the plan stay NeetCode 150's, and the Problem page names the list from
+  the record. Related problems are read only through `get_problem` for now.
+- **Status** (`getCatalogStatus`, `catalog_status`): `running`, else from the live catalog `ready` or `partial`
+  (some problems still on their tags' guess), else `staging`, `failed` or `absent`; an upload under way shows in
+  `staged` whatever the state; the counts by classifier, the source commit, the spend, `modelError`, `badClasses`.
 - **On prod**, once deployed: `import_catalog` on `aperture` with the maintainer's go, the classification file in
   ≤ 64 k-character parts, then `catalog_status` until `ready`.
 

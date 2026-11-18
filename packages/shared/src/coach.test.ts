@@ -1490,7 +1490,25 @@ describe('the full catalog, once loaded', () => {
   it('leaves the day’s plan as it was: picks only from NeetCode 150', () => {
     const sittings = [clean('two-sum', day(-3)), failed('valid-anagram', day(-2))];
     const before = planDay(input({ sittings }));
-    load();
+    // An unseen Easy in the focus pattern (arrays-hashing): a plan drawing from the loaded list would take it.
+    loadCatalog(
+      buildCatalog(
+        [
+          {
+            id: 9102,
+            slug: 'aaa-synthetic-easy-hash',
+            title: 'Synthetic Easy Hash',
+            difficulty: 'Easy',
+            premium: false,
+            acRate: 90,
+            tags: ['Array', 'Hash Table'],
+            algorithms: true,
+          },
+        ],
+        new Map(),
+      ),
+      'rev-plan',
+    );
     const after = planDay(input({ sittings }));
     expect(after.slots).toEqual(before.slots);
     const plan = new Set(NEETCODE_150.map((p) => p.slug));
