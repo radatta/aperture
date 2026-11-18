@@ -986,6 +986,23 @@ describe('calendar auto-sync (timed tasks)', () => {
       expect((await b.listPlansForDay(today)).length).toBe(6); // the spawns stand
     });
 
+    it('a spawn write that throws still syncs what spawned before it, then fails getDay', async () => {
+      const { g, b, repo } = await connectedWithRepo();
+      await b.upsertSeries(series('First', { dueOffsetDays: 1, dueTime: '14:00' }));
+      await b.upsertSeries(series('Second', { dueOffsetDays: 1, dueTime: '15:00' }));
+      const putPlan = repo.putPlan.bind(repo);
+      let n = 0;
+      vi.spyOn(repo, 'putPlan').mockImplementation(async (p) => {
+        if (++n === 2) throw new Error('throttled');
+        return putPlan(p);
+      });
+      await expect(b.getDay(today)).rejects.toThrow('throttled');
+      const occ = (await b.listTasks()).filter((t) => t.seriesId);
+      expect(occ).toHaveLength(2); // the second's task landed before its row failed
+      expect(occ.every((t) => !!t.gcalEventId || !!t.gcalSyncError)).toBe(true);
+      expect(g.events.size).toBe(2);
+    });
+
     it('auto-sync off: occurrences spawn with no event and no error', async () => {
       const { g, b } = await connected();
       await b.updateSettings({ autoCalendar: false });
@@ -997,6 +1014,21 @@ describe('calendar auto-sync (timed tasks)', () => {
         gcalSyncError: null,
       });
     });
+  });
+
+  it('bulk create: a parent write that throws after the save still syncs the saved timed tasks', async () => {
+    const { g, b, repo } = await connectedWithRepo();
+    const p = await b.createTask({ title: 'P2' });
+    vi.spyOn(
+      b as unknown as { adoptAsParent: () => Promise<void> },
+      'adoptAsParent',
+    ).mockRejectedValue(new Error('throttled'));
+    await expect(
+      b.createTasks([{ title: 'a', parentId: p.id, dueDay: '2026-10-09', dueTime: '10:00' }]),
+    ).rejects.toThrow('throttled');
+    const [part] = (await repo.listTasks({ consistent: true })).filter((t) => t.parentId === p.id);
+    expect(part!.gcalEventId ?? part!.gcalSyncError).toBeTruthy();
+    expect(g.events.size).toBe(1);
   });
 
   it('bulk create: once Google fails, the rest are marked for Retry without being attempted', async () => {

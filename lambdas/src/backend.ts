@@ -2193,19 +2193,25 @@ export class BackendClient implements ApiClient {
     const saved = await this.repo.putTasks(
       tasks.map((x) => (landing.has(x.id) ? { ...x, status: 'planned' as const } : x)),
     );
-    for (const id of parentIds) {
-      if (!hasParts(all, id)) await this.adoptAsParent(all.find((x) => x.id === id)!);
-    }
-    for (const part of saved) {
-      const row = landing.get(part.id);
-      if (row)
-        await this.repo.putPlan({
-          ...this.base(),
-          taskId: part.id,
-          day: row.day,
-          plannedMinutes: followUpPlanMinutes(part.estimateMin, part.bufferMin),
-          order: row.order,
-        });
+    try {
+      for (const id of parentIds) {
+        if (!hasParts(all, id)) await this.adoptAsParent(all.find((x) => x.id === id)!);
+      }
+      for (const part of saved) {
+        const row = landing.get(part.id);
+        if (row)
+          await this.repo.putPlan({
+            ...this.base(),
+            taskId: part.id,
+            day: row.day,
+            plannedMinutes: followUpPlanMinutes(part.estimateMin, part.bufferMin),
+            order: row.order,
+          });
+      }
+    } catch (err) {
+      // The tasks are saved: each still gets its event or its Retry note before the paste reports failure.
+      await this.syncCreated(saved, deadline, all);
+      throw err;
     }
     return this.syncCreated(saved, deadline, all);
   }

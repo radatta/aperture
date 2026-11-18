@@ -232,7 +232,7 @@ export const recurring: Scenario = {
       id: 'time-api-invalid',
       entry: 'api',
       kind: 'edge',
-      what: 'upsertSeries with a time and no due offset, with 25:00, or due the same day at 02:00 (before the 4am day start) → refused; no series written',
+      what: 'upsertSeries with a time and no due offset, with 25:00, or due the same day before the day start (an hour before it) → refused; no series written',
     },
     {
       id: 'time-mcp-create',
@@ -621,14 +621,20 @@ export const recurring: Scenario = {
       id: 'time-api-invalid',
       entry: 'api',
       proves: ['time-api-invalid'],
-      title: 'upsertSeries with a time and no offset, or with 25:00 → refused, nothing written',
+      title:
+        'upsertSeries with a time and no offset, with 25:00, or due the same day before the day start → refused, nothing written',
       async run(ctx) {
         const before = (await ctx.api.reads.listSeries()).length;
-        for (const [what, input] of [
+        const { dayStartHour } = await ctx.api.reads.getSettings();
+        const early = `${String(Math.max(dayStartHour - 1, 0)).padStart(2, '0')}:00`;
+        const cases: [string, { dueOffsetDays?: number; dueTime: string }][] = [
           ['no offset', { dueTime: '14:00' }],
           ['25:00', { dueOffsetDays: 1, dueTime: '25:00' }],
-          ['same day before the day start', { dueOffsetDays: 0, dueTime: '02:00' }],
-        ] as const) {
+        ];
+        // A 0 day start has no small hours to refuse.
+        if (dayStartHour > 0)
+          cases.push(['same day before the day start', { dueOffsetDays: 0, dueTime: early }]);
+        for (const [what, input] of cases) {
           const got = await ctx.api.writes.createSeriesExpectingRefusal(
             { title: name(ctx, `bad ${what}`), rule: { kind: 'daily' }, ...input },
             appToday,
@@ -701,8 +707,15 @@ export const recurring: Scenario = {
           yesterday,
         );
         await ctx.api.reads.getDay(yesterday); // past days are allowed: it spawns yesterday's copy
-        await ctx.api.reads.getDay(appToday); // today's copy, and the sweep of yesterday's
-        const occ = await occurrencesOf(ctx, dueDay.id);
+        // Today's copy, and the sweep of yesterday's: both reads are eventual, so a lagging list can miss
+        // the copy a moment old — ask again until it settles.
+        let occ = [] as Awaited<ReturnType<typeof occurrencesOf>>;
+        for (let i = 0; i < 10; i++) {
+          await ctx.api.reads.getDay(appToday);
+          occ = await occurrencesOf(ctx, dueDay.id);
+          if (occ.find((t) => t.seriesDay === yesterday)?.status === 'backlog') break;
+          await new Promise((r) => setTimeout(r, 500));
+        }
         const y = occ.find((t) => t.seriesDay === yesterday);
         const t = occ.find((t) => t.seriesDay === appToday);
         if (occ.length !== 2 || !y || !t) throw new Error(`occurrences: ${JSON.stringify(occ)}`);
@@ -721,6 +734,22 @@ export const recurring: Scenario = {
         const title = name(ctx, 'dueday');
         const yesterday = shiftDays(appToday, -1);
         const y = (await occurrencesOf(ctx, dueDay.id)).find((t) => t.seriesDay === yesterday)!;
+        // The unsearched Today lens: By time leads, so yesterday's copy is the first card with the title,
+        // and a By-time card carries no actions; today's copy is in the plan below with Unplan.
+        await ctx.ui.goto('/tasks');
+        await ctx.page.getByLabel('Search tasks').fill('');
+        await ctx.ui.settle();
+        await ctx.page.getByText('By time', { exact: true }).waitFor({ timeout: 15_000 });
+        const cardOf = (i: number) =>
+          rowOf(ctx, title).nth(i).locator('xpath=ancestor::*[contains(@class,"rounded-2xl")][1]');
+        const unplanIn = (i: number) =>
+          cardOf(i).getByRole('button', { name: 'Unplan', exact: true }).count();
+        if (
+          (await rowOf(ctx, title).count()) !== 2 ||
+          (await unplanIn(0)) !== 0 ||
+          (await unplanIn(1)) !== 1
+        )
+          throw new Error('the due-day copy is not By time ahead of today’s planned copy');
         await todaySearched(ctx, title);
         await ctx.ui.expectText('due today 2pm');
         const add = ctx.page.getByRole('button', { name: `Add ${title} to today` });
@@ -819,7 +848,7 @@ export const recurring: Scenario = {
       entry: 'api',
       title: 'Delete this run’s series with their occurrences (by recorded id); clear the search',
       async run(ctx) {
-        // A failed step skips the rest, so a later series may never have been made (the ledger cleans those).
+        // A deferred or probe-skipped step never made its series (the ledger cleans any it did).
         const mine = [report, ended, plain, viaMcp, prelab, quiz, timedMcp, dueDay].filter(Boolean);
         for (const s of mine) await ctx.api.writes.deleteSeries(s.id);
         const left = (await ctx.api.reads.listTasks()).filter((t) =>

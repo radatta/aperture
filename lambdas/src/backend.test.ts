@@ -1050,6 +1050,28 @@ describe('backend decisions under a lagging task list', () => {
     expect(doc.gets.some((g) => g.key.endsWith(sk.task(t.id)) && g.consistent)).toBe(true);
   });
 
+  it('a series spawn re-reads consistently: a lagging list that misses today’s occurrence spawns no second (recurring D8)', async () => {
+    const { backend, doc } = setup();
+    await backend.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' },
+      anchorDate: '2026-08-04',
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    await backend.getDay('2026-08-04');
+    const [row] = await backend.listPlansForDay('2026-08-04');
+    // Neither the occurrence nor its row is visible to an eventual read yet.
+    doc.staleNextQueries('u#local', sk.task(row!.taskId), null, 20);
+    doc.staleNextQueries('u#local', sk.plan('2026-08-04', row!.order, row!.id), null, 20);
+    await backend.getDay('2026-08-04');
+    const items = await doc.query('u#local', sk.taskPrefix(), { consistent: true });
+    const occ = items.map((i) => toEntity<Task>(i)).filter((t) => t.seriesId && !t.deletedAt);
+    expect(occ.map((t) => t.id)).toEqual([row!.taskId]);
+  });
+
   it('a second insert straight after the first sees the row though the plain list lags', async () => {
     const { backend, doc } = setup();
     const t = await backend.createTask({ title: 'pset' });
