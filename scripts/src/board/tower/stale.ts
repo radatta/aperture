@@ -122,7 +122,7 @@ export function staleItems(s: StaleInputs): StaleItem[] {
     laneState(l, s, openPr(l.branch), add);
     if (l.waitingOn) {
       // a merge reference only (`<branch> merges`, `PR <n>`): a date is dispatch's own schedule
-      const at = refFiredAt(l.waitingOn, merged, s.now - REUSE_MS);
+      const at = refFiredAt(l.waitingOn, merged, s.now - REUSE_MS, 'fire');
       if (at !== null && at <= s.now)
         add({
           kind: 'waiting-on',

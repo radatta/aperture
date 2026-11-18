@@ -17,7 +17,7 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
-import { MainBusy, withMainLock, withRestartLock } from './main-lock.ts';
+import { MAIN_LOCK, MainBusy, withMainLock, withRestartLock } from './main-lock.ts';
 import { execRun, syncMain } from './sync-main.ts';
 import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
@@ -243,7 +243,8 @@ if (process.argv[1]?.endsWith('cli.ts')) {
     if (out) process.stdout.write(out + '\n');
   } catch (e) {
     process.stderr.write(`board cli: ${(e as Error).message}\n`);
-    // a busy main checkout is no failure: the main sync loop tries again next round (sync.sh)
-    process.exit(e instanceof MainBusy ? 75 : 2);
+    // a busy main checkout (its lock, before anything moved) is no failure: the main sync loop tries again next
+    // round (sync.sh); a busy tower restart comes after a move, so it stays an error that says so
+    process.exit(e instanceof MainBusy && e.file === MAIN_LOCK ? 75 : 2);
   }
 }

@@ -1,3 +1,7 @@
+import { spawn, spawnSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { MainBusy } from './main-lock.ts';
 import { FETCH_TIMEOUT_MS, execRun, syncMain, type Run } from './sync-main.ts';
@@ -297,4 +301,32 @@ describe('sync-main', () => {
     expect(f.calls.map((c) => c.args[0])).toContain('switch');
     expect(f.calls.some((c) => c.args[2] === 'restart')).toBe(false);
   });
+});
+
+describe('pnpm board sync-main: the exit code', () => {
+  it('75 when the main checkout lock is busy (the main sync loop retries next round), before any git write', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sync-main-busy-'));
+    const repo = join(dir, 'repo');
+    expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0); // an empty repo: nothing it could move
+    const lock = join(dir, 'main.lock');
+    const holder = spawn('flock', ['-o', lock, 'sh', '-c', 'echo held; sleep 20'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    try {
+      await new Promise<void>((r) => holder.stdout!.once('data', () => r()));
+      const r = spawnSync('node', [join(import.meta.dirname, 'cli.ts'), 'sync-main'], {
+        env: {
+          ...process.env,
+          INIT_CWD: repo,
+          APERTURE_MAIN_LOCK: lock,
+          APERTURE_MAIN_LOCK_WAIT: '1',
+        },
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+      expect([r.status, r.stderr]).toEqual([75, expect.stringMatching(/main checkout busy/)]);
+    } finally {
+      holder.kill();
+    }
+  }, 40_000);
 });

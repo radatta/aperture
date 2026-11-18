@@ -149,19 +149,22 @@ export function firedAt(
 }
 // The merge half alone (`<branch> merges`, `PR <n>`, `+ N days`): what a devQueue `waitingOn` can name (stale.ts).
 // `branchSince`: a branch reference counts only a merge at or after it (a reused name: mergelog.ts REUSE_MS); a PR
-// number is exact.
+// number is exact. `on: 'fire'` cuts on when it fires instead (merge + offset): a `waitingOn` judged against now,
+// where "<branch> merges + 1 day" still fires a day after a recent merge; a follow-up cuts on the merge itself.
 export function refFiredAt(
   after: string,
   merged: Merged[],
   branchSince = -Infinity,
+  on: 'merge' | 'fire' = 'merge',
 ): number | null {
   const r = AFTER_REF.exec(after);
   const off = r?.[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0;
-  // the cut applies to when it fires: "<branch> merges + 1 day" still fires a day after a recent merge
   const pr =
     r &&
     merged.find((p) =>
-      r[1] ? p.number === +r[1] : p.branch === r[2] && p.mergedAt + off >= branchSince,
+      r[1]
+        ? p.number === +r[1]
+        : p.branch === r[2] && p.mergedAt + (on === 'fire' ? off : 0) >= branchSince,
     );
   if (!r || !pr) return null;
   return pr.mergedAt + off;
@@ -170,8 +173,10 @@ export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
   fu.flatMap((f) => {
     if (f.status !== 'open' || f.after === 'now') return [];
     // a branch merge over a day before the follow-up was written is a namesake's (a reused name: mergelog.ts); one
-    // just before is the one it records (the hub often logs a follow-up after its trigger)
-    const at = firedAt(f.after, merged, now, f.since === null ? -Infinity : f.since - REUSE_MS);
+    // just before is the one it records (the hub often logs a follow-up after its trigger). A bare-date `since` reads
+    // as that day's end, so the day before counts from that day's start.
+    const cut = f.since === null ? -Infinity : f.since - REUSE_MS - (f.sinceDay ? 86400e3 : 0);
+    const at = firedAt(f.after, merged, now, cut);
     return at !== null && at <= now ? [{ ...f, firedAt: at }] : [];
   });
 

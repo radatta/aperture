@@ -1347,6 +1347,15 @@ describe('tower-current: derived over hand-written', () => {
     expect(v.next.queue.map((l) => l.branch)).toEqual(['echo']);
     expect(v.next.order.map((r) => r.branch)).toEqual(['echo']);
     expect(v.board.items.map((x) => x.kind)).toEqual([]);
+    // a devQueue twin naming that PR settles it whatever its age: it landed
+    const named = derive(
+      inputs({
+        prs: [old],
+        devQueue: [queueLane({ branch: 'echo', state: 'waiting', pr: 201 })],
+        mergeOrder: order,
+      }),
+    );
+    expect(named.next.order).toEqual([]);
     // the same merge under a day old is this lane's: it landed
     const recent = merged(201, 'echo', NOW - 2 * 3600e3);
     const r = derive(inputs({ prs: [recent], devQueue: q, mergeOrder: order }));

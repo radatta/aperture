@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { IDS } from '../../identifiers.ts';
 import {
   firedAt,
+  firedFollowups,
   LANE_STATES,
   parseQueue,
   planAt,
@@ -551,10 +552,35 @@ describe('tower-current: autoStart and merge references', () => {
     expect(refFiredAt('fox merges', merged)).toBeNull();
     // a reused name: a branch merge counts only when it fires at or after the cut; a PR number always
     expect(refFiredAt('echo merges', merged, 2000)).toBeNull();
-    expect(refFiredAt('echo merges + 1 day', merged, 2000)).toBe(1000 + 86400e3);
+    // a waitingOn cuts on when it fires; a follow-up on the merge itself
+    expect(refFiredAt('echo merges + 1 day', merged, 2000, 'fire')).toBe(1000 + 86400e3);
+    expect(refFiredAt('echo merges + 1 day', merged, 2000)).toBeNull();
     expect(refFiredAt('PR 9', merged, 2000)).toBe(1000);
     // a follow-up written after the namesake's merge doesn't fire from it
     expect(firedAt('echo merges', merged, 5000, 3000)).toBeNull();
     expect(firedAt('echo merges', merged, 5000, 500)).toBe(1000);
+  });
+  it('a follow-up dated by day alone counts a merge from the evening before', () => {
+    const { at: since, day } = sinceTime('2026-11-18'); // that day's end
+    const evening = since! - 24 * 3600e3 - 30 * 60e3; // 11-17, 23:30
+    const merged = [{ branch: 'echo', number: 9, mergedAt: evening }];
+    const f = {
+      id: 'F1',
+      what: 'w',
+      owner: 'lane',
+      after: 'echo merges',
+      status: 'open',
+      source: null,
+      since,
+      sinceDay: day,
+    };
+    expect(firedFollowups([f], merged, since!).map((x) => x.firedAt)).toEqual([evening]);
+    // a merge days before is a namesake's
+    const old = [{ ...merged[0]!, mergedAt: since! - 4 * 86400e3 }];
+    expect(firedFollowups([f], old, since!)).toEqual([]);
+    // an offset reference cuts on the merge too: an old namesake + 1 week never fires it
+    expect(
+      firedFollowups([{ ...f, after: 'echo merges + 1 week' }], old, since! + 7 * 86400e3),
+    ).toEqual([]);
   });
 });

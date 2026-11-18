@@ -690,8 +690,11 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
     // a busy main checkout (75) is no failure: ok, says why, logs nothing
     const before = log();
     expect(once({ FAKE_OUT: 'board cli: main checkout busy', FAKE_RC: '75' }).status).toBe(0);
-    expect(beat()).toMatchObject({ ok: true, msg: expect.stringMatching(/busy: next round$/) });
+    expect(beat()).toMatchObject({ ok: true, msg: 'main checkout busy: next round' });
     expect(log()).toBe(before);
+    // any other failure that says "busy" is still a logged failure
+    expect(once({ FAKE_OUT: 'git: Device or resource busy', FAKE_RC: '2' }).status).not.toBe(0);
+    expect(log()).toMatch(/Device or resource busy/);
     // a stray argument is refused, never a forever loop
     const bad = spawnSync('bash', [join(s, 'sync.sh'), '--help'], {
       env: senv(),

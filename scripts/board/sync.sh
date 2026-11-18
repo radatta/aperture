@@ -27,8 +27,8 @@ round() {
   out=$(cd "$SB_REPO" && INIT_CWD="$SB_REPO" APERTURE_MAIN_LOCK_WAIT=20 \
     timeout -k 5 240 node "$SB_REPO/scripts/src/board/cli.ts" sync-main 2>&1 8>&-)
   rc=$?
-  # 75: the main checkout was busy (a lanes start): not a failure, the next round tries
-  if [ "$rc" = 75 ]; then out+=$'\n'"main checkout busy: next round"; elif [ "$rc" != 0 ]; then ok=false; fi
+  # 75: the main checkout's lock was busy (a lanes start), nothing moved: not a failure, and not logged; next round
+  if [ "$rc" = 75 ]; then out="main checkout busy: next round"; elif [ "$rc" != 0 ]; then ok=false; fi
   head=$(git -C "$SB_REPO" rev-parse HEAD 2>/dev/null)
   if [ "${APERTURE_SYNC_TOWER:-on}" != off ] && ! bash "$SB_SCRIPTS/board.sh" tower status >/dev/null 2>&1 8>&-; then
     out+=$'\n'$(bash "$SB_SCRIPTS/board.sh" tower start 2>&1 8>&-)
@@ -38,7 +38,7 @@ round() {
     '{v: 1, t: $t, pid: $pid, ok: $ok, head: $head, msg: ($msg | split("\n") | map(select(. != "")) | join(" · ") | .[0:300])}' \
     >"$BOARD_DIR/main-sync.json.tmp.$$" && mv -f "$BOARD_DIR/main-sync.json.tmp.$$" "$BOARD_DIR/main-sync.json"
   # the log keeps what moved, restarted, started or failed; a quiet round leaves no line
-  printf '%s\n' "$out" | grep -v -E '^$|already at|restart not needed|busy' | sed "s/^/$(date '+%m-%d %H:%M') /" >>"$BOARD_DIR/main-sync.log"
+  printf '%s\n' "$out" | grep -v -E '^$|already at|restart not needed|^main checkout busy: next round$' | sed "s/^/$(date '+%m-%d %H:%M') /" >>"$BOARD_DIR/main-sync.log"
   "$ok"
 }
 

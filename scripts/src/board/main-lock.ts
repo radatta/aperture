@@ -15,7 +15,13 @@ export const MAIN_LOCK = process.env.APERTURE_MAIN_LOCK || '/tmp/aperture-main-c
 export const TOWER_RESTART_LOCK =
   process.env.APERTURE_TOWER_RESTART_LOCK || '/tmp/aperture-tower-restart.lock';
 
-export class MainBusy extends Error {}
+export class MainBusy extends Error {
+  file: string | null; // the lock it waited on (node strips types only: no parameter properties)
+  constructor(msg: string, file: string | null = null) {
+    super(msg);
+    this.file = file;
+  }
+}
 
 const depth = new Map<string, number>(); // per lock file: nesting one lock never skips taking another
 
@@ -57,7 +63,7 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
           take(['-w', String(wait)]);
         } catch (e2) {
           if ((e2 as { status?: number }).status !== 1) throw e2;
-          throw new MainBusy(`${what}: ${file} held for ${wait} s`);
+          throw new MainBusy(`${what}: ${file} held for ${wait} s`, file);
         }
       }
     }
