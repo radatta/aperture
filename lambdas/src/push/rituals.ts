@@ -3,6 +3,7 @@ import {
   reminderEnabled,
   ritualCopy,
   ritualFireAts,
+  timeDecidesDay,
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
@@ -42,8 +43,9 @@ export const ritualSource: CandidateSource = async ({
   return out;
 };
 
-// The day's plan as the app reads it: each plan's newest copy, on that day, its task not cancelled or
-// deleted; done or not.
+// The day's plan as the app reads it (todayRows): each plan's newest copy, on that day, its task not
+// cancelled or deleted, done or not — and not one whose time decides its day, whose row is history (a series
+// deadline occurrence still counts: recurring.md D8).
 export async function dayCounts(repo: Repo, day: string): Promise<{ open: number; done: number }> {
   const newest = new Map<string, TaskPlan>();
   for (const p of await repo.listPlansFrom(day, { consistent: true })) {
@@ -54,7 +56,7 @@ export async function dayCounts(repo: Repo, day: string): Promise<{ open: number
   for (const p of newest.values()) {
     if (p.day !== day) continue;
     const task = await repo.getTask(p.taskId, { consistent: true });
-    if (!task || task.status === 'cancelled') continue;
+    if (!task || task.status === 'cancelled' || timeDecidesDay(task)) continue;
     if (task.status === 'done') counts.done++;
     else counts.open++;
   }

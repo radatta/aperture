@@ -1203,6 +1203,22 @@ describe('push dispatch — retry and catch-up', () => {
     expect(w.push.sends).toHaveLength(1);
   });
 
+  it('a planned series deadline occurrence (recurring D8) is still retried: its time is only its deadline', async () => {
+    const w = world();
+    await w.device('S1');
+    const occ = { seriesId: 'S', seriesDay: TODAY, status: 'planned' as const };
+    await w.repo().putTask(task({ id: 'P', ...occ, dueDay: '2026-11-05', dueTime: '14:00' }));
+    await w.repo().putPlan(plan({ taskId: 'P' }));
+    w.set(NINE_AM);
+    w.push.status = 503;
+    await w.tick();
+    w.push.status = 201;
+    w.set(NINE_AM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(2);
+    expect(w.notes().map((n) => n.body)).toEqual(['Planned for today', 'Planned for today']);
+  });
+
   it('a retry whose 404 lost to a revive is tried again on the revived device', async () => {
     const w = world();
     await w.device('S1');
@@ -1466,6 +1482,26 @@ describe('push dispatch — ritual nudges', () => {
       'Nothing planned yet',
       'Nothing on today’s plan',
     ]);
+  });
+
+  it('counts the plan as Today reads it: a timed task’s leftover row is out, a series deadline occurrence’s is in', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    await w.repo().putTask(task({ id: 'O', title: 'Open' }));
+    await w
+      .repo()
+      .putTask(task({ id: 'T', title: 'Timed since', dueDay: TODAY, dueTime: '15:00' }));
+    const occ = { seriesId: 'S', seriesDay: TODAY, status: 'planned' as const };
+    await w.repo().putTask(task({ id: 'D', ...occ, dueDay: '2026-11-05', dueTime: '14:00' }));
+    await w.repo().putPlan(plan({ id: 'P1', taskId: 'O' }));
+    await w.repo().putPlan(plan({ id: 'P2', taskId: 'T', order: 1 }));
+    await w.repo().putPlan(plan({ id: 'P3', taskId: 'D', order: 2 }));
+    w.set(MORNING);
+    await w.tick();
+    w.set(NIGHT);
+    await w.tick();
+    const nudges = w.notes().filter((n) => n.tag?.startsWith('ritual'));
+    expect(nudges.map((n) => n.body)).toEqual(['2 planned today', '2 left open']);
   });
 
   it('never says "missed"', async () => {

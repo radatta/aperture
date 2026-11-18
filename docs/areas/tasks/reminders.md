@@ -33,7 +33,8 @@ Notifications:
 
 - Times are the user's zone (`userDueEpoch`), DST-safe. Only open tasks ping: not done, not cancelled, not
   tombstoned. Errands and parts ping like any task.
-- A task that is both due and planned on the same day pings once (due wins).
+- A task that is both day-only due and planned on the same day pings once (due wins). A series deadline
+  occurrence planned on its due day gets both: the 09:00 planned ping and its deadline minute.
 - **Armed before it fires.** A reminder pings only if it was set before its fire time. A task created or
   re-dated after its fire time stays quiet, and so does a plan made after 09:00 for that day (the 09:00–09:30
   planning case). So does anything that fell due while its kind's toggle was off, or before the user's first
@@ -51,7 +52,8 @@ Notifications:
 - There is no user-facing cap and no quiet hours (both rejected).
 - **Ritual nudges** (`RITUAL_TIMES`, `push/rituals.ts`): counts only, never "missed" — morning "4 planned
   today" or "Nothing planned yet"; night "3 left open · 2 done" (either half alone) or "Nothing on today's
-  plan". The counts are the day's plan as the app reads it (each plan's newest copy, its task not cancelled).
+  plan". The counts are the day's plan as the app reads it (each plan's newest copy, its task not cancelled,
+  and not one whose time decides its day — a series deadline occurrence counts).
   Each nudge is its own notification, tagged by its kind, and opens Home (`/`), whose clock mode is already
   morning at 08:30 and night at 21:30 — for a day that starts by 08:30 (`dayStartHour` ≤ 8; the default is 4).
   Its day is the calendar day of its fire time. Armed like any kind (the toggle's switch-on time, the registry row). No
@@ -125,7 +127,8 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
     `RETRY_MAX` = 3 ticks retry that device only, under the same Topic, so a first copy the service took but
     never answered for is replaced while still undelivered (RFC 8030 §5.4). The device reads "… — retrying".
     Each retry re-reads its tasks: one finished, deleted, re-dated or taken off that day's plan since stays
-    quiet. Retries take no guard unit. Each try is claimed (counted, on the version read) before its POST. A
+    quiet, as does a planned one given a time that decides its day (`plannable`, the planned ping's own test
+    — a series deadline occurrence still goes). Retries take no guard unit. Each try is claimed (counted, on the version read) before its POST. A
     device the tick's deadline skipped gets a retry row too, with no try spent. A slow device — its last
     attempt failed, or (slower still) a retry of it has a try spent — goes last in a fresh batch, its retries
     after the rest's and its catch-up after theirs, so one that keeps timing out (10 s) can't use up a tick before the others within one sender; a

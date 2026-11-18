@@ -114,11 +114,12 @@ export const taskSource: CandidateSource = async ({ repo, rows, settings, notBef
   return out;
 };
 
-// A plan pings only while its task is open and untimed (a timed task is never planned — the check is
-// defensive), and only from its newest copy: a move writes the new key before deleting the old, so the old
-// one outlives it by a write, or for good when that delete failed. The app's reads keep the newest per id;
-// one consistent range read from the window's earliest plan day does the same here. A newest copy dated
-// before that day (or a removal's tombstone) reads as absent, so the row stays quiet.
+// A plan pings only while its task is open and its time doesn't decide its day (`plannable`: a timed task
+// is never planned, bar a series deadline occurrence — recurring.md D8), and only from its newest copy: a
+// move writes the new key before deleting the old, so the old one outlives it by a write, or for good when
+// that delete failed. The app's reads keep the newest per id; one consistent range read from the window's
+// earliest plan day does the same here. A newest copy dated before that day (or a removal's tombstone)
+// reads as absent, so the row stays quiet.
 export const planSource: CandidateSource = async ({ repo, rows, settings, notBefore }) => {
   if (!reminderEnabled('planned', settings)) return [];
   const reads = [];
