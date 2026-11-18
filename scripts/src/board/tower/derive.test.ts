@@ -3,6 +3,7 @@ import {
   deployFor,
   derive,
   holdReason,
+  MAIN_WAIT_MS,
   laneRow,
   liveLock,
   lockRead,
@@ -15,6 +16,7 @@ import type { LaneFile } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import type { Pr } from './prs.ts';
 import type { Lane, PlanItem } from './queue.ts';
+import { CEILING_MS } from '../../main-dev-wait.ts';
 
 const NOW = Date.parse('2026-11-13T20:00:00Z');
 const MIN = 60000;
@@ -510,11 +512,19 @@ describe('the accuracy audit (2026-11-14)', () => {
 
 describe('holdReason (the automatic HOLD)', () => {
   const p = pr();
-  it('(a) another branch holds dev → HOLD with who and until when', () => {
-    expect(holdReason(p, null, inputs({ lock: lock('bravo') }))).toMatch(
-      /^dev: bravo is testing, lock to \d\d:\d\d$/,
+  it("(a) another branch's lock: main's deploy waits for it, so it holds only past main's 60 min wait", () => {
+    expect(MAIN_WAIT_MS).toBe(CEILING_MS); // main-dev-wait.ts's ceiling, one number
+    // under the wait: the merge waits for the release on its own (PR 210) — no HOLD, its devcheck covered too
+    expect(holdReason(p, null, inputs({ lock: lock('bravo') }))).toBeNull();
+    const ledger = [
+      { run: 'r', start: NOW - 5 * MIN, end: null, status: null, full: true, slot: 'dev' as const },
+    ];
+    expect(holdReason(p, null, inputs({ lock: lock('bravo'), ledger }))).toBeNull();
+    const long = lock('bravo', { expiresAt: NOW + 90 * MIN });
+    expect(holdReason(p, null, inputs({ lock: long }))).toMatch(
+      /^dev: bravo holds the lock to \d\d:\d\d, past main's 60 min wait$/,
     );
-    expect(row(inputs({ lock: lock('bravo'), checks: green }), { pr: p })).toMatchObject({
+    expect(row(inputs({ lock: long, checks: green }), { pr: p })).toMatchObject({
       state: 'HOLD',
       tone: 'warn',
     });
@@ -524,8 +534,14 @@ describe('holdReason (the automatic HOLD)', () => {
     expect(holdReason(p, null, inputs({ lock: lock('echo') }))).toBeNull();
   });
   it('(b) devb busy holds only a PR that changes devb’s shape, or whose files are unread', () => {
+    // a devb lock under main's wait is waited for, shape or not
+    const short = inputs({ lockB: lock('juliet'), files: { [sha('e')]: ['cdk/lib/x.ts'] } });
+    expect(holdReason(p, null, short)).toBeNull();
     const i = (files: string[] | null) =>
-      inputs({ lockB: lock('juliet'), ...(files ? { files: { [sha('e')]: files } } : {}) });
+      inputs({
+        lockB: lock('juliet', { expiresAt: NOW + 90 * MIN }),
+        ...(files ? { files: { [sha('e')]: files } } : {}),
+      });
     expect(holdReason(p, null, i(['app/src/x.ts']))).toBeNull();
     expect(holdReason(p, null, i(['cdk/lib/x.ts']))).toMatch(/changes devb's shape/);
     expect(holdReason(p, null, i(['pnpm-lock.yaml']))).toMatch(/shape/);
@@ -547,9 +563,14 @@ describe('holdReason (the automatic HOLD)', () => {
     expect(holdReason(p, queueLane({ hold: 'after the Safari pass' }), inputs())).toBe(
       'after the Safari pass',
     );
-    expect(holdReason(p, queueLane({ hold: 'x' }), inputs({ lock: lock('bravo') }))).toMatch(
-      /^dev:/,
-    );
+    expect(
+      holdReason(
+        p,
+        queueLane({ hold: 'x' }),
+        inputs({ lock: lock('bravo', { expiresAt: NOW + 90 * MIN }) }),
+      ),
+    ).toMatch(/^dev:/);
+    expect(holdReason(p, queueLane({ hold: 'x' }), inputs({ lock: lock('bravo') }))).toBe('x');
   });
 });
 
@@ -602,7 +623,9 @@ describe('derive', () => {
   });
 
   it('a HOLD is never a NEEDS YOU item; it shows in NEXT with its reason', () => {
-    const v = derive(inputs({ prs: [pr()], checks: green, lock: lock('bravo') }));
+    const v = derive(
+      inputs({ prs: [pr()], checks: green, lock: lock('bravo', { expiresAt: NOW + 90 * MIN }) }),
+    );
     expect(v.needs.filter((n) => n.kind === 'merge')).toEqual([]);
     expect(v.next.merge.map((r) => r.state)).toEqual(['HOLD']);
     expect(v.slots[0]).toMatchObject({ slot: 'dev', branch: 'bravo', live: true });
@@ -869,6 +892,16 @@ describe('round 2: queue states, parked lanes, dispatch slots, unreadable locks'
         p,
         null,
         inputs({ lock: lock('bravo', { sha: sha('a') }), runs: [disp(sha('a'))] }),
+      ),
+    ).toBeNull(); // dev's holder deploying under its lock: main's deploy waits for that lock
+    expect(
+      holdReason(
+        p,
+        null,
+        inputs({
+          lock: lock('bravo', { sha: sha('a'), expiresAt: NOW + 90 * MIN }),
+          runs: [disp(sha('a'))],
+        }),
       ),
     ).toMatch(/^dev: bravo/);
     expect(

@@ -207,9 +207,8 @@ devb …` to the hub, and, for each holder whose live session the board names, a
 the slot is refused to every branch but its holder: the refusal says "main's deploy is still to land on dev (<run>)",
 names the holder main waits for, and prints the hub note and the wait (step 2; `lock wait` waits for main as well).
 So a merge during a lane's dev test no longer replaces its branch: it waits for the release, up to an hour a run
-(CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_). Until the tower's HOLD is relaxed for this (a follow-up,
-TOWER.md → _The automatic HOLD_), it still shows HOLD on a live lock: the hub may merge through that HOLD knowingly, or
-keep ordering merges as before. A holder about to merge its own PR releases first (phase 10), or its merge waits on
+(CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_). The tower's HOLD knows it: a live lock holds a merge only
+when it runs past main's hour (TOWER.md → _The automatic HOLD_). A holder about to merge its own PR releases first (phase 10), or its merge waits on
 itself. To hurry a hotfix, ask the holder to release; never cancel the run.
 
 **In a named dev order, lanes take the lock themselves** (the user, 2026-11-08). The hub sends the order and

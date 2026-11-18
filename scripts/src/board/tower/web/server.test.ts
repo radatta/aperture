@@ -182,7 +182,8 @@ describe('--once on the fixtures', () => {
     ]);
     expect(v.slots[0].detail).toBe('devcheck running since 06:02');
     expect(v.next.merge.map((r: V) => r.label)).toEqual([
-      'HOLD (dev: bravo-branch is testing, lock to 06:37)',
+      // a lock past main's 60 min wait (07:37, now 06:10) still holds; one inside it is waited for (F251)
+      "HOLD (dev: bravo-branch holds the lock to 07:37, past main's 60 min wait)",
     ]);
     expect(v.active.find((r: V) => r.branch === 'hotel-branch').label).toBe('PR (checks running)');
     expect(v.done.map((d: V) => `${d.number} ${d.deploy}`)).toEqual(['40 deployed ✓']);

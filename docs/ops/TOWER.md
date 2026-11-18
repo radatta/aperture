@@ -370,17 +370,19 @@ and what the maintainer must do.
 | PR (opened)                                                     | no lane file, and the queue says `pr-open` (the PR is open, its checks not green yet) before the PR list shows it; once it does, the PR rows above win                                                                                                                 |
 
 **The automatic HOLD** (`holdReason`, first match wins). A main merge used to redeploy dev over a dispatched branch;
-it now waits for the slot's lock (CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_), so a HOLD below costs only
-time — the rules stay until that wait has been seen working on main (a follow-up relaxes them):
+it now waits for the slot's lock, up to an hour (CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_; seen working
+on main since PR 210). So another branch's live lock is no HOLD: the merge waits for its release on its own. It holds
+only what that wait doesn't cover (`MAIN_WAIT_MS`, main-dev-wait.ts's `CEILING_MS`):
 
 1. the `dev` lock is unknown: no cache, a failed or stale refresh (over 5 min), an unreadable expiry;
-2. another branch holds a live `dev` lock;
-3. a devcheck run is open on `dev` (even with the lock lapsed);
+2. another branch's live `dev` lock runs over 60 min past now: main's wait would give up and deploy over it;
+3. a devcheck run is open on `dev` with no other branch's live lock to wait for (a lock lapsed mid-run);
 4. the runs read is failed, stale or not read yet (`main deploy state unknown`);
-5. a dispatch (`deploy-dev <sha> <key>` run-name) is running that is not devb's (below);
-6. `devb` is busy (its lock unknown, held by another branch, or a devcheck open on it) and the PR changes devb's
-   shape (`cdk/`, `pnpm-lock.yaml`, `packages/shared/src/stage.ts`: `deploy-base.ts` → `SHAPE_PATHS`), or its
-   files aren't read yet;
+5. a dispatch (`deploy-dev <sha> <key>` run-name) is running that is not devb's (below), with no other branch's live
+   `dev` lock to wait for;
+6. `devb` is busy (its lock unknown, another branch's live lock over 60 min, or with no live lock a devcheck or
+   dispatch open on it) and the PR changes devb's shape (`cdk/`, `pnpm-lock.yaml`, `packages/shared/src/stage.ts`:
+   `deploy-base.ts` → `SHAPE_PATHS`), or its files aren't read yet;
 7. a main Deploy run is queued or running;
 8. dispatch's `devQueue[].hold` reason, or `dispatch's hold unknown` when queue.json is missing or unreadable, or this lane's entry was dropped (a state or slot the parser doesn't know).
 
