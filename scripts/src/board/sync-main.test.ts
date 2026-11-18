@@ -275,4 +275,26 @@ describe('sync-main', () => {
     ).toThrow(/main checkout busy/);
     expect(f.calls.map((c) => c.args[0])).toEqual(['rev-parse']);
   });
+
+  it('a busy restart lock after the move: the error says so, the move stands, no restart', () => {
+    const f = fake({
+      head: A,
+      origin: B,
+      tower: 'running',
+      served: A,
+      changed: { [`${A}..${B}`]: ['x'] },
+    });
+    expect(() =>
+      syncMain(
+        f.run,
+        MAIN,
+        (fn) => fn(),
+        () => {
+          throw new MainBusy('tower restart busy (another sync-main restarting it)');
+        },
+      ),
+    ).toThrow(/tower restart busy/);
+    expect(f.calls.map((c) => c.args[0])).toContain('switch');
+    expect(f.calls.some((c) => c.args[2] === 'restart')).toBe(false);
+  });
 });

@@ -189,6 +189,27 @@ describe('staleItems', () => {
       ['wave', 'golf'],
     ]);
   });
+  it('a reused branch name: an old merge on it is a namesake, not this lane (no PR number, no lane file)', () => {
+    const old = merged(201, 'echo', NOW - 3 * 86400e3);
+    const q = queue({
+      devQueue: [lane({ waitingOn: 'echo merges' })],
+      mergeOrder: [{ branch: 'echo', pr: null, note: null }],
+    });
+    expect(run({ queue: q, prs: [old] })).toEqual([]);
+    // a merge under a day old on the name still counts
+    expect(kinds(run({ queue: q, prs: [merged(201, 'echo', NOW - 2 * 3600e3)] }))).toEqual([
+      'waiting-on',
+      'merge-order',
+    ]);
+    // a derived row (its lane file dates the lane) decides: its open PR is no landing
+    const rows = new Map([['echo', { state: 'PR', pr: { number: 230 } }]]);
+    const open = pr({ number: 230 });
+    expect(run({ queue: queue({ mergeOrder: q.mergeOrder }), rows, prs: [old, open] })).toEqual([]);
+    // the orphan-lane rule still looks past a day: that is its point
+    expect(kinds(run({ lanes: [laneFile({ phase: 'merged' })], prs: [old] }))).toEqual([
+      'orphan-lane',
+    ]);
+  });
 
   it('an autoStart lane that has started (a lane file, or an open PR while gh is fresh)', () => {
     const q = queue({ autoStart: ['echo', 'fox', 'golf'] });
@@ -297,6 +318,12 @@ describe('the derived files', () => {
       ],
     };
     expect(boardLine(board(), [], NOW, hm, null, cx).split('\n')[1]).toBe('ctx 3 2 b,c');
+    // a name or text carrying control bytes, spaces or commas can't split a field or reach the terminal
+    const odd = { at: NOW, stale: false, warn: [], bad: [{ name: 'a b,c\u001b[2J', pct: 60 }] };
+    expect(boardLine(board(), [], NOW, hm, null, odd).split('\n')[1]).toBe('ctx 1 1 a_b_c_[2J');
+    expect(boardLine(board(), [], NOW, hm, { at: NOW, text: 'wk 40%\u001b]0;x\u0007' })).toMatch(
+      /\nusage \d+ wk 40% \]0;x\n$/,
+    );
     expect(boardLine(board(), [], NOW, hm, null, { ...cx, warn: [], bad: [] }).split('\n')[1]).toBe(
       '',
     );

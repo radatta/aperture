@@ -8,7 +8,7 @@
 # after the tower's own derivation (a merged PR's row is gone).
 _bl_f="${APERTURE_BOARD_DIR:-/workspace/localNotes/board}/board.line"
 if [ -r "$_bl_f" ]; then
-  _bl_now=$(printf '%(%s)T' -1)
+  printf -v _bl_now '%(%s)T' -1 # bash ≥ 4.2 (the container's; not the Mac's 3.2)
   _bl_merge= _bl_usage= _bl_ctx=
   {
     IFS=' ' read -r _bl_w _bl_q _bl_n _bl_tone _bl_x
@@ -31,7 +31,8 @@ if [ -r "$_bl_f" ]; then
       read -r _bl_c40 _bl_c50 _bl_cn <<<"$_bl_ctx"
       if [[ "$_bl_c40" =~ ^[0-9]+$ ]] && [[ "$_bl_c50" =~ ^[0-9]+$ ]] && [ "$_bl_c40" -gt 0 ]; then
         if [ "$_bl_c50" -gt 0 ]; then
-          printf ' \033[31m· ctx ≥50 %s%s\033[0m' "${_bl_cn//,/, }" "$([ $((_bl_c40 - _bl_c50)) -gt 0 ] && printf ' · %s ≥40' $((_bl_c40 - _bl_c50)))"
+          _bl_sx=; [ $((_bl_c40 - _bl_c50)) -gt 0 ] && _bl_sx=" · $((_bl_c40 - _bl_c50)) ≥40"
+          printf ' \033[31m· ctx ≥50 %s%s\033[0m' "${_bl_cn//,/, }" "$_bl_sx"
         else
           printf ' \033[33m· ctx %s ≥40\033[0m' "$_bl_c40"
         fi
@@ -52,7 +53,7 @@ if [ -r "$_bl_f" ]; then
       fi
     fi
   fi
-  unset _bl_f _bl_now _bl_merge _bl_usage _bl_ctx _bl_c40 _bl_c50 _bl_cn _bl_w _bl_q _bl_n _bl_tone _bl_k _bl_rest _bl_ua _bl_c _bl_age _bl_m _bl_txt _bl_at _bl_hm _bl_what _bl_mark _bl_x
+  unset _bl_sx _bl_f _bl_now _bl_merge _bl_usage _bl_ctx _bl_c40 _bl_c50 _bl_cn _bl_w _bl_q _bl_n _bl_tone _bl_k _bl_rest _bl_ua _bl_c _bl_age _bl_m _bl_txt _bl_at _bl_hm _bl_what _bl_mark _bl_x
 else
   unset _bl_f
 fi

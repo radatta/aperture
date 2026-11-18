@@ -34,7 +34,7 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
 and never from a worktree. `pnpm lanes start` and `pnpm lanes end` finish with sync-main, and the main sync loop runs
 it every 2 min (_Board freshness_), so a merge needs nothing by hand. A stopped
-tower needs `board.sh tower start`. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
+tower comes back within 2 min while the loop runs; else `board.sh tower start`. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
 file (a checkout moved by hand or by a rolled-back `lanes start`, or a sync-main whose restart failed), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
 move), never on a timer. Only a detached checkout is compared; a tower run by hand from a checkout on a branch shows no chip. It binds `0.0.0.0:6183` (the COI proxy's connect address isn't visible from
@@ -244,7 +244,7 @@ Freshness limits (`derive.ts` `STALE`):
 | gh            | 3 min                            |
 | a PR's checks | 5 min                            |
 | queue.json    | 2 h                              |
-| main sync     | 5 min                            |
+| main sync     | 7 min                            |
 | ctx.json      | 5 min (then it counts nothing)   |
 | a lane file   | amber at 2 h, SLIPPING at 24 h   |
 | Mac stats     | 60 s, then silent (red) at 5 min |
@@ -288,7 +288,7 @@ What the tower derives over the hand-written fields:
 A lock fact counts only from a fresh lock read and an open-PR fact only from a fresh PR list; a merge is final and
 always counts. When either is stale the count reads `n?` and says which.
 
-**Tone**, one for the age and the count: red when the main sync failed or went silent (5 min), at 5 items, or when
+**Tone**, one for the age and the count: red when the main sync failed or went silent (7 min: a round's 240 s and its 2 min nap), at 5 items, or when
 one has sat 30 min; amber with any item or an unsure count; else dim. A STALE follow-up is a judgment backlog, not a
 wrong fact: it never makes it red. "Board updated" is `queue.json`'s own `updatedAt`.
 
@@ -307,7 +307,11 @@ beside `queue.json` every 30 s, tmp + rename:
   <writtenEpoch> <boardEpoch|-> <count>[?] <tone>
   merge <atEpoch> <HH:MM> <what>    the next merge row not done (derived), due no more than 2 h ago
   usage <atEpoch> <text>            pnpm usage line's last good answer
+  ctx <n≥40> <n≥50> <names≥50|->    sessions over the context lines (_Context per session_)
   ```
+
+  Text fields are one line with no control bytes (every session's terminal prints them); a ctx name's spaces and
+  commas become `_`.
 
 **Status line.** `scripts/board/statusline-board.sh` (builtins only, sourced by `statusline-snippet.sh`) prints
 `· usage … · board 12m · 3 stale · next ~19:40 <what>`, the next merge last with `?` once its time has passed, the
@@ -320,8 +324,7 @@ Dispatch's `context-watch.sh` writes `localNotes/board/ctx.json` every minute (`
 1M tokens); `ctx.ts` reads it, its mtime as its time. Each NOW row and slot card shows its session's `ctx N%`, amber at
 40 and red at 50. The desktop header counts them (`ctx ≥50 lc-catalog 78% · 3 ≥40`; more than one over 50 is `×n`,
 every name in the tooltip); on the phone a session over 50 leads the sources chip (`1 ctx≥50`) and one over 40 follows
-the board's count. `board.line`'s `ctx <n≥40> <n≥50> <names≥50>` line gives the status line the same, red with the
-names at 50. A `ctx.json` over 5 min old counts nothing and SOURCES says so. The phone alert stays dispatch's: the
+the board's count. `board.line`'s `ctx` line gives the status line the same, red with the names at 50. A `ctx.json` over 5 min old counts nothing and SOURCES says so. The phone alert stays dispatch's: the
 tower never pings.
 
 ### Main sync
@@ -329,15 +332,21 @@ tower never pings.
 `scripts/board/sync.sh`, a plain bash loop with no tokens: every 2 min `cli.ts sync-main` (fetch, move the main
 checkout when clean, restart the tower only when its code changed), then `board.sh tower start` if the tower is
 down. It writes `localNotes/board/main-sync.json` (`{v, t, pid, ok, head, msg}`) every round and appends to
-`main-sync.log` only what moved, restarted, started or failed.
+`main-sync.log` only what moved, restarted, started or failed. A round waits 20 s at most for the main checkout's lock
+(busy: the next round tries) and is killed past 240 s, above all it waits for, so the kill is for a hang, never a slow
+`git switch`; it runs with no inherited `GIT_DIR`, `GIT_WORK_TREE` or `GIT_INDEX_FILE`.
 
 - **One per container:** `flock` on `/tmp/aperture-main-sync.lock` (waited 5 s, as the sampler's), pid in
   `/tmp/aperture-main-sync.pid`; no child keeps the lock fd. `board.sh sync stop` kills that pid only, and only when
-  it is bash running `sync.sh` and the lock is held.
-- **Always main's code:** `board.sh sync start` runs the main checkout's `sync.sh` from any worktree, and the loop
-  re-execs itself (same pid, same lock, a `re-exec` log line) when `sync.sh` or `lib.sh` changes on disk.
-- **Kept alive:** `board.sh tower start` (so the SessionStart hook, after a container restart) and the tower's minute
-  tick, on a heartbeat over 5 min old or missing, run `board.sh sync ensure`, which starts it only for the real board
+  it is bash running `sync.sh` with the lock file open on fd 8; it waits out the round in flight (bash runs the TERM
+  trap after it), so a stop or restart can take up to 4 min.
+- **Always main's code:** `board.sh sync start` runs the main checkout's `sync.sh` from any worktree (none there:
+  nothing starts; a worktree's copy would outlive its worktree), and the loop re-execs itself (same pid, same lock,
+  kept by the open fd, a `re-exec` log line) when `sync.sh` or `lib.sh` changes on disk. It exits once its own script
+  is gone.
+- **Kept alive:** `board.sh tower start` (so the SessionStart hook, after a container restart; it waits 1 s for the
+  loop, the hook's budget) and the tower's minute tick, on a heartbeat over 7 min old or missing, run
+  `board.sh sync ensure`, which starts it only for the real board
   (`BOARD_DIR` the default; a test's temp board never does; `APERTURE_SYNC=on|off` overrides).
 - It pins `INIT_CWD` to its own checkout: sync-main finds the checkout from it.
 

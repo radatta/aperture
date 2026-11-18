@@ -1320,6 +1320,20 @@ describe('tower-current: derived over hand-written', () => {
     );
     expect(own.active.find((r) => r.branch === 'echo')).toBeUndefined();
   });
+  it('a reused branch name with no lane file: a queued lane is not a merge days old on its name', () => {
+    const old = merged(201, 'echo', NOW - 3 * 86400e3);
+    const q = [queueLane({ branch: 'echo', state: 'waiting' })];
+    const order = [{ branch: 'echo', pr: null, note: null }];
+    const v = derive(inputs({ prs: [old], devQueue: q, mergeOrder: order }));
+    expect(v.next.queue.map((l) => l.branch)).toEqual(['echo']);
+    expect(v.next.order.map((r) => r.branch)).toEqual(['echo']);
+    expect(v.board.items.map((x) => x.kind)).toEqual([]);
+    // the same merge under a day old is this lane's: it landed
+    const recent = merged(201, 'echo', NOW - 2 * 3600e3);
+    const r = derive(inputs({ prs: [recent], devQueue: q, mergeOrder: order }));
+    expect(r.next.queue).toEqual([]);
+    expect(r.next.order).toEqual([]);
+  });
   it("main's log: a PR a queue entry names, past gh's window, reads merged", () => {
     const log = [{ number: 12, sha: sha('c'), mergedAt: NOW - 26 * 3600e3 }];
     const q = [queueLane({ branch: 'golf', state: 'building', pr: 12 })];
@@ -1361,6 +1375,13 @@ describe('tower-current: derived over hand-written', () => {
       done: true,
       doneAt: NOW - 40 * MIN,
     });
+    // a number not written `PR n` may still be open: the row names none
+    expect(both({ plan: plan('Merges: tower 185, PR 183'), mainLog: log }).done).toBe(false);
+    // a clock time isn't a PR number
+    expect(both({ plan: plan('Merges at 19:30: PR 183'), mainLog: log }).done).toBe(true);
+    // a lane's row naming the PR it lands on top of isn't struck by that one's merge
+    const onTop = [{ ...laned[0]!, what: 'Merge x (on top of PR 183)' }];
+    expect(both({ plan: onTop, mainLog: log }).done).toBe(false);
   });
 });
 
@@ -1398,7 +1419,7 @@ describe('tower-current: the board freshness view', () => {
 describe('tower-current: the main sync heartbeat', () => {
   const src = (ms: Inputs['mainSync']) =>
     sources(inputs({ mainSync: ms })).find((s) => s.name === 'main sync')!;
-  it('a SOURCES row: missing, failed with why, silent past 5 min, else ok', () => {
+  it('a SOURCES row: missing, failed with why, silent past 7 min, else ok', () => {
     expect(src(null)).toMatchObject({
       state: 'missing',
       detail: 'no heartbeat: board.sh sync start',
@@ -1407,7 +1428,9 @@ describe('tower-current: the main sync heartbeat', () => {
       state: 'failed',
       detail: 'tracked changes',
     });
-    expect(src({ at: NOW - 6 * MIN, ok: true, msg: '' }).state).toBe('stale');
+    expect(src({ at: NOW - 8 * MIN, ok: true, msg: '' }).state).toBe('stale');
+    // a slow round (240 s) and its nap (120 s) are not silence
+    expect(src({ at: NOW - 6 * MIN, ok: true, msg: '' }).state).toBe('ok');
     expect(src({ at: NOW - MIN, ok: true, msg: '' }).state).toBe('ok');
   });
   it('a failed or silent loop turns the board red; a missing one does not', () => {
@@ -1418,7 +1441,7 @@ describe('tower-current: the main sync heartbeat', () => {
       why: 'main sync failed: dirty',
     });
     expect(
-      derive(inputs({ mainSync: { at: NOW - 6 * MIN, ok: true, msg: '' } })).board.why,
+      derive(inputs({ mainSync: { at: NOW - 8 * MIN, ok: true, msg: '' } })).board.why,
     ).toMatch(/^main sync silent since /);
     expect(derive(inputs({ mainSync: null })).board.tone).toBe('dim');
   });

@@ -611,11 +611,28 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
     mkdirSync(scripts, { recursive: true });
     for (const f of ['sync.sh', 'lib.sh', 'board.sh'])
       writeFileSync(join(scripts, f), readFileSync(join(boardDir, f)));
+    // what sync-main was given: the checkout (INIT_CWD), the lock fd 8 (never inherited), the main-lock wait, GIT_DIR
     writeFileSync(
       join(root, 'scripts/src/board/cli.ts'),
-      "process.stdout.write(process.env.FAKE_OUT ?? ''); process.exit(Number(process.env.FAKE_RC ?? 0));\n",
+      [
+        "const fs = process.getBuiltinModule('node:fs');",
+        "let fd8 = 'no-lock'; try { if (fs.readlinkSync('/proc/self/fd/8') === process.env.APERTURE_SYNC_LOCK) fd8 = 'lock'; } catch {}",
+        "const env = process.env.FAKE_ENV ? `init=${process.env.INIT_CWD} fd8=${fd8} wait=${process.env.APERTURE_MAIN_LOCK_WAIT} gitdir=${process.env.GIT_DIR ?? '-'}\\n` : '';",
+        "process.stdout.write(env + (process.env.FAKE_OUT ?? '')); process.exit(Number(process.env.FAKE_RC ?? 0));",
+        '',
+      ].join('\n'),
     );
     return scripts;
+  }
+  // a condition that a background loop makes true, polled (a round is a node cold start: seconds under load)
+  async function until(ok: () => boolean, ms = 20000) {
+    for (
+      const end = Date.now() + ms;
+      Date.now() < end;
+      await new Promise((r) => setTimeout(r, 200))
+    )
+      if (ok()) return true;
+    return ok();
   }
   const senv = (o: NodeJS.ProcessEnv = {}) => ({
     ...env,
@@ -623,6 +640,7 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
     APERTURE_SYNC_PID: join(tmp, 'sync.pid'),
     APERTURE_SYNC_TOWER: 'off',
     INIT_CWD: '/somewhere/else', // a pnpm parent's: the round must not pass it on
+    GIT_DIR: '/somewhere/else/.git', // nor an inherited git target
     ...o,
   });
   const beat = () => JSON.parse(readFileSync(join(tmp, 'board/main-sync.json'), 'utf8'));
@@ -665,9 +683,18 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
     expect(r.status).not.toBe(0);
     expect(beat()).toMatchObject({ ok: false, msg: expect.stringMatching(/tracked changes/) });
     expect(log()).toMatch(/tracked changes/);
+    // sync-main runs in its own checkout, with the loop's short main-lock wait and no inherited git target
+    expect(once({ FAKE_ENV: '1' }).status).toBe(0);
+    expect(beat().msg).toBe(`init=${join(tmp, 'repo')} fd8=no-lock wait=20 gitdir=-`);
+    // a stray argument is refused, never a forever loop
+    const bad = spawnSync('bash', [join(s, 'sync.sh'), '--help'], {
+      env: senv(),
+      encoding: 'utf8',
+    });
+    expect([bad.status, bad.stderr]).toEqual([2, 'usage: bash sync.sh [--once]\n']);
   });
 
-  it('board.sh tower start brings the loop up for the real board only (even when the tower fails to start)', () => {
+  it('board.sh tower start brings the loop up for the real board only (even when the tower fails to start)', async () => {
     const s = copy(); // no tower-web.sh in the copy: the tower can't start, so nothing binds a port
     const e = senv({
       SYNC_INTERVAL: '60',
@@ -683,9 +710,16 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
       expect(board({}, 'sync', 'status').status).toBe(1);
       expect(board({}, 'sync', 'ensure').status).toBe(0);
       expect(board({}, 'sync', 'status').status).toBe(1);
-      // on (the real board's case, forced here): it comes up
+      // no sync.sh in the main checkout (the copy is no git checkout): nothing to start, never a worktree's copy
+      const none = board({ APERTURE_SYNC_SCRIPT: '' }, 'sync', 'start');
+      expect([none.status, none.stderr]).toEqual([1, expect.stringMatching(/nothing to start/)]);
+      expect(
+        board({ APERTURE_SYNC_SCRIPT: '', APERTURE_SYNC: 'on' }, 'sync', 'ensure').status,
+      ).toBe(0);
+      expect(board({}, 'sync', 'start', 'extra').status).toBe(2);
+      // on (the real board's case, forced here): it comes up (tower start waits only 1 s for it: poll)
       expect(board({ APERTURE_SYNC: 'on' }, 'tower', 'start').status).toBe(1);
-      expect(board({}, 'sync', 'status').stdout).toMatch(/^sync: running/);
+      expect(await until(() => board({}, 'sync', 'status').status === 0)).toBe(true);
       expect(board({}, 'sync', 'stop').stdout).toMatch(/sync: stopped/);
       board({ APERTURE_SYNC: 'off' }, 'sync', 'ensure');
       expect(board({}, 'sync', 'status').status).toBe(1);
@@ -696,12 +730,24 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
 
   it('one loop per container; stop kills only its pid; a code change re-execs it in place', async () => {
     const s = copy();
-    const e = senv({ SYNC_INTERVAL: '1', APERTURE_SYNC_SCRIPT: join(s, 'sync.sh') });
+    const e = senv({ SYNC_INTERVAL: '1', APERTURE_SYNC_SCRIPT: join(s, 'sync.sh'), FAKE_ENV: '1' });
     const sync = (...a: string[]) =>
       spawnSync('bash', [join(s, 'board.sh'), 'sync', ...a], { env: e, encoding: 'utf8' });
+    let pid = '';
     try {
       expect(sync('start').stdout).toMatch(/sync: started/);
-      const pid = readFileSync(join(tmp, 'sync.pid'), 'utf8').trim();
+      pid = readFileSync(join(tmp, 'sync.pid'), 'utf8').trim();
+      // the round's sync-main never holds the loop's lock fd
+      expect(
+        await until(() => {
+          try {
+            return /fd8=/.test(beat().msg);
+          } catch {
+            return false;
+          }
+        }),
+      ).toBe(true);
+      expect(beat().msg).toMatch(/^init=.* fd8=no-lock wait=20 gitdir=-/);
       expect(sync('start').stdout).toMatch(`already running (pid ${pid})`);
       // a second loop started by hand gives up (after its 5 s wait) and leaves the pidfile alone
       const second = spawnSync('bash', [join(s, 'sync.sh')], { env: e, timeout: 15000 });
@@ -710,17 +756,27 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
       expect(sync('status').stdout).toMatch(`sync: running (pid ${pid}), last round`);
       // lib.sh changes on disk: the next round re-execs, same pid, still holding the lock
       writeFileSync(join(s, 'lib.sh'), readFileSync(join(s, 'lib.sh'), 'utf8') + '\n# moved\n');
-      await new Promise((r) => setTimeout(r, 3500));
+      expect(
+        await until(() => log().includes(`re-exec (pid ${pid}): sync.sh or lib.sh changed`)),
+      ).toBe(true);
       expect(sync('status').stdout).toMatch(`sync: running (pid ${pid})`);
-      expect(log()).toMatch(`re-exec (pid ${pid}): sync.sh or lib.sh changed`);
+      // a pidfile naming some other live process (this worker) while the loop runs: neither is killed
+      writeFileSync(join(tmp, 'sync.pid'), `${process.pid}\n`);
+      const foreign = sync('stop');
+      expect([foreign.status, foreign.stderr]).toEqual([
+        1,
+        expect.stringMatching(/doesn't name the loop/),
+      ]);
+      expect(sync('status').status).toBe(0);
+      writeFileSync(join(tmp, 'sync.pid'), `${pid}\n`);
     } finally {
-      expect(sync('stop').stdout).toMatch(/sync: stopped/);
+      // the re-exec'd loop still holds the lock on its fd 8: stop knows it (and kills it by pid if a check failed)
+      const r = sync('stop');
+      if (r.status !== 0 && /^\d+$/.test(pid)) process.kill(+pid);
+      expect(r.stdout).toMatch(/sync: stopped/);
     }
     expect(sync('status').status).toBe(1);
-    // a pidfile naming some other live process (this worker) is never killed
-    writeFileSync(join(tmp, 'sync.pid'), `${process.pid}\n`);
-    expect(sync('stop').status).toBe(0);
-  }, 40_000);
+  }, 60_000);
 });
 
 describe('statusline-board.sh', () => {

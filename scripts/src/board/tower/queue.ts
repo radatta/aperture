@@ -142,9 +142,19 @@ export function firedAt(after: string, merged: Merged[], now: number): number | 
   return refFiredAt(after, merged);
 }
 // The merge half alone (`<branch> merges`, `PR <n>`, `+ N days`): what a devQueue `waitingOn` can name (stale.ts).
-export function refFiredAt(after: string, merged: Merged[]): number | null {
+// `branchSince`: a branch reference counts only a merge at or after it (a reused name: mergelog.ts REUSE_MS); a PR
+// number is exact.
+export function refFiredAt(
+  after: string,
+  merged: Merged[],
+  branchSince = -Infinity,
+): number | null {
   const r = AFTER_REF.exec(after);
-  const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));
+  const pr =
+    r &&
+    merged.find((p) =>
+      r[1] ? p.number === +r[1] : p.branch === r[2] && p.mergedAt >= branchSince,
+    );
   if (!r || !pr) return null;
   return pr.mergedAt + (r[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0);
 }

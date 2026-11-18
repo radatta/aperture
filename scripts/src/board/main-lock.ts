@@ -19,12 +19,19 @@ export class MainBusy extends Error {}
 
 const depth = new Map<string, number>(); // per lock file: nesting one lock never skips taking another
 
-export type LockOpts = { waitSec?: number; file?: string; warn?: (s: string) => void };
+// what holds it, for the busy message; waitSec defaults to APERTURE_MAIN_LOCK_WAIT (the main sync loop's 20 s) or 120
+export type LockOpts = {
+  waitSec?: number;
+  file?: string;
+  warn?: (s: string) => void;
+  what?: string;
+};
 
 export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
   const file = o.file ?? MAIN_LOCK;
   if (depth.get(file)) return nest(file, fn);
-  const wait = o.waitSec ?? 120;
+  const wait = o.waitSec ?? (Number(process.env.APERTURE_MAIN_LOCK_WAIT) || 120);
+  const what = o.what ?? 'main checkout busy (another lanes start or sync-main)';
   const warn = o.warn ?? ((s: string) => console.error(s));
   let fd: number;
   try {
@@ -45,14 +52,12 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
       else if ((e as { status?: number }).status !== 1)
         throw e; // only 1 is "held": a usage error isn't busy
       else {
-        warn(`main checkout busy (another lanes start or sync-main): waiting up to ${wait} s`);
+        warn(`${what}: waiting up to ${wait} s`);
         try {
           take(['-w', String(wait)]);
         } catch (e2) {
           if ((e2 as { status?: number }).status !== 1) throw e2;
-          throw new MainBusy(
-            `main checkout busy: another lanes start or sync-main held ${file} for ${wait} s`,
-          );
+          throw new MainBusy(`${what}: ${file} held for ${wait} s`);
         }
       }
     }
@@ -63,7 +68,12 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
 }
 
 export const withRestartLock = <T>(fn: () => T): T =>
-  withMainLock(fn, { file: TOWER_RESTART_LOCK, waitSec: 30, warn: () => undefined });
+  withMainLock(fn, {
+    file: TOWER_RESTART_LOCK,
+    waitSec: 30,
+    warn: () => undefined,
+    what: 'tower restart busy (another sync-main restarting it)',
+  });
 
 function nest<T>(file: string, fn: () => T): T {
   depth.set(file, (depth.get(file) ?? 0) + 1);

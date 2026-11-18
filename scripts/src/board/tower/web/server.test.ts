@@ -198,6 +198,11 @@ describe('--once on the fixtures', () => {
     expect(v.behind).toBeNull(); // fixtures never compare commits
     // fixtures/board/lanes/mike-branch.json is merged with no PR in the list: finished, so not in NOW
     expect(v.active.map((r: V) => r.branch)).not.toContain('mike-branch');
+    // the context and main-sync fixtures are read (the fixed clock is their time, so both are fresh)
+    expect(v.ctx.bad.map((e: V) => e.name)).toEqual(['hotel']);
+    expect(v.ctx.warn.map((e: V) => e.name)).toEqual(['echo']);
+    for (const name of ['context', 'main sync'])
+      expect(v.sources.find((s: V) => s.name === name)?.state).toBe('ok');
     // fixtures/prs.json has a fork's open PR on echo-branch's name: no lane, slot or row picks it up
     expect(JSON.stringify(v)).not.toContain('/pull/43');
     // the Actions-minutes estimate is gone (public repo, free runners): no tile, no source row

@@ -18,7 +18,7 @@ import {
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import { CTX_STALE_MS, ctxOf, ctxView, type CtxFile, type CtxView } from './ctx.ts';
-import { mergedFromLog, mergedNumbers, type MainMerge } from './mergelog.ts';
+import { mergedFromLog, mergedNumbers, REUSE_MS, type MainMerge } from './mergelog.ts';
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
 import type { Pr } from './prs.ts';
 import { firedFollowups, sinceTime, staleFollowups, type Lane } from './queue.ts';
@@ -614,7 +614,7 @@ function orderRow(
 ): LaneRow {
   const file = files.get(o.branch) ?? null;
   const queue = queued.get(o.branch) ?? null;
-  const pr = prFor(o.branch, prs, o.pr, file);
+  const pr = prFor(o.branch, prs, o.pr, file, i.now);
   if (file || queue || pr) return laneRow({ branch: o.branch, file, queue, pr }, i);
   return {
     branch: o.branch,
@@ -643,6 +643,7 @@ function prFor(
   prs: Pr[],
   queuePr: number | null,
   file: LaneFile | null,
+  now: number,
 ): Pr | null {
   const mine = prs.filter((p) => p.branch === branch);
   const byNum = (n: number | null) => (n === null ? undefined : prs.find((p) => p.number === n));
@@ -657,11 +658,13 @@ function prFor(
     file.pr !== last.number &&
     last.mergedAt !== null &&
     (file.phaseSince ?? file.updatedAt) > last.mergedAt;
+  // no lane file to date the lane and no PR number: only a recent merge on the name is this lane's (REUSE_MS)
+  const old = !!last && !file && (last.mergedAt === null || now - last.mergedAt > REUSE_MS);
   return (
     mine.find((p) => p.state === 'OPEN') ??
     byNum(file?.pr ?? null) ??
     byNum(queuePr) ??
-    (reused ? undefined : last) ??
+    (reused || old ? undefined : last) ??
     null
   );
 }
@@ -700,15 +703,18 @@ export function derive(i: Inputs): View {
   // dispatch's landing order (NEXT only: it names lanes that may not have started, which NOW never shows); an entry
   // whose PR merged (in the PR list's newest 40) has landed
   const landed = (o: { branch: string; pr: number | null }) =>
-    prs.some(
-      (p) => p.state === 'MERGED' && (o.pr !== null ? p.number === o.pr : p.branch === o.branch),
-    );
+    o.pr !== null
+      ? prs.some((p) => p.state === 'MERGED' && p.number === o.pr)
+      : prFor(o.branch, prs, null, files.get(o.branch) ?? null, i.now)?.state === 'MERGED';
   const order = (q?.mergeOrder ?? []).filter((o) => !landed(o));
 
   const rows = names.map((b) => {
     const file = files.get(b) ?? null;
     const queue = queued.get(b) ?? null;
-    return laneRow({ branch: b, file, queue, pr: prFor(b, prs, queue?.pr ?? null, file) }, i);
+    return laneRow(
+      { branch: b, file, queue, pr: prFor(b, prs, queue?.pr ?? null, file, i.now) },
+      i,
+    );
   });
 
   // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for the maintainer, sources only the maintainer can fix.
@@ -716,7 +722,7 @@ export function derive(i: Inputs): View {
   for (const l of i.lanes) {
     if (!l.needs) continue;
     // an ask written before its lane's PR merged is finished with the lane; one written after is deliberate
-    const p = prFor(l.branch, prs, queued.get(l.branch)?.pr ?? null, l);
+    const p = prFor(l.branch, prs, queued.get(l.branch)?.pr ?? null, l, i.now);
     if (p?.state === 'MERGED' && p.mergedAt !== null && l.updatedAt < p.mergedAt) continue;
     needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
   }
@@ -855,7 +861,7 @@ export function derive(i: Inputs): View {
   const table = planTable(
     q?.plan ?? [],
     (b) => files.get(b)?.eta ?? null,
-    (b) => prFor(b, prs, queued.get(b)?.pr ?? null, files.get(b) ?? null),
+    (b) => prFor(b, prs, queued.get(b)?.pr ?? null, files.get(b) ?? null, i.now),
     i.now,
     (n) => mergedPrs.get(n) ?? null,
   );

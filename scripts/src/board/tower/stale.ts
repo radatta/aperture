@@ -7,6 +7,7 @@ import type { LaneFile } from './lanes.ts';
 import type { PlanRow } from './plan.ts';
 import type { CtxView } from './ctx.ts';
 import type { Pr } from './prs.ts';
+import { REUSE_MS } from './mergelog.ts';
 
 export type StaleKind =
   | 'queue-merged'
@@ -39,7 +40,7 @@ export type Board = {
 
 // The main-sync loop's heartbeat (sync.sh → main-sync.json): one round every 2 min.
 export type MainSync = { at: number; ok: boolean; msg: string };
-export const SYNC_SILENT_MS = 5 * 60e3;
+export const SYNC_SILENT_MS = 7 * 60e3; // a round (≤ 240 s, sync.sh) plus its 120 s nap, and a minute over
 export function parseMainSync(text: string | null): MainSync | null {
   if (text === null) return null;
   try {
@@ -87,9 +88,15 @@ export function staleItems(s: StaleInputs): StaleItem[] {
   const q = s.queue;
   const out: StaleItem[] = [];
   const add = (it: StaleItem) => out.push(it);
-  const mergedPr = (branch: string) =>
+  // the newest merge on a branch name; `recent`: only one under REUSE_MS old (a reused name, mergelog.ts)
+  const mergedPr = (branch: string, recent = true) =>
     s.prs
-      .filter((p) => p.branch === branch && p.state === 'MERGED')
+      .filter(
+        (p) =>
+          p.branch === branch &&
+          p.state === 'MERGED' &&
+          (!recent || (p.mergedAt !== null && s.now - p.mergedAt <= REUSE_MS)),
+      )
       .sort((a, b) => (b.mergedAt ?? 0) - (a.mergedAt ?? 0))[0] ?? null;
   const openPr = (branch: string) =>
     s.prs.find((p) => p.branch === branch && p.state === 'OPEN') ?? null;
@@ -115,7 +122,7 @@ export function staleItems(s: StaleInputs): StaleItem[] {
     laneState(l, s, openPr(l.branch), add);
     if (l.waitingOn) {
       // a merge reference only (`<branch> merges`, `PR <n>`): a date is dispatch's own schedule
-      const at = refFiredAt(l.waitingOn, merged);
+      const at = refFiredAt(l.waitingOn, merged, s.now - REUSE_MS);
       if (at !== null && at <= s.now)
         add({
           kind: 'waiting-on',
@@ -152,7 +159,16 @@ export function staleItems(s: StaleInputs): StaleItem[] {
   }
 
   for (const o of q?.mergeOrder ?? []) {
-    const p = o.pr !== null ? s.prs.find((x) => x.number === o.pr) : mergedPr(o.branch);
+    // with no PR number, the derived row's PR (its lane file dates a reused name), else a recent merge on the name
+    const rowPr = s.rows.get(o.branch)?.pr;
+    const p =
+      o.pr !== null
+        ? s.prs.find((x) => x.number === o.pr)
+        : rowPr
+          ? s.prs.find((x) => x.number === rowPr.number)
+          : s.rows.has(o.branch)
+            ? null
+            : mergedPr(o.branch);
     if (p?.state === 'MERGED')
       add({
         kind: 'merge-order',
@@ -188,7 +204,7 @@ export function staleItems(s: StaleInputs): StaleItem[] {
   }
 
   for (const l of s.lanes) {
-    const p = l.pr !== null ? s.prs.find((x) => x.number === l.pr) : mergedPr(l.branch);
+    const p = l.pr !== null ? s.prs.find((x) => x.number === l.pr) : mergedPr(l.branch, false);
     if (
       p?.state === 'MERGED' &&
       p.mergedAt !== null &&
@@ -247,7 +263,9 @@ function laneState(l: Lane, s: StaleInputs, open: Pr | null, add: (it: StaleItem
   if (!s.ghOk) return;
   if (open && !open.draft && ['waiting', 'next', 'building'].includes(l.state))
     item(`queue says ${l.state}; PR ${open.number} is open`, open.createdAt);
-  if (!open && (l.state === 'pr-open' || l.state === 'ready'))
+  // a PR the queue names that gh's newest 40 no longer list (open but quiet a week) may well be open: unknown, not missing
+  const unlisted = l.pr !== null && !s.prs.some((p) => p.number === l.pr);
+  if (!open && !unlisted && (l.state === 'pr-open' || l.state === 'ready'))
     item(`queue says ${l.state}; no open PR`);
   if (open && l.pr !== null && l.pr !== open.number)
     add({
@@ -284,7 +302,15 @@ export function boardTone(
 //   ctx <n≥40> <n≥50> <names≥50,…>     sessions over the context lines (ctx.ts); absent when none is, or ctx.json is stale
 export const NEXT_MERGE_PAST_MS = 2 * 3600e3; // next-merge.sh's window
 export type UsageLine = { at: number; text: string };
-const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+// one line, no control bytes: every session's status line prints these as they are (an ESC would reach the terminal)
+const oneLine = (s: string) =>
+  Array.from(s, (c) => {
+    const n = c.charCodeAt(0);
+    return n < 32 || (n >= 127 && n < 160) ? ' ' : c;
+  })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
 export function boardLine(
   b: Board,
   table: PlanRow[],
@@ -306,7 +332,7 @@ export function boardLine(
     next ? `merge ${sec(next.at!)} ${hhmm(next.at!)} ${oneLine(next.what)}` : null,
     usage ? `usage ${sec(usage.at)} ${oneLine(usage.text)}` : null,
     ctx && ctx.warn.length + ctx.bad.length
-      ? `ctx ${ctx.warn.length + ctx.bad.length} ${ctx.bad.length} ${ctx.bad.map((e) => e.name).join(',') || '-'}`
+      ? `ctx ${ctx.warn.length + ctx.bad.length} ${ctx.bad.length} ${ctx.bad.map((e) => oneLine(e.name).replace(/[ ,]/g, '_')).join(',') || '-'}`
       : null,
   ]
     .filter((l) => l !== null)

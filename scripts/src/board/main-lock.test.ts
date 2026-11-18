@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MainBusy, withMainLock } from './main-lock.ts';
 
 const lockFile = () => join(mkdtempSync(join(tmpdir(), 'main-lock-')), 'main.lock');
@@ -74,7 +74,22 @@ describe('withMainLock', () => {
       expect(said).toEqual([
         'main checkout busy (another lanes start or sync-main): waiting up to 1 s',
       ]);
+      // another lock says what it is (the tower restart's): never the main checkout's words
+      expect(() =>
+        withMainLock(() => 1, {
+          file,
+          waitSec: 1,
+          warn: () => undefined,
+          what: 'tower restart busy',
+        }),
+      ).toThrow(`tower restart busy: ${file} held for 1 s`);
+      // the main sync loop's shorter wait comes from the environment
+      vi.stubEnv('APERTURE_MAIN_LOCK_WAIT', '1');
+      said.length = 0;
+      expect(() => withMainLock(() => 1, { file, warn: (s) => said.push(s) })).toThrow(MainBusy);
+      expect(said[0]).toMatch(/waiting up to 1 s$/);
     } finally {
+      vi.unstubAllEnvs();
       stop();
     }
   });
