@@ -165,7 +165,7 @@ export const INPUT_RULES: InputRule[] = [
   },
   {
     inputs: ['packages/shared/src/rpc.ts'],
-    tests: ['scripts/src/deploy-base.test.ts'],
+    tests: ['scripts/src/deploy-base.test.ts', 'scripts/src/devcheck/mcp.test.ts'],
     why: 'reads rpc.ts as text (the header names it pins)',
   },
   {
