@@ -6,7 +6,7 @@
 //   --once            print one View as JSON and exit (no socket)
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { execFile, execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_SLUG } from '../../../identifiers.ts';
@@ -14,6 +14,7 @@ import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../../../mac-root.ts';
 import { sessionNames } from '../../sessions.ts';
 import { behindCheck, type Behind } from '../behind.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
+import { hhmm } from '../fmt.ts';
 import {
   ChecksCache,
   FilesCache,
@@ -30,6 +31,7 @@ import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
 import { PrCache, ghFetch, type Fetch } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
+import { boardLine, staleFile } from '../stale.ts';
 import { createHandler, serve } from './server.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
@@ -308,6 +310,18 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
   return { poll, view, sample, clock, paths, version };
 }
 
+// The derived files beside queue.json (stale.ts → board.line, stale.json): tmp + rename, so a reader never sees half.
+const DERIVED_MS = 30000;
+export function writeDerived(dir: string, v: View) {
+  const put = (name: string, text: string) => {
+    const tmp = join(dir, `.${name}.tmp.${process.pid}`);
+    writeFileSync(tmp, text);
+    renameSync(tmp, join(dir, name));
+  };
+  put('stale.json', JSON.stringify(staleFile(v.board, v.now)) + '\n');
+  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm));
+}
+
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
 function refreshDevlock() {
   execFile(
@@ -349,6 +363,19 @@ async function run(a: Args) {
   if (!a.fixtures) {
     refreshDevlock();
     setInterval(refreshDevlock, DEVLOCK_MS);
+  }
+  // only the board's own tower (started by board.sh, with its pidfile) writes the derived files: a proof or
+  // hand-run server never overwrites them
+  if (pidFile && !a.fixtures) {
+    const derived = () => {
+      try {
+        writeDerived(t.paths.boardDir, t.view(false));
+      } catch (e) {
+        process.stderr.write(`tower-web: derived files: ${(e as Error).message}\n`);
+      }
+    };
+    setTimeout(derived, 5000); // after the first gh poll has had its chance
+    setInterval(derived, DERIVED_MS);
   }
   const stop = () => server.close(() => process.exit(0));
   process.on('SIGTERM', stop);

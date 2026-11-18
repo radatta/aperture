@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { MAC_PLACEHOLDER } from '../../../mac-root.ts';
 import { liveTests, macInstallLine, parseArgs, sparkBuckets } from './main.ts';
-import { build, dayStart } from './main.ts';
+import { build, dayStart, writeDerived } from './main.ts';
 import { createHandler, serve } from './server.ts';
 
 const FIXTURES = join(import.meta.dirname, '../fixtures');
@@ -204,9 +204,37 @@ describe('--once on the fixtures', () => {
     expect(v.health.actions).toBeUndefined();
     expect(v.sources.some((s: V) => /actions minutes/i.test(s.name))).toBe(false);
     expect(v.problems).toEqual([]);
+    // the recorded board's queue.json contradicts what the tower derives (TOWER.md → Board freshness)
+    expect(v.board.items.map((x: V) => `${x.kind} ${x.branch}`)).toEqual(
+      expect.arrayContaining(['merge-order alpha-branch']),
+    );
+    expect(v.heads.slipping).toBe(
+      String(3 + v.board.items.filter((x: V) => x.kind !== 'followup').length),
+    );
     // A fresh node type-stripping the tower's graph: ~0.35 s alone, but its wall time is the container's contention
     // (F212: past 5 s in a full suite at 8.7 cores), as for this file's other spawned towers.
   }, 20_000);
+});
+
+describe('the derived files (board.line, stale.json)', () => {
+  it('writes both by rename into the board dir, from a fixture view', () => {
+    const t = build({ ...parseArgs(['--fixtures', FIXTURES, '--now', '2026-11-08T06:10:00Z']) });
+    const dir = mkdtempSync(join(tmpdir(), 'derived-'));
+    try {
+      const v = t.view(false);
+      writeDerived(dir, v);
+      const line = readFileSync(join(dir, 'board.line'), 'utf8').split('\n');
+      expect(line[0]).toMatch(/^\d+ (\d+|-) \d+\?? (dim|warn|bad)$/);
+      const f = JSON.parse(readFileSync(join(dir, 'stale.json'), 'utf8')) as V;
+      expect(f).toMatchObject({ v: 1, t: v.now, tone: v.board.tone });
+      expect(f.items).toHaveLength(v.board.items.length);
+      expect(
+        execFileSync('ls', ['-A', dir], { encoding: 'utf8' }).split('\n').filter(Boolean),
+      ).toEqual(['board.line', 'stale.json']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('liveTests', () => {

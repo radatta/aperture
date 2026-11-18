@@ -139,6 +139,10 @@ export function firedAt(after: string, merged: Merged[], now: number): number | 
         ? local(y - 1, +m[1]!, +m[2]!)
         : at;
   }
+  return refFiredAt(after, merged);
+}
+// The merge half alone (`<branch> merges`, `PR <n>`, `+ N days`): what a devQueue `waitingOn` can name (stale.ts).
+export function refFiredAt(after: string, merged: Merged[]): number | null {
   const r = AFTER_REF.exec(after);
   const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));
   if (!r || !pr) return null;
@@ -165,6 +169,7 @@ export type QueueData = {
   planAt: number | null; // when dispatch last rewrote the plan
   followups: Followup[];
   mergeOrder: MergeOrderItem[];
+  autoStart?: string[]; // dispatch's auto-start queue, branches only (its shape is pq-check's); read leniently
 };
 
 // A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
@@ -388,6 +393,12 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     mergeOrder.push({ branch, pr: int(o.pr), note: str(o.note) });
   });
 
+  // never a problem row: the tower only asks whether a listed lane has started (stale.ts)
+  const autoStart = arr(raw.autoStart).flatMap((x) => {
+    const b = str((x as Record<string, unknown> | null)?.branch);
+    return b && LANE_RE.test(b) ? [b] : [];
+  });
+
   return {
     status: problems.length ? 'bad' : 'ok',
     data: {
@@ -401,6 +412,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       planAt: planAtV,
       followups,
       mergeOrder,
+      autoStart,
     },
     problems,
     ...(unread.length ? { unread } : {}),

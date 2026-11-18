@@ -7,6 +7,7 @@ import type { Behind } from './behind.ts';
 import type { Checks, Cached, GhRun } from './gh.ts';
 import { powerSummary, type Costs, type MacRead, type PowerSummary } from './health.ts';
 import { slowdown, type Slowdown } from './slowdown.ts';
+import { boardTone, staleItems, type Board } from './stale.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import { mergedFromLog, mergedNumbers, type MainMerge } from './mergelog.ts';
@@ -156,6 +157,7 @@ export type View = {
   }[];
   sources: SourceRow[];
   problems: string[];
+  board: Board; // queue.json's age and where it contradicts the derived facts (stale.ts)
 };
 
 export type Inputs = {
@@ -964,6 +966,41 @@ export function derive(i: Inputs): View {
       })),
   ];
 
+  const ghWhy = ghFresh(t.prs, i.now);
+  const lockWhy = [t.lock, t.lockB]
+    .map((l, k) => [k ? 'devb' : 'dev', lockRead(l, i.now)] as const)
+    .find(([, r]) => r.state === 'unknown');
+  const items = staleItems({
+    now: i.now,
+    queue: q,
+    problems: t.queue.problems,
+    rows: byBranch,
+    prs,
+    mergedAt: (n) => mergedPrs.get(n) ?? null,
+    lanes: i.lanes,
+    liveHolder: (b) =>
+      liveLock(t.lock, i.now) && t.lock.branch === b
+        ? 'dev'
+        : liveLock(t.lockB, i.now) && t.lockB.branch === b
+          ? 'devb'
+          : null,
+    ghOk: ghWhy === null,
+    locksOk: !lockWhy,
+    table: table.rows,
+    staleFollowups: staleFollowups(q?.followups ?? [], i.now),
+  });
+  const unsure = ghWhy
+    ? `gh PRs ${ghWhy}`
+    : lockWhy
+      ? `${lockWhy[0]} lock ${lockWhy[1].why}`
+      : null;
+  const board: Board = {
+    updatedAt: q?.updatedAt ?? null,
+    items,
+    unsure,
+    ...boardTone(items, unsure, i.now),
+  };
+
   const active = rows.filter((r) => nowStates.includes(r.state));
   const srcs = sources(i);
   const off = srcs.filter((s) => s.state !== 'ok').length;
@@ -974,7 +1011,8 @@ export function derive(i: Inputs): View {
       ? `ask ${next.ask.late ? 'late' : next.ask.lo <= i.now ? 'now' : `~${hhmm(next.ask.lo)}`}`
       : `${next.order.length} to land`,
     done: String(done.length),
-    slipping: String(slipping.length),
+    // follow-ups already have their own SLIPPING rows; the rest of the board's items join them there
+    slipping: String(slipping.length + items.filter((x) => x.kind !== 'followup').length),
     sources: off ? `${off} off` : 'ok',
   };
 
@@ -1018,6 +1056,7 @@ export function derive(i: Inputs): View {
       ...t.queue.problems.map((p) => `queue.json: ${p}`),
       ...i.laneProblems.map((p) => `lanes/${p.file}: ${p.problem}`),
     ],
+    board,
   };
 }
 

@@ -7,6 +7,7 @@ import {
   LANE_STATES,
   parseQueue,
   planAt,
+  refFiredAt,
   queueAgeTone,
   sinceTime,
   staleFollowups,
@@ -527,5 +528,26 @@ describe('mergeOrder, bare dates and fired triggers (2026-11-14)', () => {
       '2026-11-14 ~25:00',
     ])
       expect(firedAt(a, merged, now)).toBeNull();
+  });
+});
+
+describe('tower-current: autoStart and merge references', () => {
+  it('reads autoStart branches leniently: a bad entry is skipped, never a problem', () => {
+    const q = parseQueue(
+      JSON.stringify({
+        v: 1,
+        updatedAt: '2026-11-17T05:00:00Z',
+        autoStart: [{ branch: 'echo', order: 1, class: 'p1' }, { branch: 'Bad Name' }, 7, null],
+      }),
+    );
+    expect(q.problems).toEqual([]);
+    expect(q.data!.autoStart).toEqual(['echo']);
+  });
+  it('refFiredAt reads only the merge half: a date never fires', () => {
+    const merged = [{ branch: 'echo', number: 9, mergedAt: 1000 }];
+    expect(refFiredAt('echo merges', merged)).toBe(1000);
+    expect(refFiredAt('PR 9 + 1 day', merged)).toBe(1000 + 86400e3);
+    expect(refFiredAt('2026-11-17', merged)).toBeNull();
+    expect(refFiredAt('fox merges', merged)).toBeNull();
   });
 });

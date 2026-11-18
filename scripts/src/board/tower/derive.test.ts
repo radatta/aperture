@@ -1357,3 +1357,34 @@ describe('tower-current: derived over hand-written', () => {
     });
   });
 });
+
+describe('tower-current: the board freshness view', () => {
+  it("counts queue.json's contradictions, joins them to SLIPPING's head, and says when gh can't tell", () => {
+    const merged = pr({ number: 60, state: 'MERGED', mergedAt: NOW - 5 * MIN, mergeSha: sha('m') });
+    const i = inputs({
+      prs: [merged],
+      devQueue: [queueLane({ state: 'waiting' })],
+      followups: [
+        {
+          id: 'F1',
+          what: 'x',
+          owner: 'lane',
+          after: 'now',
+          status: 'open',
+          source: null,
+          since: NOW - 2 * 86400e3,
+        },
+      ],
+    });
+    const v = derive(i);
+    expect(v.board).toMatchObject({ updatedAt: NOW - 10 * MIN, unsure: null, tone: 'warn' });
+    expect(v.board.items.map((x) => x.kind)).toEqual(['queue-merged', 'followup']);
+    // the follow-up has its own SLIPPING row already: counted once
+    expect(v.heads.slipping).toBe('2');
+    i.tower.prs = { list: [merged], at: NOW - 10 * MIN, error: null };
+    expect(derive(i).board.unsure).toMatch(/^gh PRs stale/);
+    i.tower.prs = { list: [merged], at: NOW - MIN, error: null };
+    i.tower.lock = lock(null, { asOf: NOW - 10 * MIN });
+    expect(derive(i).board.unsure).toMatch(/^dev lock cache stale/);
+  });
+});
