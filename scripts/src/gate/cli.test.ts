@@ -109,6 +109,7 @@ describe('readDiff', () => {
         { path: 'app/src/new.test.ts', deleted: false },
       ],
       testFiles: ['app/src/a.test.ts', 'app/src/new.test.ts'],
+      mb: 'abc',
     });
   });
 });

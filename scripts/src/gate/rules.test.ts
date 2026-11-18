@@ -39,8 +39,8 @@ const only = (kind: Problem['kind']) => formatProblems(problems.filter((p) => p.
 describe('gate rules', () => {
   it('every literal path a rule names exists', () => {
     const named = [
-      ...REPO_FULL.flatMap((r) => r.match),
-      ...PACKAGE_FULL.flatMap((r) => r.match),
+      ...REPO_FULL.flatMap((r) => [...r.match, ...(r.except ?? [])]),
+      ...PACKAGE_FULL.flatMap((r) => [...r.match, ...(r.except ?? [])]),
       ...INPUT_RULES.flatMap((r) => [...r.inputs, ...r.tests]),
       ...ALWAYS_RUN,
       ...Object.keys(SELF_CONTAINED),

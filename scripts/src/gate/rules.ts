@@ -1,6 +1,8 @@
 // @aperture/scripts — the data behind `pnpm gate:fast` (docs/ops/GATE.md): which changed paths force a full suite,
 // and which tests read inputs vitest's import graph can't see. plan.ts applies it; rules.test.ts pins it against the
 // real tree, so a rule can't rot and a new file-reading test can't go unregistered.
+// It imports nothing and exports only data: a change to it is planned with the merge-base's copy too (base.ts), which
+// loads that copy on its own, so an import here would break that load (base.test.ts loads this file so).
 //
 // Patterns: a trailing `/` is a directory prefix, `*` matches within one path segment, `**/` any number of
 // directories, anything else is an exact path. In `tests`, a trailing `/` means every test file under that directory.
@@ -53,6 +55,7 @@ export const PACKAGES: Pkg[] = [
 export interface FullRule {
   match: string[];
   why: string;
+  except?: string[]; // paths under `match` the rule leaves to the other rules (same pattern syntax)
   // PACKAGE_FULL only: the packages a non-`<pkg>` path runs whole, when they aren't (only) the one that owns it.
   pkgs?: string[];
 }
@@ -69,16 +72,21 @@ export const REPO_FULL: FullRule[] = [
   },
   { match: ['eslint.config.js'], why: 'lint config' },
   {
-    match: ['scripts/board/heavy.sh', 'scripts/board/lib.sh', 'scripts/board/limits.json'],
-    why: 'how every gate step is run and budgeted',
-  },
-  {
     match: ['identifiers.json'],
     why: 'read at import time by cdk (config/identifiers.ts) and scripts (identifiers.ts), behind a cast tsc can’t check',
   },
   {
+    // The selection code, and any gate file not yet classed below. rules.ts is data: base.ts plans a change to it
+    // with the merge-base's rules too, so it can't narrow its own gate. The others are ordinary modules and tests.
     match: ['scripts/src/gate/'],
-    why: 'the gate itself: a change to it is never judged by itself',
+    except: [
+      'scripts/src/gate/rules.ts',
+      'scripts/src/gate/ci.ts',
+      'scripts/src/gate/miss.ts',
+      'scripts/src/gate/related.ts',
+      'scripts/src/gate/*.test.ts',
+    ],
+    why: 'the gate’s selection code: a change to it is never judged by itself',
   },
 ];
 
@@ -311,13 +319,21 @@ export const INPUT_RULES: InputRule[] = [
     why: 'the board shell, its limits and the heavy guard, run by the board tests',
   },
   {
+    // Every limits.json reader is in scripts: heavy.sh, lib.sh and the watchers (spawned by the board tests), the board
+    // and lane modules (the rule above), and this one. CI never runs heavy.sh, and a broken heavy.sh fails the gate's own
+    // steps, which run under it.
+    inputs: ['scripts/board/limits.json'],
+    tests: ['scripts/src/gate/cli.test.ts'],
+    why: 'pins NARROW_WORKERS to tuning.test.maxWorkers',
+  },
+  {
     inputs: ['.claude/', 'CLAUDE.md', 'README.md', 'LICENSE.md', 'SECURITY.md'],
     tests: [],
     why: 'read by no test but the always-run scanners (hooks run their own fixtures, not vitest)',
   },
   // Same-area tests: a scripts area's tests spawn its CLIs and read its files, so a change anywhere in the area runs
   // all of them (cheaper than one rule per spawn, and it keeps new spawns covered).
-  ...['board', 'bot', 'devcheck', 'lane', 'mailroom', 'ios-probe', 'lc-e2e'].map((a) => ({
+  ...['board', 'bot', 'devcheck', 'gate', 'lane', 'mailroom', 'ios-probe', 'lc-e2e'].map((a) => ({
     inputs: [`scripts/src/${a}/`],
     tests: [`scripts/src/${a}/`],
     why: `the ${a} tests spawn its CLIs and read its files`,
@@ -391,7 +407,7 @@ export const SELF_CONTAINED: Record<string, string> = {
 // Non-test modules that read files, import by a computed path or spawn: a test that imports one inherits its reads,
 // and the graph sees only the import. Each says what it reads and what runs its importers' tests when that changes;
 // runtime state no tracked file feeds needs no rule. rules.test.ts fails on a new one until it's listed here (the
-// gate's own files are exempt: any change to them is REPO_FULL).
+// gate's own files are exempt: the gate same-area rule runs every gate test on any change to them).
 const RUNTIME = 'runtime state only (no tracked input)';
 const STACK_ENTRY =
   'Lambda entry paths, which NodejsFunction checks exist even with bundling skipped (the entry-file rule)';
@@ -415,7 +431,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/aws/health-check.mjs': 'cdk outputs and app/dist at deploy time; no test imports it',
   'scripts/aws/publish-frontend.mjs': 'cdk outputs and app/dist at deploy time; no test imports it',
   'scripts/src/board/budget-read.ts': `${RUNTIME}: the board dir, /proc`,
-  'scripts/src/board/cli.ts': `${RUNTIME}: board dir, cgroup, git; limits.json is REPO_FULL`,
+  'scripts/src/board/cli.ts': `${RUNTIME}: board dir, cgroup, git; limits.json (the scripts/board/ rule)`,
   'scripts/src/board/main-lock.ts': `${RUNTIME}: a flock file`,
   'scripts/src/board/merge-record.ts': `${RUNTIME}: the board dir`,
   'scripts/src/board/sessions.ts': `${RUNTIME}: the board dir`,
@@ -428,7 +444,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/board/tower/main.ts': `${RUNTIME}: gh, or a --fixtures dir its tests pass`,
   'scripts/src/board/tower/prs.ts': `${RUNTIME}: gh`,
   'scripts/src/board/tower/source.ts': `${RUNTIME}: board and localNotes files`,
-  'scripts/src/board/tower/web/main.ts': `${RUNTIME}: lane files, /proc, --fixtures; limits.json is REPO_FULL`,
+  'scripts/src/board/tower/web/main.ts': `${RUNTIME}: lane files, /proc, --fixtures; limits.json (the scripts/board/ rule)`,
   'scripts/src/board/tower/web/server.ts': 'its own web/ dir (the board same-area rule)',
   'scripts/src/usage/cli.ts': `${RUNTIME}: the usage dir, settings, the lane archive, board history; hub.json only names the hub`,
   'scripts/src/usage/gh.ts': `${RUNTIME}: gh`,

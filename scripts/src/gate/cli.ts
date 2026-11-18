@@ -9,7 +9,8 @@ import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { constants } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { modeOf, plan, isTest, type Change, type Plan } from './plan.ts';
+import { planWithBase, RULES_PATH } from './base.ts';
+import { modeOf, isTest, type Change, type Plan } from './plan.ts';
 import { checkRegistry, formatProblems } from './registry.ts';
 import { PACKAGES } from './rules.ts';
 import { run as execRun, type Run } from '../bot/sh.ts';
@@ -55,7 +56,7 @@ export function readDiff(
   run: Run,
   base: string,
   cwd?: string,
-): { changes: Change[]; testFiles: string[] } {
+): { changes: Change[]; testFiles: string[]; mb: string } {
   const mb = run('git', ['merge-base', base, 'HEAD']);
   const diff = fields(run('git', ['diff', '--name-status', '--no-renames', '-z', mb]));
   const changes: Change[] = [];
@@ -68,7 +69,7 @@ export function readDiff(
   const testFiles = [...fields(run('git', ['ls-files', '-z'], { cwd })), ...untracked].filter(
     isTest,
   );
-  return { changes, testFiles };
+  return { changes, testFiles, mb };
 }
 
 // Every tracked and untracked file still on disk (a deleted-but-staged path is listed, not readable), once (an
@@ -484,9 +485,11 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
     log(
       `gate:fast — couldn't read the diff (${(err as Error).message.split('\n')[0]}): running the full suite`,
     );
-    diff = { changes: [], testFiles: [] };
+    diff = { changes: [], testFiles: [], mb: '' };
   }
-  const p = plan(diff.changes, diff.testFiles);
+  const p = await planWithBase(diff.changes, diff.testFiles, () =>
+    run('git', ['show', `${diff.mb}:${RULES_PATH}`], { cwd: root }),
+  );
   log(describePlan(p, diff.changes, opts.base, opts));
   if (reg) log(reg.note);
   const todo = steps(p, root, opts);

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_SUITE } from '../fixture-inputs.ts';
 import { matches, modeOf, plan, type Change } from './plan.ts';
+import * as HEAD from './rules.ts';
 import { ALWAYS_RUN, MAX_CHANGED } from './rules.ts';
 
 const TESTS = [
@@ -62,8 +63,11 @@ describe('plan', () => {
     ['tsconfig.base.json'],
     ['identifiers.json'],
     ['eslint.config.js'],
-    ['scripts/board/heavy.sh'],
     ['scripts/src/gate/plan.ts'],
+    ['scripts/src/gate/cli.ts'],
+    ['scripts/src/gate/registry.ts'],
+    ['scripts/src/gate/base.ts'],
+    ['scripts/src/gate/new-helper.ts'], // a gate file not yet classed: selection code until it is
   ])('%s → the whole suite', (path) => {
     const p = plan(ch(path), TESTS);
     expect(p.full).toEqual([expect.stringContaining(path)]);
@@ -171,6 +175,58 @@ describe('plan', () => {
     expect(
       modeOf(plan(ch('packages/shared/src/consoleGuard.ts'), TESTS), 'packages/shared'),
     ).not.toBe('full');
+  });
+
+  it('a one-key limits.json change is narrow: the board and lane tests, and the gate test that pins it', () => {
+    const p = plan(ch('scripts/board/limits.json'), [...TESTS, 'scripts/src/gate/cli.test.ts']);
+    expect(p.full).toEqual([]);
+    expect(fullPkgs(p)).toEqual([]);
+    expect(Object.keys(p.packages).filter((d) => modeOf(p, d) !== 'skip')).toEqual(['scripts']);
+    expect(pkg(p, 'scripts').tests).toEqual(
+      expect.arrayContaining([
+        'scripts/src/board/board-cli.test.ts',
+        'scripts/src/board/limits.test.ts',
+        'scripts/src/lane/pace.test.ts',
+        'scripts/src/gate/cli.test.ts',
+      ]),
+    );
+  });
+
+  it.each([['scripts/board/heavy.sh'], ['scripts/board/lib.sh']])(
+    '%s runs the board and lane tests, not the whole suite',
+    (path) => {
+      const p = plan(ch(path), TESTS);
+      expect(p.full).toEqual([]);
+      expect(fullPkgs(p)).toEqual([]);
+      expect(pkg(p, 'scripts').tests).toEqual(
+        expect.arrayContaining(['scripts/src/board/board-cli.test.ts', 'scripts/src/lane/state.test.ts']),
+      );
+    },
+  );
+
+  it('a deleted limits.json runs the scripts suite (a deleted importable file)', () => {
+    expect(fullPkgs(plan([del('scripts/board/limits.json')], TESTS))).toEqual(['scripts']);
+  });
+
+  it.each([
+    ['scripts/src/gate/rules.ts'],
+    ['scripts/src/gate/ci.ts'],
+    ['scripts/src/gate/miss.ts'],
+    ['scripts/src/gate/plan.test.ts'],
+  ])('%s is no whole suite: every gate test runs', (path) => {
+    const gate = ['scripts/src/gate/plan.test.ts', 'scripts/src/gate/ci.test.ts'];
+    const p = plan(ch(path), [...TESTS, ...gate]);
+    expect(p.full).toEqual([]);
+    expect(fullPkgs(p)).toEqual([]);
+    expect(pkg(p, 'scripts').tests).toEqual(expect.arrayContaining(gate));
+  });
+
+  it('plans with the rules it is given (the merge-base copy, base.ts)', () => {
+    const rules = { ...HEAD, REPO_FULL: [{ match: ['docs/'], why: 'test rule' }] };
+    expect(plan(ch('docs/ops/LANES.md'), TESTS, rules).full).toEqual([
+      'docs/ops/LANES.md: test rule',
+    ]);
+    expect(plan(ch('docs/ops/LANES.md'), TESTS).full).toEqual([]);
   });
 
   it('app sources run the raw-glob scanners', () => {

@@ -3,16 +3,19 @@
 // its reason, printed by cli.ts. Unknown means run more: an empty diff, a path no rule or graph can judge, or a deleted
 // source file widens the run, never narrows it (docs/ops/GATE.md).
 import { touchesFixtureInputs, FIXTURE_SUITE } from '../fixture-inputs.ts';
-import {
-  ALWAYS_RUN,
-  INPUT_RULES,
-  MAX_CHANGED,
-  MODULE_EXT,
-  PACKAGE_FULL,
-  PACKAGES,
-  REPO_FULL,
-  type Pkg,
-} from './rules.ts';
+import * as HEAD_RULES from './rules.ts';
+import { PACKAGES, type FullRule, type InputRule, type Pkg } from './rules.ts';
+
+// What plan() reads of rules.ts: the HEAD copy by default, or the merge-base's (base.ts).
+export interface Rules {
+  PACKAGES: Pkg[];
+  REPO_FULL: FullRule[];
+  PACKAGE_FULL: FullRule[];
+  INPUT_RULES: InputRule[];
+  ALWAYS_RUN: string[];
+  MAX_CHANGED: number;
+  MODULE_EXT: RegExp;
+}
 
 export interface Change {
   path: string; // repo-relative
@@ -50,8 +53,12 @@ export function matches(pattern: string, path: string): boolean {
 
 const CODE_EXT = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
-export const pkgOf = (path: string): Pkg | undefined =>
-  PACKAGES.find((p) => path.startsWith(`${p.dir}/`));
+export const pkgOf = (path: string, pkgs: Pkg[] = PACKAGES): Pkg | undefined =>
+  pkgs.find((p) => path.startsWith(`${p.dir}/`));
+
+// A full rule's `except` hands a path it matches back to the other rules (`<pkg>` stands for each package dir).
+const excepted = (r: FullRule, path: string, dir = '') =>
+  !!r.except?.some((x) => matches(x.replace('<pkg>', dir), path));
 
 // A rule's `tests` entry: a file, or every test file under a `dir/`.
 const expand = (entry: string, testFiles: string[]) =>
@@ -70,7 +77,10 @@ const snapshotOwner = (path: string) => {
   return m ? `${m[1]}${m[2]}` : undefined;
 };
 
-export function plan(changes: Change[], testFiles: string[]): Plan {
+export function plan(changes: Change[], testFiles: string[], rules: Rules = HEAD_RULES): Plan {
+  const { ALWAYS_RUN, INPUT_RULES, MAX_CHANGED, MODULE_EXT, PACKAGE_FULL, PACKAGES, REPO_FULL } =
+    rules;
+  const own = (path: string) => pkgOf(path, PACKAGES);
   const tests = new Set(testFiles);
   const out: Plan = {
     full: [],
@@ -81,7 +91,7 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
   };
   const fullPkg = (dir: string, why: string) => out.packages[dir]!.full.push(why);
   const addTest = (t: string, why: string) => {
-    const pkg = pkgOf(t);
+    const pkg = own(t);
     if (!pkg) return out.notes.push(`${t}: not in a test package (rules.ts)`);
     const p = out.packages[pkg.dir]!;
     if (!p.tests.includes(t)) p.tests.push(t);
@@ -99,16 +109,17 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
   for (const { path, deleted } of changes) {
     let claimed = false; // a rule decided what this path runs
     for (const r of REPO_FULL)
-      if (r.match.some((m) => matches(m, path))) {
+      if (r.match.some((m) => matches(m, path)) && !excepted(r, path)) {
         claimed = true;
         out.full.push(`${path}: ${r.why}`);
       }
     // A `<pkg>/…` pattern is tried once per package; any other names one package's path, and runs that package —
     // or the rule's `pkgs`, when it names them.
-    const owning = pkgOf(path);
+    const owning = own(path);
     for (const r of PACKAGE_FULL)
       for (const p of PACKAGES)
         if (
+          !excepted(r, path, p.dir) &&
           r.match.some(
             (m) =>
               matches(m.replace('<pkg>', p.dir), path) &&
@@ -123,7 +134,7 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
     if (owner) {
       claimed = true;
       if (tests.has(owner)) addTest(owner, `its snapshot ${path} changed`);
-      else if (pkgOf(path)) fullPkg(pkgOf(path)!.dir, `${path}: a snapshot with no test beside it`);
+      else if (own(path)) fullPkg(own(path)!.dir, `${path}: a snapshot with no test beside it`);
     }
     for (const r of INPUT_RULES)
       if (r.inputs.some((m) => matches(m, path))) {
@@ -132,7 +143,7 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
           for (const t of expand(e, testFiles)) addTest(t, `${path} → ${r.why}`);
       }
 
-    const pkg = pkgOf(path);
+    const pkg = own(path);
     if (!pkg) {
       if (!claimed) unknownOutside.push(path);
       continue;
