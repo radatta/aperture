@@ -1745,7 +1745,19 @@ describe('the debug log’s submit probe', () => {
     // Flags, fixed words and ms only.
     for (const e of [a, b, c])
       expect(Object.keys(e!).sort()).toEqual(
-        ['click', 'clickMs', 'inEditor', 'key', 'keyMs', 'mod', 'note', 'open', 'repeat', 't', 'type'].sort(),
+        [
+          'click',
+          'clickMs',
+          'inEditor',
+          'key',
+          'keyMs',
+          'mod',
+          'note',
+          'open',
+          'repeat',
+          't',
+          'type',
+        ].sort(),
       );
 
     const off = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });

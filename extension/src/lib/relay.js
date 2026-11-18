@@ -93,8 +93,7 @@
   // ctx: { screenSlug, binding: {questionId, status} | null } → {ok: true} | {ok: false, reason}
   function admit(item, ctx) {
     const known = [SENDABLE, CACHE_ONLY, LOCAL].some((k) => item && k.includes(item.kind));
-    if (!item || !known)
-      return { ok: false, reason: 'kind' };
+    if (!item || !known) return { ok: false, reason: 'kind' };
     if (!ctx.screenSlug) return { ok: false, reason: 'off-problem' };
     if (item.slug != null && item.slug !== ctx.screenSlug)
       return { ok: false, reason: 'off-screen-slug' };

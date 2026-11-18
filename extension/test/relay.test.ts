@@ -107,6 +107,27 @@ describe('relay: a page message is accepted only when it’s ours, in order, for
     });
   });
 
+  it('admits a submitted item like an event — the screen’s problem, an open sitting — and it is neither sendable nor late', () => {
+    const { admit } = relayLib;
+    const item = { kind: 'submitted', slug: 'two-sum', questionId: null, payload: null };
+    expect(admit(item, active)).toEqual({ ok: true });
+    expect(admit({ ...item, slug: 'other' }, active)).toEqual({
+      ok: false,
+      reason: 'off-screen-slug',
+    });
+    expect(admit(item, { screenSlug: 'two-sum', binding: null })).toEqual({
+      ok: false,
+      reason: 'no-sitting',
+    });
+    expect(admit(item, { screenSlug: null, binding: null })).toEqual({
+      ok: false,
+      reason: 'off-problem',
+    });
+    expect(relayLib.LOCAL).toEqual(['submitted']);
+    expect(relayLib.SENDABLE).not.toContain('submitted');
+    expect(relayLib.LATE).not.toContain('submitted');
+  });
+
   it('takes the first hello only, and nothing before it', async () => {
     const relay = relayLib.createRelay();
     expect(await relay.accept('{}')).toEqual({ ok: false, reason: 'no-handshake' });

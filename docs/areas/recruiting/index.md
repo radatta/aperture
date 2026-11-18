@@ -401,15 +401,16 @@ extension stays passive.
 
 **The extension never stands between the user and LeetCode's Submit.** The Submit hold (2026-11-16: hold
 once for the trace card, re-click) was retired with the card in 2.2.0 (the maintainer, 2026-11-17: in an
-interview the trace goes in a code comment, so a separate card is extra infra). What's left reads a real Submit
-click only for the resubmit note, which never blocks it; the extension never clicks Submit — an automated
-submit was rejected. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
+interview the trace goes in a code comment, so a separate card is extra infra). What's left reads the submit
+request — a click or ⌘↵, since 2.2.1 — only for the resubmit note, which never blocks it; the extension never
+clicks Submit — an automated submit was rejected. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
 
 **The page's world is evidence, never authority** (the maintainer, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on
 an overlay that is really showing; a page message can only add events to the sitting the extension itself
 opened, for the problem in the tab's address and made from that problem's page (a run or submit made there
-and judged after you left goes to that problem's open sitting); nothing from Aperture ever flows back into the page (the
+and judged after you left goes to that problem's open sitting), or, under the same rules, tell that page a
+submit was made — never sent, it only raises the resubmit note; nothing from Aperture ever flows back into the page (the
 overlay's shadow roots are closed — the page sees only whether it shows); and messages carry an HMAC tag
 keyed by a per-load nonce, with a sequence number. The MAIN world ships raw text and the isolated world
 parses it; everything MAIN calls is bound at load, and `then` is pinned on what its promises settle with, so

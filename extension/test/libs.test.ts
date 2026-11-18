@@ -109,14 +109,15 @@ describe('timer', () => {
 });
 
 describe('selectors', () => {
-  it('ships LeetCode’s controls from the debug log; null turns a step off; a bad paste and the retired timerClicks fall back', () => {
+  it('ships LeetCode’s controls from the debug log; null turns a step off; a bad paste and the retired timerClicks and submit fall back', () => {
     const doc = new JSDOM('<!doctype html><body></body>').window.document;
     for (const k of selectors.KEYS) {
       const v = selectors.DEFAULTS[k];
       expect(typeof v, k).toBe('string');
       expect(() => doc.querySelector(v), k).not.toThrow(); // valid CSS, every one
     }
-    for (const gone of ['timerClicks', 'run']) expect(selectors.KEYS).not.toContain(gone);
+    for (const gone of ['timerClicks', 'run', 'submit']) expect(selectors.KEYS).not.toContain(gone);
+    expect(selectors.RETIRED).toEqual(['submit']);
     const m = selectors.merge({
       editorReset: '#r',
       timerStart: null,
@@ -124,16 +125,16 @@ describe('selectors', () => {
       bogus: 'x',
       dialog: 7,
       lang: null, // not a step: a null is ignored
-      submit: null, // the resubmit note, off
+      submit: null, // retired (2.2.1): ignored
     });
     expect(m).toMatchObject({
       editorReset: '#r',
       timerStart: null,
       dialog: selectors.DEFAULTS.dialog,
       lang: selectors.DEFAULTS.lang,
-      submit: null,
     });
     expect(m).not.toHaveProperty('bogus');
+    expect(m).not.toHaveProperty('submit');
     expect(m).not.toHaveProperty('timerClicks');
     expect(selectors.merge('{bad json')).toEqual({ ...selectors.DEFAULTS });
     // Both of LeetCode's timer toolbars: the 2026-11-10 one (debug logs 2–5) and the 2026-11-13/14 one (10a, 11).

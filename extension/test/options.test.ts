@@ -86,6 +86,27 @@ describe('the Options page', () => {
     expect(o.$('coachNudge').checked).toBe(false);
   });
 
+  it('opening Options drops the retired submit selector from a saved override; a null one turns the note’s switch off', async () => {
+    const ext = fakeExtension();
+    await ext.local.set({ selectors: { submit: '#s', editorReset: '#r' } });
+    const o = await loaded(ext);
+    await until(() => !('submit' in (ext.local.data.selectors as object)));
+    expect(ext.local.data.selectors).toEqual({ editorReset: '#r' });
+    expect(o.$<HTMLTextAreaElement>('selectors').value.replace(/\s/g, '')).toBe(
+      '{"editorReset":"#r"}',
+    );
+    expect(ext.local.data.coachNudge).toBeUndefined(); // a string submit said nothing about the note
+    expect(o.$('coachNudge').checked).toBe(true);
+
+    const off = fakeExtension();
+    await off.local.set({ selectors: { submit: null } });
+    const p = await loaded(off);
+    await until(() => !('selectors' in off.local.data)); // nothing left: the override goes
+    expect(off.local.data.coachNudge).toBe(false);
+    expect(p.$('coachNudge').checked).toBe(false);
+    expect(p.$<HTMLTextAreaElement>('selectors').value).toBe('');
+  });
+
   it('Debug mode toggles `debug`, and survives a reload', async () => {
     const ext = fakeExtension();
     const o = await loaded(ext);
@@ -136,7 +157,7 @@ describe('the Options page', () => {
     await until(() => ext.local.data.apiOrigin === 'http://localhost:8787');
   });
 
-  it('saves selector overrides as JSON over the defaults; bad JSON and unknown keys save nothing', async () => {
+  it('saves selector overrides as JSON over the defaults; bad JSON and unknown keys save nothing; a pasted submit is dropped', async () => {
     const ext = fakeExtension();
     const o = await loaded(ext);
     const saveSel = (text: string) => {
@@ -150,11 +171,18 @@ describe('the Options page', () => {
     saveSel('[1]');
     await until(() => o.status('selectorStatus').includes('must be a JSON object'));
     expect(ext.local.data.selectors).toBeUndefined();
+    saveSel('{"submit": "#s", "bogus": 1}'); // a retired key doesn't excuse an unknown one
+    await until(() => o.status('selectorStatus').includes('Unknown keys: bogus'));
+    expect(ext.local.data.selectors).toBeUndefined();
     saveSel('{"submit": null, "editorReset": "#reset"}');
     await until(() => o.status('selectorStatus').startsWith('Saved.'));
-    expect(ext.local.data.selectors).toEqual({ submit: null, editorReset: '#reset' });
+    expect(o.status('selectorStatus')).toContain('submit is retired');
+    expect(o.status('selectorStatus')).toContain('the note is now off');
+    expect(ext.local.data.selectors).toEqual({ editorReset: '#reset' });
+    expect(ext.local.data.coachNudge).toBe(false);
+    expect(o.$('coachNudge').checked).toBe(false);
     expect((await loaded(ext)).$<HTMLTextAreaElement>('selectors').value.replace(/\s/g, '')).toBe(
-      '{"submit":null,"editorReset":"#reset"}',
+      '{"editorReset":"#reset"}',
     );
     o.click('resetSelectors');
     await until(() => !('selectors' in ext.local.data));

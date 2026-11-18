@@ -126,7 +126,17 @@ describe('inject-main in a page', () => {
     const kinds = await until(() => (admitted.length >= 9 ? admitted.map((m) => m.kind) : null));
     expect(rejected).toEqual([]);
     expect(new Set(kinds)).toEqual(
-      new Set(['hint', 'snapshot', 'note', 'replay', 'problem', 'submit', 'submitDetails', 'run']),
+      new Set([
+        'hint',
+        'snapshot',
+        'note',
+        'replay',
+        'problem',
+        'submitted', // the /submit/ itself, local only (the resubmit note)
+        'submit',
+        'submitDetails',
+        'run',
+      ]),
     );
     expect(admitted.find((m) => m.kind === 'run')).toMatchObject({
       slug: 'two-sum',

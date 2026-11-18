@@ -206,7 +206,9 @@
         // A submit LeetCode took, however it was made (a click, ⌘↵): local only — the resubmit note reads it
         // (content.js), and it is never an event.
         if (r.type !== 'submit' || dup) return [];
-        return [{ kind: 'submitted', slug: r.slug, questionId: null, at: reqAt, payload: null, page }];
+        return [
+          { kind: 'submitted', slug: r.slug, questionId: null, at: reqAt, payload: null, page },
+        ];
       }
       // check: only the final SUCCESS counts; RUNNING_TESTS / STARTED / PENDING are polls.
       if (!res || res.state !== 'SUCCESS' || fired.has(r.id)) return [];
