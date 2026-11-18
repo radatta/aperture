@@ -143,8 +143,13 @@ export function findIdentifiers(
   path = '',
 ): IdentifierHit[] {
   const hits: IdentifierHit[] = [];
+  // A rule that hits a line hits any text holding that line whole: none anchors on ^ or $, uses `.` or the m flag,
+  // and each lookaround reads a newline as the non-letter, non-digit a line's edge is. So a rule that misses the
+  // whole text can't hit a line of it, and most files skip the per-line pass (the tree scan's cost).
+  const live = text.includes('\n') ? rules.filter(([, hit]) => hit(text)) : rules;
+  if (!live.length) return hits;
   text.split('\n').forEach((l, i) => {
-    for (const [kind, hit] of rules)
+    for (const [kind, hit] of live)
       if (hit(l) && !(path && allowed(path, kind, l))) hits.push({ kind, line: i + 1 });
   });
   return hits;
