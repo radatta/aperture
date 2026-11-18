@@ -28,6 +28,9 @@ import { SLOTS, isExpired, readLock, waitForLock } from './bot/lock.ts';
 import type { Holder } from './bot/lock.ts';
 
 export const CEILING_MS = 60 * 60_000;
+// Before the first read: the bot refuses the slot once it sees this job running (bot/main-pending.ts); a lane that
+// wrote its lock just before that sighting must be read here, so the first read comes after any jobs-API lag.
+export const SETTLE_MS = 20_000;
 export const MAX_ERRORS = 10; // ~5 min of failed reads at one a poll: a GitHub blip doesn't deploy over a live test
 const REQUEST_MS = 20_000;
 
@@ -88,11 +91,12 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
     }
     return 0;
   }
+  log(`${slot}: waiting while refs/locks/${slot} is held (ceiling ${CEILING_MS / 60_000} min)`);
+  await clock.sleep(SETTLE_MS);
   const start = clock.now();
   let slept = false;
   const timed: Clock = { now: clock.now, sleep: (ms) => ((slept = true), clock.sleep(ms)) };
   const mins = () => Math.round((clock.now() - start) / 60_000);
-  log(`${slot}: waiting while refs/locks/${slot} is held (ceiling ${CEILING_MS / 60_000} min)`);
   try {
     const r = await waitForLock(api, 'main', timed, {
       maxMs: CEILING_MS,

@@ -11,7 +11,7 @@ import { DispatchRejected, dispatchAndWait, listJobs, listRuns } from './dispatc
 import { featureBranch, requirePushed, runKey } from './git.ts';
 import { iosFiles } from './ios-routing.ts';
 import { acquireSlot, release, renew } from './lock.ts';
-import { mainPendingGuard } from './main-pending.ts';
+import { mainInFlight, mainPendingGuard } from './main-pending.ts';
 import type { Holder, Slot } from './lock.ts';
 import type { Run as Sh } from './sh.ts';
 
@@ -73,6 +73,9 @@ const JOBS: Record<Slot, { main: string; dispatched: string }> = {
 // 'unknown' (its first dispatch creates it in full). No `dev` branch push ever deployed devb.
 export async function currentBase(api: Api, slot: Slot = 'dev'): Promise<string> {
   try {
+    // A merge still to land here (queued, checking, waiting for a lock): main's head isn't what the slot serves yet,
+    // and its last deploy job may say it is. A lane may hold the slot then (main-pending.ts), so → full.
+    if (await mainInFlight(api, slot)) return 'unknown';
     const jobs = JOBS[slot];
     const [main, dispatched, devPush] = await Promise.all([
       lastDevJob(api, 'deploy.yml', 'event=push&branch=main', jobs.main, ranCdk),
@@ -151,14 +154,20 @@ export async function deployDev(
   let holder = took.holder;
   lockChanged(holder);
   log(`${slot} lock: ${branch} until ${holder.expiresAt}`);
-  // Renewal starts with 15 minutes left, so a transient failure just retries on the next poll.
+  // Renewal starts with 15 minutes left, so a transient failure just retries on the next poll. A lapsed lock can't be
+  // renewed (a merge's wait may already be deploying there: lock.ts → renew), so it stops trying and says so once.
+  const lapsed = () => Date.parse(holder.expiresAt) <= clock.now();
+  let gaveUp = false;
   const keepLock = async () => {
-    if (Date.parse(holder.expiresAt) - clock.now() >= RENEW_BELOW_MS) return;
+    if (gaveUp || Date.parse(holder.expiresAt) - clock.now() >= RENEW_BELOW_MS) return;
     try {
       holder = await renew(api, branch, clock.now(), slot);
       lockChanged(holder);
     } catch (err) {
-      log(`${slot} lock renewal failed (${(err as Error).message}) — retrying on the next poll`);
+      gaveUp = lapsed();
+      log(
+        `${slot} lock renewal failed (${(err as Error).message}) — ${gaveUp ? 'the lock lapsed; `pnpm bot lock acquire` takes it back after the deploy' : 'retrying on the next poll'}`,
+      );
     }
   };
   let run: Run;
@@ -204,7 +213,9 @@ export async function deployDev(
     );
   }
   log(
-    `${slot} now serves ${sha} (build marker APERTURE_BUILD_SHA). Lock held until ${holder.expiresAt} — \`pnpm bot lock release\` after the devcheck, \`pnpm bot lock renew\` to extend; \`pnpm devcheck\` aims at ${slot} because this branch holds its lock.`,
+    lapsed()
+      ? `${slot} now serves ${sha} (build marker APERTURE_BUILD_SHA), but this branch's lock lapsed — \`pnpm bot lock acquire --slot ${slot}\` before the devcheck (a merge may be deploying there).`
+      : `${slot} now serves ${sha} (build marker APERTURE_BUILD_SHA). Lock held until ${holder.expiresAt} — \`pnpm bot lock release\` after the devcheck, \`pnpm bot lock renew\` to extend; \`pnpm devcheck\` aims at ${slot} because this branch holds its lock.`,
   );
   return run;
 }

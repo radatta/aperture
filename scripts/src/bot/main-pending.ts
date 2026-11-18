@@ -40,6 +40,23 @@ export async function pendingMainDeploy(api: Api, slot: Slot): Promise<Run | nul
   return found;
 }
 
+// Main's run is still to put its commit on this slot at all — queued, checking, waiting or deploying (wider than
+// pending: a run whose wait hasn't started holds nothing up, but it hasn't landed either). currentBase reads it: while
+// one is in flight, `origin/main` isn't what the slot serves, so a dispatch must not diff against it.
+export const inFlightOn = (jobs: Job[], slot: Slot) =>
+  !jobs.some(
+    (j) =>
+      (j.name === `deploy-${slot}` || j.name.startsWith(`deploy-${slot} / `)) &&
+      j.status === 'completed',
+  );
+
+export async function mainInFlight(api: Api, slot: Slot): Promise<boolean> {
+  const runs = await listRuns(api, 'deploy.yml', `per_page=${NEWEST}&event=push&branch=main`);
+  for (const run of runs)
+    if (run.status !== 'completed' && inFlightOn(await listJobs(api, run.id), slot)) return true;
+  return false;
+}
+
 // acquireSlot's guard: the pending run's URL, or null.
 export const mainPendingGuard = (api: Api) => async (slot: Slot) =>
   (await pendingMainDeploy(api, slot))?.html_url ?? null;

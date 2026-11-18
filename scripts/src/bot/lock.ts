@@ -170,8 +170,8 @@ export async function heldSlot(api: Api, branch: string): Promise<Slot | null> {
 // waits for A rather than taking a free devb; holding devb, or asking for it, is refused.
 // `pending` (main-pending.ts) refuses a slot main's Deploy run is still to land on, to any branch but its live holder
 // (a lane mid-test may redeploy a fix while main waits for it). Checked before the ref is written, and again after —
-// the authoritative read: main's wait reads the lock after its run exists, so either it sees our lock or we see its
-// run. A refusal after the write releases it; so does a guard that fails after it (fail closed, then rethrow).
+// the authoritative read: main's wait job reads the lock SETTLE_MS (main-dev-wait.ts) after it starts, and the guard
+// counts it from the moment GitHub shows it running, so either main reads our lock or we see its wait. A refusal after the write releases it; so does a guard that fails after it (fail closed, then rethrow).
 export async function acquireSlot(
   api: Api,
   branch: string,

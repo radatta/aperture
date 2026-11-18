@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { acquireLock, lockWait, main, parseSlot, tellingWhoToTell } from './cli.ts';
+import { acquireLock, lockPerms, lockWait, main, parseSlot, tellingWhoToTell } from './cli.ts';
+import { PERMS } from './token.ts';
 import { fakeApi, fakeClock, ghError } from './fakes.ts';
 import { LockHeld, MainPending } from './lock.ts';
 
@@ -181,6 +182,14 @@ describe('lock wait and lock acquire hold back for main', () => {
       }),
     });
   const quietLog = () => vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+  it('mints Actions read only for the subcommands that read main’s runs', () => {
+    expect(lockPerms('acquire')).toBe(PERMS.lockAcquire);
+    expect(lockPerms('wait')).toBe(PERMS.lockWait);
+    expect(lockPerms('status')).toBe(PERMS.lockRead);
+    expect(lockPerms('renew')).toBe(PERMS.lock);
+    expect(lockPerms('release')).toBe(PERMS.lock);
+  });
 
   it('lock wait sleeps through a free slot until main has landed', async () => {
     const log = quietLog();

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { currentBase, deployTitle } from './deploy-dev.ts';
+import { mainInFlight } from './main-pending.ts';
 import type { Run } from './dispatch.ts';
 import { dispatchAndWait } from './dispatch.ts';
 import { fakeApi, fakeClock } from './fakes.ts';
@@ -207,6 +208,36 @@ describe('currentBase', () => {
     { display_title: deployTitle(sha, 'k') },
     [job('verify', 'success', devAt), job('deploy / deploy', conclusion, devAt, status)],
   ];
+
+  it('is unknown while a merge is still to land on the slot, whatever main deployed last', async () => {
+    const queued: [Partial<Run>, J[]] = [{ status: 'queued' }, []];
+    const checking: [Partial<Run>, J[]] = [
+      { status: 'in_progress' },
+      [job('check / check', null, null, 'in_progress')],
+    ];
+    for (const inFlight of [queued, checking])
+      expect(await currentBase(world([inFlight, mainRun(T(12))], [dispatch(SHA, T(11))]))).toBe(
+        'unknown',
+      );
+    // landed on dev, prod still going: dev serves it
+    const landed: [Partial<Run>, J[]] = [
+      { status: 'in_progress' },
+      [
+        job('deploy-dev / deploy', 'success', T(13), 'completed', [
+          { name: 'Deploy stacks', conclusion: 'success' },
+        ]),
+        job('deploy-prod / deploy', null, null, 'in_progress'),
+      ],
+    ];
+    expect(await currentBase(world([landed], [dispatch(SHA, T(11))]))).toBe('');
+    // a run that skips devb's deploy (no shape change) never holds devb's base
+    const skipsB: [Partial<Run>, J[]] = [
+      { status: 'in_progress' },
+      [job('deploy-devb', 'skipped', T(13)), job('deploy-dev / deploy', null, null, 'in_progress')],
+    ];
+    expect(await mainInFlight(world([skipsB], []), 'devb')).toBe(false);
+    expect(await mainInFlight(world([skipsB], []), 'dev')).toBe(true);
+  });
 
   it('is the dispatched sha when its dev job finished after main’s dev job', async () => {
     expect(await currentBase(world([mainRun(T(10))], [dispatch(SHA, T(11))]))).toBe(SHA);

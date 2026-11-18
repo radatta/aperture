@@ -158,6 +158,17 @@ export async function lockWait(
   return 0;
 }
 
+// status and wait only read: a read-only token, which a 55-minute background wait holds. acquire and wait also read
+// main's Deploy runs (main-pending.ts); renew and release need neither.
+export const lockPerms = (sub: string | undefined): Permissions =>
+  sub === 'status'
+    ? PERMS.lockRead
+    : sub === 'wait'
+      ? PERMS.lockWait
+      : sub === 'acquire'
+        ? PERMS.lockAcquire
+        : PERMS.lock;
+
 // `lock acquire`: deploy-dev's acquire, guarded the same way — never a slot main's Deploy run is still to land on.
 export const acquireLock = (
   api: Api,
@@ -247,17 +258,7 @@ export async function main(argv: string[]): Promise<number> {
       return r.conclusion === 'success' ? 0 : 1;
     }
     case 'lock': {
-      // status and wait only read: a read-only token, which a 55-minute background wait holds. acquire and wait also
-      // read main's Deploy runs (main-pending.ts).
-      const perms =
-        sub === 'status'
-          ? PERMS.lockRead
-          : sub === 'wait'
-            ? PERMS.lockWait
-            : sub === 'acquire'
-              ? PERMS.lockAcquire
-              : PERMS.lock;
-      const api = makeApi(await token(perms));
+      const api = makeApi(await token(lockPerms(sub)));
       const dir = boardDir(run);
       const cache = (h: Holder | null, slot: Slot) => writeLockCache(dir, h, clock.now(), slot);
       if (sub === 'status') {

@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { OWNER, REPO } from './bot/config';
 import { fakeClock } from './bot/fakes';
-import { CEILING_MS, MAX_ERRORS, run } from './main-dev-wait';
+import { CEILING_MS, MAX_ERRORS, SETTLE_MS, run } from './main-dev-wait';
 
 // deploy.yml's wait jobs run this against the real API only on main; here a scripted fetch stands in for GitHub.
 const R = `/repos/${OWNER}/${REPO}`;
@@ -65,9 +65,12 @@ function harness(
 
 describe('main-dev-wait', () => {
   it('deploys at once when the lock is free (404), with nothing loud', async () => {
-    const h = harness(() => null);
+    const readAt: number[] = [];
+    const h = harness((_n, now) => (readAt.push(now), null));
     expect(await h.go()).toBe(0);
-    expect(h.clock.t).toBe(T0);
+    // the first read comes only after the settle, past any jobs-API lag the bot's guard reads through
+    expect(readAt).toEqual([T0 + SETTLE_MS]);
+    expect(h.clock.t).toBe(T0 + SETTLE_MS);
     expect(h.lines.at(-1)).toBe('dev lock free — deploying');
     expect(h.summaries).toEqual([]);
   });
@@ -75,7 +78,7 @@ describe('main-dev-wait', () => {
   it('waits on a held lock, polling every 30 s, and deploys when it is released', async () => {
     const h = harness((n, now) => (n < 2 ? holder('lane-x', now + 40 * MIN) : null));
     expect(await h.go()).toBe(0);
-    expect(h.clock.t).toBe(T0 + 60_000);
+    expect(h.clock.t).toBe(T0 + SETTLE_MS + 60_000);
     expect(h.lines.some((l) => l.startsWith('waiting: dev locked by lane-x @ aaaaaaa'))).toBe(true);
     expect(h.lines.at(-1)).toBe(
       '::notice title=dev deploy waited for its lock::1 min; released — deploying',
@@ -86,7 +89,7 @@ describe('main-dev-wait', () => {
   it("wakes at the holder's expiry and deploys over a lapsed lock", async () => {
     const h = harness(() => holder('lane-x', T0 + 2 * MIN + 10_000));
     expect(await h.go()).toBe(0);
-    // polls at 0:30 … 2:00, then wakes 1 s past the expiry, not at the 2:30 tick
+    // settles 20 s, polls at 0:50, 1:20, 1:50, then wakes 1 s past the expiry, not at the 2:20 tick
     expect(h.clock.t).toBe(T0 + 2 * MIN + 10_000 + 1000);
     expect(h.lines.at(-1)).toContain("lane-x @ aaaaaaa's lock lapsed — deploying");
   });
@@ -101,7 +104,7 @@ describe('main-dev-wait', () => {
   it('goes after the ceiling against a lock renewed past its TTL, loudly', async () => {
     const h = harness((_n, now) => holder('lane-x', now + 40 * MIN));
     expect(await h.go()).toBe(0);
-    expect(h.clock.t).toBe(T0 + CEILING_MS);
+    expect(h.clock.t).toBe(T0 + SETTLE_MS + CEILING_MS);
     const warn = h.lines.find((l) => l.startsWith('::warning '));
     expect(warn).toContain('dev deploy waited 60 min and went anyway');
     expect(warn).toContain('lane-x @ aaaaaaa');
@@ -111,7 +114,7 @@ describe('main-dev-wait', () => {
   it('treats a garbled lock as lapsed, never as held', async () => {
     const h = harness(() => 'not json');
     expect(await h.go()).toBe(0);
-    expect(h.clock.t).toBe(T0);
+    expect(h.clock.t).toBe(T0 + SETTLE_MS);
     expect(h.lines.at(-1)).toContain("an unreadable holder's lock lapsed");
   });
 
