@@ -82,7 +82,10 @@ What each touched package still brings, as before:
 
 `git diff --name-only origin/main...HEAD` against the table and the infra triggers; when unsure, add the lens. The
 pick goes in `localNotes/decisions.md`. The triggered lenses are a floor: a kickoff or a relay can add lenses or
-rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_ 1).
+rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_ 1). A pending
+`localNotes/claude-edit-<n>.patch` (`docs/ops/HUB.md` → _Agent-rule edits_) is part of the diff: its paths count
+here, each lens's prompt names it to read as if applied, and a patch changed after its review is a fix for the
+recheck.
 
 - **Docs only** — `code-reviewer` alone; plus shell if an operator command changed, infra if a deploy, slot, lock or
   approval rule changed.
@@ -236,7 +239,8 @@ back, or an infra-kind dev defect on a branch infra never read, is a trigger gap
   `lens-gap: <lens> <kind> — <line>` per gap in its `[pr-open]`.
 - **The hub** keeps the ledger, `/workspace/localNotes/review-gaps.md` (`docs/ops/HUB.md` → _The hub's duties_). A
   second gap of the same lens and kind becomes a follow-up to widen that lens's checklist — an edit to
-  `.claude/agents/`, so it needs the maintainer's go in that lane's pane.
+  `.claude/agents/`, so it goes as a patch the hub applies on the maintainer's go (`docs/ops/HUB.md` →
+  _Agent-rule edits_).
 - The archived lane reports are the backup if the ledger is lost.
 
 ## The round record

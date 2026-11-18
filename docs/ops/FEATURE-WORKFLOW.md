@@ -11,8 +11,9 @@ The rule — no phone pings, no asking in the pane, every need as `[ask-maintain
 as `[info]` — and its message shapes live in `docs/ops/HUB.md` → _Messages_, _Checkpoints_. What it means here: in a
 lane, "ask the user", "tell the user" and "hand the user" anywhere in the docs mean an `[ask-maintainer]` to the
 hub, with the options and the lane's pick or the exact one-line Mac command; the answer comes back as `[relay]`.
-Which hub messages count as the user's approval: `docs/ops/HUB.md` → _Approval_; for a go only the pane can give,
-the `[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
+Which hub messages count as the user's approval, and where a go no relay can give is typed — the hub's pane for a
+`CLAUDE.md` / `.claude/` edit, which the lane sends as a patch and never makes itself; `<branch>`'s pane for the
+rest: `docs/ops/HUB.md` → _Approval_.
 
 ## Two modes
 
