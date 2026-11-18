@@ -159,13 +159,14 @@ commit for the round.
   not. The round file names, for each serious `cause=fix` or `cause=sibling` finding, the earlier finding whose
   fix patched that mechanism, or why it lies elsewhere. At any stop the round's findings stay unpatched:
   `[ask-maintainer]` with the open list and three options — patch it and recheck, re-plan that piece, or ship with
-  it logged as a follow-up — and the lane's pick; the lane holds until the relay.
+  the open list unpatched, logged as a follow-up and each S1/S2 under _Open findings shipped_ — and the lane's pick; the lane holds until the relay.
 - **The pick.** At a twin, cap or not: re-plan that piece — move the judgment to where it is made once (the
   model, one parser) or narrow the scope. A relayed re-plan, with the open list's other fixes, is built, gated and
-  committed, then reviewed afresh: a round 1 over its own diff with every lens its paths trigger, never skipped,
-  its rounds counted anew in `localNotes/review/replan<k>-round-<n>.md`. At the cap with no twin, on a diff with no
-  risk class: fix the open list, gate, commit, then one final broad review — every lens the branch's paths trigger
-  (_Picking lenses_), on the whole branch diff, not the fix range — its S1/S2 fixed and gated with no further
+  committed, then reviewed afresh: a round 1 over its own diff with every lens _Picking lenses_ picks for it (risk
+  classes and kickoff or relay additions included), never skipped, its rounds counted anew in
+  `localNotes/review/replan<k>-round-<n>.md` with ids `P<k>R<n>-<nn>`. At the cap with no twin, on a diff with no
+  risk class: fix the open list, gate, commit, then one final broad review — every lens _Picking lenses_ picks for the
+  branch (kickoff or relay additions included), on the whole branch diff, not the fix range — its S1/S2 fixed and gated with no further
   round, then ship; one it can't fix goes back as `[ask-maintainer]`. Not another narrow recheck. At any other
   stop, the lane picks on the merits.
 
@@ -177,7 +178,7 @@ whatever its size. Only a fix that touches no infra, shell, UI or extension trig
 covered by a test it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
 recheck is the chain's round 1, the rest runs as round 2 and later (serious again → recheck that fix), the cap and the
 no-fewer comparison count within the chain, the twin in a dev-fix chain from its round 1 on, against any earlier
-fix to that mechanism (a rebase's bad resolution is serious again, not a twin), and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
+fix to that mechanism (a rebase chain has no twin stop: a bad resolution is serious again), and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
 
 - **Dev fix** — the range is `<the commit before the fix>..HEAD`; the list is the dev defects it fixes.
 - **Rebase** — note the head before rebasing (`git rev-parse HEAD`); after, the recheck reads
