@@ -241,6 +241,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
         }
         if (pace) d.log(`over the pace gate (${pace}): ${a.overPace}`);
 
+        rec.startedAt = new Date(d.clock.now()).toISOString(); // after any wait: the claim is the start
         if (!d.fs.writeNew(lc, lifecycleText(rec)))
           return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
         undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });

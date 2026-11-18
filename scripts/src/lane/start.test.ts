@@ -847,6 +847,8 @@ describe('lane start: the pace gate', () => {
     expect(t.out()).toMatch(/pace: another start got in first; waiting again/);
     expect(t.out()).toMatch(/lane racer started 0 s ago, wants 120 s between starts; waiting/);
     expect(t.clock.t - T0).toBe(120_000);
+    const rec = JSON.parse(readFileSync(join(w.board, 'lifecycle', `${B}.json`), 'utf8'));
+    expect(rec.startedAt).toBe(new Date(T0 + 120_000).toISOString()); // the claim, not the start of the wait
   });
 
   it('a --wait start that loses the race with no time left exits 75', async () => {

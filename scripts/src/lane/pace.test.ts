@@ -128,6 +128,11 @@ describe('paceLimits', () => {
       }),
     );
     expect(paceLimits(t.d)).toEqual({ ...PACE_DEFAULTS, coresBelow: 6, staleSec: 300 });
+    writeFileSync(
+      join(w.main, 'scripts/board/limits.json'),
+      JSON.stringify({ pace: { psiMemFullMax: 0, minSamples: 0 } }),
+    );
+    expect(paceLimits(t.d)).toEqual({ ...PACE_DEFAULTS, psiMemFullMax: 0 }); // 0 only where it means something
     writeFileSync(join(w.main, 'scripts/board/limits.json'), '{oops');
     expect(paceLimits(t.d)).toEqual(PACE_DEFAULTS);
   });

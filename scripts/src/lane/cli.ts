@@ -33,7 +33,7 @@ import type { Deps, Lanes } from './state.ts';
 export const USAGE = `pnpm lanes <command>   (run from the main checkout; docs/ops/LANES.md)
   start <branch> [--kickoff <file>] [--over-cap "<reason>"] [--wait[=<min>] | --over-pace "<reason>"]
         worktree off origin/main + install + a tmux window running Claude named <branch> (the kickoff its first
-        message) + the board lane. Give it a 600 s timeout: the install is in it (with --wait, add the wait).
+        message) + the board lane. Give it a 600 s timeout: the install is in it (with --wait, run it in the background).
         Refuses (75) while the pace gate is busy: --wait polls up to <min> (default 5, max 30) first.
   end <branch> [--force-abandon "<reason>"]
         merged PR + green main deploy (or the reason) → archive localNotes, remove the worktree, clear the lane,

@@ -55,7 +55,7 @@ export function paceLimits(d: Deps): PaceLimits {
   const out = { ...PACE_DEFAULTS };
   for (const k of Object.keys(out) as (keyof PaceLimits)[]) {
     const v = p[k];
-    if (num(v) && v > 0) out[k] = v;
+    if (num(v) && (v > 0 || (k === 'psiMemFullMax' && v === 0))) out[k] = v; // 0: any memory stall refuses
   }
   return out;
 }
