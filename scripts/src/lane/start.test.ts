@@ -1,8 +1,19 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Answer, Call, World } from './fakes.ts';
-import { boardSession, deps, fail, laneFile, macStats, porcelain, proc, world } from './fakes.ts';
+import {
+  boardSession,
+  deps,
+  fail,
+  laneFile,
+  macStats,
+  pace,
+  porcelain,
+  proc,
+  world,
+} from './fakes.ts';
+import { lastStartText } from './pace.ts';
 import { KICKOFF_PROMPT, claudeLine, start } from './start.ts';
 import type { StartArgs } from './start.ts';
 
@@ -45,6 +56,8 @@ const args = (o: Partial<StartArgs> = {}): StartArgs => ({
   branch: B,
   kickoff: null,
   overCap: null,
+  overPace: null,
+  waitMin: null,
   ...o,
 });
 
@@ -80,6 +93,22 @@ describe('lane start: refusals change nothing', () => {
       { overCap: 'true' },
       [],
       /--over-cap wants a reason/,
+      2,
+      () => {},
+    ],
+    [
+      '--over-pace without a reason',
+      { overPace: 'true' },
+      [],
+      /--over-pace wants a reason/,
+      2,
+      () => {},
+    ],
+    [
+      '--wait with --over-pace',
+      { overPace: 'busy box, hub knows', waitMin: 5 },
+      [],
+      /--wait and --over-pace together: pick one/,
       2,
       () => {},
     ],
@@ -224,7 +253,7 @@ describe('lane start: the nominal run', () => {
       `git worktree add --no-track -b ${B} .claude/worktrees/${B} ${SHA}`,
       'pnpm install',
       `tmux new-window -d -P -F #{window_id}\t#{pane_id} -t $0: -n ${B} -c ${wt}`,
-      `tmux send-keys -t %9 -l -- claude -n ${B} '${KICKOFF_PROMPT}'`,
+      `tmux send-keys -t %9 -l -- claude -n ${B} --autocompact 500000 '${KICKOFF_PROMPT}'`,
       'tmux send-keys -t %9 Enter',
     ]);
     const install = t.calls.find((c) => c.line === 'pnpm install')!;
@@ -267,7 +296,7 @@ describe('lane start: the nominal run', () => {
     expect(await start(t.d, args())).toBe(0);
     expect(mutated(t.calls)[0]).toBe(`git switch --detach ${SHA}`);
     expect(t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1)).toBe(
-      `claude -n ${B}`,
+      `claude -n ${B} --autocompact 500000`,
     );
   });
 
@@ -318,6 +347,7 @@ describe('lane start: the nominal run', () => {
   it('the claude line varies only by the validated branch', () => {
     expect(claudeLine('x', false)).toBe('claude -n x');
     expect(claudeLine('x', true)).toBe(`claude -n x '${KICKOFF_PROMPT}'`);
+    expect(claudeLine('x', false, 250000)).toBe('claude -n x --autocompact 250000');
     expect(KICKOFF_PROMPT).not.toMatch(/'/);
     // The workflow doc isn't loaded on its own (CLAUDE.md → _Feature workflow_): every lane opens it first.
     expect(KICKOFF_PROMPT).toMatch(/^Read docs\/ops\/FEATURE-WORKFLOW\.md first/);
@@ -576,5 +606,328 @@ describe('lane start: the Mac on battery', () => {
       expect(await start(t.d, args())).toBe(0);
       expect(t.out()).not.toMatch(/note: the Mac/);
     }
+  });
+});
+
+describe('lane start: the pace gate', () => {
+  const T0 = Date.parse('2026-10-13T20:00:00Z'); // fakeClock's start
+  const paceAt = (w: World, over: object = {}, now = T0) =>
+    writeFileSync(join(w.board, 'pace.json'), pace(now, over));
+  const HOT_CONTROL = '{"state":"hot","since":1,"held":[]}';
+  const stamp = (w: World, b: string, now: number) =>
+    writeFileSync(join(w.board, 'lane-last-start.json'), lastStartText(b, now));
+
+  it('a calm fresh pace starts and stamps the last start', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    expect(JSON.parse(readFileSync(join(w.board, 'lane-last-start.json'), 'utf8'))).toEqual({
+      v: 1,
+      at: T0 / 1000,
+      branch: B,
+    });
+    expect(t.out()).not.toMatch(/pace/);
+  });
+
+  it.each([
+    ['state hot', { state: 'hot' }, /the container is hot \(pace.json state "hot"\)/],
+    [
+      'cores at 7.5',
+      { avg: { anonMiB: 8000, cores: 7.5, psiCpu: 1 } },
+      /cores avg 7.5, wants under 7.5/,
+    ],
+    [
+      'CPU PSI at 40',
+      { avg: { anonMiB: 8000, cores: 1, psiCpu: 40 } },
+      /CPU PSI avg 40, wants under 40/,
+    ],
+    [
+      'anon at 9000',
+      { avg: { anonMiB: 9000, cores: 1, psiCpu: 1 } },
+      /anon avg 9000 MiB, wants under 9000/,
+    ],
+    ['memory PSI full over 1', { psiMemFull: 2.5 }, /memory PSI full 2.5, wants at most 1/],
+    ['a warming watcher', { samples: 1 }, /the watcher has 1 of 3 samples/],
+    ['a hot pace-control', {}, /the hub marked the box hot \(pace-control.json\)/, HOT_CONTROL],
+    ['a half-written pace-control', {}, /pace-control.json is unreadable/, '{"sta'],
+    ['a stale pace file', { heartbeat: T0 / 1000 - 181 }, /pace.json is 181 s old \(over 180\)/],
+  ] as [string, object, RegExp, string?][])(
+    'refuses on %s with 75 before the lock, nothing changed',
+    async (_, over, msg, control) => {
+      const w = world();
+      paceAt(w, over);
+      if (control !== undefined) writeFileSync(join(w.board, 'pace-control.json'), control);
+      const t = deps(w, script(w));
+      expect(await start(t.d, args())).toBe(75);
+      expect(t.out()).toMatch(msg);
+      expect(t.out()).toMatch(/Retry later, pass --wait, or --over-pace "<reason>"\.$/);
+      expect(t.lock.events).toEqual([]);
+      expect(t.calls.map((c) => c.line)).toEqual([
+        'tmux display -p -t %1 #{session_id} #{pid} #{start_time}',
+      ]);
+      expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+      expect(existsSync(join(w.board, 'lane-last-start.json'))).toBe(false);
+    },
+  );
+
+  it('a high load5 alone is not judged: it counts I/O waits here', async () => {
+    const w = world();
+    claudeSession(w);
+    paceAt(w, { load5: 25 });
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+  });
+
+  it('refuses with no pace file, naming the watcher', async () => {
+    const w = world();
+    const t = deps(w, script(w));
+    rmSync(join(w.board, 'pace.json'));
+    expect(await start(t.d, args())).toBe(75);
+    expect(t.out()).toMatch(
+      /no pace.json in .*board: the watcher is not running, restart .*board\/pace-watch.sh/,
+    );
+    expect(mutated(t.calls)).toEqual([]);
+  });
+
+  it('a second start inside the spacing refuses; at the spacing it passes the gate', async () => {
+    const w = world();
+    stamp(w, 'other-lane', T0 - 45_000);
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(75);
+    expect(t.out()).toMatch(/lane other-lane started 45 s ago, wants 120 s between starts/);
+
+    stamp(w, 'other-lane', T0 - 120_000);
+    claudeSession(w);
+    const t2 = deps(w, script(w));
+    expect(await start(t2.d, args())).toBe(0);
+  });
+
+  it('the in-lock re-check refuses a start that raced past the first check', async () => {
+    const w = world();
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'git fetch origin',
+          () => {
+            stamp(w, 'racer', T0); // another start claimed while this one fetched
+            return '';
+          },
+        ],
+      ]),
+    );
+    expect(await start(t.d, args())).toBe(75);
+    expect(t.out()).toMatch(
+      /pace: turned busy during the start \(lane racer started 0 s ago, wants 120 s between starts\); nothing changed, rerun/,
+    );
+    expect(mutated(t.calls)).toEqual([]);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+  });
+
+  it('--over-pace goes past a missing file and the spacing, records and logs why, and still stamps', async () => {
+    const w = world();
+    claudeSession(w);
+    stamp(w, 'other-lane', T0 - 10_000);
+    const t = deps(w, script(w));
+    rmSync(join(w.board, 'pace.json'));
+    expect(await start(t.d, args({ overPace: 'hub: watcher restarting' }))).toBe(0);
+    expect(t.out()).toMatch(
+      /over the pace gate \(no pace.json in .*; lane other-lane started 10 s ago.*\): hub: watcher restarting/,
+    );
+    const rec = JSON.parse(readFileSync(join(w.board, 'lifecycle', `${B}.json`), 'utf8'));
+    expect(rec.overPace).toBe('hub: watcher restarting');
+    expect(JSON.parse(readFileSync(join(w.board, 'lane-last-start.json'), 'utf8')).branch).toBe(B);
+  });
+
+  it('--over-pace on a hot box goes on', async () => {
+    const w = world();
+    claudeSession(w);
+    paceAt(w, { state: 'hot', avg: { anonMiB: 9500, cores: 1, psiCpu: 1 } });
+    const t = deps(w, script(w));
+    expect(await start(t.d, args({ overPace: 'the maintainer said go' }))).toBe(0);
+    expect(t.out()).toMatch(
+      /over the pace gate \(the container is hot .*; anon avg 9500 MiB, wants under 9000\)/,
+    );
+  });
+
+  it('--wait starts once the pace clears, taking the lock only after', async () => {
+    const w = world();
+    claudeSession(w);
+    paceAt(w, { avg: { anonMiB: 8000, cores: 8, psiCpu: 10 } });
+    const t = deps(w, script(w));
+    let sleeps = 0;
+    t.clock.sleep = async (ms) => {
+      t.clock.t += ms;
+      if (++sleeps === 3)
+        paceAt(w, {}, t.clock.t); // the watcher's next calm tick
+      else if (sleeps < 3) paceAt(w, { avg: { anonMiB: 8000, cores: 8, psiCpu: 10 } }, t.clock.t);
+    };
+    expect(await start(t.d, args({ waitMin: 5 }))).toBe(0);
+    expect(sleeps).toBe(3);
+    expect(t.out().match(/waiting \(up to 5 min\)/g)).toHaveLength(1); // logged once, not per poll
+    expect(t.out()).toMatch(/^pace: cores avg 8, wants under 7.5; waiting \(up to 5 min\)$/m);
+    expect(t.lock.events[0]).toBe('lock after 1'); // only the tmux display ran before it
+  });
+
+  it('--wait gives up with 75 when the pace stays busy, naming the last reason', async () => {
+    const w = world();
+    paceAt(w, { state: 'hot' });
+    const t = deps(w, script(w));
+    t.clock.sleep = async (ms) => {
+      t.clock.t += ms;
+      paceAt(w, { state: 'hot' }, t.clock.t);
+    };
+    expect(await start(t.d, args({ waitMin: 5 }))).toBe(75);
+    expect(t.clock.t - T0).toBe(5 * 60_000);
+    expect(t.out()).toMatch(/lane: pace: still busy after 5 min: the container is hot/);
+    expect(t.lock.events).toEqual([]);
+    expect(mutated(t.calls)).toEqual([]);
+  });
+
+  it('--wait keeps waiting on a stale file, and logs again when the reason changes', async () => {
+    const w = world();
+    paceAt(w, { heartbeat: T0 / 1000 - 600 });
+    const t = deps(w, script(w));
+    let sleeps = 0;
+    t.clock.sleep = async (ms) => {
+      t.clock.t += ms;
+      if (++sleeps === 4) paceAt(w, { avg: { anonMiB: 8000, cores: 8, psiCpu: 10 } }, t.clock.t); // the watcher came back, still busy
+      if (sleeps > 4) paceAt(w, { avg: { anonMiB: 8000, cores: 8, psiCpu: 10 } }, t.clock.t);
+    };
+    expect(await start(t.d, args({ waitMin: 3 }))).toBe(75);
+    expect(sleeps).toBe(6);
+    expect(t.out().match(/waiting/g)).toHaveLength(2);
+    expect(t.out()).toMatch(/still busy after 3 min: cores avg 8, wants under 7.5$/);
+  });
+
+  it('the in-lock re-check also catches the hub marking the box hot mid-start', async () => {
+    const w = world();
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'git fetch origin',
+          () => {
+            writeFileSync(join(w.board, 'pace-control.json'), HOT_CONTROL);
+            return '';
+          },
+        ],
+      ]),
+    );
+    expect(await start(t.d, args())).toBe(75);
+    expect(t.out()).toMatch(
+      /pace: turned busy during the start \(the hub marked the box hot \(pace-control.json\)\); nothing changed, rerun with --wait$/,
+    );
+    expect(mutated(t.calls)).toEqual([]);
+  });
+
+  it('a --wait start that loses the in-lock race waits again, then starts', async () => {
+    const w = world();
+    claudeSession(w);
+    let fetches = 0;
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'git fetch origin',
+          () => {
+            if (++fetches === 1) stamp(w, 'racer', t.clock.now()); // another start claimed meanwhile
+            return '';
+          },
+        ],
+      ]),
+    );
+    t.clock.sleep = async (ms) => {
+      t.clock.t += ms;
+      paceAt(w, {}, t.clock.t);
+    };
+    expect(await start(t.d, args({ waitMin: 5 }))).toBe(0);
+    expect(fetches).toBe(2);
+    expect(t.out()).toMatch(/pace: another start got in first; waiting again/);
+    expect(t.out()).toMatch(/lane racer started 0 s ago, wants 120 s between starts; waiting/);
+    expect(t.clock.t - T0).toBe(120_000);
+    const rec = JSON.parse(readFileSync(join(w.board, 'lifecycle', `${B}.json`), 'utf8'));
+    expect(rec.startedAt).toBe(new Date(T0 + 120_000).toISOString()); // the claim, not the start of the wait
+  });
+
+  it('a --wait start that loses the race with no time left exits 75', async () => {
+    const w = world();
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'git fetch origin',
+          () => {
+            t.clock.t += 60_000; // a slow fetch spends the whole wait
+            paceAt(w, {}, t.clock.t);
+            stamp(w, 'racer', t.clock.t);
+            return '';
+          },
+        ],
+      ]),
+    );
+    expect(await start(t.d, args({ waitMin: 1 }))).toBe(75);
+    expect(t.out()).toMatch(/lane: pace: still busy after 1 min: lane racer started 0 s ago/);
+    expect(mutated(t.calls)).toEqual([]);
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(false);
+  });
+
+  it('an unwritable start stamp only warns: the start goes on', async () => {
+    const w = world();
+    claudeSession(w);
+    mkdirSync(join(w.board, 'lane-last-start.json')); // a directory where the file goes
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(
+      /warning: start time not recorded \(the spacing won't see this start\)/,
+    );
+    expect(existsSync(join(w.board, 'lifecycle', `${B}.json`))).toBe(true);
+  });
+
+  it('a rolled-back start still counts for spacing', async () => {
+    const w = world();
+    const t = deps(w, script(w, [['pnpm install', fail('ENOSPC')]]));
+    expect(await start(t.d, args())).toBe(1);
+    expect(t.out()).toMatch(/rolled back: nothing left behind/);
+    expect(JSON.parse(readFileSync(join(w.board, 'lane-last-start.json'), 'utf8')).branch).toBe(B);
+  });
+});
+
+describe('lane start: the auto-compact window', () => {
+  const sent = async (lanes: object | null) => {
+    const w = world();
+    claudeSession(w);
+    if (lanes) writeFileSync(join(w.main, 'scripts/board/limits.json'), JSON.stringify({ lanes }));
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    return {
+      line: t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1),
+      out: t.out(),
+    };
+  };
+
+  it('limits.json sets it, 0 turns it off, absent is 500000', async () => {
+    expect((await sent({ autoCompactWindow: 300000 })).line).toBe(
+      `claude -n ${B} --autocompact 300000`,
+    );
+    expect((await sent({ autoCompactWindow: 0 })).line).toBe(`claude -n ${B}`);
+    expect((await sent(null)).line).toBe(`claude -n ${B} --autocompact 500000`);
+  });
+
+  it.each([[99999], [1000001], [250000.5], ['500k'], ['1; rm x'], [null]])(
+    'a bad value %j is noted and defaulted, never typed',
+    async (v) => {
+      const r = await sent({ autoCompactWindow: v });
+      expect(r.line).toBe(`claude -n ${B} --autocompact 500000`);
+      expect(r.out).toMatch(
+        /note: limits.json lanes.autoCompactWindow .* is not 0 or 100000-1000000 tokens; using 500000/,
+      );
+    },
+  );
+
+  it('the tracked limits.json sets 500000', () => {
+    const l = JSON.parse(readFileSync(new URL('../../board/limits.json', import.meta.url), 'utf8'));
+    expect(l.lanes.autoCompactWindow).toBe(500000);
   });
 });

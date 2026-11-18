@@ -160,6 +160,27 @@ export function laneCap(d: Deps): number {
   }
 }
 
+// The lane's `claude --autocompact <tokens>`, from limits.json `lanes.autoCompactWindow`: 0 turns it off, absent is the
+// default, anything else outside 100k-1M is noted and defaulted (docs/ops/LANES.md → Start step 8).
+export const DEFAULT_COMPACT_WINDOW = 500_000; // about half a 1M window (the maintainer, 2026-11-17)
+export function compactWindow(d: Deps): number | null {
+  let v: unknown;
+  try {
+    v = JSON.parse(d.fs.read(`${d.env.mainRoot}/scripts/board/limits.json`) ?? '{}')?.lanes
+      ?.autoCompactWindow;
+  } catch {
+    v = undefined;
+  }
+  if (v === undefined) return DEFAULT_COMPACT_WINDOW;
+  if (v === 0) return null;
+  if (Number.isInteger(v) && (v as number) >= 100_000 && (v as number) <= 1_000_000)
+    return v as number;
+  d.log(
+    `note: limits.json lanes.autoCompactWindow ${JSON.stringify(v)} is not 0 or 100000-1000000 tokens; using ${DEFAULT_COMPACT_WINDOW}`,
+  );
+  return DEFAULT_COMPACT_WINDOW;
+}
+
 // The Mac's power, read through the lane seam (F120): `lanes status` prints its line, `lanes start` the ≤ 3 advice.
 export function macRead(d: Deps): MacRead {
   return readMacStats(`${d.env.boardDir}/mac-stats.json`, d.clock.now(), (p) => {
@@ -184,6 +205,7 @@ export type Lifecycle = {
   baseSha: string | null;
   kickoff: string | null;
   overCap: string | null;
+  overPace?: string | null; // absent in records written before the pace gate
   archive: string | null; // where `lanes end` archived localNotes, so a rerun writes there
   startedAt: string;
 };

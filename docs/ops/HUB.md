@@ -135,7 +135,11 @@ no script writes it: the Mac never runs anything from the shared folder.
 
 - **Lanes.** The hub starts each lane from `/workspace` with its kickoff file:
   `pnpm lanes start <branch> --kickoff /workspace/localNotes/kickoffs/<branch>.md`. It keeps active lanes under the
-  cap (`limits.json` `lanes.maxActive`); a refused start names who is active.
+  cap (`limits.json` `lanes.maxActive`); a refused start names who is active. Start enforces the pace rule itself
+  (`docs/ops/LANES.md` → _The pace gate_), so the hub never reads `pace.json` by hand. After any watcher exit, restart
+  the watcher (in the background) before the next start; run a `--wait` start in the background too. `--over-pace
+"<reason>"` is the hub's own call only to start past a dead or missing watcher it is restarting; past a busy box it
+  needs the maintainer's word.
 - **Lanes on battery** (F120). With the Mac on battery under 30% or in Low Power Mode, keep **at most 3 lanes**
   running: a throttled Mac stretches every gate (2026-11-17's low-power window: typecheck ×1.8, lint ×2), so a fourth
   lane costs everyone time. Read it from the `mac:` line of `pnpm lanes status` or `board.sh status` (it says

@@ -9,6 +9,7 @@ import { MainBusy } from '../board/main-lock.ts';
 import { fakeClock } from '../bot/fakes.ts';
 import { realFs } from './archive.ts';
 import { lanesAt } from './cli.ts';
+import { paceFile } from './pace.ts';
 import type { Deps } from './state.ts';
 
 export type Call = {
@@ -122,6 +123,8 @@ export function deps(w: World, answers: [string, Answer][], over: Partial<Deps['
       }
     },
   };
+  // a calm, fresh pace file unless the test wrote its own: every start passes the pace gate by default
+  if (!realFs.exists(paceFile(d.env))) writeFileSync(paceFile(d.env), pace(clock.now()));
   return { d, calls, logs, clock, sync, lock, out: () => logs.join('\n') };
 }
 
@@ -193,4 +196,17 @@ export const macStats = (now: number, power: object = {}) =>
       },
       ...power,
     },
+  });
+
+// pace.json as the hub's watcher writes it (pace-watch.sh), calm and fresh at `now`; `over` replaces top-level fields.
+export const pace = (now: number, over: object = {}) =>
+  JSON.stringify({
+    state: 'calm',
+    heartbeat: Math.floor(now / 1000),
+    pid: 1,
+    samples: 5,
+    avg: { anonMiB: 8000, cores: 4.5, psiCpu: 10 },
+    psiMemFull: 0,
+    load5: 6,
+    ...over,
   });

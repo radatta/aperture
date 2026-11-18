@@ -2,9 +2,14 @@
 // cliGuard first, before any token, git, network or stdin read: `deploy-dev --help` once ran a real dev deploy.
 // The caller passes its own arg parser, so a command is found exactly as its main() would find it.
 
-// A command's allowed `--flags` — `flags` take a value, `bare` are on/off — and how many positionals may follow it
-// (and its sub). null: it parses its own.
-export type Spec = { flags?: readonly string[]; bare?: readonly string[]; args?: number } | null;
+// A command's allowed `--flags` — `flags` take a value, `bare` are on/off, `optional` take one or not (`--wait`,
+// `--wait=10`; the command validates it) — and how many positionals may follow it (and its sub). null: it parses its own.
+export type Spec = {
+  flags?: readonly string[];
+  bare?: readonly string[];
+  optional?: readonly string[];
+  args?: number;
+} | null;
 export type Parse = (argv: string[]) => { positional: string[]; flags: Record<string, string> };
 export interface Verdict {
   code: number; // 0 help, 2 refused
@@ -69,7 +74,8 @@ export function cliGuard(
   if (!spec) return null;
   const valued = spec.flags ?? [];
   const bare = spec.bare ?? [];
-  const bad = Object.keys(flags).filter((f) => !valued.includes(f) && !bare.includes(f));
+  const known = [...valued, ...bare, ...(spec.optional ?? [])];
+  const bad = Object.keys(flags).filter((f) => !known.includes(f));
   if (bad.length) return refuse(`${key}: unknown flag ${bad.map((f) => `--${f}`).join(' ')}`);
   // parseArgs lets a bare flag swallow the next word (`--after-rebase main`) and leaves a value flag 'true'
   const swallowed = bare.filter((f) => f in flags && flags[f] !== 'true');

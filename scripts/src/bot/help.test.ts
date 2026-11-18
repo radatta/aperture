@@ -91,6 +91,15 @@ describe('cliGuard: refusals', () => {
     expect(guard('frob', '--x')).toBeNull();
   });
 
+  it('an optional flag passes bare or valued, and a swallowed positional is left to the command', () => {
+    const t = { go: { optional: ['wait'], args: 1 } };
+    expect(cliGuard(['go', 'x', '--wait'], USAGE, t, parseArgs)).toBeNull();
+    expect(cliGuard(['go', 'x', '--wait=10'], USAGE, t, parseArgs)).toBeNull();
+    expect(cliGuard(['go', 'x', '--wait', '10'], USAGE, t, parseArgs)).toBeNull();
+    expect(cliGuard(['go', '--wait', 'x'], USAGE, t, parseArgs)).toBeNull();
+    expect(cliGuard(['go', 'x', '--waiting'], USAGE, t, parseArgs)?.code).toBe(2);
+  });
+
   it('a null spec parses its own arguments', () => {
     expect(cliGuard(['own', '--anything', 'x'], USAGE, { own: null }, parseArgs)).toBeNull();
   });

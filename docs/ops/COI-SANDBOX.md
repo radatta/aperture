@@ -919,9 +919,9 @@ sessions by them, and restore matches on them.
   - `Ctrl-a g` — the hub's window, `dispatch`, by name: numbers shift as windows close (`renumber-windows`).
   - `Ctrl-a j` — fuzzy-jump to any window by name with `fzf` (`au3` finds `auto-3`; Esc cancels).
 - **Window restore** (`tmux-restore.sh`): `save` snapshots each window running Claude — name, session id, cwd,
-  and `--dangerously-skip-permissions` if it had it — to `localNotes/tmux-sessions.tsv` (gitignored: it holds
+  and the `--dangerously-skip-permissions` and `--autocompact <n>` flags if it had them — to `localNotes/tmux-sessions.tsv` (gitignored: it holds
   session ids); with no Claude windows it keeps the last snapshot and exits 1. Restore reopens each missing
-  window by name with `claude --resume <id> -n <name>`, 3 s apart, and skips windows that already exist. Run it
+  window by name with `claude --resume <id> -n <name>` and those flags, 3 s apart, and skips windows that already exist. Run it
   inside the COI session (`coi attach`), which it fills; outside tmux it builds a separate `aperture` session
   (plus a `_boot` window) that `coi attach` won't find.
   ```bash

@@ -4,6 +4,7 @@
 import {
   EXIT,
   activeLanes,
+  compactWindow,
   describeActive,
   macRead,
   expectedGitdir,
@@ -22,6 +23,7 @@ import type { Deps, Lifecycle } from './state.ts';
 import { MainBusy } from '../board/main-lock.ts';
 import { LANES_THROTTLED, powerSummary } from '../board/tower/health.ts';
 import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
+import { lastStartFile, lastStartText, paceBlock, waitForPace } from './pace.ts';
 
 export const KICKOFF_MAX = 256 * 1024;
 export const CONFIRM_MS = 20_000;
@@ -34,6 +36,8 @@ export type StartArgs = {
   branch: string | undefined;
   kickoff: string | null;
   overCap: string | null;
+  overPace: string | null;
+  waitMin: number | null; // --wait: minutes to wait for the pace gate (cli.ts parseWait)
 };
 
 const refuse = (d: Deps, msg: string, code: number = EXIT.refused) => {
@@ -41,9 +45,12 @@ const refuse = (d: Deps, msg: string, code: number = EXIT.refused) => {
   return code;
 };
 
-// The shell line typed into the new window: only the validated branch varies.
-export const claudeLine = (b: string, kickoff: boolean) =>
-  `claude -n ${b}` + (kickoff ? ` '${KICKOFF_PROMPT}'` : '');
+// The shell line typed into the new window: only the validated branch and the integer window vary.
+export const claudeLine = (b: string, kickoff: boolean, window: number | null = null) =>
+  `claude -n ${b}` +
+  // a flag, not the env var: the PreCompact hook's handoff fork would inherit an env var and compact itself
+  (window === null ? '' : ` --autocompact ${window}`) +
+  (kickoff ? ` '${KICKOFF_PROMPT}'` : '');
 
 export async function start(d: Deps, a: StartArgs): Promise<number> {
   const e = d.env;
@@ -58,6 +65,10 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
   if (a.overCap !== null && (a.overCap === 'true' || !a.overCap.trim()))
     return refuse(d, '--over-cap wants a reason', EXIT.usage);
+  if (a.overPace !== null && (a.overPace === 'true' || !a.overPace.trim()))
+    return refuse(d, '--over-pace wants a reason', EXIT.usage);
+  if (a.overPace !== null && a.waitMin !== null)
+    return refuse(d, '--wait and --over-pace together: pick one', EXIT.usage);
   if (e.cwdTop !== e.mainRoot)
     return refuse(d, `run it from ${e.mainRoot}: the lifecycle always runs main's code`);
 
@@ -92,6 +103,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
     baseSha: null,
     kickoff: a.kickoff,
     overCap: a.overCap,
+    overPace: a.overPace,
     archive: null,
     startedAt: new Date(d.clock.now()).toISOString(),
   };
@@ -123,137 +135,179 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   // `lanes end` finishing) can't move HEAD or refs in between. Busy past its wait is a refusal: nothing changed.
   let base = '';
   let early: number | null;
-  try {
-    early = d.lock((): number | null => {
-      const status = d.run('git', ['status', '--porcelain'], { cwd: e.mainRoot });
-      const tracked = status.split('\n').filter((l) => l && !l.startsWith('??'));
-      if (tracked.length)
+  const RACED = -1; // lost the in-lock pace check with wait time left: wait again
+  const until = a.waitMin === null ? null : d.clock.now() + a.waitMin * 60_000;
+  const stillBusy = (why: string) =>
+    refuse(d, `pace: still busy after ${a.waitMin} min: ${why}`, EXIT.later);
+  for (;;) {
+    // The pace gate (pace.ts), before the lock so a wait never holds it; checked again inside the lock.
+    if (a.overPace === null) {
+      const why = until === null ? paceBlock(d) : await waitForPace(d, until, a.waitMin!);
+      if (why && until === null)
         return refuse(
           d,
-          `the main checkout has tracked changes:\n  ${tracked.slice(0, 10).join('\n  ')}`,
-        );
-      if (tryRun(d, 'git', ['symbolic-ref', '-q', 'HEAD'], e.mainRoot) !== null)
-        return refuse(d, `the main checkout is on a branch; it stays detached at origin/main`);
-      const untracked = status.split('\n').filter((l) => l.startsWith('??'));
-      if (untracked.length)
-        d.log(`note: untracked in the main checkout (left alone): ${untracked.length} path(s)`);
-
-      try {
-        d.run('git', ['fetch', 'origin'], { cwd: e.mainRoot, timeoutMs: FETCH_TIMEOUT_MS });
-      } catch (err) {
-        return refuse(
-          d,
-          `git fetch failed (nothing changed): ${(err as Error).message}`,
-          EXIT.failed,
-        );
-      }
-      if (
-        tryRun(d, 'git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], e.mainRoot) !==
-        null
-      )
-        return refuse(d, `branch ${b} already exists (local)`);
-      let remote: string;
-      try {
-        remote = d
-          .run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${b}`], {
-            cwd: e.mainRoot,
-            timeoutMs: LS_REMOTE_TIMEOUT_MS,
-          })
-          .trim();
-      } catch (err) {
-        return refuse(
-          d,
-          `git ls-remote failed (nothing changed): ${(err as Error).message}`,
-          EXIT.failed,
-        );
-      }
-      if (remote) return refuse(d, `branch ${b} already exists (on origin)`);
-      const trees = parseWorktrees(
-        d.run('git', ['worktree', 'list', '--porcelain'], { cwd: e.mainRoot }),
-      );
-      if (d.fs.exists(wt) || trees.some((t) => t.path === wt))
-        return refuse(d, `.claude/worktrees/${b} already exists`);
-      if (d.fs.exists(lifecyclePath(e, b)))
-        return refuse(d, `a lifecycle record for ${b} exists: pnpm lanes end ${b} first`);
-      // Tab-separated: a window name may hold spaces.
-      const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}']);
-      const same = windows.split('\n').find((l) => l.slice(l.indexOf('\t') + 1) === b);
-      if (same)
-        return refuse(
-          d,
-          `a window named ${b} exists (${same.split('\t')[0]}): names are addresses`,
-        );
-      const active = activeLanes(d, trees);
-      const cap = laneCap(d);
-      if (active.length >= cap && a.overCap === null)
-        return refuse(
-          d,
-          `${active.length} of ${cap} lanes active: ${describeActive(active)}. End one (pnpm lanes end), park one ` +
-            `(pnpm board lane parked), or pass --over-cap "<reason>".`,
+          `pace: ${why}. Retry later, pass --wait, or --over-pace "<reason>".`,
           EXIT.later,
         );
-      if (active.length >= cap) d.log(`over the cap (${active.length} of ${cap}): ${a.overCap}`);
-      // advice, never a refusal: the hub decides (docs/ops/HUB.md → lanes on battery)
-      const advice = powerSummary(macRead(d)).advice;
-      if (advice && active.length >= LANES_THROTTLED)
-        d.log(
-          `note: the Mac is on battery or Low Power Mode, ${active.length} lanes active already: suggest ${advice}`,
-        );
+      if (why) return stillBusy(why);
+    }
+    try {
+      early = d.lock((): number | null => {
+        const status = d.run('git', ['status', '--porcelain'], { cwd: e.mainRoot });
+        const tracked = status.split('\n').filter((l) => l && !l.startsWith('??'));
+        if (tracked.length)
+          return refuse(
+            d,
+            `the main checkout has tracked changes:\n  ${tracked.slice(0, 10).join('\n  ')}`,
+          );
+        if (tryRun(d, 'git', ['symbolic-ref', '-q', 'HEAD'], e.mainRoot) !== null)
+          return refuse(d, `the main checkout is on a branch; it stays detached at origin/main`);
+        const untracked = status.split('\n').filter((l) => l.startsWith('??'));
+        if (untracked.length)
+          d.log(`note: untracked in the main checkout (left alone): ${untracked.length} path(s)`);
 
-      if (!d.fs.writeNew(lc, lifecycleText(rec)))
-        return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
-      undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });
+        try {
+          d.run('git', ['fetch', 'origin'], { cwd: e.mainRoot, timeoutMs: FETCH_TIMEOUT_MS });
+        } catch (err) {
+          return refuse(
+            d,
+            `git fetch failed (nothing changed): ${(err as Error).message}`,
+            EXIT.failed,
+          );
+        }
+        if (
+          tryRun(d, 'git', ['show-ref', '--verify', '--quiet', `refs/heads/${b}`], e.mainRoot) !==
+          null
+        )
+          return refuse(d, `branch ${b} already exists (local)`);
+        let remote: string;
+        try {
+          remote = d
+            .run('git', ['ls-remote', '--heads', 'origin', `refs/heads/${b}`], {
+              cwd: e.mainRoot,
+              timeoutMs: LS_REMOTE_TIMEOUT_MS,
+            })
+            .trim();
+        } catch (err) {
+          return refuse(
+            d,
+            `git ls-remote failed (nothing changed): ${(err as Error).message}`,
+            EXIT.failed,
+          );
+        }
+        if (remote) return refuse(d, `branch ${b} already exists (on origin)`);
+        const trees = parseWorktrees(
+          d.run('git', ['worktree', 'list', '--porcelain'], { cwd: e.mainRoot }),
+        );
+        if (d.fs.exists(wt) || trees.some((t) => t.path === wt))
+          return refuse(d, `.claude/worktrees/${b} already exists`);
+        if (d.fs.exists(lifecyclePath(e, b)))
+          return refuse(d, `a lifecycle record for ${b} exists: pnpm lanes end ${b} first`);
+        // Tab-separated: a window name may hold spaces.
+        const windows = d.run('tmux', ['list-windows', '-a', '-F', '#{window_id}\t#{window_name}']);
+        const same = windows.split('\n').find((l) => l.slice(l.indexOf('\t') + 1) === b);
+        if (same)
+          return refuse(
+            d,
+            `a window named ${b} exists (${same.split('\t')[0]}): names are addresses`,
+          );
+        const active = activeLanes(d, trees);
+        const cap = laneCap(d);
+        if (active.length >= cap && a.overCap === null)
+          return refuse(
+            d,
+            `${active.length} of ${cap} lanes active: ${describeActive(active)}. End one (pnpm lanes end), park one ` +
+              `(pnpm board lane parked), or pass --over-cap "<reason>".`,
+            EXIT.later,
+          );
+        if (active.length >= cap) d.log(`over the cap (${active.length} of ${cap}): ${a.overCap}`);
+        // advice, never a refusal: the hub decides (docs/ops/HUB.md → lanes on battery)
+        const advice = powerSummary(macRead(d)).advice;
+        if (advice && active.length >= LANES_THROTTLED)
+          d.log(
+            `note: the Mac is on battery or Low Power Mode, ${active.length} lanes active already: suggest ${advice}`,
+          );
 
-      // One sha for every step: another session's fetch moving origin/main mid-start can't split the base.
-      try {
-        base = d.run('git', ['rev-parse', 'origin/main'], { cwd: e.mainRoot });
-        rec.baseSha = base;
-        if (d.run('git', ['rev-parse', 'HEAD'], { cwd: e.mainRoot }) !== base)
-          d.run('git', ['switch', '--detach', base], { cwd: e.mainRoot });
-      } catch (err) {
-        return rollback(
-          `could not detach the main checkout at origin/main: ${(err as Error).message}`,
-        );
-      }
-      try {
-        d.run('git', ['worktree', 'add', '--no-track', '-b', b, `.claude/worktrees/${b}`, base], {
-          cwd: e.mainRoot,
-        });
-      } catch (err) {
-        // git makes the -b branch before the checkout and keeps it when the checkout fails: take it back if it is ours.
-        const made = tryRun(
-          d,
-          'git',
-          ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`],
-          e.mainRoot,
-        );
-        if (made === base)
-          undo.push({
-            what: `branch ${b}`,
-            fn: () => {
-              d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot }); // repo-wide, but only drops dead admin dirs
-              d.run('git', ['branch', '-d', b], { cwd: e.mainRoot });
-            },
+        // The authoritative pace check: another start may have stamped, or the box turned hot, since the one above.
+        const pace = paceBlock(d);
+        if (pace && a.overPace === null) {
+          if (until === null)
+            return refuse(
+              d,
+              `pace: turned busy during the start (${pace}); nothing changed, rerun with --wait`,
+              EXIT.later,
+            );
+          return d.clock.now() < until ? RACED : stillBusy(pace);
+        }
+        if (pace) d.log(`over the pace gate (${pace}): ${a.overPace}`);
+
+        rec.startedAt = new Date(d.clock.now()).toISOString(); // after any wait: the claim is the start
+        if (!d.fs.writeNew(lc, lifecycleText(rec)))
+          return refuse(d, `a lifecycle record for ${b} appeared meanwhile: another start?`);
+        undo.push({ what: `lifecycle record ${lc}`, fn: () => d.fs.rm(lc) });
+        // Kept on a rollback: the spacing counts every start that got this far.
+        try {
+          d.fs.write(lastStartFile(e), lastStartText(b, d.clock.now()));
+        } catch (err) {
+          // spacing is advisory: an unwritable board dir must not block every start, --over-pace included
+          d.log(
+            `warning: start time not recorded (the spacing won't see this start): ${(err as Error).message}`,
+          );
+        }
+
+        // One sha for every step: another session's fetch moving origin/main mid-start can't split the base.
+        try {
+          base = d.run('git', ['rev-parse', 'origin/main'], { cwd: e.mainRoot });
+          rec.baseSha = base;
+          if (d.run('git', ['rev-parse', 'HEAD'], { cwd: e.mainRoot }) !== base)
+            d.run('git', ['switch', '--detach', base], { cwd: e.mainRoot });
+        } catch (err) {
+          return rollback(
+            `could not detach the main checkout at origin/main: ${(err as Error).message}`,
+          );
+        }
+        try {
+          d.run('git', ['worktree', 'add', '--no-track', '-b', b, `.claude/worktrees/${b}`, base], {
+            cwd: e.mainRoot,
           });
-        return rollback(`worktree add failed: ${(err as Error).message}`);
-      }
-      // The safe delete: the branch sits at the main checkout's HEAD, so -d never refuses (and never loses work).
-      undo.push({
-        what: `branch ${b}`,
-        fn: () => d.run('git', ['branch', '-d', b], { cwd: e.mainRoot }),
-      });
-      undo.push({
-        what: `worktree ${wt}`,
-        fn: () =>
-          d.run('git', ['worktree', 'remove', `.claude/worktrees/${b}`], { cwd: e.mainRoot }),
-      });
+        } catch (err) {
+          // git makes the -b branch before the checkout and keeps it when the checkout fails: take it back if it is ours.
+          const made = tryRun(
+            d,
+            'git',
+            ['rev-parse', '--verify', '--quiet', `refs/heads/${b}`],
+            e.mainRoot,
+          );
+          if (made === base)
+            undo.push({
+              what: `branch ${b}`,
+              fn: () => {
+                d.run('git', ['worktree', 'prune'], { cwd: e.mainRoot }); // repo-wide, but only drops dead admin dirs
+                d.run('git', ['branch', '-d', b], { cwd: e.mainRoot });
+              },
+            });
+          return rollback(`worktree add failed: ${(err as Error).message}`);
+        }
+        // The safe delete: the branch sits at the main checkout's HEAD, so -d never refuses (and never loses work).
+        undo.push({
+          what: `branch ${b}`,
+          fn: () => d.run('git', ['branch', '-d', b], { cwd: e.mainRoot }),
+        });
+        undo.push({
+          what: `worktree ${wt}`,
+          fn: () =>
+            d.run('git', ['worktree', 'remove', `.claude/worktrees/${b}`], { cwd: e.mainRoot }),
+        });
 
-      return null;
-    });
-  } catch (err) {
-    if (err instanceof MainBusy)
-      return refuse(d, `${err.message} (nothing changed; retry)`, EXIT.later);
-    throw err;
+        return null;
+      });
+    } catch (err) {
+      if (err instanceof MainBusy)
+        return refuse(d, `${err.message} (nothing changed; retry)`, EXIT.later);
+      throw err;
+    }
+    if (early !== RACED) break;
+    d.log('pace: another start got in first; waiting again');
   }
   if (early !== null) return early;
 
@@ -312,7 +366,8 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
 
   try {
-    d.run('tmux', ['send-keys', '-t', paneId, '-l', '--', claudeLine(b, kickoff !== null)]);
+    const line = claudeLine(b, kickoff !== null, compactWindow(d));
+    d.run('tmux', ['send-keys', '-t', paneId, '-l', '--', line]);
     d.run('tmux', ['send-keys', '-t', paneId, 'Enter']);
   } catch (err) {
     return rollback(`tmux send-keys failed: ${(err as Error).message}`);

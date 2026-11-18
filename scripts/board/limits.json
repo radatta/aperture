@@ -2,7 +2,16 @@
   "v": 1,
   "enforce": true,
   "concurrency": { "test": 2 },
-  "lanes": { "maxActive": 5 },
+  "lanes": { "maxActive": 5, "autoCompactWindow": 500000 },
+  "pace": {
+    "coresBelow": 7.5,
+    "psiCpuBelow": 40,
+    "anonMiBBelow": 9000,
+    "psiMemFullMax": 1,
+    "minSamples": 3,
+    "spacingSec": 120,
+    "staleSec": 180
+  },
   "measuredAt": "2026-10-14T02:52:03Z",
   "measuredLimits": { "pidsMax": 4096, "highMiB": 18432 },
   "container": {

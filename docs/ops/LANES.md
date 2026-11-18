@@ -6,7 +6,7 @@ window, all named after the branch. It is born at kickoff with `pnpm lanes start
 `scripts/src/lane/`.
 
 ```
-pnpm lanes start <branch> [--kickoff <file>] [--over-cap "<reason>"]
+pnpm lanes start <branch> [--kickoff <file>] [--over-cap "<reason>"] [--wait[=<min>] | --over-pace "<reason>"]
 pnpm lanes end <branch> [--force-abandon "<reason>"]
 pnpm lanes status
 ```
@@ -17,7 +17,7 @@ Exit codes:
 - 1: failed midway (says what was rolled back and what is left), or a failed fetch or GitHub read (nothing changed)
 - 2: usage or a bad name
 - 3: refused, with nothing changed
-- 75: refused for now (cap full, deploy still running, the main checkout busy): wait or act, then rerun
+- 75: refused for now (cap full, the pace gate busy, deploy still running, the main checkout busy): wait or act, then rerun
 
 `status` prints the active lanes against the cap, then the Mac's `mac:` power line (battery, Low Power Mode,
 thermal; `docs/ops/HUB.md` → _Lanes on battery_).
@@ -39,9 +39,46 @@ It refuses, changing nothing, on any of these:
 - a branch of that name, locally or on origin
 - an existing worktree path or lifecycle record
 - a window of that name
+- **the pace gate** (exit 75): the container is busy, the pace file is missing or stale, or a lane started too
+  recently (below)
 - **the cap** (exit 75): it names every active lane and its phase
 - **the main checkout busy** (exit 75): another `lanes start` or a sync-main (a `lanes end` finishing, or
   `pnpm board sync-main`) held the main-checkout lock past its 120 s wait (below)
+
+**The pace gate.** Before the main-checkout lock, start reads `<board>/pace.json`, which the hub's pace watcher
+(`pace-watch.sh` in the board dir, untracked) rewrites every minute, the hub's `<board>/pace-control.json`, and
+`<board>/lane-last-start.json`. It starts only when all of these hold, else it refuses with exit 75 and one line naming
+each reason:
+
+- `state` is `calm` in `pace.json`, and in `pace-control.json` when that file is there. The watcher exits on a trip
+  and its last `pace.json` still says calm until it goes stale, while the hub's file says hot at once; so a control
+  file that is there but won't parse (a hot mark caught mid-write) refuses too
+- the averages are under the limits: `avg.cores` < 7.5, `avg.psiCpu` < 40, `avg.anonMiB` < 9000, and `psiMemFull`
+  (the latest memory-PSI reading, the watcher's own memory trip) at most 1. `load5` isn't judged: it counts
+  I/O-waiting tasks here and sat at 12 or more in a third of calm samples (2026-11-17)
+- the watcher has at least 3 `samples`, its own floor for tripping: just after a restart the "average" is a minute or
+  two
+- the file is fresh: `heartbeat` at most 180 s old (and at most 60 s ahead)
+- the last start was at least 120 s ago (a junk or future stamp is ignored, so spacing never blocks for good)
+
+The limits are `scripts/board/limits.json` → `pace`, each falling back to the default above. The CPU PSI limit matches
+the watcher's own CPU trip (40, lowered from 60 on 2026-11-17); change both together until the watcher reads this
+block (F239). A missing, stale or unreadable `pace.json` **fails closed**: a dead watcher is the silent failure the
+gate exists for, and `--over-pace` always goes past it, so the hub is never stranded; the line names the watcher to
+restart. The board dir moves with `APERTURE_BOARD_DIR`, and no watcher writes anywhere else, so a start against
+another board dir needs `--over-pace`.
+
+- `--wait[=<min>]` polls every 30 s for up to `<min>` minutes (default 5, at most 30), logging the reasons once each
+  time they change, then starts, or exits 75 with the last reason. It waits before the checks under the lock (the
+  cap, an existing branch or record), so a wait can end in one of those refusals. The install follows the wait, and a
+  foreground tool call dies at 600 s, so run a `--wait` start in the background.
+- `--over-pace "<reason>"` skips the gate, logs what it would have refused on, and keeps the reason in the lifecycle
+  record (`pnpm lanes status` shows it). It and `--wait` together exit 2.
+- Inside the lock, just before the claim, start checks again, so a start that raced another past the first check
+  never lands inside its spacing: with wait time left it goes back to waiting, else it exits 75 with nothing changed.
+  Right after the claim it writes `lane-last-start.json` (`{v, at: epoch s, branch}`); a start that later rolls back
+  keeps it, since its install load was real. A failed write only warns: spacing is advisory, and an unwritable board
+  dir must not block every start.
 
 **The main-checkout lock** (F155). From the dirty check through `worktree add`, start holds
 `/tmp/aperture-main-checkout.lock` (`APERTURE_MAIN_LOCK`; `scripts/src/board/main-lock.ts`), as sync-main does from
@@ -56,7 +93,8 @@ Mode and 3 lanes already active, start prints a `note:` with the ≤ 3 advice an
 
 Then it runs these steps, each registering an undo:
 
-1. Claims the lifecycle record (`O_EXCL`, so two starts can't race), under the main-checkout lock with steps 2–3.
+1. Claims the lifecycle record (`O_EXCL`, so two starts can't race) and stamps `lane-last-start.json`, under the
+   main-checkout lock with steps 2–3.
 2. Detaches the main checkout at `origin/main`'s sha, read once: every later step uses that sha, so another session's
    fetch mid-start can't split the base.
 3. Runs `git worktree add --no-track -b <branch> .claude/worktrees/<branch> <that sha>`. If it fails after git made the
@@ -72,7 +110,15 @@ Then it runs these steps, each registering an undo:
    is typed, so the session reads the doc itself (CLAUDE.md → _Feature workflow_). **No kickoff text ever reaches an argv**: COI reads every process's argv,
    and a kickoff quoting the safety rules would kill the container. The window starts a shell, not Claude, so
    `tools/coi/tmux-restore.sh save` finds Claude as the shell's child. No permission flag: sessions here start in
-   bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15).
+   bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15). The line carries
+   `--autocompact <tokens>`, from `scripts/board/limits.json` → `lanes.autoCompactWindow` (500000, about half a 1M
+   window, so a long lane compacts on its own; 0 drops it; a value outside 100000–1000000 is noted and defaulted). A
+   flag, not the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var: the PreCompact hook's handoff fork
+   (`docs/ops/COMPACTION-HANDOFF.md`) would inherit an env var and, resuming a transcript just under the window, compact
+   itself; the fork's own argv carries no flag (inference: unmeasured until a lane's first compaction, whose
+   `precompact.log` line should show no `skip reason=fork`). 2026-11-17 probes on 2.1.327 (`claude -p`, filler files, a
+   100k window) compacted at the window less about 20k with `trigger: "auto"`, by the flag, the env var and
+   `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` alike. `tools/coi/tmux-restore.sh` keeps the flag when it relaunches the lane.
 9. Writes the board lane: phase `plan`, step `kickoff sent`, after clearing a past same-name file (`writeLane` would
    carry its PR number on).
 10. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a
@@ -179,12 +225,13 @@ the same reason, an abandon reason must not quote the delete command.
 
 ## State
 
-| What                       | Where                                                                                                                                                                                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Phase (the tower reads)    | `<board>/lanes/<branch>.json` (`docs/ops/TOWER.md` → _Lane files_)                                                                                                                                                                                |
-| Window identity, the start | `<board>/lifecycle/<branch>.json`: window and pane ids, the tmux server's pid and start time, base sha, kickoff path, over-cap reason, the archive `lanes end` chose. Its own directory, because `writeLane` rebuilds a lane file from known keys |
-| The cap                    | `scripts/board/limits.json` → `lanes.maxActive`                                                                                                                                                                                                   |
-| The end record             | `/workspace/localNotes/archive/<branch>/` → `mac-cleanup.txt`, `lane-end.txt`                                                                                                                                                                     |
+| What                       | Where                                                                                                                                                                                                                                                            |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase (the tower reads)    | `<board>/lanes/<branch>.json` (`docs/ops/TOWER.md` → _Lane files_)                                                                                                                                                                                               |
+| Window identity, the start | `<board>/lifecycle/<branch>.json`: window and pane ids, the tmux server's pid and start time, base sha, kickoff path, over-cap and over-pace reasons, the archive `lanes end` chose. Its own directory, because `writeLane` rebuilds a lane file from known keys |
+| The cap                    | `scripts/board/limits.json` → `lanes.maxActive`                                                                                                                                                                                                                  |
+| The pace gate              | `<board>/pace.json` (the hub's watcher), `<board>/pace-control.json` (the hub's state), `<board>/lane-last-start.json` (the last start), `scripts/board/limits.json` → `pace`                                                                                    |
+| The end record             | `/workspace/localNotes/archive/<branch>/` → `mac-cleanup.txt`, `lane-end.txt`                                                                                                                                                                                    |
 
 **Legacy lanes.** A lane started before these commands has no lifecycle record. `lanes end` still archives
 (recording a bare record for the archive), removes and prints, but leaves the window for its owner to close.
