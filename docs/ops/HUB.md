@@ -146,6 +146,11 @@ no script writes it: the Mac never runs anything from the shared folder.
   "suggest ≤ 3 lanes" when the rule applies), or the tower's MAC tile; the `slowdown` line beside it says how much
   slower jobs run now (SESSION-BOARD.md → _History_ → _Slowdown_). `lanes start` notes it and still starts: the hub
   decides, parking or holding a lane (`pnpm board lane parked`) until the Mac is back on AC.
+- **The smart cap is log-only for now.** `lanes start`, `pnpm lanes status` and `board.sh status` print a
+  `budget (log-only): …` line, units by phase and work type against a budget scaled for the Mac's power
+  (SESSION-BOARD.md → _Budget_). The 5-lane cap and the battery rule above stay the live rules until a day of its logs
+  is read: `pnpm board budget-report /workspace/localNotes/board/history 1`. It measures the box only. More light
+  lanes means more tokens an hour, and the usage lines govern that (_Watchers_ → `usage-watch.sh`), never the budget.
 - **Asks.** Relay each `[ask-maintainer]` to the user with the hub's own recommendation, and the answer back as a
   `[relay]`, verbatim, plus what it means for the lane.
 - **Lens gaps.** The hub alone writes `/workspace/localNotes/review-gaps.md` from the `lens-gap:` lines lanes send

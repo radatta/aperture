@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { deps, porcelain, world } from './fakes.ts';
-import { DEFAULT_CAP, laneCap, laneTrees, nameProblem, parseWorktrees } from './state.ts';
+import { boardSession, deps, porcelain, proc, world } from './fakes.ts';
+import {
+  DEFAULT_CAP,
+  laneCap,
+  laneTrees,
+  liveSessionBranches,
+  liveSessions,
+  nameProblem,
+  parseWorktrees,
+} from './state.ts';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -51,5 +59,27 @@ describe('laneCap', () => {
     expect(laneCap(d)).toBe(3);
     writeFileSync(join(w.main, 'scripts/board/limits.json'), '{"lanes":{"maxActive":0}}');
     expect(laneCap(d)).toBe(DEFAULT_CAP);
+  });
+});
+
+describe('liveSessions', () => {
+  it('counts every live registered session, the hub and off-branch ones too; dead, reused, zombie and gone are not', () => {
+    const w = world();
+    const { d } = deps(w, []);
+    proc(w, 1, '777');
+    boardSession(w, 1, 'lane-a');
+    proc(w, 2, '777');
+    boardSession(w, 2, ''); // the hub, detached on main: no branch
+    proc(w, 3, '999');
+    boardSession(w, 3, 'reused'); // pid reused: its start tick differs
+    proc(w, 4, '777', 'Z');
+    boardSession(w, 4, 'zombie');
+    proc(w, 5, '777');
+    boardSession(w, 5, 'gone', '777', 'gone');
+    boardSession(w, 6, 'dead'); // no /proc entry
+    const s = liveSessions(d);
+    expect(s.count).toBe(2);
+    expect([...s.branches]).toEqual(['lane-a']);
+    expect([...liveSessionBranches(d)]).toEqual(['lane-a']);
   });
 });

@@ -132,6 +132,18 @@ describe('lane cli', () => {
     );
   });
 
+  it('status prints the log-only budget after the mac line, and nothing without a budget block', async () => {
+    const w = world();
+    const shipped = readFileSync(new URL('../../board/limits.json', import.meta.url), 'utf8');
+    writeFileSync(join(w.main, 'scripts/board/limits.json'), shipped);
+    const t = deps(w, [['git worktree list', `worktree ${w.main}\nHEAD 1\ndetached\n`]]);
+    writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now(), { lowPowerMode: true }));
+    expect(await main(['status'], () => t.d)).toBe(0);
+    expect(t.out().split('\n')[2]).toBe(
+      'budget (log-only): lanes 0.5/3.5 · sessions 0/14 · k 1.3 lpm',
+    );
+  });
+
   it('start.ts and end.ts reach processes and the disk only through the seam', () => {
     for (const f of ['start.ts', 'end.ts', 'state.ts', 'mac-line.ts', 'pace.ts']) {
       const src = readFileSync(new URL(f, import.meta.url), 'utf8');

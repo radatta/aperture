@@ -20,7 +20,8 @@ Exit codes:
 - 75: refused for now (cap full, the pace gate busy, deploy still running, the main checkout busy): wait or act, then rerun
 
 `status` prints the active lanes against the cap, then the Mac's `mac:` power line (battery, Low Power Mode,
-thermal; `docs/ops/HUB.md` → _Lanes on battery_).
+thermal; `docs/ops/HUB.md` → _Lanes on battery_), then the log-only budget's `budget (log-only): lanes … · sessions …
+· k …` line (`docs/ops/SESSION-BOARD.md` → _Budget_).
 
 **Names.** `^[a-z0-9][a-z0-9-]{0,62}$` (the mailroom's rule). Not `main`, `master`, `dev`, `devb`, `test` (the heavy
 guard would read `pnpm lanes start test` as a suite), or the hub's `hub.json` name. Such a name is safe in a path, a
@@ -157,6 +158,11 @@ it (git-core PPA) before touching worktrees.
 So a stale worktree with no session doesn't count. `--over-cap "<reason>"` goes past the cap and keeps the reason in
 the lifecycle record (`pnpm lanes status` shows it). The cap is counted before the claim, so two starts racing at
 one below it can both pass: accepted, as one hub starts lanes.
+
+**The budget beside it (log-only).** At the cap's outcome — a refusal, or once the in-lock pace check has decided —
+start prints one `budget (log-only): lanes <now>+0.4/<allowed> · sessions <n>/14 · k … → would admit|refuse` line
+and logs one `kind: "budget"`, `scope: "lane"` event, from these same active lanes (`docs/ops/SESSION-BOARD.md` →
+_Budget_). It never changes the outcome; a lost `--wait` race logs on the pass that decides.
 
 ## End
 

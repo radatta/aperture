@@ -1506,3 +1506,245 @@ describe('board.sh status: conflicts and overlaps', () => {
     expect(status(at(25))).toBe('conflicts (25 min old: is the sampler running?):');
   });
 });
+
+// The log-only budget (SESSION-BOARD.md → Budget): logged once per admission beside the decision, never changing it.
+describe('the log-only budget', () => {
+  const budgets = () => events().filter((e) => e.kind === 'budget');
+  // a live slot held by a stand-in session's process, so gc keeps it
+  function slotFile(cls: string, cmd?: string, pid = liveSession(), name = `${pid}-${cls}`) {
+    const dir = join(tmp, 'board/leases/heavy');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `${name}.json`),
+      JSON.stringify({
+        v: 1,
+        pid,
+        class: cls,
+        label: cls,
+        wrapperPid: pid,
+        wrapperStart: startOf(pid),
+        startedAt: new Date().toISOString(),
+        ...(cmd && { cmd }),
+      }),
+    );
+    return pid;
+  }
+  // the outcome a caller can see: exit code, stderr without the timing line, and the lease (barrier) events
+  const outcome = (r: { code: number | null; err: string }) => ({
+    code: r.code,
+    err: r.err.replace(/^heavy: \S+ exit .*$/m, ''),
+    leases: events()
+      .filter((e) => e.kind === 'lease')
+      .map((e) => ({ ...e, t: null })),
+  });
+
+  it('a slotted run logs one budget event: its units, the held slots split by command, the live verdict', () => {
+    const holder = slotFile('ui', 'pnpm devcheck --tier full');
+    const r = heavy(
+      [
+        '--',
+        'bash',
+        '-c',
+        'cat "$APERTURE_BOARD_DIR"/leases/heavy/*-*.json > "$0"',
+        join(tmp, 'slots'),
+      ],
+      {
+        HEAVY_CLASS: 'lint',
+        HEAVY_LABEL: 'lint',
+      },
+    );
+    expect(r.code).toBe(0);
+    expect(budgets()).toEqual([
+      expect.objectContaining({
+        scope: 'job',
+        class: 'lint',
+        label: 'lint',
+        unit: { as: 'lint', units: 1 },
+        committed: expect.objectContaining({
+          base: 0.5,
+          slots: 0.5,
+          held: [{ pid: holder, class: 'ui', as: 'ui-dev', units: 0.5 }],
+        }),
+        k: 1.3, // no mac-stats.json in the test board: the slow guess
+        kWhy: 'unknown',
+        allowed: 5,
+        would: 'admit',
+        actual: { verdict: 'grant', wait: false },
+        enforce: false,
+      }),
+    ]);
+    // the run's own slot file carries its command (the ui split needs it), cut to 160 chars
+    expect(readFileSync(join(tmp, 'slots'), 'utf8')).toMatch(/"cmd":"bash -c cat /);
+  });
+
+  it('a run held and then granted logs once, at its first decision', async () => {
+    limits({ enforce: true });
+    const cap = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).concurrency.test;
+    for (let i = 0; i < cap - 1; i++) slotFile('test');
+    const brief = spawnSync('bash', ['-c', 'sleep 1.5 >/dev/null 2>&1 & echo $!'], {
+      encoding: 'utf8',
+    });
+    slotFile('test', undefined, Number(brief.stdout.trim()));
+    const r = heavy(['--wait', '20', '--', 'true'], { HEAVY_CLASS: 'test' });
+    expect(r.code).toBe(0);
+    expect(budgets()).toHaveLength(1);
+    expect(budgets()[0]).toMatchObject({
+      actual: { verdict: 'cap-full', wait: true },
+      would: 'wait',
+    });
+  }, 30000);
+
+  it('changes no outcome: over budget, enforcing, missing or malformed, the run goes as it did without one', () => {
+    const shippedLimits = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8'));
+    slotFile('test');
+    const run = (budget: unknown) => {
+      rmSync(join(tmp, 'board/history'), { recursive: true, force: true });
+      limits({ enforce: true, budget });
+      cgroup(3700, 2 * GiB); // past the hard line: the live rules hold it
+      return heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'typecheck' });
+    };
+    const none = run(undefined);
+    expect(none.code).toBe(75);
+    const want = outcome(none);
+    expect(budgets()).toEqual([]);
+    for (const [budget, logs] of [
+      [{ ...shippedLimits.budget, jobUnits: 1 }, true],
+      [{ ...shippedLimits.budget, enforce: true }, true],
+      [{ ...shippedLimits.budget, units: 'x' }, false],
+      ['garbage', false],
+    ] as const) {
+      expect(outcome(run(budget))).toEqual(want);
+      expect(budgets()).toHaveLength(logs ? 1 : 0);
+    }
+  });
+
+  it('an unwritable events file costs the log line, never the exit code', () => {
+    const day = new Date().toISOString().slice(0, 10);
+    mkdirSync(join(tmp, `board/history/events-${day}.jsonl`), { recursive: true }); // a directory: every append fails
+    const r = heavy(['--', 'bash', '-c', 'exit 3'], { HEAVY_CLASS: 'typecheck' });
+    expect(r.code).toBe(3);
+  });
+
+  it('the guard’s decide-only call and an unslotted run log nothing', () => {
+    const g = spawnSync(
+      'bash',
+      [
+        '-c',
+        `. "${join(boardDir, 'lib.sh')}"; . "${join(boardDir, 'lease.sh')}"; eval "$(sb_thresholds)"; sb_locked _heavy_try "" 0 test guard 0 0`,
+      ],
+      { env, cwd: tmp, encoding: 'utf8' },
+    );
+    expect(JSON.parse(g.stdout)).toMatchObject({ verdict: 'grant' });
+    expect(heavy(['--', 'true'], { HEAVY_CLASS: 'test-file' }).code).toBe(0);
+    expect(budgets()).toEqual([]);
+  });
+
+  it('board.sh status prints the units next to the old count, and nothing without a budget block', () => {
+    slotFile('test');
+    const status = () =>
+      spawnSync('bash', [join(boardDir, 'board.sh'), 'status'], {
+        env: { ...env, APERTURE_DEVLOCK_SOURCE: `file:${join(tmp, 'gh-lock')}` },
+        cwd: tmp,
+        encoding: 'utf8',
+      }).stdout.split('\n');
+    const lines = status();
+    const at = lines.findIndex((l) => l.startsWith('heavy: 1 slot(s)'));
+    expect(lines[at + 1]).toMatch(
+      /^budget \(log-only\): jobs 3\.5\/5 · lanes 0\.5\/3\.5 · sessions \d+\/14 · k 1\.3 unknown$/,
+    );
+    limits({ budget: undefined });
+    expect(status().some((l) => l.startsWith('budget'))).toBe(false);
+  });
+});
+
+describe('sampler.sh lane phases', () => {
+  // a process whose comm is `claude` (a copy of sleep), registered on `branch`: a session row for the sampler
+  function claude(branch: string) {
+    const bin = join(tmp, 'claude');
+    if (!existsSync(bin)) {
+      writeFileSync(bin, readFileSync('/bin/sleep'));
+      chmodSync(bin, 0o755);
+    }
+    const c = spawn(bin, ['300'], { stdio: 'ignore' });
+    children.push(c);
+    mkdirSync(join(tmp, 'board/sessions'), { recursive: true });
+    writeFileSync(
+      join(tmp, 'board/sessions', `${c.pid}.json`),
+      JSON.stringify({
+        v: 1,
+        pid: c.pid,
+        pidStart: startOf(c.pid!),
+        name: branch,
+        branch,
+        state: 'idle',
+      }),
+    );
+    return c.pid!;
+  }
+  const lane = (branch: string, text: string) => {
+    mkdirSync(join(tmp, 'board/lanes'), { recursive: true });
+    writeFileSync(join(tmp, 'board/lanes', `${branch}.json`), text);
+  };
+  const phases = () => {
+    const r = spawnSync('bash', [join(boardDir, 'sampler.sh'), '--print'], {
+      env,
+      encoding: 'utf8',
+    });
+    return Object.fromEntries(
+      JSON.parse(r.stdout).sessions.map((s: { pid: number; phase: string | null }) => [
+        s.pid,
+        s.phase,
+      ]),
+    );
+  };
+
+  it('tags each session with its lane file’s phase; a torn lane file or none is null for that lane alone', () => {
+    const a = claude('aa');
+    const bb = claude('bb');
+    const c = claude('cc');
+    lane('aa', JSON.stringify({ v: 1, branch: 'aa', phase: 'gate' }, null, 2));
+    lane('bb', '{"v":1,"branch":"bb","pha');
+    expect(phases()).toMatchObject({ [a]: 'gate', [bb]: null, [c]: null });
+  });
+
+  it('a sampler.sh from before the phase field (no F5) still reads every row, phase null', () => {
+    // sample.awk alone, fed a registered session on `aa` and a lanes file saying `gate`: with F5 the row says gate;
+    // without it (the file list and -v set an old sampler.sh passes) the same row reads null
+    const x = join(tmp, 'x');
+    writeFileSync(`${x}.e`, '');
+    writeFileSync(`${x}.sess`, '123\t\taa\taa\t\n');
+    writeFileSync(`${x}.lanes`, 'aa\tgate\n');
+    const tick = (f5: boolean) => {
+      const files = [`${x}.e`, `${x}.sess`, `${x}.e`, `${x}.e`, ...(f5 ? [`${x}.lanes`] : []), '-'];
+      const v = {
+        F1: `${x}.e`,
+        F2: `${x}.sess`,
+        F3: `${x}.e`,
+        F4: `${x}.e`,
+        ...(f5 && { F5: `${x}.lanes` }),
+      };
+      const r = spawnSync(
+        'awk',
+        [
+          '-f',
+          join(boardDir, 'sample.awk'),
+          ...Object.entries({
+            ...v,
+            page: 4096,
+            hz: 100,
+            interval: 30,
+            prevOut: '/dev/null',
+            statusOut: '/dev/null',
+          }).flatMap(([k, val]) => ['-v', `${k}=${val}`]),
+          ...files,
+        ],
+        { input: '123\t1\tclaude\t1\t1\t1\targs\n', encoding: 'utf8' },
+      );
+      return JSON.parse(r.stdout).sessions;
+    };
+    expect(tick(true)).toEqual([
+      expect.objectContaining({ pid: 123, branch: 'aa', phase: 'gate' }),
+    ]);
+    expect(tick(false)).toEqual([expect.objectContaining({ pid: 123, branch: 'aa', phase: null })]);
+  });
+});

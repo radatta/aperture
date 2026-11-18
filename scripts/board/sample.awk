@@ -1,9 +1,10 @@
 # One sampler tick → one JSON line on stdout (docs/ops/SESSION-BOARD.md → Sampler format).
-# Inputs, in ARGV order (named F1–F4 via -v; no gawk ARGIND): 1 tmux panes  "window\tpane_pid"
+# Inputs, in ARGV order (named F1–F5 via -v; no gawk ARGIND): 1 tmux panes  "window\tpane_pid"
 #                                      2 sessions    "pid\tsid\tname\tbranch\tstate"   (hook-registered)
 #                                      3 heavy slots "pid\tlabel"
 #                                      4 prev tick   "T\tepoch\tusage_usec\tepochRealtime" | "S\tpid\tcpuTicks"
-#                                      5 procs (-)   "pid\tppid\tcomm\tthreads\trssPages\tcpuTicks\targs"
+#                                      5 lane phases "branch\tphase"   (board/lanes/*.json; absent from an older sampler.sh)
+#                                      6 procs (-)   "pid\tppid\tcomm\tthreads\trssPages\tcpuTicks\targs"
 # -v: t ep epr interval anon file current high pids pidsMax usage cpus psiMemSome psiMemFull psiCpuSome oomKill
 #     highEvents dev page hz prevOut statusOut
 BEGIN { FS = "\t"; MiB = 1048576 }
@@ -11,6 +12,7 @@ FILENAME == F1 { win[$2] = $1; next }
 # A hook state counts only once a heartbeat has fired (sampler.sh blanks it otherwise).
 FILENAME == F2 { reg[$1] = 1; sid[$1] = $2; rname[$1] = $3; branch[$1] = $4; hstate[$1] = $5; next }
 FILENAME == F3 { if (!($1 in heavy)) heavy[$1] = $2; else heavy[$1] = heavy[$1] "+" $2; nslots++; next }
+FILENAME == F5 { phase[$1] = $2; next }
 FILENAME == F4 {
   if ($1 == "T") { prevEp = $2; prevUsage = $3; prevEpr = $4 } else if ($1 == "S") prevCpu[$2] = $3
   next
@@ -74,10 +76,11 @@ END {
     else { state = (d >= 0.05 * hz * el) ? "working" : "idle"; src = "cpu" }  # ≥ 5 % of a core
     if (state == "working") working++; else idle++
     nm = (ppid[r] in win) ? win[ppid[r]] : ((r in reg && rname[r] != "") ? rname[r] : "pid" r)
-    sess = sess (sess == "" ? "" : ",") sprintf("{\"pid\":%s,\"name\":\"%s\",\"sid\":%s,\"branch\":%s,\"state\":\"%s\",\"stateSrc\":\"%s\",\"thr\":%d,\"rssMiB\":%d,\"cpuSec\":%.1f,\"heavy\":%s}", \
+    sess = sess (sess == "" ? "" : ",") sprintf("{\"pid\":%s,\"name\":\"%s\",\"sid\":%s,\"branch\":%s,\"state\":\"%s\",\"stateSrc\":\"%s\",\"thr\":%d,\"rssMiB\":%d,\"cpuSec\":%.1f,\"heavy\":%s,\"phase\":%s}", \
       r, esc(nm), (r in reg && sid[r] != "") ? "\"" esc(sid[r]) "\"" : "null", \
       (r in reg && branch[r] != "") ? "\"" esc(branch[r]) "\"" : "null", state, src, st[r], sr[r] / MiB, d / hz, \
-      (r in heavy) ? "\"" esc(heavy[r]) "\"" : "null")
+      (r in heavy) ? "\"" esc(heavy[r]) "\"" : "null", \
+      (r in reg && branch[r] != "" && (branch[r] in phase)) ? "\"" esc(phase[branch[r]]) "\"" : "null")
   }
   close(prevOut)
 

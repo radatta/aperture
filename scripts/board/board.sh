@@ -104,7 +104,7 @@ sampler_running() {
 }
 
 board_json() {
-  local sample leases overlap bar mach
+  local sample leases overlap bar mach budget
   if [ -r "$CG/memory.stat" ]; then
     sample=$(bash "$SB_SCRIPTS/sampler.sh" --print)
   else  # not in the container (the Mac): the sampler's latest tick, read-only
@@ -119,15 +119,17 @@ board_json() {
   bar=$(node "$SB_REPO/scripts/src/board/cli.ts" barriers "$BOARD_DIR/history" 7 2>/dev/null)  # none on a Mac without node
   # the Mac's power and the slowdown ratio (F120, docs/ops/HUB.md → lanes on battery); null without node
   mach=$(node "$SB_REPO/scripts/src/board/cli.ts" machine "$BOARD_DIR" --json 2>/dev/null)
+  # the log-only budget's units now (SESSION-BOARD.md → Budget); null without node or a budget block
+  budget=$(APERTURE_LIMITS_JSON="$LIMITS_JSON" node "$SB_REPO/scripts/src/board/cli.ts" budget "$BOARD_DIR" --json 2>/dev/null)
   jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" --arg bar "$bar" --arg cap "$(sb_limit '.concurrency.test')" \
-    --arg mach "$mach" \
+    --arg mach "$mach" --arg budget "$budget" \
     --slurpfile dev <( [ -f "$BOARD_DIR/devlock.json" ] && cat "$BOARD_DIR/devlock.json" ) \
     --slurpfile ov <( [ -f "$BOARD_DIR/overlap.json" ] && cat "$BOARD_DIR/overlap.json" ) \
     --slurpfile reg <( cat "$BOARD_DIR"/sessions/*.json 2>/dev/null ) \
     --arg sampler "$(sampler_running && echo running || echo stopped)" \
     --arg thr "$(sb_thresholds 2>/dev/null)" '
     {sample: $s, sampler: $sampler, barriers: (if $bar == "" then null else $bar end),
-     machine: ($mach | fromjson? // null),
+     machine: ($mach | fromjson? // null), budget: ($budget | fromjson? // null),
      testCap: (if $cap == "" then null else ($cap | tonumber) end), thresholds: ($thr | split(" ") | map(select(. != "") | split("=") | {(.[0]): .[1]}) | add),
      devLock: ($dev[0] // null), heavy: $heavy, overlap: ($ov[0] // null),
      registered: ($reg | map({key: (.pid | tostring), value: .}) | from_entries)}'
@@ -152,6 +154,7 @@ cmd_status() {
       (($r[.pid | tostring].note // "") as $n | if $n != "" then "  — " + $n else "" end)),
     $dl,
     "heavy: \(.heavy | length) slot(s)\(if .testCap then " · test \([.heavy[] | select(.class == "test")] | length)/\(.testCap)" else "" end)\(if (.heavy | length) > 0 then " — " + (.heavy | map("\(.name // .pid): \(.label // .class)") | join(", ")) else "" end)",
+    (.budget.line // empty),
     (.barriers // empty),
     (.machine.lines // [] | .[]),
     (if ((.overlap.conflicts // []) | length) > 0  # git merge-tree at the heads (SESSION-BOARD.md → Overlaps)

@@ -296,6 +296,7 @@ export const INPUT_RULES: InputRule[] = [
     tests: [
       'scripts/src/board/',
       'scripts/src/board/board-cli.test.ts',
+      'scripts/src/board/budget.test.ts',
       'scripts/src/board/lease.test.ts',
       'scripts/src/board/limits.test.ts',
       'scripts/src/board/merge-watch.test.ts',
@@ -412,6 +413,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/aws/fetch-stack-outputs.mjs': 'the aws CLI at deploy time; no test imports it',
   'scripts/aws/health-check.mjs': 'cdk outputs and app/dist at deploy time; no test imports it',
   'scripts/aws/publish-frontend.mjs': 'cdk outputs and app/dist at deploy time; no test imports it',
+  'scripts/src/board/budget-read.ts': `${RUNTIME}: the board dir, /proc`,
   'scripts/src/board/cli.ts': `${RUNTIME}: board dir, cgroup, git; limits.json is REPO_FULL`,
   'scripts/src/board/main-lock.ts': `${RUNTIME}: a flock file`,
   'scripts/src/board/merge-record.ts': `${RUNTIME}: the board dir`,

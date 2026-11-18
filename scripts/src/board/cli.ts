@@ -17,6 +17,8 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { check, parseCache, type GitRun, type Head } from './conflicts.ts';
 import { decideHeavy } from './lease.ts';
+import { budgetNow, logJobBudget } from './budget-read.ts';
+import { budgetReport, formatBudgetReport } from './budget-report.ts';
 import { parseLimits, staleness } from './limits.ts';
 import { branchFiles, overlaps, type Tree } from './overlap.ts';
 import { parseLimit } from './proc.ts';
@@ -50,6 +52,8 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   report <historyDir> [days] [--json]   usage by mix + job peaks
   barriers <historyDir> [days] [--json] how limiting the cap is
   machine <boardDir> [--json]           the Mac's power line and the slowdown ratio (F120)
+  budget <boardDir> [--json]            the log-only budget's units now: jobs, lanes, sessions, k
+  budget-report <historyDir> [days] [--json]  what the log-only budget would have decided, against what ran
   lane <phase> [--step …] [--plan …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
   sync-main                             the main checkout to origin/main; restarts the web tower if its code changed
   stale [--json]                        where queue.json contradicts the derived board (the web tower's stale.json)
@@ -64,6 +68,8 @@ export const FLAGS: Record<string, Spec> = {
   report: { bare: ['json'], args: 2 },
   barriers: { bare: ['json'], args: 2 },
   machine: { bare: ['json'], args: 1 },
+  budget: { bare: ['json'], args: 1 },
+  'budget-report': { bare: ['json'], args: 2 },
   lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
   'sync-main': {},
   stale: { bare: ['json'] },
@@ -243,8 +249,17 @@ export function main(argv: string[], stdin: () => string): string {
   const now = new Date();
   switch (cmd) {
     case 'decide-heavy': {
-      const { limits, liveLimits: ll, live, slots, req } = JSON.parse(stdin());
-      return JSON.stringify(decideHeavy(parseLimits(limits), ll, live, slots ?? [], req, now));
+      const input = JSON.parse(stdin());
+      const { limits, liveLimits: ll, live, slots, req } = input;
+      const d = decideHeavy(parseLimits(limits), ll, live, slots ?? [], req, now);
+      const out = JSON.stringify(d);
+      // The log-only budget (budget-read.ts): beside the decision, never part of it — any error is swallowed.
+      try {
+        if (input.budget) logJobBudget(input, d, now.getTime());
+      } catch {
+        // an unwritable history or a torn file costs the log line, never the admission
+      }
+      return out;
     }
     case 'staleness': {
       const [limitsPath, historyDir] = args;
@@ -297,6 +312,35 @@ export function main(argv: string[], stdin: () => string): string {
         .filter((j) => j.t >= t - 7 * 86400_000); // the tower's window (source.ts JOB_DAYS)
       const m = machine(readMacStats(join(dir, 'mac-stats.json'), t), jobs, t);
       return rest.includes('--json') ? JSON.stringify(m) : m.lines.join('\n');
+    }
+    case 'budget': {
+      const [dir] = args;
+      if (!dir) throw new Error('usage: budget <boardDir> [--json]');
+      const limitsPath =
+        process.env.APERTURE_LIMITS_JSON ?? resolve(import.meta.dirname, '../../board/limits.json'); // lib.sh's LIMITS_JSON
+      const b = budgetNow(
+        dir,
+        JSON.parse(readFileSync(limitsPath, 'utf8')),
+        '/proc',
+        now.getTime(),
+      );
+      return rest.includes('--json') ? JSON.stringify(b) : (b?.line ?? '');
+    }
+    case 'budget-report': {
+      const [historyDir, days = '1'] = args;
+      if (!historyDir) throw new Error('usage: budget-report <historyDir> [days] [--json]');
+      const since = new Date(now.getTime() - Number(days) * 86400_000);
+      const limitsPath =
+        process.env.APERTURE_LIMITS_JSON ?? resolve(import.meta.dirname, '../../board/limits.json');
+      const psiLine = JSON.parse(readOr(limitsPath) ?? '{}')?.pace?.psiCpuBelow; // the pace gate's line
+      const r = budgetReport(
+        readJsonl(historyDir, 'events-'),
+        readJsonl(historyDir, 'samples-') as Sample[],
+        since,
+        now,
+        typeof psiLine === 'number' ? psiLine : undefined,
+      );
+      return rest.includes('--json') ? JSON.stringify(r) : formatBudgetReport(r);
     }
     case 'lane': {
       // docs/ops/TOWER.md → Lane files: the branch and sha come from git, never from an argument
@@ -388,7 +432,7 @@ export function main(argv: string[], stdin: () => string): string {
     }
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | lane | sync-main | stale | brief | ran (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | budget | budget-report | lane | sync-main | stale | brief | ran (got ${cmd ?? 'nothing'})`,
       );
   }
 }

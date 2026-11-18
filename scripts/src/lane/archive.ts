@@ -2,6 +2,7 @@
 // (relative path, size, sha256; a symlink by its target). start.ts and end.ts reach the disk only through this.
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -96,6 +97,10 @@ export const realFs: LaneFs = {
       if ((e as NodeJS.ErrnoException).code === 'EEXIST') return false;
       throw e;
     }
+  },
+  append: (p, s) => {
+    mkdirSync(dirname(p), { recursive: true });
+    appendFileSync(p, s);
   },
   exists: (p) => existsSync(p),
   rm: (p) => rmSync(p, { force: true }), // files only: never a recursive delete
