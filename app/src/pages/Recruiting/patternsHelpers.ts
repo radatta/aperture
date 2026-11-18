@@ -36,7 +36,7 @@ export function patternRows(
 }
 
 // The Patterns tab's mock rows: each done mock, newest first, with the first-try rate of its ISO week beside it (null
-// when that week had no first try), so the outcome metric reads next to the practice one.
+// when that week had no first try, re-solves only included), so the outcome metric reads next to the practice one.
 export function mockRows(
   mocks: readonly Mock[],
   weeks: readonly { week: string; firstTry: Rate }[],
@@ -44,5 +44,8 @@ export function mockRows(
   const byWeek = new Map(weeks.map((w) => [w.week, w.firstTry]));
   return mocks
     .filter((m) => m.status === 'done' && m.scores)
-    .map((mock) => ({ mock, firstTry: byWeek.get(isoWeekKey(mock.day)) ?? null }));
+    .map((mock) => {
+      const rate = byWeek.get(isoWeekKey(mock.day));
+      return { mock, firstTry: rate && rate.of > 0 ? rate : null }; // a week of re-solves only has none
+    });
 }

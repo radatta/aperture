@@ -842,4 +842,16 @@ describe('log_mock and list_mocks', () => {
     ).rejects.toBeInstanceOf(RpcParamError);
     await expect(call('list_mocks', { limit: 0 })).rejects.toBeInstanceOf(RpcParamError);
   });
+
+  it('a failed read of the week after the save says so, not as a failed write', async () => {
+    const real = ctx.dispatch;
+    ctx = {
+      ...ctx,
+      dispatch: (method, args) =>
+        method === 'getCoachToday' ? Promise.reject(new Error('throttled')) : real(method, args),
+    };
+    const out = await call('log_mock', { scores: { code: 2, solve: 2 } });
+    expect(out).toMatchObject({ week: null, note: expect.stringMatching(/don’t log it again/) });
+    expect((await backend.listMocks()).map((m) => m.id)).toEqual([out.mock.id]);
+  });
 });

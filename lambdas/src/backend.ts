@@ -1882,11 +1882,12 @@ export class BackendClient implements ApiClient {
     const stored = id === null ? null : await this.repo.getMock(id, { consistent: true });
     if (id !== null && !stored) throw new Error(`Not found: ${id}`);
     const n = normalizeMock(input, today, stored);
+    // A sitting newly named: it must be the user's, and its problem fills a problemSlug the write didn't send.
     let slug: string | null = null;
     if (n.sittingId !== null && n.sittingId !== stored?.sittingId) {
       const s = await this.repo.getSitting(n.sittingId, { consistent: true });
       if (!s) throw new Error(`Not found: sitting ${n.sittingId}`);
-      if (n.problemSlug === null && !('problemSlug' in input)) slug = s.problemSlug;
+      if (input.problemSlug === undefined) slug = s.problemSlug;
     }
     const fill = (m: NormalizedMock): NormalizedMock => (slug ? { ...m, problemSlug: slug } : m);
     if (!stored) return this.repo.putMock({ ...this.baseAt(now), ...fill(n) });

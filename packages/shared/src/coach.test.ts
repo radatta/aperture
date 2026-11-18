@@ -1585,14 +1585,46 @@ describe('mocks', () => {
     );
   });
 
+  it('passed planned mocks wait in `unlogged`, newest first, at most 5', () => {
+    const past = [1, 2, 3, 4, 5, 6].map((n) =>
+      mk({ status: 'planned', day: addDays(T, -n), id: `p${n}` }),
+    );
+    const v = mockView([...past, mk({ status: 'planned', day: T, id: 'today' })], T);
+    expect(v.unlogged.map((m) => m.id)).toEqual(['p1', 'p2', 'p3', 'p4', 'p5']);
+    expect(v.upcoming.map((m) => m.id)).toEqual(['today']);
+  });
+
+  it('none this week but one planned in the next 48 hours: the line names it (a Sunday’s Monday mock)', () => {
+    const sunday = '2026-11-22';
+    const v = mockView([mk({ status: 'planned', day: '2026-11-23' })], sunday);
+    expect(v).toMatchObject({ thisWeek: 'none', line: 'Mock planned tomorrow' });
+    expect(v.upcoming).toHaveLength(1);
+  });
+
+  it('normalizeMock: the day window is inclusive at 365 back and 60 on, only for a day being set', () => {
+    expect(
+      normalizeMock({ scores: { code: 1, solve: 1 }, day: addDays(T, -365) }, T, null).day,
+    ).toBe(addDays(T, -365));
+    expect(() =>
+      normalizeMock({ scores: { code: 1, solve: 1 }, day: addDays(T, -366) }, T, null),
+    ).toThrow(/365/);
+    expect(normalizeMock({ status: 'planned', day: addDays(T, 60) }, T, null).day).toBe(
+      addDays(T, 60),
+    );
+    expect(() => normalizeMock({ status: 'planned', day: addDays(T, 61) }, T, null)).toThrow(/60/);
+    const old = mk({ day: addDays(T, -500) });
+    expect(normalizeMock({ notes: 'n' }, T, old)).toMatchObject({ day: old.day, notes: 'n' });
+    expect(normalizeMock({ notes: 'a\n\n\n\nb   c' }, T, old).notes).toBe('a\n\nb c');
+  });
+
   it('normalizeMock: a change keeps what it isn’t sent, null clears, scores replace whole', () => {
     const stored = mk({
-      partner: 'Pat',
+      partner: 'Study group',
       notes: 'n',
       scores: { code: 2, solve: 3, communicate: 1 },
     });
     expect(normalizeMock({ id: stored.id, notes: null }, T, stored)).toMatchObject({
-      partner: 'Pat',
+      partner: 'Study group',
       notes: null,
       scores: { code: 2, solve: 3, communicate: 1 },
     });

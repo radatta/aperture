@@ -29,6 +29,7 @@ import {
   COACH_VOIDS_MAX,
   MOCK_AHEAD_DAYS,
   MOCK_BACK_DAYS,
+  MOCK_INPUT_KEYS,
   MOCK_KINDS,
   MOCK_NOTES_MAX,
   MOCK_PARTNER_MAX,
@@ -64,17 +65,6 @@ const ASK_FIRST =
   'Writes to their Aperture data. Before calling, say exactly what you will write and wait for their yes in this conversation; never infer it.';
 
 const iso = (ms: number) => new Date(ms).toISOString();
-const MOCK_ARGS = [
-  'id',
-  'day',
-  'status',
-  'kind',
-  'partner',
-  'sittingId',
-  'problemSlug',
-  'scores',
-  'notes',
-] as const;
 const mockOut = (m: Mock) => ({
   id: m.id,
   day: m.day,
@@ -1053,7 +1043,7 @@ export const COACH_TOOLS: Tool[] = [
     description: [
       ASK_FIRST,
       `Logs a mock interview (its own record, never a task or an attempt: it never moves the plan, the re-solve queue or their estimates). A done one carries the interviewer\u2019s \`scores\` from 1 to 4: \`code\` and \`solve\` required, \`communicate\` optional — their scorecard\u2019s Code and Solve; a planned one has none yet (\`status: "planned"\`, a \`day\` up to ${MOCK_AHEAD_DAYS} days on) and shows on their Today card. \`kind\`: ${MOCK_KINDS.join(', ')} (default human); \`partner\` their own label for who ran it (≤ ${MOCK_PARTNER_MAX} characters — never research the person); \`sittingId\` when it ran as a sitting (its problem fills \`problemSlug\`); \`notes\` ≤ ${MOCK_NOTES_MAX}; \`day\` defaults to today, up to ${MOCK_BACK_DAYS} days back. With \`id\` it changes that mock (mark a planned one done with its scores): a field left out keeps its value, null clears it.`,
-      'Returns the mock as stored and the week\u2019s mock line after — read both back.',
+      'Returns the mock as stored and the week\u2019s mock line after — read both back. A null `week` (with a note) means only that read failed: the mock is saved, so don\u2019t log it again.',
     ].join(' '),
     inputSchema: {
       type: 'object',
@@ -1091,10 +1081,21 @@ export const COACH_TOOLS: Tool[] = [
       if (args.id !== undefined && (typeof args.id !== 'string' || !isUlid(args.id)))
         throw new RpcParamError('"id" must be a mock id — list_mocks lists them');
       const input: Record<string, unknown> = {};
-      for (const k of MOCK_ARGS) if (args[k] !== undefined) input[k] = args[k];
+      for (const k of MOCK_INPUT_KEYS) if (args[k] !== undefined) input[k] = args[k];
       const stored = (await ctx.dispatch('upsertMock', [input])) as Mock;
-      const t = (await ctx.dispatch('getCoachToday', [])) as CoachToday;
-      return { mock: mockOut(stored), week: t.mock.line };
+      // The mock is saved: a failed read of the week's line must not read as a failed write (a retry would log it
+      // twice), so it says so instead.
+      const week = await ctx
+        .dispatch('getCoachToday', [])
+        .then((t) => (t as CoachToday).mock.line)
+        .catch(() => null);
+      return {
+        mock: mockOut(stored),
+        week,
+        ...(week === null
+          ? { note: 'Saved; the week’s line couldn’t be read just now — don’t log it again.' }
+          : {}),
+      };
     },
   },
   {

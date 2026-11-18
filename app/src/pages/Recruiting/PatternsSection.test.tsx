@@ -220,4 +220,41 @@ describe('Patterns tab: mock interviews', () => {
     expect(screen.getByRole('list', { name: 'Weakest first tries first' })).toBeTruthy();
     read.mockRestore();
   });
+
+  it('No hands focus back to Delete; a failed delete says so and keeps the row', async () => {
+    const user = userEvent.setup();
+    const api = freshApi();
+    await api.upsertMock({ day: ago(1), scores: { code: 2, solve: 2 } });
+    vi.spyOn(api, 'deleteMock').mockRejectedValueOnce(new Error('Throttled'));
+    renderApp({ api, path: '/recruiting/patterns' });
+    const s = await section();
+    await user.click(await within(s).findByRole('button', { name: /^Delete the mock on / }));
+    await user.click(within(s).getByRole('button', { name: 'No' }));
+    expect(document.activeElement).toBe(
+      within(s).getByRole('button', { name: /^Delete the mock on / }),
+    );
+    await user.click(within(s).getByRole('button', { name: /^Delete the mock on / }));
+    await user.click(within(s).getByRole('button', { name: /^Yes, delete the mock on / }));
+    expect((await within(s).findByRole('alert')).textContent).toBe('Throttled. Nothing changed.');
+    expect(within(s).getByText('Code 2 · Solve 2')).toBeTruthy();
+  });
+
+  it('a delete moves focus to the section heading; a week of re-solves only shows no first try', async () => {
+    const user = userEvent.setup();
+    const api = freshApi();
+    const slug = slugs('two-pointers')[0]!;
+    await api.logCoachAttempts([{ slug, outcome: 'clean', day: ago(20) }]);
+    await api.logCoachAttempts([{ slug, outcome: 'clean', day: ago(0) }]); // a re-solve this week
+    await api.upsertMock({ day: ago(0), scores: { code: 2, solve: 2 } });
+    renderApp({ api, path: '/recruiting/patterns' });
+    const s = await section();
+    expect(await within(s).findByText('No first try that week')).toBeTruthy();
+    await user.click(within(s).getByRole('button', { name: /^Delete the mock on / }));
+    await user.click(within(s).getByRole('button', { name: /^Yes, delete the mock on / }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(s).getByRole('heading', { name: 'Mock interviews' }),
+      ),
+    );
+  });
 });

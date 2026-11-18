@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { MOCK_KIND_NAMES, MOCK_KINDS, MOCK_NOTES_MAX, MOCK_PARTNER_MAX } from '@aperture/shared';
 import type { MockBrief, MockKind, MockScore } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -8,6 +8,7 @@ import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import { Textarea } from '../../components/Textarea';
 import { useUpsertMock } from '../../data/hooks/useCoach';
+import { returnFocus } from '../../lib/useDisclosure';
 import { isTransientRead } from '../../data/retry';
 
 type Status = 'done' | 'planned';
@@ -35,16 +36,25 @@ export function MockForm({
   const [code, setCode] = useState<MockScore | null>(null);
   const [solve, setSolve] = useState<MockScore | null>(null);
   const [communicate, setCommunicate] = useState<MockScore | null>(null);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(mock?.notes ?? ''); // a planned mock's notes carry over to its log
   const [error, setError] = useState<string | null>(null);
   const done = status === 'done';
+  // The button that opened the form goes away with it: focus starts inside the form.
+  const form = useRef<HTMLFormElement>(null);
+  useLayoutEffect(() => {
+    const first = form.current?.querySelector<HTMLElement>('button, input, select, textarea');
+    if (first) returnFocus(first);
+  }, []);
+  // One save at a time: a ref, since a double tap lands both clicks before the pending state renders.
+  const inFlight = useRef(false);
 
   async function save() {
-    if (upsert.isPending) return;
+    if (inFlight.current) return;
     setError(null);
     if (done && (!code || !solve))
       return setError('Add the Code and Solve scores (1 to 4) to log a done mock.');
     if (!day) return setError('Pick the day.');
+    inFlight.current = true;
     try {
       await upsert.mutateAsync({
         ...(mock ? { id: mock.id } : {}),
@@ -63,6 +73,8 @@ export function MockForm({
           ? 'Couldn’t confirm the save — it may have saved; the card shows what stands.'
           : (e as Error).message || 'Couldn’t save the mock — try again.',
       );
+    } finally {
+      inFlight.current = false;
     }
   }
 
@@ -72,11 +84,17 @@ export function MockForm({
     set: (v: MockScore | null) => void,
     optional = false,
   ) => (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <Text id={`${id}-${label}`} size="sm" tone="muted">
-        {label}
-        {optional ? ' (optional)' : ''}
-      </Text>
+    <div className="flex items-center justify-between gap-2">
+      <span id={`${id}-${label}`} className="flex min-w-0 flex-col">
+        <Text as="span" size="sm" tone="muted">
+          {label}
+        </Text>
+        {optional && (
+          <Text as="span" size="xs" tone="subtle">
+            optional
+          </Text>
+        )}
+      </span>
       <ModeToggle
         aria-labelledby={`${id}-${label}`}
         options={SCORES.map((s) => ({ value: s, label: s, title: `${label} ${s} of 4` }))}
@@ -89,6 +107,7 @@ export function MockForm({
 
   return (
     <form
+      ref={form}
       aria-label={mock ? 'Log the planned mock' : 'Log a mock'}
       className="flex flex-col gap-3 rounded-xl border border-line p-3"
       onSubmit={(e) => {

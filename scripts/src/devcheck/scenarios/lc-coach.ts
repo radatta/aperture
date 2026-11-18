@@ -824,14 +824,32 @@ export const lcCoach: Scenario = {
       what: 'log_mock with a score out of 1–4, or no Code, is refused with why and writes nothing',
     },
     {
-      id: 'mock-delete-ownership',
+      id: 'mock-ui-log-planned',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Log it on a mock planned for today scores that same row done (an edit by id, no second mock)',
+    },
+    {
+      id: 'mock-patterns-delete',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Delete on the Patterns list asks once inline; Yes removes the mock',
+    },
+    {
+      id: 'mock-delete-idempotent',
       entry: 'api',
       kind: 'edge',
-      what: 'Delete is idempotent, and another user’s mock (or sitting) is Not found to change, delete or name',
+      what: 'deleteMock twice on the same mock: the second is a no-op, and it stays gone',
+    },
+    {
+      id: 'mock-ownership',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Another user’s mock is Not found to change or delete and stays as it was; their sitting can’t be named',
       offDev: {
         file: 'lambdas/src/backend.mocks.test.ts',
         test: 'another user’s mock is Not found to read, change or delete, and stays as it was',
-        why: 'dev has one test user, so a second user’s rows can’t exist there; the contract test runs the idempotent delete on the stub and the backend alike, and the dev step’s Cancel runs the same deleteMock',
+        why: 'dev has one test user, so a second user’s rows can’t exist there (the partition key is the user)',
       },
     },
     {
@@ -2362,7 +2380,9 @@ export const lcCoach: Scenario = {
         'mock-ui-log',
         'mock-slots-unchanged',
         'mock-ui-plan',
+        'mock-ui-log-planned',
         'mock-patterns',
+        'mock-patterns-delete',
         'mock-390',
       ],
       async run(ctx) {
@@ -2440,6 +2460,36 @@ export const lcCoach: Scenario = {
           fail(`the planned mock: ${JSON.stringify(planned)}`);
         await ctx.shot('lc-coach-mock-planned');
 
+        // One planned for today, then Log it on its row: the same id, now done.
+        await block.getByRole('button', { name: 'Log a mock' }).click();
+        form = block.getByRole('form', { name: 'Log a mock' });
+        await form.getByRole('button', { name: 'Planned' }).click();
+        await form.getByLabel('Day').fill(before.day);
+        await form.getByLabel('Who ran it (optional)').fill(label);
+        await form.getByLabel('Notes (optional)').fill(`planned ${ctx.nonce}`);
+        await form.getByRole('button', { name: 'Plan mock' }).click();
+        const todayRow = c
+          .getByRole('region', { name: 'Next 48 hours' })
+          .getByRole('listitem')
+          .filter({ hasText: `with ${label}` })
+          .filter({ hasText: 'today' });
+        await todayRow.getByRole('button', { name: 'Log it — mock today' }).click();
+        form = block.getByRole('form', { name: 'Log the planned mock' });
+        await form.getByRole('button', { name: 'Code 4 of 4' }).click();
+        await form.getByRole('button', { name: 'Solve 3 of 4' }).click();
+        await form.getByRole('button', { name: 'Save mock' }).click();
+        await todayRow.waitFor({ state: 'hidden', timeout: 15_000 });
+        const plannedToday = (await ctx.api.reads.listMocks()).filter(
+          (m) => m.partner === label && m.notes === `planned ${ctx.nonce}`,
+        );
+        if (
+          plannedToday.length !== 1 ||
+          plannedToday[0]!.status !== 'done' ||
+          plannedToday[0]!.scores?.code !== 4
+        )
+          fail(`Log it: ${JSON.stringify(plannedToday)}`);
+        const loggedId = plannedToday[0]!.id;
+
         const after = await ctx.api.reads.getCoachToday();
         if (!same(slugs(after), slugs(before)))
           fail(`a mock moved the slots: ${slugs(before).join(',')} → ${slugs(after).join(',')}`);
@@ -2451,12 +2501,24 @@ export const lcCoach: Scenario = {
           .getByRole('listitem')
           .filter({ hasText: `with ${label}` });
         await item.getByText('Code 3 · Solve 2', { exact: true }).waitFor({ timeout: 15_000 });
-        await item.getByText(/^(First try that week \d+ of \d+|No first try that week)/).waitFor();
+        await item.getByText(/^(First try that week \d+ of \d+|No first try that week)$/).waitFor();
         await ctx.shot('lc-coach-mock-patterns');
+        // Delete the logged-from-planned one there: asks once, Yes removes it.
+        const gone = ctx.page
+          .getByRole('region', { name: 'Mock interviews' })
+          .getByRole('listitem')
+          .filter({ hasText: 'Code 4 · Solve 3' })
+          .filter({ hasText: `with ${label}` });
+        await gone.getByRole('button', { name: /^Delete the mock on / }).click();
+        await gone.getByRole('button', { name: /^Yes, delete the mock on / }).click();
+        await until(
+          'the deleted mock gone',
+          async () => !(await ctx.api.reads.listMocks()).some((m) => m.id === loggedId),
+        );
 
         // Cancel the planned one from the card.
         c = await todayCard(ctx);
-        await row().getByRole('button', { name: 'Cancel the planned mock' }).click();
+        await row().getByRole('button', { name: 'Cancel — mock tomorrow' }).click();
         await until('the planned mock gone', async () => !(await mine('planned')).length);
         await row().waitFor({ state: 'hidden', timeout: 15_000 });
       },
@@ -2470,13 +2532,18 @@ export const lcCoach: Scenario = {
         const label = `dc mcp ${tag(ctx)}`.slice(0, 40);
         const count = async () => (await ctx.api.reads.listMocks()).length;
         const n0 = await count();
-        for (const scores of [{ code: 5, solve: 2 }, { solve: 2 }]) {
+        for (const [scores, why] of [
+          [{ code: 5, solve: 2 }, /scores\.code is required, a whole number from 1 to 4|maximum/],
+          [{ solve: 2 }, /scores\.code is required|code/],
+        ] as const) {
+          let took = false;
           try {
             await ctx.mcp.writes.logMock({ scores, partner: label });
-            fail(`log_mock took ${JSON.stringify(scores)}`);
+            took = true;
           } catch (err) {
-            if (!/1 to 4|code/.test(String(err))) throw err;
+            if (!why.test(String(err))) throw err;
           }
+          if (took) fail(`log_mock took ${JSON.stringify(scores)}`);
         }
         if ((await count()) !== n0) fail('a refused log_mock wrote a mock');
         const out = await ctx.mcp.writes.logMock({
@@ -2499,6 +2566,22 @@ export const lcCoach: Scenario = {
           fail('list_mocks’ trend lacks it');
         const t = await ctx.mcp.reads.leetcodeToday();
         if (t.mock?.thisWeek !== 'done') fail(`leetcode_today’s mock: ${JSON.stringify(t.mock)}`);
+      },
+    },
+    {
+      id: 'mocks-delete',
+      title: 'deleteMock twice on the MCP step’s mock: the second is a no-op',
+      entry: 'api',
+      proves: ['mock-delete-idempotent'],
+      async run(ctx) {
+        const label = `dc mcp ${tag(ctx)}`.slice(0, 40);
+        const m =
+          (await ctx.api.reads.listMocks()).find((x) => x.partner === label) ??
+          fail('no mock from the mcp step to delete');
+        await ctx.api.writes.deleteMock(m.id);
+        await ctx.api.writes.deleteMock(m.id);
+        if ((await ctx.api.reads.listMocks()).some((x) => x.id === m.id))
+          fail('the mock is still listed after two deletes');
       },
     },
     noConsoleErrors,

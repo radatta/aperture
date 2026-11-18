@@ -78,7 +78,6 @@ export function PatternsSection() {
           />
         </Text>
       )}
-      <PatternsMocks weeks={s.weeks} />
       <div className="flex flex-col gap-1">
         <Text as="h2" id="patterns-ranking" size="sm" weight="semibold" tone="muted">
           Weakest first tries first
@@ -101,6 +100,7 @@ export function PatternsSection() {
           />
         ))}
       </ol>
+      <PatternsMocks weeks={s.weeks} />
     </div>
   );
 }

@@ -1922,7 +1922,8 @@ export type NormalizedMock = Pick<
   Mock,
   'day' | 'status' | 'kind' | 'partner' | 'sittingId' | 'problemSlug' | 'scores' | 'notes'
 >;
-const MOCK_KEYS = new Set([
+// Every field a mock write takes — the one list: normalizeMock, log_mock's arguments and the RPC's key check.
+export const MOCK_INPUT_KEYS = [
   'id',
   'day',
   'status',
@@ -1932,7 +1933,8 @@ const MOCK_KEYS = new Set([
   'problemSlug',
   'scores',
   'notes',
-]);
+] as const satisfies readonly (keyof MockInput)[];
+const MOCK_KEYS: ReadonlySet<string> = new Set(MOCK_INPUT_KEYS);
 const isMockScore = (v: unknown): v is MockScore => v === 1 || v === 2 || v === 3 || v === 4;
 function mockScores(v: unknown): MockScores | null {
   if (v === null || v === undefined) return null;
@@ -1978,7 +1980,8 @@ export function mockIdOf(v: unknown): string | null {
 }
 // One mock write, validated against the stored row it changes (null for a new one): a field it doesn't send keeps
 // the stored value, null clears it. A done mock carries Code and Solve (1–4) and is dated today or earlier; a
-// planned one has no scores yet. Throws with the reason; nothing is written on a throw.
+// planned one has no scores yet. The day's window applies only to a day being set, so an old mock's notes can
+// still change. Throws with the reason; nothing is written on a throw.
 export function normalizeMock(v: unknown, today: string, stored: Mock | null): NormalizedMock {
   mockIdOf(v);
   const r = v as Record<string, unknown>;
@@ -1995,9 +1998,10 @@ export function normalizeMock(v: unknown, today: string, stored: Mock | null): N
     throw new Error(`kind must be one of ${MOCK_KINDS.join(', ')}`);
   const day = pick('day', today);
   if (typeof day !== 'string' || !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
-  if (day < addDays(today, -MOCK_BACK_DAYS))
+  const dayMoved = day !== stored?.day;
+  if (dayMoved && day < addDays(today, -MOCK_BACK_DAYS))
     throw new Error(`day must be within the last ${MOCK_BACK_DAYS} days`);
-  if (day > addDays(today, MOCK_AHEAD_DAYS))
+  if (dayMoved && day > addDays(today, MOCK_AHEAD_DAYS))
     throw new Error(`day must be within the next ${MOCK_AHEAD_DAYS} days`);
   if (status === 'done' && day > today)
     throw new Error('A done mock is dated today or earlier — plan it (status planned) instead');
@@ -2034,15 +2038,20 @@ export function normalizeMock(v: unknown, today: string, stored: Mock | null): N
 export const sortMocks = (mocks: readonly Mock[]): Mock[] =>
   [...mocks].sort((a, b) => b.day.localeCompare(a.day) || b.createdAt - a.createdAt);
 
-export type MockBrief = Pick<Mock, 'id' | 'day' | 'status' | 'kind' | 'partner' | 'scores'>;
+export type MockBrief = Pick<
+  Mock,
+  'id' | 'day' | 'status' | 'kind' | 'partner' | 'scores' | 'notes'
+>;
 // The Today card's and leetcode_today's view of mocks. One line, never a count of weeks without one.
 export interface CoachMockView {
   thisWeek: 'done' | 'planned' | 'none'; // the ISO week of today: a done one wins over a planned one
   last: MockBrief | null; // the newest done mock, any week
   doneCount: number;
   upcoming: MockBrief[]; // planned from today through 2 days on, soonest first (the card's 48-hour list)
+  unlogged: MockBrief[]; // planned for a day already past, newest first, ≤ MOCK_UNLOGGED_MAX: to log or cancel
   line: string;
 }
+export const MOCK_UNLOGGED_MAX = 5;
 const brief = (m: Mock): MockBrief => ({
   id: m.id,
   day: m.day,
@@ -2050,6 +2059,7 @@ const brief = (m: Mock): MockBrief => ({
   kind: m.kind,
   partner: m.partner,
   scores: m.scores,
+  notes: m.notes,
 });
 export const fmtMockScores = (s: MockScores): string =>
   [
@@ -2067,20 +2077,27 @@ export function mockView(mocks: readonly Mock[], today: string): CoachMockView {
   const planned = alive.filter((m) => m.status === 'planned' && inWeek(m)); // newest day first
   const plannedNow = planned.filter((m) => m.day >= today).at(-1) ?? planned[0];
   const in48 = addDays(today, 2);
+  const upcoming = alive
+    .filter((m) => m.status === 'planned' && m.day >= today && m.day <= in48)
+    .sort((a, b) => a.day.localeCompare(b.day) || a.createdAt - b.createdAt);
+  // None this week but one booked in the next 48 hours (a Sunday's Monday mock): the line names it, so neither the
+  // card nor the thread suggests one already planned.
+  const named = plannedNow ?? upcoming[0];
   const line = doneNow
     ? `Mock this week: ${fmtMockScores(doneNow.scores!)}`
-    : plannedNow
-      ? plannedNow.day >= today
-        ? `Mock planned ${fmtSpokenDay(plannedNow.day, today)}`
-        : `Mock planned ${fmtSpokenDay(plannedNow.day, today)}, not logged yet`
+    : named
+      ? named.day >= today
+        ? `Mock planned ${fmtSpokenDay(named.day, today)}`
+        : `Mock planned ${fmtSpokenDay(named.day, today)}, not logged yet`
       : 'No mock this week yet';
   return {
     thisWeek: doneNow ? 'done' : plannedNow ? 'planned' : 'none',
     last: done[0] ? brief(done[0]) : null,
     doneCount: done.length,
-    upcoming: alive
-      .filter((m) => m.status === 'planned' && m.day >= today && m.day <= in48)
-      .sort((a, b) => a.day.localeCompare(b.day) || a.createdAt - b.createdAt)
+    upcoming: upcoming.map(brief),
+    unlogged: alive
+      .filter((m) => m.status === 'planned' && m.day < today)
+      .slice(0, MOCK_UNLOGGED_MAX)
       .map(brief),
     line,
   };

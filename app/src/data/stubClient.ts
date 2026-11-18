@@ -1503,15 +1503,16 @@ class StubClient implements ApiClient {
   async upsertMock(input: MockInput): Promise<Mock> {
     const id = mockIdOf(input);
     const stored = id === null ? null : this.mustFind(this.store.mocks, id);
-    const ci = this.coachInput();
-    const n = normalizeMock(input, ci.today, stored);
+    const now = this.now();
+    const n = normalizeMock(input, dayKeyInZone(now, USER_TIME_ZONE, this.dayStartHour()), stored);
+    // A sitting newly named: it must be the user's, and its problem fills a problemSlug the write didn't send.
     if (n.sittingId !== null && n.sittingId !== stored?.sittingId) {
       const s = this.find(this.store.sittings, n.sittingId);
       if (!s) throw new Error(`Not found: sitting ${n.sittingId}`);
-      if (n.problemSlug === null && !('problemSlug' in input)) n.problemSlug = s.problemSlug;
+      if (input.problemSlug === undefined) n.problemSlug = s.problemSlug;
     }
     if (stored) return this.writes.patch(this.store.mocks, stored.id, n);
-    return this.writes.insert(this.store.mocks, { ...this.baseAt(ci.now), ...n });
+    return this.writes.insert(this.store.mocks, { ...this.baseAt(now), ...n });
   }
   async listMocks(): Promise<Mock[]> {
     return sortMocks(this.alive(this.store.mocks));

@@ -4494,6 +4494,7 @@ export function runApiContract(
           last: null,
           doneCount: 0,
           upcoming: [],
+          unlogged: [],
           line: 'No mock this week yet',
         });
         const m = await api.upsertMock({
@@ -4559,35 +4560,71 @@ export function runApiContract(
       });
 
       it('bad scores and fields are refused and write nothing', async () => {
-        for (const input of [
-          { scores: { code: 5, solve: 2 } },
-          { scores: { code: 0, solve: 2 } },
-          { scores: { code: 2.5, solve: 2 } },
-          { scores: { solve: 2 } },
-          { scores: { code: 2, solve: 2, communicate: 9 } },
-          { scores: { code: 2, solve: 2, focus: 2 } },
-          {}, // done, no scores
-          { status: 'planned', day: addDays(TODAY, 1), scores: done },
-          { scores: done, day: addDays(TODAY, 1) },
-          { scores: done, day: addDays(TODAY, -400) },
-          { status: 'planned', day: addDays(TODAY, 61) },
-          { scores: done, kind: 'phone' },
-          { scores: done, status: 'maybe' },
-          { scores: done, partner: 'x'.repeat(41) },
-          { scores: done, notes: 'x'.repeat(1001) },
-          { scores: done, problemSlug: 'Two Sum' },
-          { scores: done, day: '11/14/2023' },
-          { scores: done, extra: true },
-        ])
-          await expect(api.upsertMock(input as never)).rejects.toThrow();
+        const cases: [object, RegExp][] = [
+          [{ scores: { code: 5, solve: 2 } }, /scores\.code .*1 to 4/],
+          [{ scores: { code: 0, solve: 2 } }, /scores\.code .*1 to 4/],
+          [{ scores: { code: 2.5, solve: 2 } }, /scores\.code .*1 to 4/],
+          [{ scores: { solve: 2 } }, /scores\.code is required/],
+          [{ scores: { code: 2, solve: 2, communicate: 9 } }, /communicate must be/],
+          [{ scores: { code: 2, solve: 2, focus: 2 } }, /Unknown score: focus/],
+          [{}, /needs its scores/], // done, no scores
+          [{ status: 'planned', day: addDays(TODAY, 1), scores: done }, /no scores yet/],
+          [{ scores: done, day: addDays(TODAY, 1) }, /today or earlier/],
+          [{ scores: done, day: addDays(TODAY, -366) }, /last 365 days/],
+          [{ status: 'planned', day: addDays(TODAY, 61) }, /next 60 days/],
+          [{ scores: done, kind: 'phone' }, /kind must be/],
+          [{ scores: done, status: 'maybe' }, /planned or done/],
+          [{ scores: done, partner: 'x'.repeat(41) }, /partner is limited to 40/],
+          [{ scores: done, notes: 'x'.repeat(1001) }, /notes is limited to 1000/],
+          [{ scores: done, problemSlug: 'Two Sum' }, /problemSlug must be/],
+          [{ scores: done, day: '11/14/2023' }, /YYYY-MM-DD/],
+          [{ scores: done, extra: true }, /extra/],
+        ];
+        for (const [input, why] of cases)
+          await expect(api.upsertMock(input as never)).rejects.toThrow(why);
         expect(await api.listMocks()).toEqual([]);
         // At the caps it's fine.
         const ok = await api.upsertMock({
           scores: { code: 1, solve: 4, communicate: 4 },
           partner: 'x'.repeat(40),
           notes: 'y'.repeat(1000),
+          day: addDays(TODAY, -365),
         });
         expect(ok.scores).toEqual({ code: 1, solve: 4, communicate: 4 });
+        expect((await api.upsertMock({ status: 'planned', day: addDays(TODAY, 60) })).status).toBe(
+          'planned',
+        );
+      });
+
+      it('an old mock’s notes still change; only a day being set meets the window', async () => {
+        const m = await api.upsertMock({ scores: done, day: addDays(TODAY, -300) });
+        advance(100 * 86_400_000); // now 400 days after it
+        expect((await api.upsertMock({ id: m.id, notes: 'still mine' })).notes).toBe('still mine');
+        await expect(api.upsertMock({ id: m.id, day: addDays(m.day, -1) })).rejects.toThrow(
+          /last 365 days/,
+        );
+      });
+
+      it('logging a planned mock by id keeps its notes; moving it to another sitting takes that problem', async () => {
+        const p = await api.upsertMock({
+          status: 'planned',
+          day: TODAY,
+          notes: 'bring a timer',
+        });
+        const logged = await api.upsertMock({ id: p.id, status: 'done', scores: done });
+        expect(logged.notes).toBe('bring a timer');
+        const a = await startSitting(api, { problemSlug: 'two-sum', problemTitle: 'Two Sum' });
+        const m = await api.upsertMock({ id: p.id, sittingId: a.sitting.id });
+        expect(m.problemSlug).toBe('two-sum');
+        await api.transitionTask(a.sitting.repTaskId, 'cancelled');
+        advance(60_000);
+        const b = await startSitting(api, {
+          problemSlug: 'valid-anagram',
+          problemTitle: 'Valid Anagram',
+        });
+        expect((await api.upsertMock({ id: p.id, sittingId: b.sitting.id })).problemSlug).toBe(
+          'valid-anagram',
+        );
       });
 
       it('an id that isn’t one of yours is Not found; delete is idempotent', async () => {
@@ -4632,6 +4669,7 @@ export function runApiContract(
           doneCount: 1,
           last: { id: old.id },
           upcoming: [],
+          unlogged: [{ id: missed.id, day: addDays(TODAY, -1), status: 'planned' }],
           line: 'Mock planned yesterday, not logged yet',
         });
       });

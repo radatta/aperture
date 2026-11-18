@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { fmtMockScores, fmtMonthShortDay, MOCK_KIND_NAMES } from '@aperture/shared';
 import type { CoachStats, Mock } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -6,6 +6,7 @@ import { LoadError } from '../../components/LoadError';
 import { Text } from '../../components/Text';
 import { useDeleteMock, useMocks } from '../../data/hooks/useCoach';
 import { isTransientRead } from '../../data/retry';
+import { returnFocus } from '../../lib/useDisclosure';
 import { fmtRate, mockRows } from './patternsHelpers';
 
 const MAX_SHOWN = 12;
@@ -15,13 +16,27 @@ const MAX_SHOWN = 12;
 // two. Delete asks once, inline.
 export function PatternsMocks({ weeks }: { weeks: CoachStats['weeks'] }) {
   const mocks = useMocks();
+  // A deleted row takes its buttons with it: focus goes to the section's heading.
+  const heading = useRef<HTMLElement>(null);
+  const onDeleted = () => {
+    if (heading.current) returnFocus(heading.current);
+  };
   if (mocks.isError && !mocks.data)
     return <LoadError onRetry={() => void mocks.refetch()}>Couldn’t load the mocks.</LoadError>;
   if (!mocks.data) return null;
   const rows = mockRows(mocks.data, weeks).slice(0, MAX_SHOWN);
   return (
     <section aria-labelledby="patterns-mocks" className="flex flex-col gap-1">
-      <Text as="h2" id="patterns-mocks" size="sm" weight="semibold" tone="muted">
+      <Text
+        as="h2"
+        ref={heading}
+        tabIndex={-1}
+        id="patterns-mocks"
+        size="sm"
+        weight="semibold"
+        tone="muted"
+        className="outline-offset-2"
+      >
         Mock interviews
       </Text>
       {rows.length === 0 ? (
@@ -34,7 +49,7 @@ export function PatternsMocks({ weeks }: { weeks: CoachStats['weeks'] }) {
           <ScoreLines mocks={rows.map((r) => r.mock)} />
           <ul className="flex flex-col divide-y divide-line">
             {rows.map((r) => (
-              <MockRow key={r.mock.id} mock={r.mock} firstTry={r.firstTry} />
+              <MockRow key={r.mock.id} mock={r.mock} firstTry={r.firstTry} onDeleted={onDeleted} />
             ))}
           </ul>
         </>
@@ -43,9 +58,25 @@ export function PatternsMocks({ weeks }: { weeks: CoachStats['weeks'] }) {
   );
 }
 
-function MockRow({ mock: m, firstTry }: { mock: Mock; firstTry: CoachStats['firstTry'] | null }) {
+function MockRow({
+  mock: m,
+  firstTry,
+  onDeleted,
+}: {
+  mock: Mock;
+  firstTry: CoachStats['firstTry'] | null;
+  onDeleted: () => void;
+}) {
   const del = useDeleteMock();
   const [asking, setAsking] = useState(false);
+  // No hands focus back to the Delete it replaced (remounted with the question gone).
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const back = useRef(false);
+  useLayoutEffect(() => {
+    if (asking || !back.current || !deleteButton.current) return;
+    back.current = false;
+    returnFocus(deleteButton.current);
+  }, [asking]);
   const [error, setError] = useState<string | null>(null);
   const when = fmtMonthShortDay(m.day);
   async function remove() {
@@ -53,6 +84,7 @@ function MockRow({ mock: m, firstTry }: { mock: Mock; firstTry: CoachStats['firs
     setError(null);
     try {
       await del.mutateAsync(m.id);
+      onDeleted();
     } catch (e) {
       setError(
         isTransientRead(e)
@@ -85,12 +117,21 @@ function MockRow({ mock: m, firstTry }: { mock: Mock; firstTry: CoachStats['firs
             >
               Yes
             </Button>
-            <Button variant="quiet" size="sm" autoFocus onClick={() => setAsking(false)}>
+            <Button
+              variant="quiet"
+              size="sm"
+              autoFocus
+              onClick={() => {
+                back.current = true;
+                setAsking(false);
+              }}
+            >
               No
             </Button>
           </span>
         ) : (
           <Button
+            ref={deleteButton}
             variant="quiet"
             size="sm"
             aria-label={`Delete the mock on ${when}`}

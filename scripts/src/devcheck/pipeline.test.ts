@@ -7,6 +7,8 @@ import {
   FLUX_SET_VIA,
   LOG_VIA,
   STORY_VIA,
+  MOCK_VIA,
+  UI_MOCK_VIA,
   CATEGORY_VIA,
   PLACE_TOKEN_VIA,
   PUSH_SUB_VIA,
@@ -20,6 +22,7 @@ import {
   type DevLogEntry,
   type DevPlace,
   type DevScopedToken,
+  type DevMock,
   type DevStory,
   type DevTask,
 } from './api';
@@ -90,6 +93,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const logDeleted: string[] = [];
   const stories = new Map<string, DevStory>();
   const storiesDeleted: string[] = [];
+  const mocks = new Map<string, DevMock>();
+  const mocksDeleted: string[] = [];
   const places = new Map<string, DevPlace>();
   const placesDeleted: string[] = [];
   const categories = new Map<string, DevCategory>();
@@ -297,7 +302,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         patterns: [],
       }),
       listCoachAttempts: async () => [],
-      listMocks: async () => [],
+      listMocks: async () => [...mocks.values()],
       getCoachFocusRow: async () => null,
       getCoachDay: async () => null,
       listCoachVoids: async () => [],
@@ -597,8 +602,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       patchSittingReview: async () => {
         throw new Error('unused');
       },
-      deleteMock: async () => {
-        throw new Error('unused');
+      deleteMock: async (id) => {
+        mocksDeleted.push(id);
+        mocks.delete(id);
       },
       deleteCoachAttempt: async () => {
         throw new Error('unused');
@@ -683,6 +689,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     logDeleted,
     stories,
     storiesDeleted,
+    mocks,
+    mocksDeleted,
     places,
     placesDeleted,
     placeToken,
@@ -1317,6 +1325,33 @@ describe('runPipeline', () => {
     expect(w.storiesDeleted).toEqual(['st-old', 'st-new']);
     expect(w.deleted).toEqual([]);
     expect(r.swept).toEqual(['st-old']);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a mock — logged over MCP, or made in the app — is read back and deleted as a mock; a crashed run’s too', async () => {
+    const w = world();
+    const mock = (id: string): DevMock => ({
+      id,
+      day: '2026-11-17',
+      status: 'done',
+      kind: 'human',
+      partner: null,
+      sittingId: null,
+      problemSlug: null,
+      scores: { code: 2, solve: 2 },
+      notes: null,
+    });
+    w.mocks.set('mk-old', mock('mk-old'));
+    const ledger = memLedger([{ run: 'run0', op: 'created', id: 'mk-old', via: MOCK_VIA }]);
+    const sc = scenario(async (x) => {
+      ledger.append({ run: 'run1', op: 'created', id: 'mk-new', via: UI_MOCK_VIA });
+      x.mocks.set('mk-new', mock('mk-new'));
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.mocksDeleted).toEqual(['mk-old', 'mk-new']);
+    expect(w.deleted).toEqual([]);
+    expect(w.mocks.size).toBe(0);
+    expect(r.swept).toEqual(['mk-old']);
     expect(r.status).toBe('PASS');
   });
 

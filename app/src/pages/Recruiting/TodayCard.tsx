@@ -1,6 +1,6 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { MOCK_KIND_NAMES, PATTERN_NAMES, PATTERNS } from '@aperture/shared';
+import { fmtSpokenDay, MOCK_KIND_NAMES, PATTERN_NAMES, PATTERNS } from '@aperture/shared';
 import type { CoachSlot, CoachToday, MockBrief, PatternId } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -331,6 +331,7 @@ function PlannedMockRow({
   onLog: () => void;
   onCancel: () => void;
 }) {
+  const when = fmtSpokenDay(m.day, today);
   return (
     <li className="flex flex-col">
       <div className="flex items-baseline justify-between gap-3">
@@ -342,16 +343,17 @@ function PlannedMockRow({
           </Text>
         </Text>
         <Text size="xs" tone="muted" className="shrink-0">
-          {m.day === today ? 'today' : dueLabel(m.day, today)}
+          {when}
         </Text>
       </div>
       <div className="-ml-2 flex flex-wrap gap-1">
+        {/* From its day on: a mock not yet held has nothing to log. */}
         {m.day <= today && (
-          <Button variant="quiet" size="sm" onClick={onLog} aria-label="Log it — the planned mock">
+          <Button variant="quiet" size="sm" onClick={onLog} aria-label={`Log it — mock ${when}`}>
             Log it
           </Button>
         )}
-        <Button variant="quiet" size="sm" onClick={onCancel} aria-label="Cancel the planned mock">
+        <Button variant="quiet" size="sm" onClick={onCancel} aria-label={`Cancel — mock ${when}`}>
           Cancel
         </Button>
       </div>
@@ -362,7 +364,8 @@ function PlannedMockRow({
 // The week's mock in one line (muted when there's none yet — never a count of missed weeks), Log a mock, and the
 // form when open.
 function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
-  const none = today.mock.thisWeek === 'none';
+  const none = today.mock.thisWeek === 'none' && !today.mock.upcoming.length;
+  const unlogged = today.mock.unlogged ?? [];
   useLayoutEffect(() => {
     if (!state.refocus.current || !state.trigger.current) return;
     state.refocus.current = false;
@@ -380,6 +383,20 @@ function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
           </Button>
         )}
       </div>
+      {/* Planned for a day already past: still to log, or to cancel — never left dangling. */}
+      {unlogged.length > 0 && (
+        <ul aria-label="Planned mocks not logged yet" className="flex flex-col gap-0.5">
+          {unlogged.map((m) => (
+            <PlannedMockRow
+              key={m.id}
+              mock={m}
+              today={today.day}
+              onLog={() => state.openLog(m)}
+              onCancel={() => void state.cancel(m)}
+            />
+          ))}
+        </ul>
+      )}
       {state.error && (
         <p role="alert" className="text-sm text-danger">
           {state.error}
