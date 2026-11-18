@@ -2,6 +2,7 @@
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
 import { findIdentifiers } from '../../identifiers.ts';
 import { clean, parseTime } from './fmt.ts';
+import { REUSE_MS } from './mergelog.ts';
 
 // pr-open: the lane opened its PR and checks aren't green yet (between building and ready)
 export const LANE_STATES = [
@@ -122,7 +123,12 @@ const AFTER_REF =
 const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:(?:T| ~?)(\d{1,2}):(\d{2}))?(?=$|[ (~])/;
 const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{2})-(\d{2})(?=$|[ (])/;
 export type Merged = { branch: string; number: number; mergedAt: number };
-export function firedAt(after: string, merged: Merged[], now: number): number | null {
+export function firedAt(
+  after: string,
+  merged: Merged[],
+  now: number,
+  branchSince = -Infinity,
+): number | null {
   const iso = planAt(after.split(/[ (]/)[0]); // a whole ISO date-time (`2026-11-20T09:00Z`), as the plan takes it
   if (iso !== null) return iso;
   let m = AFTER_ISO.exec(after);
@@ -139,15 +145,38 @@ export function firedAt(after: string, merged: Merged[], now: number): number | 
         ? local(y - 1, +m[1]!, +m[2]!)
         : at;
   }
+  return refFiredAt(after, merged, branchSince);
+}
+// The merge half alone (`<branch> merges`, `PR <n>`, `+ N days`): what a devQueue `waitingOn` can name (stale.ts).
+// `branchSince`: a branch reference counts only a merge at or after it (a reused name: mergelog.ts REUSE_MS); a PR
+// number is exact. `on: 'fire'` cuts on when it fires instead (merge + offset): a `waitingOn` judged against now,
+// where "<branch> merges + 1 day" still fires a day after a recent merge; a follow-up cuts on the merge itself.
+export function refFiredAt(
+  after: string,
+  merged: Merged[],
+  branchSince = -Infinity,
+  on: 'merge' | 'fire' = 'merge',
+): number | null {
   const r = AFTER_REF.exec(after);
-  const pr = r && merged.find((p) => (r[1] ? p.number === +r[1] : p.branch === r[2]));
+  const off = r?.[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0;
+  const pr =
+    r &&
+    merged.find((p) =>
+      r[1]
+        ? p.number === +r[1]
+        : p.branch === r[2] && p.mergedAt + (on === 'fire' ? off : 0) >= branchSince,
+    );
   if (!r || !pr) return null;
-  return pr.mergedAt + (r[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0);
+  return pr.mergedAt + off;
 }
 export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
   fu.flatMap((f) => {
     if (f.status !== 'open' || f.after === 'now') return [];
-    const at = firedAt(f.after, merged, now);
+    // a branch merge over a day before the follow-up was written is a namesake's (a reused name: mergelog.ts); one
+    // just before is the one it records (the hub often logs a follow-up after its trigger). A bare-date `since` reads
+    // as that day's end, so the day before counts from that day's start.
+    const cut = f.since === null ? -Infinity : f.since - REUSE_MS - (f.sinceDay ? 86400e3 : 0);
+    const at = firedAt(f.after, merged, now, cut);
     return at !== null && at <= now ? [{ ...f, firedAt: at }] : [];
   });
 
@@ -165,6 +194,7 @@ export type QueueData = {
   planAt: number | null; // when dispatch last rewrote the plan
   followups: Followup[];
   mergeOrder: MergeOrderItem[];
+  autoStart?: string[]; // dispatch's auto-start queue, branches only (its shape is pq-check's); read leniently
 };
 
 // A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
@@ -388,6 +418,12 @@ function parse(text: string | null, prev: QueueData | null): Queue {
     mergeOrder.push({ branch, pr: int(o.pr), note: str(o.note) });
   });
 
+  // never a problem row: the tower only asks whether a listed lane has started (stale.ts)
+  const autoStart = arr(raw.autoStart).flatMap((x) => {
+    const b = str((x as Record<string, unknown> | null)?.branch);
+    return b && LANE_RE.test(b) ? [b] : [];
+  });
+
   return {
     status: problems.length ? 'bad' : 'ok',
     data: {
@@ -401,6 +437,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       planAt: planAtV,
       followups,
       mergeOrder,
+      autoStart,
     },
     problems,
     ...(unread.length ? { unread } : {}),

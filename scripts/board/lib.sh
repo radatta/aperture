@@ -13,9 +13,10 @@ SB_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SB_REPO="$(cd "$SB_SCRIPTS/../.." && pwd)"
 # The board lives in the MAIN checkout's localNotes/ (shared by every worktree): /workspace in the container;
 # on the Mac, wherever git says the main checkout is (read-only view — see board.sh status).
-if [ -n "${APERTURE_BOARD_DIR:-}" ]; then BOARD_DIR=$APERTURE_BOARD_DIR
-elif [ -d /workspace/localNotes ]; then BOARD_DIR=/workspace/localNotes/board
-else BOARD_DIR="$(cd "$(git -C "$SB_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)/localNotes/board"; fi
+# SB_HOME_BOARD is that default whatever the override: only the real board starts the main sync (board.sh sync ensure).
+if [ -d /workspace/localNotes ]; then SB_HOME_BOARD=/workspace/localNotes/board
+else SB_HOME_BOARD="$(cd "$(git -C "$SB_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/.." 2>/dev/null && pwd)/localNotes/board"; fi
+BOARD_DIR="${APERTURE_BOARD_DIR:-$SB_HOME_BOARD}"
 BOARD_LOCK="${APERTURE_BOARD_LOCK:-/tmp/aperture-board.lock}"
 CG="${APERTURE_CGROUP_DIR:-/sys/fs/cgroup}"
 LIMITS_JSON="${APERTURE_LIMITS_JSON:-$SB_SCRIPTS/limits.json}"
@@ -24,6 +25,9 @@ SAMPLER_LOCK="${APERTURE_SAMPLER_LOCK:-/tmp/aperture-sampler.lock}"
 SAMPLER_PID="${APERTURE_SAMPLER_PID:-/tmp/aperture-sampler.pid}"
 TOWER_PID="${APERTURE_TOWER_PID:-/tmp/aperture-tower.pid}" # the web tower server, written once bound (docs/ops/TOWER.md)
 TOWER_PORT="${APERTURE_TOWER_PORT:-6183}" # its port: the one-server lock, and how `board.sh tower` finds it without the pidfile
+# The main-sync loop singleton (sync.sh, docs/ops/TOWER.md → Main sync); tests point both elsewhere.
+SYNC_LOCK="${APERTURE_SYNC_LOCK:-/tmp/aperture-main-sync.lock}"
+SYNC_PID="${APERTURE_SYNC_PID:-/tmp/aperture-main-sync.pid}"
 
 sb_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 sb_today() { date -u +%Y-%m-%d; }

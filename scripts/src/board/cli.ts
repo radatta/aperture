@@ -17,13 +17,14 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
-import { withMainLock } from './main-lock.ts';
+import { MAIN_LOCK, MainBusy, withMainLock, withRestartLock } from './main-lock.ts';
 import { execRun, syncMain } from './sync-main.ts';
 import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { LANE_USAGE, parseLaneArgs, writeLane } from './tower/lanes.ts';
 import { readMacStats } from './tower/health.ts';
+import { formatStale } from './tower/stale.ts';
 import { compactJob } from './tower/history.ts';
 import { machine } from './machine.ts';
 
@@ -35,7 +36,8 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   barriers <historyDir> [days] [--json] how limiting the cap is
   machine <boardDir> [--json]           the Mac's power line and the slowdown ratio (F120)
   lane <phase> [--step …] [--plan …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
-  sync-main                             the main checkout to origin/main; restarts the web tower if its code changed`;
+  sync-main                             the main checkout to origin/main; restarts the web tower if its code changed
+  stale [--json]                        where queue.json contradicts the derived board (the web tower's stale.json)`;
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
 export const FLAGS: Record<string, Spec> = {
@@ -47,6 +49,7 @@ export const FLAGS: Record<string, Spec> = {
   machine: { bare: ['json'], args: 1 },
   lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
   'sync-main': {},
+  stale: { bare: ['json'] },
 };
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.
@@ -214,13 +217,29 @@ export function main(argv: string[], stdin: () => string): string {
         execRun,
         process.env.INIT_CWD ?? process.cwd(), // pnpm runs scripts from the root; INIT_CWD is where it was typed
         withMainLock,
+        withRestartLock,
       );
+    case 'stale': {
+      const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
+      if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+      let text: string | null = null;
+      try {
+        text = readFileSync(join(dir, 'stale.json'), 'utf8');
+      } catch {
+        // not written yet
+      }
+      return rest.includes('--json') ? (text ?? '').trim() : formatStale(text, now.getTime());
+    }
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | lane | sync-main (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | lane | sync-main | stale (got ${cmd ?? 'nothing'})`,
       );
   }
 }
+
+// A busy main checkout (its lock, before anything moved) is no failure: 75, and the main sync loop tries again next
+// round (sync.sh). A busy tower restart comes after a move, so it stays an error (2) that says so.
+export const exitCode = (e: unknown) => (e instanceof MainBusy && e.file === MAIN_LOCK ? 75 : 2);
 
 if (process.argv[1]?.endsWith('cli.ts')) {
   try {
@@ -228,6 +247,6 @@ if (process.argv[1]?.endsWith('cli.ts')) {
     if (out) process.stdout.write(out + '\n');
   } catch (e) {
     process.stderr.write(`board cli: ${(e as Error).message}\n`);
-    process.exit(2);
+    process.exit(exitCode(e));
   }
 }

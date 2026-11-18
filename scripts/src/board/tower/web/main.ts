@@ -6,14 +6,16 @@
 //   --once            print one View as JSON and exit (no socket)
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { execFile, execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_SLUG } from '../../../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../../../mac-root.ts';
 import { sessionNames } from '../../sessions.ts';
 import { behindCheck, type Behind } from '../behind.ts';
+import { parseCtx } from '../ctx.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
+import { hhmm } from '../fmt.ts';
 import {
   ChecksCache,
   FilesCache,
@@ -26,13 +28,16 @@ import {
 } from '../gh.ts';
 import { readCosts, readMacStats, type MacRead } from '../health.ts';
 import { readLanes } from '../lanes.ts';
+import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
 import { PrCache, ghFetch, type Fetch } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
+import { boardLine, parseMainSync, staleFile, SYNC_SILENT_MS, type UsageLine } from '../stale.ts';
 import { createHandler, serve } from './server.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const TICK_MS = 5000;
+const USAGE_MS = 300000;
 const DEVLOCK_MS = 60000;
 
 // NEEDS YOU's command when the Mac stats agent is missing (tools/macstats/install.sh; TOWER.md → Mac stats).
@@ -229,8 +234,48 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     return ok;
   };
 
+  // main's squash merges (mergelog.ts), a local git read at most once a minute; fixtures: their mainlog.txt, if any
+  let mainLog: { at: number; list: MainMerge[] } | null = null;
+  const readMainLog = (now: number): MainMerge[] => {
+    if (mainLog && now - mainLog.at < 60000) return mainLog.list;
+    let list: MainMerge[] = mainLog?.list ?? [];
+    try {
+      list = parseMainLog(
+        fx ? readFileSync(join(fx, 'mainlog.txt'), 'utf8') : repoGit([...MAINLOG_ARGS]),
+      );
+    } catch {
+      // no fixture log, or no origin/main: the last read (or none) stands
+    }
+    mainLog = { at: now, list };
+    return list;
+  };
+
+  // `pnpm usage line` (docs/ops/USAGE-METER.md) for the header and the status line: a subprocess every 5 min, never a
+  // transcript scan (--no-scan: the meter rows only), never on fixtures. A failed run keeps the last good line.
+  let usage: UsageLine | null = null;
+  let usageTried = -Infinity;
+  let usageBusy = false;
+  const pollUsage = (now: number) => {
+    if (fx || usageBusy || now - usageTried < USAGE_MS) return;
+    usageBusy = true;
+    usageTried = now;
+    execFile(
+      'node',
+      [join(REPO, 'scripts/src/usage/cli.ts'), 'line', '--no-scan'],
+      { timeout: 20000, maxBuffer: 1 << 16 },
+      (err, out) => {
+        usageBusy = false;
+        const text = String(out ?? '')
+          .split('\n')[0]!
+          .trim();
+        if (!err && text) usage = { at: clock(), text: text.slice(0, 120) };
+      },
+    );
+  };
+
   // GitHub, in the background: never awaited by a request, never two of one kind at once.
   async function poll(now: number) {
+    pollUsage(now);
     await Promise.all([prs?.poll(now), runs.poll(now)]);
     for (const p of prs?.list ?? []) {
       if (p.state !== 'OPEN' || !p.sha) continue;
@@ -239,9 +284,12 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     }
   }
 
-  function view(
-    history: boolean,
-  ): View & { history?: unknown; sparks: Record<string, (number | null)[]>; startedAt: number } {
+  function view(history: boolean): View & {
+    history?: unknown;
+    sparks: Record<string, (number | null)[]>;
+    startedAt: number;
+    usage: UsageLine | null;
+  } {
     const now = clock();
     const tower = source.refresh(now);
     const lanes = readLanes(paths.boardDir);
@@ -264,6 +312,9 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       macInstall: MAC_INSTALL,
       macInstallReady: installReady(now),
       dayStart: dayStart(now),
+      mainLog: readMainLog(now),
+      mainSync: readMainSync(paths.boardDir),
+      ctx: readCtx(paths.boardDir, fx ? now : null),
     };
     const v = derive(inputs);
     const sparks = {
@@ -276,11 +327,12 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
         now,
       ),
     };
-    if (!history) return { ...v, sparks, startedAt };
+    if (!history) return { ...v, sparks, startedAt, usage };
     return {
       ...v,
       sparks,
       startedAt,
+      usage,
       history: {
         container: tower.points.map((p) => [p.t, p.anon, p.cpu]),
         mac: macHist.map((m) => [m.t, m.usedMiB, m.totalMiB]),
@@ -288,6 +340,36 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     };
   }
   return { poll, view, sample, clock, paths, version };
+}
+
+// dispatch's ctx.json; its mtime is its time (a fixture's is the fixed clock's)
+const readCtx = (dir: string, fixedAt: number | null) => {
+  try {
+    const f = join(dir, 'ctx.json');
+    return parseCtx(readFileSync(f, 'utf8'), fixedAt ?? statSync(f).mtimeMs);
+  } catch {
+    return null;
+  }
+};
+
+const readMainSync = (dir: string) => {
+  try {
+    return parseMainSync(readFileSync(join(dir, 'main-sync.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+// The derived files beside queue.json (stale.ts → board.line, stale.json): tmp + rename, so a reader never sees half.
+const DERIVED_MS = 30000;
+export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }) {
+  const put = (name: string, text: string) => {
+    const tmp = join(dir, `.${name}.tmp.${process.pid}`);
+    writeFileSync(tmp, text);
+    renameSync(tmp, join(dir, name));
+  };
+  put('stale.json', JSON.stringify(staleFile(v.board, v.now)) + '\n');
+  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null, v.ctx));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -331,6 +413,31 @@ async function run(a: Args) {
   if (!a.fixtures) {
     refreshDevlock();
     setInterval(refreshDevlock, DEVLOCK_MS);
+  }
+  // only the board's own tower (started by board.sh, with its pidfile) writes the derived files: a proof or
+  // hand-run server never overwrites them
+  if (pidFile && !a.fixtures) {
+    const derived = () => {
+      try {
+        writeDerived(t.paths.boardDir, t.view(false));
+      } catch (e) {
+        process.stderr.write(`tower-web: derived files: ${(e as Error).message}\n`);
+      }
+    };
+    setTimeout(derived, 5000); // after the first gh poll has had its chance
+    setInterval(derived, DERIVED_MS);
+    // the main sync heals from here too: a loop gone silent (or never started) is started again, by its own lock and
+    // only for the real board (`sync ensure`: a test's server on a temp board never starts one)
+    setInterval(() => {
+      const s = readMainSync(t.paths.boardDir);
+      if (!s || t.clock() - s.at > SYNC_SILENT_MS)
+        execFile(
+          'bash',
+          [join(REPO, 'scripts/board/board.sh'), 'sync', 'ensure'],
+          { timeout: 30000 },
+          () => undefined,
+        );
+    }, DEVLOCK_MS);
   }
   const stop = () => server.close(() => process.exit(0));
   process.on('SIGTERM', stop);

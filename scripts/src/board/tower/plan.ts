@@ -23,19 +23,38 @@ export type Ask = {
 
 const PAST_MS = 2 * 3600e3; // a row past due longer than this (and not slipping) drops off the glance
 
-// `prOf` gives a lane's PR (newest 40); `etaOf` its lane file's ETAs.
+// A lane-less merge row names its PRs in its text ("Merges: PR 183, PR 184 …"): `PR <n>` only, and only when that is
+// every number in it (clock times aside) — "tower 183, PR 184" may still wait on 183, so it names none.
+export const namedPrs = (what: string) => {
+  const prs = [...what.matchAll(/\bPR (\d+)\b/g)].map((m) => +m[1]!);
+  const all = what.replace(/\b\d{1,2}:\d{2}\b/g, '').match(/\b\d+\b/g) ?? [];
+  return all.length === prs.length ? prs : [];
+};
+
+// `prOf` gives a lane's PR (newest 40, or main's log); `etaOf` its lane file's ETAs; `mergedAt` when a PR number
+// merged (gh or main's log), else null.
 export function planTable(
   plan: PlanItem[],
   etaOf: (branch: string) => LaneEta | null,
   prOf: (branch: string) => PlanPr,
   now: number,
+  mergedAt: (n: number) => number | null = () => null,
 ): { rows: PlanRow[]; nowIndex: number } {
   const rows = plan.map((p): PlanRow => {
     const pr = p.lane ? prOf(p.lane) : null;
-    // a merge row whose lane's PR merged is finished then, whether or not dispatch has marked it
-    const merged = p.kind === 'merge' && pr?.state === 'MERGED' && pr.mergedAt !== null;
+    // a merge row whose lane's PR merged is finished then, whether or not dispatch has marked it; so is one once
+    // every PR its text names has merged (the last merge is its actual). A lane's row may name the PR it lands on top
+    // of, so it reads only its own "(PR n…)" (the first parenthesis opening with its PR), and only when nothing
+    // places the lane's PR.
+    let mergedTime = p.kind === 'merge' && pr?.state === 'MERGED' ? pr.mergedAt : null;
+    if (p.kind === 'merge' && mergedTime === null && !(p.lane && pr)) {
+      const own = /\(PR (\d+)[,)]/.exec(p.what);
+      const at = (p.lane ? (own ? [+own[1]!] : []) : namedPrs(p.what)).map(mergedAt);
+      if (at.length && at.every((t) => t !== null)) mergedTime = Math.max(...(at as number[]));
+    }
+    const merged = mergedTime !== null;
     const done = p.done || merged;
-    const doneAt = p.doneAt ?? (merged ? pr!.mergedAt : null);
+    const doneAt = p.doneAt ?? mergedTime;
     const due = p.eta?.to ?? p.at;
     let slip: number | null = null;
     let slipLo: number | null = null;

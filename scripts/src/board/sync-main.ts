@@ -2,7 +2,8 @@
 // restarted only when the code it serves differs from the new HEAD in a file the tower runs. The base is the commit the
 // tower serves (board.sh tower version), not the old HEAD: a checkout moved by `pnpm lanes start` is caught too. Never
 // starts a stopped tower. Idempotent: a second run says so and does nothing. The dirty check through the switch runs
-// under the main-checkout lock (main-lock.ts), so it never interleaves with a `lanes start`; the tower restart doesn't.
+// under the main-checkout lock (main-lock.ts), so it never interleaves with a `lanes start`; the tower check and
+// restart under the restart lock, so two callers (the main-sync loop, a `lanes end`) never restart it twice.
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { towerChanged } from './tower/behind.ts';
@@ -31,7 +32,12 @@ export const execRun: Run = (cmd, args, cwd, timeoutMs) => {
   }
 };
 
-export function syncMain(run: Run, here: string, locked: Locked = (fn) => fn()): string {
+export function syncMain(
+  run: Run,
+  here: string,
+  locked: Locked = (fn) => fn(),
+  restartLocked: Locked = (fn) => fn(),
+): string {
   const git = (args: string[], timeoutMs?: number) => run('git', args, mainRoot, timeoutMs).trim();
   const mainRoot = dirname(
     run('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], here).trim(),
@@ -41,7 +47,7 @@ export function syncMain(run: Run, here: string, locked: Locked = (fn) => fn()):
     old === target
       ? `main checkout: already at ${short(target)}`
       : `main checkout: moved ${short(old)} → ${short(target)}`;
-  return restartTower(run, git, mainRoot, target, moved);
+  return restartLocked(() => restartTower(run, git, mainRoot, target, moved));
 }
 
 function move(

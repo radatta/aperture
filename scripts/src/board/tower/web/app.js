@@ -312,6 +312,11 @@ function needs(v) {
 }
 
 // `o`: a landing-order row (NEXT): its own key, its place, dispatch's note
+// a session's context use (F240): amber at 40 %, red at 50 % (ctx.ts)
+const ctxTone = (p) => (p >= 50 ? 't-bad' : p >= 40 ? 't-warn' : 't-dim');
+const ctxMeta = (p) =>
+  p === null || p === undefined ? null : el('span', `meta ${ctxTone(p)}`, `ctx ${Math.round(p)}%`);
+
 function laneItem(r, o = null) {
   const text = [el('b', null, r.branch)];
   if (r.session) text.push(el('span', 'who', `  ${r.session}`));
@@ -325,6 +330,7 @@ function laneItem(r, o = null) {
     text,
     track: r.steps ? stepBar(r.steps) : track(r.phase),
     meta: [
+      ctxMeta(r.ctx),
       r.quiet ? el('span', 'meta t-warn', `quiet ${ago(v_now - r.fileAge * 1000, v_now)}`) : null,
       prEta(r),
       r.since ? timer(r.since) : null,
@@ -364,7 +370,9 @@ function nowPanel(v) {
     );
     c.append(name);
     if (busy) {
-      c.append(el('div', 'who', `${s.branch}${s.session ? ` · ${s.session}` : ''}`));
+      const who = el('div', 'who', `${s.branch}${s.session ? ` · ${s.session}` : ''}`);
+      if (s.ctx !== null && s.ctx !== undefined) who.append(' ', ctxMeta(s.ctx));
+      c.append(who);
       const what = el(
         'div',
         'what',
@@ -849,33 +857,101 @@ function health(v) {
   );
 }
 
+// The board freshness chip (TOWER.md → Board freshness): queue.json's age and how many of its facts the tower's
+// derived ones contradict. Desktop only: the phone's one-line header has no room for a third button (390 px), so
+// there the count joins the sources chip, as behind main does (sources()).
+function boardChip(v) {
+  const chip = $('#board-chip');
+  const bd = v.board;
+  if (!bd) return void (chip.hidden = true); // an older server: no board yet
+  chip.hidden = false;
+  const n = `${bd.items.length}${bd.unsure ? '?' : ''}`;
+  const age = bd.updatedAt === null ? '?' : agoShort(bd.updatedAt, v.now);
+  chip.textContent = `board ${age} · ${bd.items.length || bd.unsure ? `${n} stale` : 'fresh'}`;
+  chip.className = `only-desk ${bd.tone === 'bad' ? 't-bad' : bd.tone === 'warn' ? 't-warn' : 't-dim'}`;
+  chip.title = bd.why ?? (bd.unsure ? `can't tell all: ${bd.unsure}` : '');
+}
+// sessions over the context lines (F240), desktop: "ctx ≥50 lc-catalog 78% · 3 ≥40"; the phone's count is in the
+// sources chip (sources())
+function ctxChip(v) {
+  const c = $('#ctx-chip');
+  const x = v.ctx;
+  const n = x ? x.warn.length + x.bad.length : 0;
+  c.hidden = !n;
+  if (!n) return;
+  // one session over 50 % is named; more are counted (every name and % in the tooltip)
+  const b1 = x.bad[0];
+  c.textContent = [
+    x.bad.length === 1
+      ? `ctx ≥50 ${b1.name} ${Math.round(b1.pct)}%`
+      : x.bad.length
+        ? `ctx ≥50 ×${x.bad.length}`
+        : null,
+    x.warn.length ? `${x.bad.length ? '' : 'ctx '}${x.warn.length} ≥40` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  c.className = `meta only-desk ${x.bad.length ? 't-bad' : 't-warn'}`;
+  c.title = [...x.bad, ...x.warn].map((e) => `${e.name} ${e.pct}%`).join(' · ');
+}
+
+// `pnpm usage line` beside it (desktop): the weekly meter, burn rate and forecast; the server runs it every 5 min
+function usageChip(v) {
+  const u = $('#usage-chip');
+  const old = v.usage && v.now - v.usage.at > 15 * 60000;
+  u.textContent = v.usage ? `${v.usage.text}${old ? ` (as of ${hhmm(v.usage.at)})` : ''}` : '';
+  u.hidden = !v.usage;
+}
+const agoShort = (ms, now) => {
+  const m = Math.max(0, Math.round((now - ms) / 60000));
+  return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+};
+
 function slipping(v) {
   const b = body('slipping');
-  $('#slipping .count').textContent = `(${v.slipping.length})`;
-  if (!v.slipping.length) return emptyOr(v, b, 'slipping', 'nothing slipping');
+  // the board's own items (follow-ups already have their rows below): queue.json facts the tower contradicts
+  const board = (v.board?.items ?? []).filter((x) => x.kind !== 'followup');
+  $('#slipping .count').textContent = `(${v.slipping.length + board.length})`;
+  if (v.board?.unsure) b.append(el('div', 'cant', `board: can't tell all: ${v.board.unsure}`));
+  if (!v.slipping.length && !board.length) return emptyOr(v, b, 'slipping', 'nothing slipping');
   const KIND = {
     followup: ['STALE', 'c-hold'],
     fired: ['DUE', 'c-hold'],
     parked: ['PARKED', 'c-dim'],
     quiet: ['QUIET', 'c-hold'],
   };
+  const boardRows = board.map((x) =>
+    item(`board:${x.kind}:${x.what.slice(0, 60)}`, {
+      c: v.board.tone === 'bad' ? 'c-bad' : 'c-hold',
+      badge: 'BOARD',
+      text: [short(x.what)],
+      meta: [x.since ? ago(x.since, v.now) : null],
+      more: [short(x.what) !== x.what ? x.what : null, `fix: ${x.fix}`],
+    }),
+  );
   list(
     b,
     'slipping',
-    v.slipping.map((s) =>
-      item(`slip:${s.kind}:${s.what.slice(0, 60)}`, {
-        c: KIND[s.kind][1],
-        badge: KIND[s.kind][0],
-        text: [short(s.what)],
-        meta: [s.owner, s.sinceDay ? `since ${s.sinceDay}` : s.since ? ago(s.since, v.now) : null],
-        more: [
-          short(s.what) !== s.what ? s.what : null,
-          s.after
-            ? `trigger: ${s.after} (fired ${hhmm(s.since)}, ${ago(s.since, v.now)} ago)`
-            : null,
-        ],
-      }),
-    ),
+    [
+      ...boardRows,
+      ...v.slipping.map((s) =>
+        item(`slip:${s.kind}:${s.what.slice(0, 60)}`, {
+          c: KIND[s.kind][1],
+          badge: KIND[s.kind][0],
+          text: [short(s.what)],
+          meta: [
+            s.owner,
+            s.sinceDay ? `since ${s.sinceDay}` : s.since ? ago(s.since, v.now) : null,
+          ],
+          more: [
+            short(s.what) !== s.what ? s.what : null,
+            s.after
+              ? `trigger: ${s.after} (fired ${hhmm(s.since)}, ${ago(s.since, v.now)} ago)`
+              : null,
+          ],
+        }),
+      ),
+    ],
     8,
   );
 }
@@ -886,18 +962,47 @@ function sources(v) {
   $('#sources .count').textContent = off.length ? `(${off.length} not ok)` : '(all ok)';
   const chip = $('#sources-chip');
   const failed = off.some((s) => s.state === 'failed');
-  // behind main joins the chip (a third header button doesn't fit at 390 px): "behind main · 2 off"
-  if (v.behind)
-    chip.replaceChildren(
-      'behind',
-      el('span', 'only-desk', ' main'),
-      off.length ? ` · ${off.length} off` : '',
-    );
-  else
-    chip.textContent = off.length
-      ? `${off.length} source${off.length > 1 ? 's' : ''} off`
-      : 'sources ok';
-  chip.className = failed ? 't-bad' : off.length || v.behind ? 't-warn' : 't-dim';
+  // behind main joins the chip (a third header button doesn't fit at 390 px): "behind main · 2 off"; on the phone a
+  // stale board joins it too (its own chip is desktop-only, boardChip), the first two of behind, stale, off
+  const bd = v.board && v.board.tone !== 'dim' ? v.board : null;
+  const offText = off.length ? `${off.length} off` : null;
+  // context (F240): a session at 50 % leads (he wants it urgently); at 40 % it follows the board's count
+  const cx = v.ctx && (v.ctx.bad.length || v.ctx.warn.length) ? v.ctx : null;
+  const ctxText = cx
+    ? cx.bad.length
+      ? `${cx.bad.length} ctx≥50`
+      : `${cx.warn.length} ctx≥40`
+    : null;
+  chip.replaceChildren(
+    el(
+      'span',
+      'only-desk',
+      v.behind
+        ? `behind main${offText ? ` · ${offText}` : ''}`
+        : offText
+          ? `${off.length} source${off.length > 1 ? 's' : ''} off`
+          : 'sources ok',
+    ),
+    el(
+      'span',
+      'only-phone',
+      [
+        cx?.bad.length ? ctxText : null,
+        v.behind ? 'behind' : null,
+        bd ? `${bd.items.length}${bd.unsure ? '?' : ''} stale` : null,
+        cx && !cx.bad.length ? ctxText : null,
+        offText,
+      ]
+        .filter(Boolean)
+        .slice(0, 2)
+        .join(' · ') || 'sources ok',
+    ),
+  );
+  // the worse of the two tones; on the desktop the board's own chip carries its tone, so it counts on the phone only
+  const srcTone = failed ? 2 : off.length || v.behind ? 1 : 0;
+  const bdTone = Math.max(bd?.tone === 'bad' ? 2 : bd ? 1 : 0, cx ? (cx.bad.length ? 2 : 1) : 0);
+  const t = (n) => ['t-dim', 't-warn', 't-bad'][n];
+  chip.className = bdTone > srcTone ? `${t(srcTone)} phone-${t(bdTone)}` : t(srcTone);
   $('#live-dot').className = `dot live ${failed ? 'c-bad' : off.length ? 'c-hold' : 'c-good'}`; // data, not code
   for (const s of v.sources) {
     const c = s.state === 'ok' ? 'c-good' : s.state === 'stale' ? 'c-hold' : 'c-bad';
@@ -1089,6 +1194,9 @@ function render(v, fresh = true) {
   // a redraw never moves the page: the same scroll after as before
   const y = window.scrollY;
   health(v);
+  boardChip(v);
+  usageChip(v);
+  ctxChip(v);
   for (const [id, draw] of [
     ['needs', needs],
     ['now', nowPanel],
@@ -1232,6 +1340,7 @@ function fail(text, e, now = false) {
 
 for (const id of ['slipping', 'sources'])
   $(`#${id} h2`).addEventListener('click', () => $(`#${id}`).classList.toggle('open'));
+$('#board-chip').addEventListener('click', () => openPanel('slipping'));
 $('#sources-chip').addEventListener('click', () => {
   if (openId) return openPanel('sources'); // the glance's SOURCES is hidden behind an expanded panel
   $('#sources').classList.add('open');
