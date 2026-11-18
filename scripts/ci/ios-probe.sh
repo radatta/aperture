@@ -15,9 +15,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card" ;;
-    2) echo "restore card" ;;
-    *) echo "restore card" ;;
+    1) echo "restore card hub" ;;
+    2) echo "restore card nohub" ;;
+    *) echo "restore card nohub,light" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -37,7 +37,8 @@ H=956
 BUDGET=2400 # seconds of probe before every loop gives up, inside the job's 45 min
 
 SHARD="${IOS_PROBE_SHARD:-1}"
-read -r SRC AFTER <<<"$(variant)"
+read -r SRC AFTER OPTS <<<"$(variant)"
+OPTS="${OPTS:-}" # nohub: leave Device Hub off (sim.sh gets the shim); light: launch waits on point reads only
 # Only a rows shard holds the password, and only as an unexported shell variable: no child process inherits it.
 PW=""
 [ "$AFTER" != rows ] || PW="${DEVCHECK_PASSWORD:-}"
@@ -266,6 +267,7 @@ HUB=down
 s_hub() {
   local i
   [ "$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')" -ge 27 ] || { note "Xcode < 27: no Device Hub"; return 0; }
+  case ",$OPTS," in *,nohub,*) note "Device Hub left off (nohub)"; return 0 ;; esac
   cap 30 open -g -b com.apple.dt.Devices >/dev/null 2>&1 || note "open -g -b com.apple.dt.Devices failed"
   for i in $(seq 1 15); do
     if pgrep -x DeviceHub >/dev/null 2>&1; then HUB=up; note "Device Hub up after ${i} s"; return 0; fi
@@ -500,6 +502,16 @@ s_launch() {
   local i t s x y r l app=""
   read -r x y r l <<<"$ICON"
   tap_at "$x" "$y" || { note "icon tap failed"; return 1; }
+  case ",$OPTS," in *,light,*)
+    for i in $(seq 1 60); do
+      late && break
+      sleep 1
+      if s="$(scan_text 'Sign in' 400 700)"; then note "light: Sign in at y ${s%% *} after look $i (no tree reads)"; return 0; fi
+      [ "$i" != 6 ] || { note "light: no card at look 6: icon tapped again"; tap_at "$x" "$y" || true; }
+    done
+    note "light: no Sign in card"
+    return 1 ;;
+  esac
   for i in $(seq 1 20); do
     late && break
     sleep 2
@@ -742,11 +754,15 @@ finish() {
   local rc=$?
   trap - EXIT
   printf 'total\t%s\t%s\t\n' "$([ "$rc" = 0 ] && echo pass || echo fail)" "$(($(now_ms) - T0))" >>"$OUT/steps.tsv"
+  kill "$CPU_PID" 2>/dev/null || true
   [ -z "$U" ] || xcrun simctl shutdown "$U" >/dev/null 2>&1 || true
   summary
   exit "$rc"
 }
 T0=$(now_ms)
+# Who eats the runner's 3 vCPUs (Device Hub has CPU-runaway reports on 8 GB Macs: Apple forums 847485)
+( while sleep 20; do { date +%H:%M:%S; top -l 1 -n 6 -o cpu -stats command,cpu 2>/dev/null | tail -7; } >>"$OUT/cpu.log"; done ) &
+CPU_PID=$!
 trap finish EXIT
 trap 'exit 143' TERM
 log "shard $SHARD: $SRC → $AFTER"
