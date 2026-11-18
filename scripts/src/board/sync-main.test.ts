@@ -3,7 +3,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { MainBusy } from './main-lock.ts';
+import { exitCode } from './cli.ts';
+import { MAIN_LOCK, MainBusy, TOWER_RESTART_LOCK } from './main-lock.ts';
 import { FETCH_TIMEOUT_MS, execRun, syncMain, type Run } from './sync-main.ts';
 
 const A = 'a'.repeat(40);
@@ -329,4 +330,10 @@ describe('pnpm board sync-main: the exit code', () => {
       holder.kill();
     }
   }, 40_000);
+  it('2 for any other failure, a busy tower restart included (it comes after a move: never a quiet round)', () => {
+    expect(exitCode(new MainBusy('x', MAIN_LOCK))).toBe(75);
+    expect(exitCode(new MainBusy('tower restart busy', TOWER_RESTART_LOCK))).toBe(2);
+    expect(exitCode(new MainBusy('no file'))).toBe(2);
+    expect(exitCode(new Error('boom'))).toBe(2);
+  });
 });

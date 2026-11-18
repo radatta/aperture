@@ -237,14 +237,16 @@ export function main(argv: string[], stdin: () => string): string {
   }
 }
 
+// A busy main checkout (its lock, before anything moved) is no failure: 75, and the main sync loop tries again next
+// round (sync.sh). A busy tower restart comes after a move, so it stays an error (2) that says so.
+export const exitCode = (e: unknown) => (e instanceof MainBusy && e.file === MAIN_LOCK ? 75 : 2);
+
 if (process.argv[1]?.endsWith('cli.ts')) {
   try {
     const out = main(process.argv.slice(2), () => readFileSync(0, 'utf8'));
     if (out) process.stdout.write(out + '\n');
   } catch (e) {
     process.stderr.write(`board cli: ${(e as Error).message}\n`);
-    // a busy main checkout (its lock, before anything moved) is no failure: the main sync loop tries again next
-    // round (sync.sh); a busy tower restart comes after a move, so it stays an error that says so
-    process.exit(e instanceof MainBusy && e.file === MAIN_LOCK ? 75 : 2);
+    process.exit(exitCode(e));
   }
 }

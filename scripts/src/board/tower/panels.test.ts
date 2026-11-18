@@ -60,7 +60,7 @@ describe('frame', () => {
   it('wide: lock, gauges, queue, wave, sessions and history from the fixtures', () => {
     const f = text(compose(state, live, 210, 55));
     expect(f).toContain(
-      'dev lock bravo-branch (bravo) until 23:37 1h27m left   next charlie-branch (charlie) · devb juliet-branch until 22:45 35m left',
+      'dev lock bravo-branch (bravo) until 22:37 27m left   next charlie-branch (charlie) · devb juliet-branch until 22:45 35m left',
     );
     expect(f).toContain('ON DEV juliet-branch@devb  35m');
     expect(f).toMatch(/mem ━+.*9\.0G\/18G/);

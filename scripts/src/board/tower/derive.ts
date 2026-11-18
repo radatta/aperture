@@ -303,46 +303,35 @@ export function slotDetail(
 
 // The automatic merge HOLD (TOWER.md → HOLD): a main merge redeploys dev over a dispatched branch (CI-BOT.md →
 // Dev deploys), and devb only when the merge changes devb's shape (deploy-base.ts → SHAPE_PATHS). First match wins.
-// A merge's slot deploy waits while that slot's lock is held (PR 210, scripts/src/main-dev-wait.ts), up to an hour,
-// then deploys anyway. So another branch's live lock holds a merge only when it runs past that wait (F228, F251).
-// main-dev-wait.ts's CEILING_MS (not imported: its chain reaches the bot's API; a test pins the two equal).
-export const MAIN_WAIT_MS = 60 * 60e3;
-
 export function holdReason(pr: Pr, queue: Lane | null, i: Inputs): string | null {
   const dev = lockRead(i.tower.lock, i.now);
   if (dev.state === 'unknown') return `dev lock unknown (${dev.why})`;
   const devLock = i.tower.lock!;
-  // another branch's live lock: main's deploy waits for it, so its devcheck (and its dispatch) is covered
-  const devWaits = dev.state === 'live' && devLock.branch !== pr.branch;
-  if (devWaits && devLock.expiresAt! - i.now > MAIN_WAIT_MS)
-    return `dev: ${devLock.branch} holds the lock to ${hhmm(devLock.expiresAt!)}, past main's 60 min wait`;
+  if (dev.state === 'live' && devLock.branch !== pr.branch)
+    return `dev: ${devLock.branch} is testing, lock to ${hhmm(devLock.expiresAt!)}`;
   const devRun = openRun(i, 'dev');
-  if (devRun && !devWaits) return `dev: a devcheck is running since ${hhmm(devRun.start!)}`;
+  if (devRun) return `dev: a devcheck is running since ${hhmm(devRun.start!)}`;
   const runs = ghFresh(i.runs, i.now);
   if (runs) return `main deploy state unknown (gh runs ${runs})`;
   // a running dispatch is devb's only when it carries devb's holder sha; any other may be dev's (a lock released
   // mid-deploy, a lapsed lock): unknown means hold
   const bSha = i.tower.lockB?.sha ?? null;
   const devbDispatch = bSha ? dispatching(i, bSha) : undefined;
-  if (unattributedDispatch(i) && !devWaits) return 'a dev deploy is running';
+  if (unattributedDispatch(i)) return 'a dev deploy is running';
 
   // devb only matters when the merge changes devb's shape
   const b = lockRead(i.tower.lockB, i.now);
   const bLock = i.tower.lockB;
-  // as dev: another branch's live devb lock is waited for (main's devb deploy waits too), unless past the wait
-  const bWaits = b.state === 'live' && bLock!.branch !== pr.branch;
   const bBusy =
     b.state === 'unknown'
       ? `devb lock unknown (${b.why})`
-      : bWaits && bLock!.expiresAt! - i.now > MAIN_WAIT_MS
-        ? `devb: ${bLock!.branch} holds the lock past main's 60 min wait`
-        : bWaits
-          ? null
-          : openRun(i, 'devb')
-            ? 'devb: a devcheck is running'
-            : devbDispatch
-              ? 'a devb deploy is running'
-              : null;
+      : b.state === 'live' && bLock!.branch !== pr.branch
+        ? `devb: ${bLock!.branch} is testing`
+        : openRun(i, 'devb')
+          ? 'devb: a devcheck is running'
+          : devbDispatch
+            ? 'a devb deploy is running'
+            : null;
   if (bBusy) {
     const f = pr.sha ? i.files(pr.sha) : null;
     if (!f?.files)
