@@ -109,8 +109,9 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
   removal of the user's row (the last device removed, or deleted by the poller after a 404/410) then re-reads
   their devices strongly and puts the row back, keeping its `createdAt`, if one is alive. `getPushStatus` also
   re-adds it when a live device exists. The poller's 404/410 delete is conditional on the version it read, so a
-  removal (tombstone) or a re-subscribe that lands mid-send stands, and the reminder that 404'd is retried to
-  the re-subscribed device on the next tick.
+  removal (tombstone) or a re-subscribe that lands mid-send stands. That 404 counts as a transient failure
+  ("re-subscribed mid-send"): a fresh notification or a retry is retried to the re-subscribed device, and a
+  catch-up's failure is said on the device and the health line.
 - **Fail-closed dedup:** dedup and guard rows are written before the send and never refunded, so no reminder
   is ever found twice.
 - **Retry and catch-up** (`push/deliver.ts`, D17–D22). Each device's answer is classified:
@@ -123,15 +124,16 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
     Each retry re-reads its tasks: one finished, deleted, re-dated or taken off that day's plan since stays
     quiet. Retries take no guard unit. Each try is claimed (counted, on the version read) before its POST. A
     device the tick's deadline skipped gets a retry row too, with no try spent. A slow device — its last
-    attempt failed, or a retry of it has a try spent — goes last in a fresh batch, and all its retries after
-    the rest's, so one that keeps timing out (10 s) can't use up a tick before the others; a fresh batch
+    attempt failed, or (slower still) a retry of it has a try spent — goes last in a fresh batch, its retries
+    after the rest's and its catch-up after theirs, so one that keeps timing out (10 s) can't use up a tick before the others; a fresh batch
     still goes before earlier ticks' retries, so a skipped device's older one can wait a tick more (within
     the 5-minute expiry). A new failure under a Topic still retrying replaces that row;
   - final — anything else (400, 403, 413, a fault of ours): the device's error, as before.
 
   Retries that run out (or a retry older than 5 minutes: the poller stalled) leave the device "… after N
   tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick the stage
-  could check (the poller's `lastCheckedAt`: it could sign, read the registry and start a user's tick) for
+  could check (the poller's `lastCheckedAt`: it could sign, read the registry and start a user's tick, or had
+  none) for
   longer than the window — leaves misses too, for every device: what fell due in it, up to 12 h back, armed, enabled
   and still open, deduped by its `psent#` row and queued before any send of that tick. A device's misses go out once, as "N reminders didn't reach you" with their
   titles (opening Today), when all of them have settled (5 minutes after a run-out; at once after a gap) and

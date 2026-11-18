@@ -1239,7 +1239,11 @@ describe('push dispatch — retry and catch-up', () => {
       return 410;
     };
     await w.tick();
-    expect(await w.repo().getPushSub('S1')).toMatchObject({ updatedAt: 50 });
+    // Kept, stamped on its new version as a transient failure, and retried.
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+      "Last reminder didn't reach this device (re-subscribed mid-send) — retrying",
+    );
+    expect((await w.repo().getPushSub('S1'))?.updatedAt).toBeGreaterThan(50);
     expect((await w.repo().listPushQueue()).retries).toHaveLength(1);
     expect((await w.repo().getPushUserHealth())?.lastError ?? '').not.toMatch(/stopped accepting/);
     w.push.status = 201;
@@ -1247,6 +1251,79 @@ describe('push dispatch — retry and catch-up', () => {
     await w.tick();
     expect(w.push.sends).toHaveLength(2);
     expect(await w.repo().getPushSub('S1')).toMatchObject({ lastOkAt: TWO_PM + MIN });
+  });
+
+  it('a catch-up whose 404 lost to a revive says so, on the device and the health line', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ id: 'A', title: 'Gap', dueDay: TODAY, dueTime: '13:15' }));
+    w.push.status = () => {
+      w.mem.putNow(entityItem(U, sk.pushSub('S1'), sub('S1', { updatedAt: 50 })));
+      return 410;
+    };
+    await w.tick();
+    expect(w.notes().map((n) => n.title)).toEqual(['1 reminder didn’t reach you']);
+    const said = "Couldn't deliver the catch-up for 1 missed reminder (re-subscribed mid-send)";
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(said);
+    expect((await w.repo().getPushUserHealth())?.lastError).toContain(said);
+  });
+
+  it('a device whose last attempt failed goes last with no retry row; one with a try spent after it', async () => {
+    const w = world();
+    for (const id of ['S1', 'S2', 'S3']) await w.device(id);
+    await w.repo().putTask(task({ id: 'X', title: 'X', dueDay: TODAY, dueTime: '14:00' }));
+    await w.tick(); // X delivered to all three and deduped
+    // S2: an old error, never cleared (no retry row). S1: a retry of X with a try spent.
+    w.mem.putNow(
+      entityItem(
+        U,
+        sk.pushSub('S2'),
+        sub('S2', { updatedAt: 5, lastOkAt: TWO_PM, lastErrorAt: TWO_PM + 1 }),
+      ),
+    );
+    await w.repo().putPushRetry({
+      subId: 'S1',
+      topic: 'X',
+      cands: [
+        { kind: 'timed', fireAt: TWO_PM, taskId: 'X', title: 'X', dueTime: '14:00', key: 'X' },
+      ],
+      tries: 1,
+      retries: 1,
+      firstAt: TWO_PM + MIN,
+      why: 'timed out',
+      updatedAt: TWO_PM + MIN,
+    });
+    await w.repo().putTask(task({ id: 'B', dueDay: TODAY, dueTime: '14:02' }));
+    w.push.sends.length = 0;
+    w.set(TWO_PM + 2 * MIN);
+    await w.tick();
+    expect(w.push.sends.map((x) => [x.target.endpoint.slice(-2), x.opts.topic])).toEqual([
+      ['S3', 'B'],
+      ['S2', 'B'],
+      ['S1', 'B'],
+      ['S1', 'X'],
+    ]);
+  });
+
+  it('after a gap, a slow device’s catch-up goes after the others’', async () => {
+    const w = world();
+    await w.device('S1', U, { lastErrorAt: 1 }); // its last attempt failed
+    await w.device('S2');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ id: 'A', title: 'Gap', dueDay: TODAY, dueTime: '13:15' }));
+    await w.tick();
+    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S2', 'S1']);
   });
 
   it('stores titles clipped as the notification clips them', async () => {

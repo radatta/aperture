@@ -129,8 +129,8 @@ export class Deliverer {
   // goes to their (slow) device last.
   private readonly pending = new Set<string>();
   private readonly queued: PushMissRow[] = []; // misses this tick wrote (a run-out, a gap)
-  // Devices that failed lately (see the constructor): sent to, and retried, last.
-  private readonly slow = new Set<string>();
+  // Devices that failed lately, ranked (see the constructor): sent to, retried and caught up last.
+  private readonly slow = new Map<string, 1 | 2>();
 
   constructor(
     private readonly d: DelivererDeps,
@@ -138,13 +138,14 @@ export class Deliverer {
     retries: readonly PushRetryRow[],
   ) {
     this.subs = new Map(subs.map((s) => [s.id, s]));
-    // Slow: its last attempt failed (the stamp the tick read), or a retry of it has a try spent.
+    // Slow: its last attempt failed (the stamp the tick read) — rank 1, a stale error mostly — or a retry
+    // of it has a try spent this chain — rank 2, likely hanging now, so it goes after a rank 1.
     for (const s of subs)
       if (s.lastErrorAt !== null && (s.lastOkAt === null || s.lastErrorAt > s.lastOkAt))
-        this.slow.add(s.id);
+        this.slow.set(s.id, 1);
     for (const r of retries) {
       this.pending.add(`${r.subId}#${r.topic}`);
-      if (r.tries >= 1) this.slow.add(r.subId);
+      if (r.tries >= 1) this.slow.set(r.subId, 2);
     }
   }
 
@@ -155,7 +156,7 @@ export class Deliverer {
     if (!this.fails.includes(message)) this.fails.push(message);
   };
   private hasPending = (subId: string) => [...this.pending].some((k) => k.startsWith(`${subId}#`));
-  private slowFirst = (subId: string) => Number(this.slow.has(subId)); // sorts slow devices last
+  private slowFirst = (subId: string) => this.slow.get(subId) ?? 0; // sorts slow devices last
 
   // A fresh notification to every device, the slow ones last, so one that times out again doesn't use up
   // the tick before the rest. A transient refusal, or a device the tick's deadline skipped, leaves a retry
@@ -176,10 +177,7 @@ export class Deliverer {
         continue;
       }
       const { outcome, why } = await this.post(sub, payload, topic, cands, 'retrying');
-      // A transient refusal, or a 404/410 that lost to a revive (the device is back, its new subscription
-      // never got this one): tried again next tick.
-      if (outcome === 'retry' || (outcome === 'gone' && this.subs.has(sub.id)))
-        await this.queueRetry(sub, cands, topic, 1, why);
+      if (outcome === 'retry') await this.queueRetry(sub, cands, topic, 1, why);
     }
   }
 
@@ -227,8 +225,7 @@ export class Deliverer {
         cands,
         last ? 'last' : 'retrying',
       );
-      const revived = outcome === 'gone' && this.subs.has(sub.id);
-      if (outcome !== 'retry' && !revived) await this.dropRetry(row);
+      if (outcome !== 'retry') await this.dropRetry(row);
       else if (last) await this.runOut(this.subs.get(sub.id) ?? sub, { ...claimed, cands, why });
       else
         await this.d.repo.putPushRetryIf(
@@ -251,7 +248,8 @@ export class Deliverer {
     const bySub = new Map<string, PushMissRow[]>();
     for (const r of [...rows, ...this.queued])
       bySub.set(r.subId, [...(bySub.get(r.subId) ?? []), r]);
-    for (const [subId, misses] of bySub) {
+    const order = [...bySub].sort(([a], [b]) => this.slowFirst(a) - this.slowFirst(b));
+    for (const [subId, misses] of order) {
       if (this.d.past()) return void (this.tally.deadline = true);
       const sub = this.subs.get(subId);
       if (!sub || this.hasPending(subId) || misses.some((m) => m.readyAt > this.d.now)) continue;
@@ -288,7 +286,10 @@ export class Deliverer {
   }
 
   // One POST, its log line, and the device's stamp: delivered, dropped (gone), or its error. `lead`
-  // replaces the error's opening (a catch-up's).
+  // replaces the error's opening (a catch-up's). A 404/410 whose delete lost to a re-subscribe made
+  // mid-send is judged here, once: the device is back and this notification never reached its new
+  // subscription, so it is a transient failure ('retry', "re-subscribed mid-send") — each caller's own
+  // transient path takes it (a retry queued or continued, a catch-up's failure said).
   private async post(
     sub: PushSub,
     payload: string,
@@ -331,34 +332,35 @@ export class Deliverer {
       return { outcome, why };
     }
     this.tally.failed++;
+    let to = sub; // the version the stamp goes on
+    let result: { outcome: Outcome; why: string } = { outcome, why };
     if (outcome === 'gone') {
       // The push service says this subscription is dead (or its keys never could work): drop it — the
       // row as read only, so a removal (tombstone) or a revive that landed meanwhile stands. The app
       // re-subscribes on its next launch (D7).
       const deleted = await this.d.repo.deletePushSubIf(sub.id, sub.updatedAt);
       this.d.log(JSON.stringify({ ...line, ...(deleted ? { removed: true } : { changed: true }) }));
-      if (deleted) {
-        this.removed++;
+      // A revive keeps its device (and its queued rows) and is retried; a removal doesn't.
+      const now = deleted ? null : await this.d.repo.getPushSub(sub.id);
+      if (!now || now.deletedAt !== null) {
+        if (deleted) this.removed++;
         this.subs.delete(sub.id);
-      } else {
-        // A revive keeps its device (and its queued rows); a removal doesn't.
-        const now = await this.d.repo.getPushSub(sub.id);
-        if (now && now.deletedAt === null) this.subs.set(sub.id, now);
-        else this.subs.delete(sub.id);
-      }
-      // A revived device is retried (its caller re-queues it); that outcome speaks next tick.
-      if (!this.subs.has(sub.id))
         this.fail(
           `${sub.label} stopped accepting reminders (${why}) — turn them on again on that device`,
         );
-      return { outcome, why };
-    }
-    this.d.log(JSON.stringify(line));
-    if (outcome === 'retry' && pending === 'last') return { outcome, why }; // runOut says it
-    const message = `${lead} (${why})${outcome === 'retry' && pending === 'retrying' ? ' — retrying' : ''}`;
-    await this.stamp({ ...sub, updatedAt, lastError: message, lastErrorAt: this.d.now }, sub);
-    this.fail(`${sub.label}: ${message}`);
-    return { outcome, why };
+        return result;
+      }
+      this.subs.set(sub.id, now);
+      to = now;
+      result = { outcome: 'retry', why: 're-subscribed mid-send' };
+    } else this.d.log(JSON.stringify(line));
+    const r = result;
+    if (r.outcome === 'retry' && pending === 'last') return r; // runOut says it
+    const message = `${lead} (${r.why})${r.outcome === 'retry' && pending === 'retrying' ? ' — retrying' : ''}`;
+    const at = Math.max(this.d.now, to.updatedAt + 1);
+    await this.stamp({ ...to, updatedAt: at, lastError: message, lastErrorAt: this.d.now }, to);
+    this.fail(`${to.label}: ${message}`);
+    return r;
   }
 
   // Retries ran out (or the poller stalled past RETRY_EXPIRE_MS): the device says so, and its reminders
@@ -397,7 +399,7 @@ export class Deliverer {
       updatedAt: this.d.now,
     });
     this.pending.add(`${sub.id}#${topic}`);
-    if (tries >= 1) this.slow.add(sub.id);
+    if (tries >= 1) this.slow.set(sub.id, 2);
   }
   private async dropRetry(row: Pick<PushRetryRow, 'subId' | 'topic'>): Promise<void> {
     await this.d.repo.deletePushRetry(row.subId, row.topic);

@@ -304,14 +304,12 @@ export async function runPushTick(
       subs,
       own.retries,
     );
-    // The gap's reminders: deduped, then queued as misses at once — before any send, so a fault later in
-    // this tick can't leave them deduped but never caught up.
-    if (gapFrom !== null && gapFrom < now - REMINDER_WINDOW_MS) {
-      const missed: FoundCandidate[] = [];
+    // The gap's reminders: each deduped, then queued as misses right away — before any send, so a fault
+    // later in this tick can't leave them deduped but never caught up (only a kill between one's two writes).
+    if (gapFrom !== null && gapFrom < now - REMINDER_WINDOW_MS)
       for (const c of (await find(gapFrom, now - REMINDER_WINDOW_MS - 1, true)).filter(missable))
-        if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now })) missed.push(c);
-      if (missed.length > 0) await send.queueMisses(send.subIds(), missed, now);
-    }
+        if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now }))
+          await send.queueMisses(send.subIds(), [c], now);
     const guard = () => takeGuard(repo, now);
     // The reminders as one notification; each ritual as its own (its tap opens Home, not a task).
     const batches = [
@@ -385,7 +383,7 @@ export async function runPushTick(
           log(JSON.stringify({ event: 'push_deadline' }));
           break;
         }
-        stageChecked = true; // a user's tick started: the gap pass ran for at least one
+        stageChecked = true; // a user's tick started: the cursor moves on (§3's trade covers one it doesn't finish)
         try {
           await tickUser(user);
         } catch (err) {
