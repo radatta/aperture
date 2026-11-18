@@ -118,7 +118,9 @@ step() {
   case "$rc" in 0) st=pass ;; 2) st=soft ;; *) st=fail; FAILED="$name" ;; esac # soft: went on, but short of its check
   printf '%s\t%s\t%s\t%s\n' "$name" "$st" "$((t1 - t0))" "$NOTE" >>"$OUT/steps.tsv"
   log "== $name: $st in $((t1 - t0)) ms"
-  if [ "$st" = pass ]; then evidence "$name"; else evidence "$name" tree; fi
+  # Run 14: a screenshot after every passing step cost 107-252 s a shard on the starved runner. Passing steps keep
+  # their timings and notes; failures still get a screenshot and a tree, and the card gets its shot.
+  if [ "$st" != pass ]; then evidence "$name" tree; elif [ "$name" = launch-to-sign-in ]; then evidence "$name"; fi
   [ "$st" != fail ]
 }
 
@@ -183,8 +185,15 @@ scan_text() {
 
 # --- the steps -------------------------------------------------------------------------------------------------
 
+# Run 14: on the starved runner one `xcodebuild -version` took 70 s and this listing up to 135 s, so the timed path
+# reads the version from Xcode's plist once, and the full listing runs from finish(), after the clock stops.
+xcode_version() { plutil -extract CFBundleShortVersionString raw "$(xcode-select -p)/../Info.plist" 2>/dev/null || echo 0; }
 s_env() {
-  note "image ${ImageOS:-?} ${ImageVersion:-?}, macOS $(sw_vers -productVersion), $(xcodebuild -version | tr '\n' ' ')"
+  XCODE_VER="$(xcode_version)"
+  XCODE_MAJOR="${XCODE_VER%%.*}"
+  note "image ${ImageOS:-?} ${ImageVersion:-?}, macOS $(sw_vers -productVersion), Xcode $XCODE_VER"
+}
+env_dump() {
   {
     sw_vers
     xcodebuild -version
@@ -195,7 +204,6 @@ s_env() {
     xcrun simctl list devicetypes | grep -i iphone
     sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
   } >"$OUT/env.txt" 2>&1
-  return 0 # evidence only
 }
 
 s_axe_install() {
@@ -266,7 +274,7 @@ s_restore() {
 HUB=down
 s_hub() {
   local i
-  [ "$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')" -ge 27 ] || { note "Xcode < 27: no Device Hub"; return 0; }
+  [ "${XCODE_MAJOR:-0}" -ge 27 ] || { note "Xcode < 27: no Device Hub"; return 0; }
   case ",$OPTS," in *,nohub,*) note "Device Hub left off (nohub)"; return 0 ;; esac
   cap 30 open -g -b com.apple.dt.Devices >/dev/null 2>&1 || note "open -g -b com.apple.dt.Devices failed"
   for i in $(seq 1 15); do
@@ -576,7 +584,7 @@ run_sim_ci() (
   source "$REPO/tools/mailroom/jobs/sim.sh"
   # Xcode 26 has no Device Hub and its device isn't the profile's; on xcode-27 sim.sh runs as on the Mac. Device
   # Hub only shows the sim (simctl boots without it): where it won't start on a runner, sim.sh is told it's up.
-  if [ "$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')" -lt 27 ]; then
+  if [ "${XCODE_MAJOR:-0}" -lt 27 ]; then
     # shellcheck disable=SC2034
     SIM_DEVICE_TYPE="$DEVICE_TYPE"
   fi
@@ -756,6 +764,7 @@ finish() {
   printf 'total\t%s\t%s\t\n' "$([ "$rc" = 0 ] && echo pass || echo fail)" "$(($(now_ms) - T0))" >>"$OUT/steps.tsv"
   kill "$CPU_PID" 2>/dev/null || true
   [ -z "$U" ] || xcrun simctl shutdown "$U" >/dev/null 2>&1 || true
+  cap 120 env_dump || true # off the clock
   summary
   exit "$rc"
 }
