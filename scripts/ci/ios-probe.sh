@@ -15,7 +15,7 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "cold save" ;;
+    1) echo "seed save" ;;
     2) echo "cold card" ;;
     *) echo "seed card" ;;
   esac
@@ -188,6 +188,7 @@ s_env() {
     sw_vers
     xcodebuild -version
     xcrun simctl list runtimes
+    xcrun simctl runtime list
     xcrun simctl list devicetypes | grep -i iphone
     sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
   } >"$OUT/env.txt" 2>&1
@@ -213,7 +214,13 @@ boot_start() {
   (cap 400 xcrun simctl bootstatus "$U" -b >"$WORK/boot.log" 2>&1; echo "$?" >"$WORK/boot.rc") &
   BOOT_PID=$!
 }
+# runner-images 15334: select Xcode 27.2 before any simctl call (the image's default is 27.1)
+select_xcode() {
+  [ -d /Applications/Xcode_27.2.app ] || return 0
+  sudo xcode-select -s /Applications/Xcode_27.2.app && note "Xcode 27.2 selected"
+}
 s_create() {
+  select_xcode
   U="$(xcrun simctl create "$SIM_NAME" "$DEVICE_TYPE" "$RUNTIME_ID" 2>>"$OUT/log.txt")" || { note "create failed"; U=""; return 1; }
   RUNTIME=27.2
   note "created $U"
@@ -224,6 +231,7 @@ s_create() {
 # service restart. If the set won't list it, its data goes into a fresh device of the same type instead.
 s_restore() {
   local d u
+  select_xcode
   d="$(find "$CACHE_DIR/device" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)"
   [ -n "$d" ] || { note "no cached device ($KEY) restored"; return 1; }
   u="$(basename "$d")"
@@ -249,6 +257,19 @@ s_restore() {
   fi
   RUNTIME=27.2
   boot_start
+}
+# Device Hub (Xcode 27's Simulator app): sim.sh starts it on the Mac. Whether it starts on a runner (a GUI session?)
+# is run-only (no source either way); simctl boots without it.
+HUB=down
+s_hub() {
+  local i
+  [ "$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')" -ge 27 ] || { note "Xcode < 27: no Device Hub"; return 0; }
+  cap 30 open -g -b com.apple.dt.Devices >/dev/null 2>&1 || note "open -g -b com.apple.dt.Devices failed"
+  for i in $(seq 1 15); do
+    if pgrep -x DeviceHub >/dev/null 2>&1; then HUB=up; note "Device Hub up after ${i} s"; return 0; fi
+    sleep 1
+  done
+  note "Device Hub didn't start in 15 s: sim.sh gets the shim"
 }
 s_boot_wait() {
   wait "$BOOT_PID" 2>/dev/null || true
@@ -390,11 +411,12 @@ s_a2hs() {
   touch "$WORK/a2hs.marker"
   # iOS 26 Safari keeps Share in the … menu (AXButton "More"); iOS 27 reportedly moved that button to tabs, so a
   # Share button in the bar is tried first
+  # iOS 27: the … button opens tabs; Share is in the Page menu (left of the address bar) or on a long-press of it
   if ! tap_label '^Share$' AXButton 2; then
-    tap_label '^More$' AXButton 3 || return 1
+    tap_label '^(Page Menu|More)$' AXButton 3 || return 1
     sleep 1
     evidence a2hs-menu tree
-    tap_label '^Share$' AXButton 4 || return 1
+    tap_label '^Share' '' 4 || return 1
   fi
   for i in $(seq 1 30); do
     late && return 1
@@ -406,8 +428,10 @@ s_a2hs() {
   sleep 2
   evidence a2hs-sheet-collapsed
   dump_points sheet 366,855 52,855 220,630
-  # View More expands the action list: by point read if that sees it, else at the measured point
-  if hit="$(scan_text 'View More' 820 900 366)"; then
+  # View More expands the action list (iOS 26: collapsed, "View More" reads as "go down"); skip it if the row shows
+  if hit="$(scan_text 'Add to Home Screen' 300 920 158)"; then
+    note "Add to Home Screen visible without View More ($hit)"
+  elif hit="$(scan_text 'go down' 760 920 366)" || hit="$(scan_text 'View More' 760 920 366)"; then
     note "View More by point read ($hit)"
     tap_at 366 "${hit%% *}" || return 1
   else
@@ -536,10 +560,13 @@ run_sim_ci() (
   HELD=lock
   # shellcheck source=/dev/null
   source "$REPO/tools/mailroom/jobs/sim.sh"
-  # Xcode 26 has no Device Hub and its device isn't the profile's; on xcode-27 sim.sh runs as on the Mac
+  # Xcode 26 has no Device Hub and its device isn't the profile's; on xcode-27 sim.sh runs as on the Mac. Device
+  # Hub only shows the sim (simctl boots without it): where it won't start on a runner, sim.sh is told it's up.
   if [ "$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')" -lt 27 ]; then
     # shellcheck disable=SC2034
     SIM_DEVICE_TYPE="$DEVICE_TYPE"
+  fi
+  if [ "$HUB" != up ]; then
     pgrep() { if [ "${1:-}" = -x ] && [ "${2:-}" = DeviceHub ]; then return 0; fi; command pgrep "$@"; }
   fi
   security() {
@@ -728,6 +755,7 @@ esac
 step env s_env # beside the boot
 step axe-install s_axe_install
 step boot s_boot_wait
+step device-hub s_hub
 # A rows shard leaves the readiness tree, the icon and the launch to sim.sh's own `launch` op (the same reads).
 [ "$AFTER" = rows ] || step axe-ready s_axe_ready
 step origin s_origin
