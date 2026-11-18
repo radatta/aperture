@@ -18,8 +18,9 @@ export function ranId(slug: string, now: Date): string {
 }
 
 // Appended to the whole `cd <mac-repo> && a && b` line. `r=$?` first, inside the subshell, is the chain's status;
-// `set -C` then makes `>` create-only, so a file or symlink already at the path (one the container could plant, to
-// aim the write at a Mac file) is refused, never written through. The path is absolute: the chain may `cd` away.
+// `set -C` then makes `>` create-only, so a regular file already at the path, or a symlink to one (one the container
+// could plant, to aim the write at a Mac file), is refused, never written through; a symlink to a FIFO or a device
+// is not (HUB.md → Mac lines → the residuals). The path is absolute: the chain may `cd` away.
 export function ranSuffix(root: string, id: string): string {
   if (!RAN_ID.test(id)) throw new Error(`ran: bad id ${JSON.stringify(id)}`);
   return `; (r=$?; set -C; echo $r > ${root}/localNotes/board/ran/${id})`;

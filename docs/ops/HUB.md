@@ -240,13 +240,15 @@ cd <mac-repo> && <cmd> && <cmd>; (r=$?; set -C; echo $r > <mac-repo>/localNotes/
 - **`&&` inside, the one `;` before the marker.** `r=$?` is the whole `&&` chain's status, so the steps join with
   `&&` only (a `;` among them would record just the part after it). The path is absolute, as the chain may `cd` into a
   worktree. The terminal's own status afterwards is the marker's.
-- **Create-only.** `set -C` makes the write refuse any file or symlink already at the path, so a symlink planted in
-  the shared folder can never aim it at a Mac file (with zsh's defaults: its `CLOBBER_EMPTY` option, off unless set,
-  lets `set -C` write into an existing empty file). A rerun of the same line runs the command and then prints
+- **Create-only.** `set -C` makes the write refuse a regular file already at the path, or a symlink to one, so a
+  symlink planted in the shared folder can never overwrite a Mac file (zsh's `CLOBBER_EMPTY` option, off by default,
+  would let it write into an existing empty one). A rerun of the same line runs the command and then prints
   "file exists": a rerun gets a fresh suffix.
 - **The trust boundary:** the line only ever creates one new file holding a number; nothing on the Mac reads the
-  folder; the container reads it only as a number (`SESSION-BOARD.md` → _Watchers_ → merge). The residual: with
-  `ran/` itself swapped for a symlink, the line could create one such new file elsewhere, never overwrite one.
+  folder; the container reads it only as a number (`SESSION-BOARD.md` → _Watchers_ → merge). The residuals, each
+  only ever a number: with `ran/` itself swapped for a symlink, the line could create one such new file elsewhere;
+  and `set -C` still writes through a symlink to a FIFO or a device, so one planted at the id could hand that number
+  to a reader on the Mac, or, with no reader, hold the finished line open until Ctrl-C.
 - `merge-watch.sh` exits 11 with the code. No marker means not run, or interrupted (Ctrl-C drops the rest of the
   line), or a step with no line (a web page): past the step's expected time, the hub asks.
 

@@ -685,10 +685,11 @@ would announce the same again), **78** with no `jq`. Once each: `merge-announced
 200), and a missing one is the first run, which seeds it with every sha already there and says nothing;
 `ran-announced` keeps `<id> <mtime>` for every marker still on disk (the week's prune bounds it, so none drops out
 and is said again). A marker is read only when its name matches `ran.ts`'s `RAN_ID`, it is a plain file (no symlink)
-of at most 8 bytes, and then only its first 4 bytes, under a 1 s `timeout` (the open too: a FIFO never blocks it), as a 1–3 digit number; anything else
-waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its content never printed. Markers a week
-old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is dropped; a title or time loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`, `lease`), so a `merged` row passes
-them by.
+of at most 8 bytes, and then only its first 4 bytes, under a 1 s `timeout` (the open too: a FIFO never blocks it),
+as a 1–3 digit number; anything else waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its
+content never printed. Markers a week old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is
+dropped; a title or time loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`,
+`lease`), so a `merged` row passes them by.
 
 ## Script-shape rules (COI monitor)
 
