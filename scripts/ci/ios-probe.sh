@@ -16,9 +16,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,hostlog,taplanded" ;;
-    2) echo "restore card nohub,light,hostlog,simlog,taplanded" ;;
-    *) echo "restore card nohub,light,taplanded" ;;
+    1) echo "restore card nohub,light,hostlog,dyld,taplanded" ;;
+    2) echo "restore card nohub,light,hostlogafter,taplanded" ;;
+    *) echo "restore card nohub,light,hostlog,taplanded" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -363,6 +363,25 @@ s_simlog() {
   cap 30 xcrun simctl spawn "$U" launchctl disable system/com.apple.diagnosticd >/dev/null 2>&1 || note "sim disable refused"
   if e="$(cap 30 xcrun simctl spawn "$U" launchctl bootout system/com.apple.diagnosticd 2>&1)"; then note "sim diagnosticd booted out"
   else note "sim bootout refused: $(printf '%s' "$e" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-100)"; fi
+  return 0
+}
+# Research panel leads (11-17, community sources), run 20:
+# dyld: Apple DTS (forums thread 820720) suggested `simctl runtime dyld_shared_cache update` for slow first launches;
+# timed on its own, before the boot, to see whether the settle is the shared-cache build.
+s_dyld() {
+  case ",$OPTS," in *,dyld,*) ;; *) note "dyld off"; return 0 ;; esac
+  select_xcode
+  # this runtime only if simctl takes its identifier (4 runtimes on the image), else --all as DTS gave it
+  if cap 600 xcrun simctl runtime dyld_shared_cache update "$RUNTIME_ID" >"$WORK/dyld.log" 2>&1; then note "dyld update ($RUNTIME_ID) ok"
+  elif cap 600 xcrun simctl runtime dyld_shared_cache update --all >>"$WORK/dyld.log" 2>&1; then note "dyld update --all ok"
+  else note "dyld update failed: $(tail -1 "$WORK/dyld.log" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-100)"; fi
+  return 0
+}
+# hostlogafter: CircleCI's own order (support.circleci.com 46737392770203), after the boot, `unload -w` (CI only).
+s_hostlog_after() {
+  case ",$OPTS," in *,hostlogafter,*) ;; *) note "hostlogafter off"; return 0 ;; esac
+  if cap 20 sudo -n launchctl unload -w /System/Library/LaunchDaemons/com.apple.diagnosticd.plist >/dev/null 2>&1; then note "host diagnosticd unloaded after boot"
+  else note "host diagnosticd unload refused"; fi
   return 0
 }
 s_boot_wait() {
@@ -881,6 +900,7 @@ trap finish EXIT
 trap 'exit 143' TERM
 log "shard $SHARD: $SRC → $AFTER"
 step hostlog s_hostlog # before the boot
+step dyld s_dyld       # before the boot
 case "$SRC" in
   restore) step restore s_restore ;;
   *) step create s_create ;; # cold, seed (seeding happens before the boot starts)
@@ -890,6 +910,7 @@ step axe-install s_axe_install
 step boot s_boot_wait
 step device-hub s_hub
 step simlog s_simlog
+step hostlog-after s_hostlog_after
 step quiet s_quiet # run 16: didn't pay; kept so a `quiet` variant still means something
 procs after-boot
 # A rows shard leaves the readiness tree, the icon and the launch to sim.sh's own `launch` op (the same reads).
