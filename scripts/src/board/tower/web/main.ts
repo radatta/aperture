@@ -444,8 +444,12 @@ async function run(a: Args) {
     const derived = () => {
       try {
         const v = t.view(false);
+        try {
+          writeBrief(t.paths.boardDir, v); // its own try: a failed board.line must not age the brief into TOWER DOWN
+        } catch (e) {
+          process.stderr.write(`tower-web: brief.txt: ${(e as Error).message}\n`);
+        }
         writeDerived(t.paths.boardDir, v);
-        writeBrief(t.paths.boardDir, v);
       } catch (e) {
         process.stderr.write(`tower-web: derived files: ${(e as Error).message}\n`);
       }

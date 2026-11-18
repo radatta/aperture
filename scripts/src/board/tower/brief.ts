@@ -5,7 +5,6 @@
 import { macLine } from '../machine.ts';
 import type { LaneRow, View } from './derive.ts';
 import { gib, hhmm as hhmmLocal } from './fmt.ts';
-import { queuedLine } from './queued.ts';
 import type { UsageLine } from './stale.ts';
 
 export const BRIEF_FILE = 'brief.txt';
@@ -35,7 +34,7 @@ function laneLine(r: LaneRow, f: Fmt, w: number): string {
   if (r.pr && !r.label.includes(`PR ${r.pr.number}`)) bits.push(`PR ${r.pr.number}`);
   if (r.eta?.pr && !r.pr) bits.push(`PR ${range(r.eta.pr, f)}${r.eta.late ? ' late' : ''}`);
   if (r.ctx !== null && r.ctx >= 40) bits.push(`ctx ${Math.round(r.ctx)}%`);
-  return `  ${r.branch.padEnd(w)}  ${bits.join(' · ')}`;
+  return `  ${one(r.branch, 40).padEnd(w)}  ${bits.join(' · ')}`;
 }
 
 // a count by state, in the order the states show up: `2 BUILDING · 1 TESTING`
@@ -64,8 +63,9 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
     `SLOTS ${v.slots
       .map((s) => {
         if (s.state === 'free' && !s.deploying) return `${s.slot} free`;
+        // a holder read from a stale or failed cache is said as such: the hub pastes this as fact
         if (s.branch)
-          return `${s.slot} ${s.branch}${s.expiresAt ? ` until ${f(s.expiresAt)}` : ''}${s.live ? '' : ' (lapsed)'}`;
+          return `${s.slot} ${one(s.branch, 40)}${s.expiresAt ? ` until ${f(s.expiresAt)}` : ''}${s.state === 'unknown' ? ' (lock unknown)' : ''}`;
         if (s.deploying) return `${s.slot} no holder · a dev deploy is running`;
         return `${s.slot} unknown${s.why ? ` (${one(s.why, 40)})` : ''}`;
       })
@@ -95,7 +95,7 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
     const held = q.filter((x) => x.state === 'held').length;
     return [
       `QUEUED ${q.length} · ${ready} ready${held ? ` · ${held} held` : ''}`,
-      ...q.slice(0, LIST_MAX).map((x) => `  ${one(queuedLine(x), 90)}`),
+      ...q.slice(0, LIST_MAX).map((x) => `  ${one(x.line, 90)}`),
       ...(q.length > LIST_MAX ? [`  +${q.length - LIST_MAX} more`] : []),
     ];
   },

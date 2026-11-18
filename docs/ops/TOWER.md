@@ -407,7 +407,7 @@ down. It writes `localNotes/board/main-sync.json` (`{v, t, pid, ok, head, msg}`)
   `history/events-<UTC day>.jsonl` as `{v: 1, t, kind: "merged", pr, sha, mergedAt, title}` (title cleaned, ≤ 120),
   oldest first, and the round's output says `merged: PR <n> (<sha7>)`. The rows go before the baseline moves, so a
   crash repeats a row rather than losing one (`merge-watch.sh` dedupes by sha). A missing or malformed `merge-seen`,
-  or one `origin/main` no longer descends from, only sets the baseline: nothing is back-filled. A failed record never
+  or one `origin/main` no longer descends from (git's exit 1; any other git error keeps the baseline and says so), only sets the baseline: nothing is back-filled. A failed record never
   fails the round (`merge log: <error>`, the baseline holds). The hub wakes on it through `merge-watch.sh`
   (`docs/ops/SESSION-BOARD.md` → _Watchers_).
 

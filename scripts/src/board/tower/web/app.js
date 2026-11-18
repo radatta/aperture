@@ -577,40 +577,10 @@ function next(v) {
     for (const r of merge) items.push(laneItem(r));
     for (const r of v.next.soon) items.push(planItem(r));
   }
-  if (order.length) group('Landing order');
-  order.forEach((o, k) => items.push(laneItem(o.row, { pos: k + 1, note: o.note })));
-  if (inFull && merge.length) group('Merge queue');
-  if (inFull) for (const r of merge) items.push(laneItem(r));
-  if (inFull && v.needs.length) {
-    group('Your items (NEEDS YOU)');
-    for (const n of v.needs) items.push(needItem(n));
-  }
-  // QUEUED: approved autoStart lanes not started, in start order (queued.ts); the glance folds them into one row
+  // QUEUED: approved autoStart lanes not started, in start order (queued.ts). The glance folds them into one row,
+  // above the landing order so the 8-row cap never hides it; expanded, a group of their own further down.
   const queued = v.queued ?? [];
-  const qLine = (q) =>
-    `${q.order ?? '-'} ${q.branch}${q.cls ? ` ${q.cls}` : ''} · ${
-      q.state === 'held'
-        ? (q.note ?? 'held')
-        : q.state === 'after'
-          ? `after ${q.waitsOn.join(', ')}`
-          : 'ready'
-    }`;
-  if (queued.length && inFull) {
-    group('Queued to start (autoStart)');
-    for (const q of queued)
-      items.push(
-        item(`queued:${q.branch}`, {
-          c: q.state === 'ready' ? '' : 'c-dim',
-          badge: q.state === 'ready' ? 'READY' : q.state === 'held' ? 'HELD' : 'AFTER',
-          text: [
-            el('b', null, q.branch),
-            `  ·  ${short(qLine(q).split(' · ').slice(1).join(' · '), 60)}`,
-          ],
-          meta: [q.cls, q.order !== null ? `#${q.order}` : null],
-          more: [q.note, q.after.length ? `after ${q.after.join(', ')}` : null],
-        }),
-      );
-  } else if (queued.length) {
+  if (queued.length && !inFull) {
     const ready = queued.filter((q) => q.state === 'ready');
     items.push(
       item('next:queued', {
@@ -621,9 +591,34 @@ function next(v) {
           `${queued.length} · ${ready.length} ready`,
           ready.length ? el('span', 'who', `: ${ready.map((q) => q.branch).join(', ')}`) : '',
         ],
-        more: queued.map(qLine),
+        more: queued.map((q) => q.line),
       }),
     );
+  }
+  if (order.length) group('Landing order');
+  order.forEach((o, k) => items.push(laneItem(o.row, { pos: k + 1, note: o.note })));
+  if (inFull && merge.length) group('Merge queue');
+  if (inFull) for (const r of merge) items.push(laneItem(r));
+  if (inFull && v.needs.length) {
+    group('Your items (NEEDS YOU)');
+    for (const n of v.needs) items.push(needItem(n));
+  }
+  if (queued.length && inFull) {
+    group('Queued to start (autoStart)');
+    for (const q of queued)
+      items.push(
+        item(`queued:${q.branch}`, {
+          c: q.state === 'ready' ? '' : 'c-dim',
+          badge: q.state === 'ready' ? 'READY' : q.state === 'held' ? 'HELD' : 'AFTER',
+          text: [
+            el('b', null, q.branch),
+            `  ·  ${short(q.line.split(' · ').slice(1).join(' · '), 60)}`,
+          ],
+          meta: [q.cls, q.order !== null ? `#${q.order}` : null],
+          // the row says the state; the note adds why, unless it is the row's own text (a held note)
+          more: [q.state === 'held' ? null : q.note],
+        }),
+      );
   }
   if (v.next.queue.length) group('Dev order');
   for (const slot of ['dev', 'devb'])

@@ -3,6 +3,7 @@
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -361,7 +362,14 @@ export function main(argv: string[], stdin: () => string): string {
       const id = ranId(slug, now);
       const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
       if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+      // the suffix writes <mac-repo>/localNotes/board/ran: a board dir anywhere else is a different folder
+      if (!/\/localNotes\/board\/?$/.test(dir))
+        throw new Error(
+          `ran: the board dir ${dir} is not <repo>/localNotes/board, where the suffix writes`,
+        );
       mkdirSync(join(dir, 'ran'), { recursive: true }); // the suffix never makes it: a missing folder fails loud
+      if (existsSync(join(dir, 'ran', id)))
+        throw new Error(`ran: ${id} is already on disk (issued this second): run it again`);
       return ranOut(macRoot(), id);
     }
     default:

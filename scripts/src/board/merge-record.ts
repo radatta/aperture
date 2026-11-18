@@ -53,6 +53,7 @@ export function mergedRows(log: string, now: Date): MergedEvent[] {
 }
 
 const writeSeen = (dir: string, sha: string) => {
+  mkdirSync(dir, { recursive: true });
   const f = join(dir, SEEN_FILE);
   writeFileSync(`${f}.tmp.${process.pid}`, `${sha}\n`);
   renameSync(`${f}.tmp.${process.pid}`, f);
@@ -77,7 +78,9 @@ export function recordMerges(
   }
   try {
     git(['merge-base', '--is-ancestor', seen, target]);
-  } catch {
+  } catch (e) {
+    // exit 1 is "not an ancestor" (a rewrite); anything else (128: an object git can't read) keeps the baseline
+    if ((e as { status?: unknown }).status !== 1) throw e;
     writeSeen(rec.dir, target);
     return `merge log: ${seen.slice(0, 7)} is not under origin/main: baseline reset at ${target.slice(0, 7)} (nothing back-filled)`;
   }

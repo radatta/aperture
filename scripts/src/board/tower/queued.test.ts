@@ -89,7 +89,7 @@ describe('queuedView', () => {
       ['f', 'ready', []],
     ]);
   });
-  it('a started lane drops out (it shows in NOW), and no longer holds back the lanes after it', () => {
+  it('a started lane drops out (it shows in NOW), but its leftover autoStart entry still holds the lanes after it', () => {
     const d = q({ autoStart: [entry('a', { order: 1 }), entry('b', { order: 2, after: ['a'] })] });
     // a is still in autoStart, so b waits on it: the stale item tells dispatch to drop it
     expect(queuedView(d, new Set(['a'])).map((x) => [x.branch, x.state])).toEqual([['b', 'after']]);
@@ -113,6 +113,8 @@ describe('queuedView', () => {
       '- b · HOLD: design',
     ]);
   });
+  // On a well-formed queue. A malformed entry (a bad state, a branch that fails LANE_RE) is dropped by the parser but
+  // still counted by the jq; it is already a problem row on the tower and a pq-check error, so the two may disagree then.
   it("matches pace-watch.sh's exit-6 ready rule on the same queue", () => {
     const raw = {
       v: 1,

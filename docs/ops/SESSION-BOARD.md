@@ -680,13 +680,14 @@ exits 9 unless `ctx-alerted.json` stamped it within `realertSec` (6 h); only the
 a constant, as nothing about it is a threshold. Each tick it reads the `merged` rows the main sync appends
 (`docs/ops/TOWER.md` → _Main sync_) and the Mac lines' markers (`docs/ops/HUB.md` → _Mac lines_), and exits **10**
 when a PR merged (one `HH:MM MERGED PR <n> <sha7> at HH:MM "<title>"` line each; marker lines ride along) or **11** when
-only a marker landed (`HH:MM RAN <id> exit <n>`). Once each: `merge-announced` keeps the announced shas (the last 200),
-and a missing one is the first run, which seeds it with every sha already there and says nothing; `ran-announced`
-keeps `<id> <mtime>`, so the same line run again fires again. A marker is read only when its name matches `ran.ts`'s
-`RAN_ID`, it is a plain file (no symlink) of at most 8 bytes, and then only its first 4 bytes as a 1–3 digit number;
-anything else waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its content never printed.
-Markers a week old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is dropped; a title loses its
-control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`, `lease`), so a `merged` row passes
+only a marker landed (`HH:MM RAN <id> exit <n>`); **74** when a state file it keeps can't be written (a restart
+would announce the same again), **78** with no `jq`. Once each: `merge-announced` keeps the announced shas (the last
+200), and a missing one is the first run, which seeds it with every sha already there and says nothing;
+`ran-announced` keeps `<id> <mtime>` for every marker still on disk (the week's prune bounds it, so none drops out
+and is said again). A marker is read only when its name matches `ran.ts`'s `RAN_ID`, it is a plain file (no symlink)
+of at most 8 bytes, and then only its first 4 bytes, with a 1 s read timeout, as a 1–3 digit number; anything else
+waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its content never printed. Markers a week
+old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is dropped; a title loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`, `lease`), so a `merged` row passes
 them by.
 
 ## Script-shape rules (COI monitor)

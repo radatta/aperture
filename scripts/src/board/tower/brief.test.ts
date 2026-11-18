@@ -66,6 +66,10 @@ describe('briefText on the fixture board', () => {
     expect(b).toMatch(/^MAC AC .* · load [\d. ]+\/\d+/m);
     expect(b).toMatch(/^VM anon [\d.]+G\/[\d.]+G · cpu /m);
     expect(b).toMatch(/^CTX ≥50 /m);
+    expect(b).toMatch(/^ASK ~\d\d:\d\d–\d\d:\d\d echo-branch PR$/m);
+    expect(b).toMatch(/^NEEDS 3 · india-branch: admit the branch to dev \(\+2\)$/m);
+    expect(b).toMatch(/^MERGE 0 · 1 on hold$/m);
+    expect(b).toMatch(/^ {2}HOLD PR 41 charlie-branch ".*": dev: bravo-branch is testing/m);
   });
 });
 
@@ -104,7 +108,7 @@ describe('briefText on an empty board', () => {
       'CTX unknown (no ctx.json)',
     ])
       expect(b.split('\n')).toContain(l);
-    expect(b).toMatch(/^MERGE (none|unknown \(gh PRs )/m);
+    expect(b).toMatch(/^MERGE none$/m);
     expect(b).toMatch(/^MAC no stats/m);
     expect(b).toMatch(/^VM no sample/m);
   });
@@ -115,6 +119,45 @@ describe('briefText on an empty board', () => {
       { name: 'gh PRs', state: 'failed', at: null, detail: 'HTTP 502' },
     ];
     expect(briefText(v, utc)).toMatch(/^MERGE unknown \(gh PRs failed: HTTP 502\)$/m);
+  });
+  it('MERGE ME rows, each PR with its title; HOLD after them with its reason; gh trouble beside real rows', () => {
+    const row = fx.active[0]!;
+    const me = {
+      ...row,
+      branch: 'm-lane',
+      state: 'MERGE ME' as const,
+      pr: { number: 231, title: 'Brief', url: null },
+    };
+    const hold = {
+      ...row,
+      branch: 'h-lane',
+      state: 'HOLD' as const,
+      hold: 'devb busy',
+      pr: { number: 232, title: 'T', url: null },
+    };
+    const v = { ...empty(), next: { ...empty().next, merge: [me, hold] } };
+    expect(
+      briefText(v, utc)
+        .split('\n')
+        .filter((l) => /^(MERGE| {2}(PR|HOLD))/.test(l)),
+    ).toEqual([
+      'MERGE 1 · 1 on hold',
+      '  PR 231 m-lane "Brief"',
+      '  HOLD PR 232 h-lane "T": devb busy',
+    ]);
+    v.sources = [
+      ...v.sources.filter((x) => x.name !== 'gh PRs'),
+      { name: 'gh PRs', state: 'stale', at: null, detail: null },
+    ];
+    expect(briefText(v, utc)).toMatch(/^MERGE 1 · 1 on hold \(gh PRs stale\)$/m);
+  });
+  it('a lock held per a stale or failed read says so: the hub pastes the line as fact', () => {
+    const v = empty();
+    v.slots = [
+      { ...fx.slots[0]!, branch: 'x-lane', state: 'unknown', expiresAt: null, live: true },
+      fx.slots[1]!,
+    ];
+    expect(briefText(v, utc)).toMatch(/^SLOTS dev x-lane \(lock unknown\) · /m);
   });
   it('a stale ctx.json reads unknown, a calm one none', () => {
     const v = empty();
@@ -135,6 +178,7 @@ describe('briefText on an empty board', () => {
       approvedAt: null,
       state: 'ready' as const,
       waitsOn: [],
+      line: `${i} lane-${i} p1 · ready`,
     }));
     const b = briefText({ ...empty(), queued: q }, utc);
     expect(b).toMatch(/^QUEUED 7 · 7 ready$/m);

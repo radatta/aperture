@@ -3,6 +3,7 @@
 // with no tick left — kill the watcher, which reads as "stayed quiet") and `date` (`+%s` reads the clock).
 import { spawnSync } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,6 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { mergedRows } from './merge-record.ts';
 import { RAN_ID } from './ran.ts';
 const ctl = (s: string) => [...s].some((c) => c.charCodeAt(0) < 32 && c !== '\n'); // a control byte other than newline
 
@@ -42,16 +44,12 @@ exec ${REAL_DATE} -d "@$c" "$@"
 
 type Files = Record<string, string>; // path under the fake root → content
 const sha = (c: string) => c.repeat(40);
-const merged = (pr: number, s: string, title = `PR ${pr} title`) =>
-  JSON.stringify({
-    v: 1,
-    t: '2026-11-18T20:00:00Z',
-    kind: 'merged',
-    pr,
-    sha: s,
-    mergedAt: '2026-11-18T19:58:00Z',
-    title,
-  });
+// the writer's own rows (merge-record.ts), so a change to its shape breaks this reader's tests too
+const merged = (pr: number, s: string, title = `PR ${pr} title`) => {
+  const [row] = mergedRows(`${s}\t1795031880\t${title} (#${pr})`, new Date('2026-11-18T20:00:00Z'));
+  if (!row) return JSON.stringify({ kind: 'merged', pr, sha: s, title }); // a bad sha: what the writer can't make
+  return JSON.stringify(row);
+};
 const job = JSON.stringify({
   v: 1,
   t: '2026-11-18T19:00:00Z',
@@ -131,6 +129,33 @@ describe('merge-watch.sh: merges', () => {
     rmSync(join(dir, 'ticks'), { recursive: true });
     expect(run(dir).quiet).toBe(true);
   });
+  it('a first run with no events file at all seeds an empty baseline; the first merge after it is announced', () => {
+    const dir = fake([{}, { [ev('2026-11-18')]: `${merged(231, sha('b'))}\n` }]);
+    expect(run(dir)).toMatchObject({ status: 10, tick: 1 });
+  });
+  // root writes through the mode bit: the container user and CI's runner aren't root
+  it.skipIf(process.getuid?.() === 0)(
+    'a state file it cannot write: exit 74 naming it, never a quiet exit 10',
+    () => {
+      const dir = fake(
+        [{ [ev('2026-11-18')]: `${merged(231, sha('b'))}\n`, 'board/merge-announced': '' }],
+        (d) => {
+          mkdirSync(join(d, 'board/ran'), { recursive: true });
+          writeFileSync(join(d, 'board/ran-announced'), '');
+          chmodSync(join(d, 'board'), 0o500);
+        },
+      );
+      try {
+        const r = run(dir);
+        expect([r.status, r.stderr]).toEqual([
+          74,
+          expect.stringMatching(/cannot write .*merge-announced/),
+        ]);
+      } finally {
+        chmodSync(join(dir, 'board'), 0o700);
+      }
+    },
+  );
   it('an empty merge-announced is a real baseline: every merged row is new', () => {
     const dir = fake([
       { [ev('2026-11-18')]: `${merged(231, sha('b'))}\n`, 'board/merge-announced': '' },

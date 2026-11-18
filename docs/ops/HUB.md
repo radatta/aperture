@@ -204,21 +204,21 @@ at once — with the same arguments. One copy of each at a time: stop a running 
 (`timeout` passes TERM on to the watcher), or for pace by the `pid` in `pace.json` — never by pattern (a singleton lock
 is follow-up F274). What each exit asks:
 
-| Exit  | Watcher | Act, then restart                                                                                                |
-| ----- | ------- | ---------------------------------------------------------------------------------------------------------------- |
-| 3     | pace    | trip: write `pace-control.json` hot with `since` (a whole epoch), hold or park lanes                             |
-| 0     | pace    | recovered: write it calm, resume held lanes                                                                      |
-| 5     | pace    | a held lane's trigger met: resume that lane and drop its trigger                                                 |
-| 4     | pace    | hot an hour: tell the user and decide; re-stamp `since`                                                          |
-| 6     | pace    | idle capacity and a ready `autoStart` lane: start it, or tell the user why not                                   |
-| 7     | usage   | soft stop (below); restart with `--hard-only`, dropped once usage is back under the soft line (the weekly reset) |
-| 8     | usage   | hard stop (below); no restart until usage is under the line: the meter rows' `rl.seven_day.resets_at` says when  |
-| 9     | context | a session at the urgent line: tell the user at once                                                              |
-| 10    | merge   | PRs merged on main (a `MERGED` line each): the after-merge duties for each, unprompted (_The hub's duties_)      |
-| 11    | merge   | a Mac line finished (`RAN <id> exit <n>`): carry on with what waited on it; not 0, or unreadable: look into it   |
-| 124   | any     | an hour with nothing to report: restart with the same arguments                                                  |
-| 78    | any     | a `limits.json` key is missing or bad (stderr and `<board>/<watcher>.log` name it): fix it, then restart         |
-| other | any     | 2 (a bad argument or override), 1, 126 …: read stderr and the watcher's log, fix the cause — never restart blind |
+| Exit  | Watcher | Act, then restart                                                                                                                    |
+| ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| 3     | pace    | trip: write `pace-control.json` hot with `since` (a whole epoch), hold or park lanes                                                 |
+| 0     | pace    | recovered: write it calm, resume held lanes                                                                                          |
+| 5     | pace    | a held lane's trigger met: resume that lane and drop its trigger                                                                     |
+| 4     | pace    | hot an hour: tell the user and decide; re-stamp `since`                                                                              |
+| 6     | pace    | idle capacity and a ready `autoStart` lane: start it, or tell the user why not                                                       |
+| 7     | usage   | soft stop (below); restart with `--hard-only`, dropped once usage is back under the soft line (the weekly reset)                     |
+| 8     | usage   | hard stop (below); no restart until usage is under the line: the meter rows' `rl.seven_day.resets_at` says when                      |
+| 9     | context | a session at the urgent line: tell the user at once                                                                                  |
+| 10    | merge   | PRs merged on main (a `MERGED` line each): the after-merge duties for each, unprompted (_The hub's duties_)                          |
+| 11    | merge   | a Mac line finished (`RAN <id> exit <n>`): carry on with what waited on it; not 0, or unreadable: look into it                       |
+| 124   | any     | an hour with nothing to report: restart with the same arguments                                                                      |
+| 78    | any     | a `limits.json` key is missing or bad (stderr and `<board>/<watcher>.log` name it): fix it, then restart                             |
+| other | any     | 2 (a bad argument or override), 74 (merge: a state file unwritable), 1, 126 …: read stderr and the log, fix it — never restart blind |
 
 **Soft and hard stop** (the user's rule, 2026-11-17). Soft: no new lane starts, and running lanes park at a clean
 checkpoint (committed, status file written), never mid-step. Hard: every lane stops after its current command and
@@ -230,19 +230,24 @@ already approved to start; exit 6 only finds capacity for one, it never adds app
 ### Mac lines
 
 Every one-line Mac command the hub hands the user ends with a marker, so "ran it" needs no typing:
-`pnpm board ran <slug>` prints the suffix (and makes `localNotes/board/ran/`), and the hub appends it to the line as
-printed:
+`pnpm board ran <slug>` prints a fresh suffix for each hand-out (and makes `localNotes/board/ran/`), and the hub
+appends it to the line as printed:
 
 ```
-cd <mac-repo> && <cmd> && <cmd>; echo $? >| <mac-repo>/localNotes/board/ran/<slug>-<4 base36>
+cd <mac-repo> && <cmd> && <cmd>; (r=$?; set -C; echo $r > <mac-repo>/localNotes/board/ran/<slug>-<4 base36>)
 ```
 
-`$?` there is the whole `&&` chain's status, so the line joins its steps with `&&` only (a `;` inside would record
-just the part after it); `>|` writes past zsh's `noclobber`; the path is absolute, as the chain may `cd` into a
-worktree. The terminal's own status afterwards is the `echo`'s. `merge-watch.sh` exits 11 with the code. The trust
-boundary holds: the line writes only a number, nothing on the Mac reads the folder, and the container reads at most
-4 bytes of a file whose name it could have issued (`ran.ts`, `SESSION-BOARD.md` → _Watchers_). A line with no marker
-(a step on a web page, a line typed before the marker existed) still needs the user's word.
+- **`&&` inside, the one `;` before the marker.** `r=$?` is the whole `&&` chain's status, so the steps join with
+  `&&` only (a `;` among them would record just the part after it). The path is absolute, as the chain may `cd` into a
+  worktree. The terminal's own status afterwards is the marker's.
+- **Create-only.** `set -C` makes the write refuse any file or symlink already at the path, so a symlink planted in
+  the shared folder can never aim it at a Mac file. A rerun of the same line runs the command and then prints
+  "file exists": a rerun gets a fresh suffix.
+- **The trust boundary:** the line only ever creates one new file holding a number; nothing on the Mac reads the
+  folder; the container reads it only as a number (`SESSION-BOARD.md` → _Watchers_ → merge). The residual: with
+  `ran/` itself swapped for a symlink, the line could create one such new file elsewhere, never overwrite one.
+- `merge-watch.sh` exits 11 with the code. No marker means not run, or interrupted (Ctrl-C drops the rest of the
+  line), or a step with no line (a web page): past the step's expected time, the hub asks.
 
 ## Lock etiquette
 

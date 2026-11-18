@@ -16,18 +16,21 @@ const A = 'a'.repeat(40);
 const B = 'b'.repeat(40);
 const C = 'c'.repeat(40);
 const D = 'd'.repeat(40);
-const NOW = new Date('2026-11-18T23:59:30.250Z');
+const NOW = new Date('2026-11-19T03:00:30.250Z'); // 11-18 in Pacific time: the file is named by the UTC day
 
 const line = (sha: string, epoch: number, subject: string) => `${sha}\t${epoch}\t${subject}`;
 
-function world(o: { seen?: string; log?: string; notAncestor?: boolean } = {}) {
+function world(
+  o: { seen?: string; log?: string; notAncestor?: boolean; gitBroken?: boolean } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), 'merge-record-'));
   if (o.seen !== undefined) writeFileSync(join(dir, SEEN_FILE), o.seen);
   const calls: string[][] = [];
   const git = (args: string[]) => {
     calls.push(args);
     if (args[0] === 'merge-base') {
-      if (o.notAncestor) throw new Error('exit 1');
+      if (o.notAncestor) throw Object.assign(new Error('exit 1'), { status: 1 });
+      if (o.gitBroken) throw Object.assign(new Error('fatal: bad object'), { status: 128 });
       return '';
     }
     if (args[0] === 'log') return o.log ?? '';
@@ -61,7 +64,7 @@ describe('mergedRows', () => {
     expect(rows).toEqual([
       {
         v: 1,
-        t: '2026-11-18T23:59:30Z',
+        t: '2026-11-19T03:00:30Z',
         kind: 'merged',
         pr: 231,
         sha: A,
@@ -106,8 +109,8 @@ describe('recordMerges', () => {
     });
     expect(recordMerges(w.git, C, w.rec)).toBe('merged: PR 231 (bbbbbbb), PR 232 (ccccccc)');
     expect(w.events().map((e) => [e.file, e.kind, e.pr, e.sha])).toEqual([
-      ['events-2026-11-18.jsonl', 'merged', 231, B],
-      ['events-2026-11-18.jsonl', 'merged', 232, C],
+      ['events-2026-11-19.jsonl', 'merged', 231, B],
+      ['events-2026-11-19.jsonl', 'merged', 232, C],
     ]);
     expect(w.calls).toContainEqual([
       'log',
@@ -135,19 +138,28 @@ describe('recordMerges', () => {
     expect(w.seen()).toBe(D);
     expect(w.events()).toEqual([]);
   });
+  it('a git error that is not "not an ancestor" throws and keeps the baseline (no gap is skipped)', () => {
+    const w = world({ seen: A, gitBroken: true });
+    expect(() => recordMerges(w.git, D, w.rec)).toThrow(/bad object/);
+    expect(w.seen()).toBe(A);
+  });
   it('events are written before the baseline moves: an append that fails leaves the baseline where it was', () => {
     const w = world({ seen: A, log: line(B, 1, 'x (#5)') });
     writeFileSync(join(w.dir, 'history'), 'a file where the dir should be');
     expect(() => recordMerges(w.git, B, w.rec)).toThrow();
     expect(w.seen()).toBe(A);
   });
-  it('a baseline that cannot be written throws (sync-main turns it into a line)', () => {
-    const w = world({ seen: A, log: '' });
-    chmodSync(w.dir, 0o500);
-    try {
-      expect(() => recordMerges(w.git, B, w.rec)).toThrow();
-    } finally {
-      chmodSync(w.dir, 0o700);
-    }
-  });
+  // root writes through the mode bit: the container user and CI's runner aren't root
+  it.skipIf(process.getuid?.() === 0)(
+    'a baseline that cannot be written throws (sync-main turns it into a line)',
+    () => {
+      const w = world({ seen: A, log: '' });
+      chmodSync(w.dir, 0o500);
+      try {
+        expect(() => recordMerges(w.git, B, w.rec)).toThrow();
+      } finally {
+        chmodSync(w.dir, 0o700);
+      }
+    },
+  );
 });

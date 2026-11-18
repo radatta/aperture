@@ -1,12 +1,13 @@
 // QUEUED (docs/ops/TOWER.md → Panels → NEXT): dispatch's autoStart lanes, approved but not started, in start order,
 // each ready / after / held by the rule pace-watch.sh's exit 6 starts them by — a note starting LOW or HOLD holds it;
-// an `after` lane still in devQueue or autoStart keeps it waiting. A lane with a lane file has started: it shows in
-// NOW, and its autoStart entry is the `auto-start` stale item's to flag. Pure.
+// an `after` lane still in devQueue or autoStart keeps it waiting. A lane with a lane file or an open PR has started
+// (the `auto-start` stale item's rule): it shows in NOW, and the stale item flags its leftover entry. Pure.
 import type { AutoStartItem, QueueData } from './queue.ts';
 
 export type QueuedItem = AutoStartItem & {
   state: 'ready' | 'after' | 'held';
   waitsOn: string[]; // the `after` lanes still queued
+  line: string; // queuedLine: the brief and the page print the same words
 };
 
 const HELD = /^(LOW|HOLD)/;
@@ -28,15 +29,20 @@ export function queuedView(q: QueueData | null, started: ReadonlySet<string>): Q
     )
     .map(({ a }) => {
       const waitsOn = a.after.filter((b) => live.has(b));
-      const state = HELD.test(a.note ?? '') ? 'held' : waitsOn.length ? 'after' : 'ready';
-      return { ...a, state, waitsOn };
+      const state: QueuedItem['state'] = HELD.test(a.note ?? '')
+        ? 'held'
+        : waitsOn.length
+          ? 'after'
+          : 'ready';
+      const item = { ...a, state, waitsOn, line: '' };
+      return { ...item, line: queuedLine(item) };
     });
 }
 
 const rank = (c: AutoStartItem['cls']) => (c === 'p0' ? 0 : c === 'p1' ? 1 : 2);
 
 // One line per entry, shared by the brief and the page's details: `1 gate-trims p0 · after test-registry-check`.
-export const queuedLine = (q: QueuedItem) =>
+export const queuedLine = (q: Omit<QueuedItem, 'line'>) =>
   `${q.order ?? '-'} ${q.branch}${q.cls ? ` ${q.cls}` : ''} · ${
     q.state === 'held'
       ? (q.note ?? 'held') // a held note starts LOW or HOLD itself

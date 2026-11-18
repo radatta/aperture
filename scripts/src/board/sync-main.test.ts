@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -319,18 +319,22 @@ describe('sync-main: the merge record (merge-record.ts)', () => {
     const f = fake({ head: A, origin: B, tower: 'running', served: B, log: `${B}\t1\tx (#7)` });
     const r = rec(A);
     const order: string[] = [];
+    const run: Run = (cmd, args, cwd, t) => {
+      if (args[0] === 'log') order.push('log');
+      return f.run(cmd, args, cwd, t);
+    };
     const locked = <T>(fn: () => T) => {
       order.push('lock');
       const out = fn();
       order.push('unlock');
       return out;
     };
-    const out = syncMain(f.run, '/repo/wt', locked, (fn) => fn(), r);
+    const out = syncMain(run, '/repo/wt', locked, (fn) => fn(), r);
     expect(out).toMatch(/main checkout: moved aaaaaaa → bbbbbbb\nmerged: PR 7 \(bbbbbbb\)/);
     const g = f.calls.filter((c) => c.cmd === 'git').map((c) => c.args[0]);
     expect(g.indexOf('fetch')).toBeLessThan(g.indexOf('log'));
     expect(g.indexOf('log')).toBeLessThan(g.indexOf('switch'));
-    expect(order).toEqual(['lock', 'unlock']);
+    expect(order).toEqual(['lock', 'log', 'unlock']);
     expect(readFileSync(join(r.dir, 'merge-seen'), 'utf8').trim()).toBe(B);
   });
   it('a failed record never fails the sync: a merge log line, the move stands', () => {
@@ -365,6 +369,68 @@ describe('sync-main: the merge record (merge-record.ts)', () => {
     syncMain(f.run, '/repo/wt');
     expect(f.did('merge-base') || f.calls.some((c) => c.args[0] === 'log')).toBe(false);
   });
+});
+
+describe('pnpm board sync-main: the merge record end to end (real git, temp repos)', () => {
+  it('the verb passes the board dir: a first round sets the baseline, a merge after it lands as a merged row', () => {
+    const root = mkdtempSync(join(tmpdir(), 'sync-main-e2e-'));
+    const env = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 't',
+      GIT_AUTHOR_EMAIL: 't@example.invalid',
+      GIT_COMMITTER_NAME: 't',
+      GIT_COMMITTER_EMAIL: 't@example.invalid',
+      GIT_CONFIG_GLOBAL: '/dev/null',
+      GIT_CONFIG_NOSYSTEM: '1',
+    };
+    const git = (cwd: string, ...a: string[]) => {
+      const r = spawnSync('git', a, { cwd, env, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${a.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git(root, 'init', '-q', '--bare', '-b', 'main', 'origin.git');
+    git(root, 'clone', '-q', 'origin.git', 'dev');
+    const dev = join(root, 'dev');
+    git(dev, 'commit', '-q', '--allow-empty', '-m', 'first (#1)');
+    git(dev, 'push', '-q', 'origin', 'HEAD:main');
+    git(root, 'clone', '-q', 'origin.git', 'main');
+    const main = join(root, 'main');
+    git(main, 'switch', '-q', '--detach', 'origin/main');
+    const board = join(root, 'localNotes/board');
+    const sync = () =>
+      spawnSync('node', [join(import.meta.dirname, 'cli.ts'), 'sync-main'], {
+        env: {
+          ...env,
+          INIT_CWD: main,
+          APERTURE_BOARD_DIR: board,
+          APERTURE_MAIN_LOCK: join(root, 'main.lock'),
+        },
+        encoding: 'utf8',
+        timeout: 30_000,
+      });
+    let r = sync();
+    expect([r.status, r.stdout]).toEqual([0, expect.stringMatching(/baseline set at/)]);
+    git(dev, 'commit', '-q', '--allow-empty', '-m', 'Second change (#7)');
+    git(dev, 'push', '-q', 'origin', 'HEAD:main');
+    r = sync();
+    expect([r.status, r.stdout]).toEqual([
+      0,
+      expect.stringMatching(/merged: PR 7 \([0-9a-f]{7}\)/),
+    ]);
+    const day = readdirSync(join(board, 'history')).filter((f) => f.startsWith('events-'));
+    const rows = day.flatMap((f) =>
+      readFileSync(join(board, 'history', f), 'utf8')
+        .split('\n')
+        .filter(Boolean)
+        .map((l) => JSON.parse(l) as Record<string, unknown>),
+    );
+    expect(rows).toEqual([
+      expect.objectContaining({ kind: 'merged', pr: 7, title: 'Second change' }),
+    ]);
+    expect(readFileSync(join(board, 'merge-seen'), 'utf8').trim()).toBe(
+      git(main, 'rev-parse', 'HEAD'),
+    );
+  }, 40_000);
 });
 
 describe('pnpm board sync-main: the exit code', () => {

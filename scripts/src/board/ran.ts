@@ -1,7 +1,7 @@
-// Mac-line "ran" markers (docs/ops/HUB.md → Mac lines): a line the hub hands the maintainer ends with a suffix that
-// writes the line's exit code into <board>/ran/<id> over the shared mount, and merge-watch.sh wakes the hub with it,
-// so "ran it" needs no typing. The suffix only ever writes a number; nothing on the Mac reads the folder; the container
-// reads a file only when its name matches RAN_ID, and at most a few bytes of it, as a number.
+// Mac-line "ran" markers: a line the hub hands the maintainer ends with a suffix that writes the line's exit code
+// into <board>/ran/<id> over the shared mount, and merge-watch.sh wakes the hub with it, so "ran it" needs no typing.
+// The suffix's shape and its trust boundary: docs/ops/HUB.md → Mac lines; the reader's checks: SESSION-BOARD.md →
+// Watchers → merge.
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE } from '../mac-root.ts';
 
 export const RAN_ID = /^[a-z0-9][a-z0-9-]{0,31}$/; // merge-watch.sh holds the same pattern
@@ -17,12 +17,12 @@ export function ranId(slug: string, now: Date): string {
   return `${slug}-${t.toString(36).padStart(4, '0')}`;
 }
 
-// Appended to the whole `cd <mac-repo> && a && b` line: `$?` after the chain is the chain's status (the first
-// failure's, or the last command's); `>|` writes past zsh's noclobber; the path is absolute because the chain may
-// `cd` into a worktree. Join the line with && only: a `;` inside would record only the part after it.
+// Appended to the whole `cd <mac-repo> && a && b` line. `r=$?` first, inside the subshell, is the chain's status;
+// `set -C` then makes `>` create-only, so a file or symlink already at the path (one the container could plant, to
+// aim the write at a Mac file) is refused, never written through. The path is absolute: the chain may `cd` away.
 export function ranSuffix(root: string, id: string): string {
   if (!RAN_ID.test(id)) throw new Error(`ran: bad id ${JSON.stringify(id)}`);
-  return `; echo $? >| ${root}/localNotes/board/ran/${id}`;
+  return `; (r=$?; set -C; echo $r > ${root}/localNotes/board/ran/${id})`;
 }
 
 // What `pnpm board ran <slug>` prints: the suffix, plus the placeholder note when the Mac root is unknown.
