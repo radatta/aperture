@@ -722,6 +722,44 @@ describe('main', () => {
     expect(out.join('\n')).toMatch(/at once: one `test-fast` slot, uncapped, up to 6 tokens/);
   });
 
+  // A rules.ts change plans with the merge-base's copy too (base.ts): here that copy is today's rules.ts.
+  const RULES_TEXT = readFileSync(fileURLToPath(new URL('./rules.ts', import.meta.url)), 'utf8');
+  const noOuter = async () => {
+    throw new Error('re-ran');
+  };
+  const withBase = (show: () => string) => {
+    const g = git(z('M', 'scripts/src/gate/rules.ts', 'M', 'scripts/board/limits.json'));
+    const calls: string[][] = [];
+    const run: typeof g.run = (cmd, args, o) => {
+      if (args[0] === 'show') return (calls.push(args), show());
+      return g.run(cmd, args, o);
+    };
+    return { run, calls };
+  };
+
+  it('a rules.ts change reads the merge-base copy and runs the union (rules.ts + limits.json: narrow)', async () => {
+    const { run, calls } = withBase(() => RULES_TEXT);
+    const out: string[] = [];
+    const code = await main(['--dry-run'], { run, exec: record().exec, outer: noOuter, log: (l) => out.push(l), env: {} });
+    expect(code).toBe(0);
+    expect(calls).toEqual([['show', 'abc:scripts/src/gate/rules.ts']]);
+    const text = out.join('\n');
+    expect(text).toMatch(/planned with the merge-base's rules too; the union runs/);
+    expect(text).toMatch(/at once: one `test-fast` slot/);
+    expect(text).not.toMatch(/would run: test$/m);
+  });
+
+  it('a merge-base copy git can’t show runs the full suite', async () => {
+    const { run } = withBase(() => {
+      throw new Error("fatal: invalid object name 'abc'");
+    });
+    const out: string[] = [];
+    await main(['--dry-run'], { run, exec: record().exec, outer: noOuter, log: (l) => out.push(l), env: {} });
+    const text = out.join('\n');
+    expect(text).toMatch(/merge-base's copy couldn't be loaded \(fatal: invalid object name 'abc'\)/);
+    expect(text).toMatch(/would run: test$/m);
+  });
+
   it('a diff it can’t read runs the full suite, in a wide slot', async () => {
     const { ran, exec } = record();
     const { run } = fakeRun([
