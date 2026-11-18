@@ -2,7 +2,14 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { earlierOrphans, openLedger, orphanIntents, pendingIds, type LedgerEntry } from './ledger';
+import {
+  earlierOrphans,
+  leftovers,
+  openLedger,
+  orphanIntents,
+  pendingIds,
+  type LedgerEntry,
+} from './ledger';
 
 const e = (op: LedgerEntry['op'], id?: string, extra: Partial<LedgerEntry> = {}): LedgerEntry => ({
   t: '2026-10-13T00:00:00.000Z',
@@ -91,6 +98,18 @@ describe('earlierOrphans', () => {
       e('reported', undefined, { of: 'killed', via: 'api:createTask', title: 'x' }),
     ];
     expect(pendingIds(entries)).toEqual(['a']);
+  });
+});
+
+describe('leftovers', () => {
+  it('counts pending ids and a killed run’s orphan intents: either wakes an idle lane to sweep', () => {
+    const orphanOnly = [
+      e('intent', undefined, { run: 'killed', via: 'api:createTask', title: 'x' }),
+    ];
+    expect(leftovers(orphanOnly, 'now')).toBe(1);
+    expect(leftovers([e('created', 't1')], 'now')).toBe(1);
+    expect(leftovers([e('created', 't1'), e('deleted', 't1')], 'now')).toBe(0);
+    expect(leftovers([], 'now')).toBe(0);
   });
 });
 

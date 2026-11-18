@@ -228,6 +228,6 @@ export function crashed(
     shots: [],
     durationMs: 0,
     leftoversUnknown:
-      'the lane crashed before its cleanup — its ledger keeps its ids, so the next run sweeps them',
+      "the lane threw, so its cleanup may not have finished — its ledger keeps its ids for that user's lane's next run",
   };
 }

@@ -225,7 +225,8 @@ export class Source {
     this.leaseFeed = this.leaseFeed.filter((f) => f.t >= now - DAY);
     this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
-    for (const [slot, t] of this.ledgerTails) foldRuns(this.runs, parseLines(readNew(t)), slot);
+    for (const [slot, t] of this.ledgerTails)
+      foldRuns(this.runs, parseLines(readNew(t)), slot, t.path);
     // full runs stay: the TTL proof counts them from queue.json's `since`, however old (a handful a day)
     for (const [id, r] of this.runs)
       if (!r.full && (r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);

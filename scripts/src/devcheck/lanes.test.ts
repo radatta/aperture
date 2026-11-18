@@ -348,7 +348,7 @@ describe('crashed', () => {
     const md = renderReport(m);
     expect(md).toContain('on dev (https://dev.example)');
     expect(md).toMatch(
-      /Leftovers: \*\*0\*\* · \*\*unknown\*\* besides: the lane crashed before its cleanup/,
+      /Leftovers: \*\*0\*\* · \*\*unknown\*\* besides: the lane threw, so its cleanup may not have finished/,
     );
     expect(m.crash).not.toContain(IPHONE_TAG); // the browser lane's lines are untagged
   });

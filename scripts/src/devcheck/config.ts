@@ -51,10 +51,13 @@ export const TEST_USERS: Record<TestUser, string> = {
 };
 // A test user is one of the constants, and only on the dev subdomain: an identifiers.json missing a key or holding
 // another address can't widen the guard (token.ts assertTestUser).
-export const isTestUserEmail = (email: string): boolean =>
+export const isTestUserEmail = (
+  email: string,
+  users: Record<string, string> = TEST_USERS,
+): boolean =>
   typeof email === 'string' &&
   email.endsWith(`@${IDS.domains.dev}`) &&
-  Object.values(TEST_USERS).includes(email);
+  Object.values(users).includes(email);
 // packages/shared/src/rpc.ts AUTH_HEADER — the BFF reads the JWT here (CloudFront owns Authorization).
 export const AUTH_HEADER = 'x-aperture-authorization';
 // packages/shared/src/rpc.ts AGENT_TOKEN_HEADER — the MCP server's static agent token (a raw value, no Bearer).
@@ -159,7 +162,11 @@ export function parseEnv(text: string, user: TestUser = 'main'): DevcheckEnv {
     if (eq > 0) vars[line.slice(0, eq)] = line.slice(eq + 1);
   }
   const missing = ENV_KEYS.filter((k) => !vars[k]);
-  if (missing.length) throw new DevcheckError('ENV_MISSING', `missing ${missing.join(', ')}`);
+  if (missing.length)
+    throw new DevcheckError(
+      'ENV_MISSING',
+      `missing ${missing.join(', ')}${user === 'web' ? ` in the browser user's devcheck.dev.web.env — DEV-CHECK.md → One-time setup, step 1b (meanwhile DEVCHECK_LANES=one-user)` : ''}`,
+    );
   if (vars.DEVCHECK_EMAIL !== TEST_USERS[user])
     throw new DevcheckError(
       'WRONG_USER',

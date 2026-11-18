@@ -12,17 +12,22 @@ export type Run = {
 };
 
 // Slot A's run has a line pair per lane (one ledger per test user: scripts/src/devcheck/lanes.ts), under one id: it's
-// in flight while any lane is, ends with the last lane's end, and reads the worst lane's status.
-const lanesOf = new WeakMap<Run, { open: number; end: number | null }>();
+// in flight while any lane is, ends with the last lane's end, and reads the worst lane's status. Open lanes are a set
+// keyed by ledger (`from`), so a ledger read again from the top (replaced, purged by hand) never opens a run twice.
+// In serial mode the run reads ended for the moment between the iPhone lane's run-end and the browser lane's
+// run-start; every reader is per frame and the dev lock still holds merges, so one frame's blip is accepted.
+const lanesOf = new WeakMap<Run, { open: Set<string>; end: number | null }>();
 const RANK: Record<string, number> = { PASS: 0, FAIL: 1, CRASH: 2 }; // anything else reads worse than a crash
 const worse = (a: string | null, b: string | null) =>
   a === null ? b : b === null ? a : (RANK[b] ?? 3) > (RANK[a] ?? 3) ? b : a;
 
-// Folds one ledger's records into `runs` (keyed slot:id, kept in start order); other ops are ignored.
+// Folds one ledger's records into `runs` (keyed slot:id, kept in start order); other ops are ignored. `from` names
+// the ledger (its path): one lane each.
 export function foldRuns(
   runs: Map<string, Run>,
   records: unknown[],
   slot: Run['slot'] = 'dev',
+  from: string = slot,
 ): void {
   for (const raw of records) {
     const r = raw as { op?: unknown; run?: unknown; t?: unknown; status?: unknown };
@@ -35,17 +40,17 @@ export function foldRuns(
       run = { run: id, start: null, end: null, status: null, full: id.endsWith('-full'), slot };
       runs.set(key, run);
     }
-    const l = lanesOf.get(run) ?? { open: 0, end: null };
+    const l = lanesOf.get(run) ?? { open: new Set<string>(), end: null };
     lanesOf.set(run, l);
     if (r.op === 'run-start') {
-      l.open++;
+      l.open.add(from);
       run.start = run.start === null || t === null ? (run.start ?? t) : Math.min(run.start, t);
     } else {
-      l.open = Math.max(0, l.open - 1);
+      l.open.delete(from);
       l.end = l.end === null || t === null ? (l.end ?? t) : Math.max(l.end, t);
       run.status = worse(run.status, typeof r.status === 'string' ? clean(r.status) : null);
     }
-    run.end = l.open > 0 ? null : l.end;
+    run.end = l.open.size ? null : l.end;
   }
 }
 

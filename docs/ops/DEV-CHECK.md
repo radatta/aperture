@@ -148,7 +148,7 @@ cloudformation describe-stacks --profile aperture-dev --region us-west-1 --stack
 "$id" >> .secrets/devcheck.dev.env && chmod 600 .secrets/devcheck.dev.env` (one line; a recreated dev stack
    means removing the old line and rerunning it).
    1b. **The browser lane's user** (slot A only; _Two users_). The same kind of user, `identifiers.json` →
-   `email.devTestUserWeb`, made by the same operator line against dev's pool, writing
+   `email.devTestUserWeb`, made by the same kind of operator line against dev's pool (under the break-glass profile: the freeze denies `AdminCreateUser` to every other principal, `cdk/src/lib/org-stack.ts`), writing
    `.secrets/devcheck.dev.web.env` with all seven keys (the claude client's included: the append line above writes
    only the original user's file). Until it exists, slot A runs
    one user. One more user in the pool costs nothing: Cognito's free tier on the Lite and Essentials plans is

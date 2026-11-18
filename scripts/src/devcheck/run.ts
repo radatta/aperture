@@ -42,7 +42,7 @@ import {
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { DevcheckError } from './errors';
-import { earlierOrphans, openLedger, pendingIds } from './ledger';
+import { leftovers, openLedger } from './ledger';
 import { IPHONE_SHOTS, LANES_ENV, laneMode, planLanes, runLanes } from './lanes';
 import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
@@ -368,8 +368,7 @@ async function main(): Promise<number> {
     let result: RunResult;
     if (lanes.mode === 'one-user') {
       log(`one test user (${lanes.why})`);
-      const web = ledgers.web.read();
-      const waiting = pendingIds(web).length + earlierOrphans(web, runId).length;
+      const waiting = leftovers(ledgers.web.read(), runId);
       if (waiting)
         log(
           `the browser user's ledger has ${waiting} leftover(s) (pending ids, orphan intents): the next two-user run sweeps or lists them`,
@@ -383,12 +382,10 @@ async function main(): Promise<number> {
       });
       result.lanes = { mode: 'one-user' };
     } else {
-      const mainLedger = ledgers.main.read();
       const split = planLanes({
         scenarios,
         defer: { skip, slow },
-        mainLeftovers:
-          pendingIds(mainLedger).length > 0 || earlierOrphans(mainLedger, runId).length > 0,
+        mainLeftovers: leftovers(ledgers.main.read(), runId) > 0,
       });
       const iphoneRuns = split.iphoneRuns;
       const ilog = (msg: string) => log(`iPhone · ${msg}`);

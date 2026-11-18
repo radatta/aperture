@@ -96,6 +96,13 @@ describe('the test users', () => {
     for (const e of all)
       expect(e).toMatch(new RegExp(`^[^@\\s]+@${IDS.domains.dev.replace(/\./g, '\\.')}$`));
   });
+  it('the guard holds even if identifiers.json went wrong: an empty or off-domain entry admits nothing', () => {
+    expect(isTestUserEmail('', { main: TEST_USERS.main, web: '' })).toBe(false);
+    expect(isTestUserEmail('x@example.com', { main: TEST_USERS.main, web: 'x@example.com' })).toBe(
+      false,
+    );
+    expect(isTestUserEmail(TEST_USERS.main, { main: TEST_USERS.main, web: '' })).toBe(true);
+  });
   it('isTestUserEmail admits only those two: no other address, no empty one', () => {
     expect(isTestUserEmail(TEST_USERS.main)).toBe(true);
     expect(isTestUserEmail(TEST_USERS.web)).toBe(true);
@@ -108,6 +115,18 @@ describe('the test users', () => {
 describe('loadEnv', () => {
   it('fails ENV_MISSING when the file is absent', () => {
     expect(() => loadEnv('/nonexistent/devcheck.dev.env')).toThrow(/ENV_MISSING/);
+  });
+  it('the browser user’s file missing a key names that file, its setup step and the one-user way round', () => {
+    const web = GOOD.replace(TEST_USER_EMAIL, TEST_USERS.web)
+      .split('\n')
+      .filter((l) => !l.startsWith('DEVCHECK_CLAUDE_CLIENT_ID='))
+      .join('\n');
+    expect(() => parseEnv(web, 'web')).toThrow(
+      /ENV_MISSING: missing DEVCHECK_CLAUDE_CLIENT_ID in the browser user's devcheck\.dev\.web\.env — .*step 1b/,
+    );
+    expect(() => parseEnv(GOOD.split('\n').slice(1).join('\n'))).toThrow(
+      /^ENV_MISSING: missing DEVCHECK_EMAIL$/,
+    );
   });
   it('the browser user’s missing file points at its own setup step and the one-user way round', () => {
     expect(() => loadEnv('/nonexistent/devcheck.dev.web.env', vi.fn(), 'web')).toThrow(
