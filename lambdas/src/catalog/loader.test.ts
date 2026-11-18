@@ -80,8 +80,9 @@ describe('ensureCatalog', () => {
     const { store, doc } = setup();
     await publish(store, 'run-1', 1000);
     await doc.delete(CATALOG_PK, catalogSk.chunk('a', 0));
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     await ensureCatalog(store, 10_000);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('catalog load failed'));
     const queries = doc.queries.length;
     await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS - 1);
     expect(doc.queries.length).toBe(queries); // meta only
@@ -95,9 +96,10 @@ describe('ensureCatalog', () => {
   it('backs off a rev whose chunks throw while loading, as one that doesn’t parse', async () => {
     const { store, doc } = setup();
     await publish(store, 'run-1', 1000);
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const load = vi.spyOn(store, 'loadLive').mockRejectedValue(new Error('incorrect header check'));
     await ensureCatalog(store, 10_000);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('incorrect header check'));
     await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS - 1);
     expect(load).toHaveBeenCalledTimes(1);
     expect(doc.queries.length).toBeGreaterThanOrEqual(0);

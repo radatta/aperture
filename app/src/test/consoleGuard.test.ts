@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { failOnConsoleNoise } from '@aperture/shared/console-guard';
 
-// setup.ts installs the guard and reroutes jsdom's own errors into it. Each test drains the record itself, so
+// guard.ts installs the guard and reroutes jsdom's own errors into it. Each test drains the record itself, so
 // setup's afterEach finds it empty and the file stays green.
-describe('the app console guard (setup.ts)', () => {
+describe('the app console guard (guard.ts)', () => {
   it('fails on what jsdom reports, which otherwise goes past vitest straight to stderr', () => {
     document.createElement('canvas').getContext('2d');
     expect(() => failOnConsoleNoise()).toThrow(

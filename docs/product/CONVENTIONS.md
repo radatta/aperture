@@ -89,8 +89,8 @@ can only show up in a local run, and only when vitest's workers happen to pair t
 
 **The console guard: in `app` and `lambdas`, a test that reaches `console.error` or `console.warn` fails** —
 jsdom's own errors ("Not implemented: …") included, which `app/src/test/guard.ts` routes in (the guard:
-`packages/shared/src/consoleGuard.ts`). It sees only those two console methods: `process.emitWarning`, a direct
-`process.stderr.write` and output after a worker's last test still print unguarded. A test that expects the output spies it with `mockImplementation` and
+`packages/shared/src/consoleGuard.ts`). It sees only those two console methods — `process.emitWarning` and a direct `process.stderr.write` still print
+unguarded — and a call after a worker's last check is recorded and dropped, never shown. A test that expects the output spies it with `mockImplementation` and
 asserts on it; jsdom-only gaps get a per-file stub (`app/src/test/canvas.ts`). `lambdas` prints its handlers'
 `console.log` lines only for a failing test (`silent: 'passed-only'`). React's act() checking stays off in `app`
 (no vitest globals); a file that drives `act()` itself sets `IS_REACT_ACT_ENVIRONMENT`, and setup resets it after

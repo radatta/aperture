@@ -83,24 +83,37 @@ describe('gate rules', () => {
         (r) => r.match.includes(dep) && (r.pkgs ? r.pkgs.includes(pkg) : dep.startsWith(`${pkg}/`)),
       );
     const gaps: string[] = [];
-    let seen = 0;
+    const guardedPkgs: string[] = [];
     for (const { dir } of PACKAGES) {
       const config = ['vitest.config.ts', 'vitest.config.mts']
         .map((f) => `${dir}/${f}`)
         .find(exists);
-      const list = config && /setupFiles:\s*\[([^\]]*)\]/.exec(read(config));
-      for (const [, rel] of list ? list[1]!.matchAll(/'([^']+)'/g) : []) {
-        const file = join(dir, rel!);
-        seen++;
+      const lists = config ? [...read(config).matchAll(/setupFiles:\s*\[([^\]]*)\]/g)] : [];
+      const files = lists.flatMap((l) =>
+        [...l[1]!.matchAll(/['"]([^'"]+)['"]/g)].map((m) => join(dir, m[1]!)),
+      );
+      if (lists.length && !files.length) gaps.push(`${config}: setupFiles found but none read`);
+      for (const file of files) {
         if (!file.startsWith(`${dir}/src/test/`)) gaps.push(`${file}: not under ${dir}/src/test/`);
-        for (const [, spec] of read(file).matchAll(/^import[^'"]*['"]([^'"]+)['"]/gm)) {
+        const text = read(file);
+        for (const [, spec] of text.matchAll(/^import[^'"]*['"]([^'"]+)['"]/gm)) {
           const dep = resolve(file, spec!);
-          if (dep && !dep.startsWith(`${dir}/src/test/`) && !runsWhole(dep, dir))
+          if (!dep && (spec!.startsWith('.') || spec!.startsWith('@aperture/')))
+            gaps.push(`${file}: can't resolve ${spec}`);
+          else if (dep && !dep.startsWith(`${dir}/src/test/`) && !runsWhole(dep, dir))
             gaps.push(`${file} imports ${dep}`);
         }
       }
+      // The guard goes in first, before any other setup module loads (it could keep the unguarded console), and a
+      // package that installs it also fails on what it records.
+      const guarded = files.filter((f) => read(f).includes('installConsoleGuard('));
+      if (guarded.length) guardedPkgs.push(dir);
+      if (guarded.length && guarded[0] !== files[0])
+        gaps.push(`${dir}: the guard's setupFile isn't first`);
+      if (guarded.length && !files.some((f) => /afterEach\([^]*failOnConsoleNoise\(/.test(read(f))))
+        gaps.push(`${dir}: installs the guard but no afterEach calls failOnConsoleNoise`);
     }
-    expect(seen).toBeGreaterThan(0); // the config scan found the setupFiles at all
+    expect(guardedPkgs.sort()).toEqual(['app', 'lambdas']); // the scan read the setupFiles at all
     expect(gaps).toEqual([]);
   });
 
