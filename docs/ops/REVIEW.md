@@ -18,33 +18,45 @@ commit, it behaves as before (and says what it left to the other lenses).
 | correctness | `review-correctness` | opus, high      | any code, config or script                                                                                                                           | logic, ordering, reads and writes, failure paths, time, contracts, model output, unsourced outside assumptions                               |
 | tests       | `review-tests`       | sonnet, high    | any code, config or script                                                                                                                           | test gaps, assertions that can't fail, isolation, clocks, CI parity, fakes, the dev-test matrix and its scenario                             |
 | infra       | `review-infra`       | fable, high     | the infra triggers below                                                                                                                             | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
-| shell       | `review-shell`       | opus, high      | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`; the TypeScript CLI dirs only as set below; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
+| shell       | `review-shell`       | opus, high      | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`; TypeScript in `scripts/src` only as below; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
 | UI          | `review-ui`          | sonnet, high    | `app/`; `packages/shared` when it changes what renders                                                                                               | the headless pass, first-open state, focus, input size, probe points                                                                         |
 | extension   | `review-extension`   | opus, high      | `extension/`                                                                                                                                         | research before fixing, the WebKit quirks, the wire contract                                                                                 |
 | fix recheck | `review-fixes`       | opus, high      | rounds 2 and later; a dev fix; a rebase that resolved conflicts                                                                                      | fix closed, fix regressions, sibling call sites, drop reasons                                                                                |
 
 **Infra triggers** — anything that can change a deploy, a dev slot or a monthly bill:
 
-- `cdk/`, `.github/`, and any file a workflow or action runs or reads: `scripts/aws/`, `scripts/src/bot/`,
+- `cdk/`, `.github/`, and any file a workflow, an action or synth runs or reads: `scripts/aws/`, `scripts/src/bot/`,
   `scripts/src/classify-changes.ts`, `scripts/src/deploy-*`, `scripts/src/workflow-*`, `scripts/src/checked-tree.ts`,
   `scripts/src/smoke.ts`, `scripts/src/mask-function-url.ts`, `scripts/src/cdk-diff-summary.ts`,
-  `scripts/src/fixture-inputs.ts`;
+  `scripts/src/fixture-inputs.ts`, `scripts/src/main-dev-wait.ts`, `identifiers.json`, the header constants in
+  `packages/shared/src/rpc.ts` (CloudFront is built from them), `pnpm-workspace.yaml` and `.npmrc` (which install
+  scripts the deploy job runs), and `lambdas/src/kill/` (the hand-deployed `ApertureOrg` stack);
 - the deploy-shape paths (`deploy-base.ts` → `SHAPE_PATHS`: `packages/shared/src/stage.ts`, `pnpm-lock.yaml`),
   `.nvmrc` and the root `package.json`'s `packageManager`;
 - slot routing and locks: `scripts/src/devcheck/{slot,config}.ts`, `scripts/src/devcheck/scenarios/ios-paths.ts`,
   `scripts/board/devlock.sh`;
 - a `lambdas/` change adding a function, env var, AWS call, table access pattern, schedule, secret, a paid
-  third-party or model call, or heavy logging (the kill switch's log-bytes alarm);
+  third-party or model call, or heavy logging (the kill switch's log-bytes alarm); or changing what an existing one
+  needs (an env var, parameter or grant newly required; the rate, cap, model or retry of a paid or rate-limited call);
+  or changing a stored shape, key or `expiresAt` stamp, a backfill, or a branch on `STAGE` (dev can't show a prod-only
+  path, and prod's table expires rows);
 - an `app/` change adding an `/api` call at load (the BFF's reserved concurrency), and a devcheck scenario that adds
   load against the kill thresholds (`docs/ops/CI-BOT.md` → _What's capped_, _Kill switch_);
-- `docs/arch/INFRA.md`, `docs/ops/CI-BOT.md`, and any deploy, slot, lock or approval rule.
+- `docs/arch/INFRA.md`, `docs/ops/CI-BOT.md`, and any deploy, slot, lock or approval rule, this doc's lens and round
+  rules included.
 
-A risk class alone is not a trigger (_Picking lenses_); IAM/cdk always is one (`cdk/`). On four auth and
-lambdas-config diffs that touched none of these, infra found 0 serious (the lens measurement, 2026-11-18).
+A risk class alone is not a trigger (_Picking lenses_); IAM/cdk always is one (`cdk/`), and a migration or a
+`STAGE` branch is one through the `lambdas/` bullet. On the two auth diffs that touched no trigger (f226, app-401),
+infra found 0 serious; no finance, migration or external-write diff was measured (the lens measurement, 2026-11-18).
 
-**Shell on the CLI dirs** — `scripts/src/{lane,board,mailroom,gate}/` is TypeScript: it brings the shell lens only when
-the diff there spawns a shell, writes a hook, or builds a shell command line or an operator command. The same
-measurement: shell found 0–1 serious a run on TS-only CLI diffs, 2 on shell, hook and process diffs.
+**Shell on `scripts/src/` TypeScript** — `scripts/src/bot/{sh,help}.ts`, `scripts/src/shq.ts` and
+`scripts/src/mac-root.ts` (the argv seam, the CLI flag guard, zsh quoting, the Mac path) always bring the shell lens.
+Any other TypeScript there, the lane, board, mailroom and gate CLIs included, brings it only when a hunk touches: a
+process call (`run`, `execFile`, `spawn`, `kill`, `tmux`, `flock`) or the argv or env it is passed; a constant that
+reaches an argv; a name or quoting validator (`BRANCH_RE`, `nameProblem`, `shq`); a CLI flag guard (`FLAGS`,
+`cliGuard`); a printed Mac line; a job field or validator the Mac runner reads; or a write under `.claude/`. Unsure
+means it does. The same measurement: shell found 0–1 serious a run on TS-only CLI diffs, 2 on shell, hook and process
+diffs; gate-parallel's TS-side finds (`HEAVY_NOSLOT`, the wide-gate workers) are env passed to a process call.
 
 What each touched package still brings, as before:
 
@@ -72,8 +84,8 @@ rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_
 
 - **Docs only** — `code-reviewer` alone; plus shell if an operator command changed, infra if a deploy, slot, lock or
   approval rule changed.
-- **Tooling only** (scripts, `.claude/hooks/`, `tools/`) — rules, correctness, tests; shell on a shell trigger (a TS-only
-  CLI change isn't one: _Shell on the CLI dirs_); plus infra for any infra trigger.
+- **Tooling only** (scripts, `.claude/hooks/`, `tools/`) — rules, correctness, tests; shell on a shell trigger
+  (`scripts/src/` TypeScript: _Shell on `scripts/src/` TypeScript_); plus infra for any infra trigger.
 - **Workflow docs or other `.claude/` files** (agents, rules, skills) — rules and shell; plus infra when an approval
   or deploy rule changes.
 - **Risk classes** — auth (JWT, Cognito, tokens, the origin secret), IAM/cdk (`cdk/`, roles, policies), finance
@@ -82,9 +94,8 @@ rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_
   itself: infra runs on an infra trigger, and its prompt then names the class. The class still counts for the dev-fix
   skip (_After a dev fix or a rebase_) and at the round cap (_Round 2 and later_ → _The pick_).
 - **A small diff** — 3 files or fewer, no infra, shell, UI or extension trigger: round 1 is `code-reviewer`,
-  `review-tests` and `review-correctness` only, and "when unsure, add the lens" doesn't apply (docs only stays
-  `code-reviewer` alone; kickoff or relay additions still add). Such diffs ran 4–5 lenses; app-401-refresh's only
-  serious finds came from tests, and f242-overlay-flakes had none (the lens measurement).
+  `review-tests` and `review-correctness` only, with no lens added on judgment. Doubt whether a trigger applies means
+  it applies; docs only keeps its own bullet; kickoff or relay additions still add.
 - **A model call, prompt or model-output validator** in the diff — tell the correctness lens, so it runs its model
   output section.
 
@@ -148,7 +159,8 @@ next push or deploy, and phase 10.
 ## Fix, gate, commit
 
 One pass over everything kept, S1 to S3; the touched files' tests while fixing; then one gate (phase 5) and one
-commit for the round.
+commit for the round. If the fix range touches a trigger whose lens the round didn't run, that lens runs on the fix
+range before the review stops, whatever the round found.
 
 ## Round 2 and later
 
