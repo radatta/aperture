@@ -6,6 +6,7 @@ export interface PwResponse {
   status(): number;
   request(): { method(): string; postData?(): string | null }; // the same Request object the `request` event carried — stable identity
   json(): Promise<unknown>;
+  text(): Promise<string>;
 }
 
 export interface PwRequest {

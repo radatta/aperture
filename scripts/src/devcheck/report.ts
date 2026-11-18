@@ -1,6 +1,7 @@
 // The run's report: status line first (PASS / FAIL: <codes> / CRASH), then what ran, against which build,
 // what it created and what's left. report.md is for reading (Claude reads it, then the screenshots);
 // report.json is the same result for tooling.
+import { budgetLine } from './budget';
 import type { ReasonCode } from './errors';
 import type { IosJobSummary } from './ios';
 import type { EntryPoint, RowKind } from './scenario';
@@ -58,6 +59,8 @@ export interface RunResult {
   target?: string; // the dev slot the run was on and its origin (DEV-CHECK.md → Dev slots)
   startSha?: string;
   endSha?: string;
+  sittingStarts?: number; // the ledger's estimate of today's sitting Starts on this slot, at the run's start (budget.ts)
+  dayStart?: number; // the test user's day start the estimate was counted over (absent: budget.ts's default)
   deployUrl?: string;
   status: 'PASS' | 'FAIL' | 'CRASH';
   codes: ReasonCode[];
@@ -276,6 +279,7 @@ export function renderReport(r: RunResult): string {
     `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
+  if (r.sittingStarts !== undefined) lines.push(budgetLine(r.sittingStarts, r.dayStart));
   if (r.failures.length)
     lines.push('', ...r.failures.map((f) => `**Failed:** ${f.code} — ${f.message}`));
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);

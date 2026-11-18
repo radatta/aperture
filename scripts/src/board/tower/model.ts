@@ -4,9 +4,42 @@ import type { Queue } from './queue.ts';
 import type { Run } from './ledger.ts';
 import type { Pr } from './prs.ts';
 import type { Bench } from './bench.ts';
+import { MAIN, type Conflict } from '../conflicts.ts';
 
 export type Range = '1h' | '6h' | '24h';
 export const RANGE_SEC: Record<Range, number> = { '1h': 3600, '6h': 6 * 3600, '24h': 24 * 3600 };
+
+// The board's merge-tree check, from overlap.json (docs/ops/SESSION-BOARD.md → Overlaps): `at` is the file's own
+// `t`, null when it has none. A warning only: it never sets a lane's state, tone or needs.
+export type Conflicts = { at: number | null; list: Conflict[] };
+// One lane's share of it: the files it can't merge with main, and with each other lane (sorted by branch).
+// `oldMin`: the file's age in whole minutes once it is CONFLICTS_OLD_MS old (board.sh's line), else null.
+export type LaneConflicts = {
+  main: string[] | null;
+  lanes: { branch: string; files: string[] }[];
+  oldMin: number | null;
+};
+export const CONFLICTS_OLD_MS = 10 * 60_000;
+
+export function conflictsOf(
+  c: Conflicts | null,
+  branch: string | null,
+  now: number,
+): LaneConflicts | null {
+  if (!c || !branch) return null;
+  let main: string[] | null = null;
+  const lanes: LaneConflicts['lanes'] = [];
+  for (const x of c.list) {
+    if (x.b === MAIN) {
+      if (x.a === branch) main = x.files;
+    } else if (x.a === branch) lanes.push({ branch: x.b, files: x.files });
+    else if (x.b === branch) lanes.push({ branch: x.a, files: x.files });
+  }
+  if (!main && !lanes.length) return null;
+  lanes.sort((x, y) => (x.branch < y.branch ? -1 : x.branch > y.branch ? 1 : 0));
+  const age = c.at === null ? 0 : now - c.at;
+  return { main, lanes, oldMin: age >= CONFLICTS_OLD_MS ? Math.floor(age / 60_000) : null };
+}
 
 // One sampler tick, compacted: 24 h of raw samples is ~14 MB; these are a few dozen bytes each.
 export type Point = {
@@ -90,4 +123,5 @@ export type TowerState = {
   bench: Bench | null;
   lockFeed: FeedItem[]; // transitions this tower saw
   leaseFeed: FeedItem[];
+  conflicts: Conflicts | null; // overlap.json's merge-tree conflicts; null: no file, or one from before the check
 };

@@ -2,11 +2,25 @@
 // places are added, renamed and deleted in Settings and errands captured onto them the way the user does it;
 // the Shortcut's route is driven raw (api.ts placeDigestRaw) with a token rotated through the guarded API,
 // then generated, rotated and revoked through Settings. Names and slugs carry the run's nonce, so no run can
-// collide with another's leftover; a place is ledgered from its create (the browser's upsertPlace response,
-// recorder.ts, or the API's), the token as `place-token:<run>` before any mint, and cleanup deletes the
-// places and revokes the token by those records. The token's plaintext lives in this module's memory only —
-// never in a log, an error, a screenshot or the ledger. The rows are the plan's dev-test matrix
-// (localNotes/plan.md §4 D) plus review rounds 1 and 2 (localNotes/decisions.md) — round 2 the broken-down errand.
+// collide with another's leftover. The token's plaintext lives in this module's memory only — never in a log,
+// an error, a screenshot or the ledger. The rows are the plan's dev-test matrix (localNotes/plan.md §4 D) plus
+// review rounds 1 and 2 (localNotes/decisions.md) — round 2 the broken-down errand. The scenario drives the
+// daily read cap on dev (sequential GETs to the server's own 429, ~40–60 s).
+//
+// Places and the place token are two ledger kinds (DEV-CHECK.md → What it guarantees). A place is recorded from
+// the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's request has no `id`, through
+// recorder.ts — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is deleted
+// with deletePlace(id, null) (finished errands keep the old slug — harmless, tasks are cleaned by id). The token
+// is recorded as `place-token:<run>` before rotatePlaceToken (never the token itself), and revokePlaceToken is
+// refused unless a run-minted token is still unresolved — a Settings Generate/Rotate click records the same id
+// first (recordPlaceTokenMint), so a browser-minted token is cleaned too. Cleanup revokes it, which leaves the
+// test user an inactive `ptoken` pointer (never deleted); a revoke racing another device throws, cleanup catches
+// per id, so the loop goes on, the run reports it, and the next run's sweep retries it. A step that shows the
+// token runs inside hidingSecret: any failure blanks the page (about:blank) and skips the failure screenshot,
+// so the token never lands in screenshots/. ledgerKind() tells task, Flux, place and token apart by `via`, so a
+// task delete refuses a place id and vice versa. An unrecorded place that appears during the run is a LEFTOVERS
+// failure, like a task. Every run, smoke included, lists places after the sweep — so the harness needs a dev
+// build with the places methods.
 import { randomBytes } from 'node:crypto';
 import { targetOrigin } from '../config';
 import type { DevPlace, DevPlaceTokenStatus, DevTask } from '../api';

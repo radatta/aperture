@@ -2,7 +2,14 @@
 // day-row field, a category edit — keeps what the first one wrote (PR 77 made task reads consistent; this
 // covers plans, the day row, categories; settings, stories and habits ride the same repo change, unit-
 // tested). Plus PR 77's Right-now nit: a timed part's second line at phone width. Tasks and the category
-// come from the API (ledger-recorded); the day row is the test user's own and is put back as found.
+// come from the API (ledger-recorded).
+//
+// A category is a ledger kind (DEV-CHECK.md → What it guarantees): recorded from the create's id
+// (`via: api:upsertCategory`), deleted with deleteCategory(id, null). Cleanup runs newest-first and the category
+// is made after the run's tasks, so it goes before them — a run task on a run category would make the delete
+// refuse, so no scenario puts one there. The day row (capacity, intent) is the test user's own, set through the
+// UI and put back as found in the step's finally — a singleton, nothing to ledger (an intent that was never set
+// comes back as ''; the API has no null intent).
 import type { DevCategory } from '../api';
 import { datesFor, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 

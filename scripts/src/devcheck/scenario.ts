@@ -54,6 +54,9 @@ export interface Scenario {
   rows: Row[]; // [] only for smoke, which proves the harness, not a feature
   steps: Step[];
   slowPaths?: string[]; // repo-relative globs (`**` crosses folders) a branch must touch for its slow steps to run
+  // Where it runs among the others: lower first, ties by id. The scenarios that predate discovery sit at 10, 20, …
+  // 440 in their old order (scenarios/index.ts → LEGACY_ORDER, `list.ts` prints it); a new one must set this.
+  order?: number;
 }
 
 export interface Dates {

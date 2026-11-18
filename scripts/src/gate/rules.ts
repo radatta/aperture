@@ -140,6 +140,11 @@ export const INPUT_RULES: InputRule[] = [
     why: 'imports lambdas/src/rpc/argSpecs.ts by path at runtime (and so everything it imports)',
   },
   {
+    inputs: ['packages/shared/src/sittings.ts', 'packages/shared/src/dates.ts'],
+    tests: ['scripts/src/devcheck/budget.test.ts'],
+    why: 'pins the sitting caps, refusal texts and the user’s zone to shared’s by reading the files',
+  },
+  {
     inputs: ['packages/shared/src/'],
     tests: ['scripts/src/devcheck/scenarios/siri-capture.ts'],
     why: 'loadShared imports shared’s dates/due/spokenTime/capture by URL; naming the module runs its importers',
@@ -307,6 +312,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/bot/cli.test.ts': 'spawns bot/cli.ts (same area)',
   'scripts/src/bot/lock-cache.test.ts': 'temp dir',
   'scripts/src/board/cli-help.test.ts': 'temp dir',
+  'scripts/src/board/conflicts.test.ts': 'temp repo',
   'scripts/src/board/main-lock.test.ts': 'temp lock files',
   'scripts/src/board/sync-main.test.ts': 'spawns board/cli.ts (same area) on a temp repo and lock',
   'scripts/src/board/tower/lanes.test.ts': 'temp dir',
@@ -314,6 +320,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/commit-identity.test.ts': 'temp repos; spawns its sibling commit-identity.ts',
   'scripts/src/devcheck/ios-plans.test.ts': 'reads devcheck/scenarios (same area)',
   'scripts/src/devcheck/ledger.test.ts': 'temp dir',
+  'scripts/src/devcheck/list.test.ts': 'reads devcheck/*.ts, api/ and mcp/ (same area)',
   'scripts/src/devcheck/login.test.ts': 'temp dir',
   'scripts/src/devcheck/mcp-login.test.ts': 'temp dir',
   'scripts/src/identifiers-scan.test.ts': 'temp repos',
@@ -395,6 +402,8 @@ export const MODULE_READERS: Record<string, string> = {
     'spawns lambdas/src/local/serve.ts, shared inside (lc-e2e runs it, by the lambdas/ + shared rule)',
   'scripts/src/devcheck/login.ts': `${RUNTIME}: a storage-state file`,
   'scripts/src/devcheck/run.ts': `${RUNTIME}: a pid lock and the scenario files (same area)`,
+  'scripts/src/devcheck/scenarios/index.ts':
+    'its own scenarios/ dir, imported by name (the devcheck same-area rule)',
   'scripts/src/devcheck/scenarios/per-slot-runs.ts': `${RUNTIME}: the branch's git diff`,
   'scripts/src/devcheck/scenarios/siri-capture.ts': 'packages/shared/src (its rule)',
   'scripts/src/fixture-inputs.ts': 'stdin',

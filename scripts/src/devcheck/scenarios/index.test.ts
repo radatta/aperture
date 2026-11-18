@@ -4,9 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { IosAssert, validateSimParams, type IosOp } from '../../mailroom/sim.ts';
 import { MATRIX_EXEMPT, matrixProblems } from '../matrix';
 import {
+  LEGACY_ORDER,
   PROBE_COVERED,
   SCENARIOS,
   globMatch,
+  ordered,
+  scenarioFiles,
+  scenarioOf,
   probeSkip,
   selectScenarios,
   slowScenarios,
@@ -25,6 +29,106 @@ describe('SCENARIOS', () => {
 
   it('only smoke declares no rows', () => {
     expect(SCENARIOS.filter((s) => !s.rows.length).map((s) => s.id)).toEqual(MATRIX_EXEMPT);
+  });
+});
+
+describe('discovery', () => {
+  const sc = (id: string, order?: number): Scenario => ({
+    id,
+    title: id,
+    tiers: ['full'],
+    rows: [],
+    steps: [],
+    ...(order === undefined ? {} : { order }),
+  });
+
+  it('loads one scenario from every file on disk, its id its file name', () => {
+    expect(SCENARIOS.map((s) => `${s.id}.ts`).sort()).toEqual(scenarioFiles());
+    expect(new Set(SCENARIOS.map((s) => s.id)).size).toBe(SCENARIOS.length);
+  });
+
+  it('keeps the scenarios that predate it in their old order, and the list frozen', () => {
+    // the run order before discovery (the SCENARIOS array it replaced, 2026-11-17): never edited
+    expect([...LEGACY_ORDER]).toEqual([
+      'smoke',
+      'dev-slot-b',
+      'ios-standalone',
+      'ios-probe',
+      'capture-task',
+      'capture-dock',
+      'parts-v2',
+      'parts-v2b',
+      'parts-v2b-reads',
+      'day-guards',
+      'dead-rows',
+      'plan-write-refetch',
+      'flux-history',
+      'flux-perf',
+      'attachment-delete',
+      'places',
+      'errand-rows-night',
+      'log-mcp',
+      'private-log',
+      'reflection-line',
+      'phone-nits',
+      'timer-credit',
+      'calibration-integrity',
+      'recurring',
+      'areas',
+      'category-suggest',
+      'finance',
+      'timed-reminders',
+      'cognito-refresh',
+      'lc-coach-ai',
+      'lc-catalog',
+      'lc-sittings',
+      'lc-coach',
+      'coach-fixes',
+      'dev-concurrency-caps',
+      'bff-hardening',
+      'bff-shapes',
+      'per-slot-runs',
+      'identifier-cleanup',
+      'capture-titles',
+      'siri-capture',
+      'lc-extension',
+      'failed-reads',
+      'sitting-auto-close',
+    ]);
+    const legacy = new Set<string>(LEGACY_ORDER);
+    expect(SCENARIOS.map((s) => s.id).filter((id) => legacy.has(id))).toEqual([...LEGACY_ORDER]);
+  });
+
+  it('DEV-CHECK.md names no scenario file that isn’t there', () => {
+    const doc = readFileSync(new URL('../../../../docs/ops/DEV-CHECK.md', import.meta.url), 'utf8');
+    const named = [...doc.matchAll(/scenarios\/([a-z0-9-]+)\.ts/g)].map((m) => `${m[1]}.ts`);
+    expect(named.length).toBeGreaterThan(0);
+    expect(
+      named.filter((f) => !scenarioFiles().includes(f) && f !== 'index.ts' && f !== 'ios-paths.ts'),
+    ).toEqual([]);
+  });
+
+  it('refuses a file with no scenario, two, or one under another id', () => {
+    expect(() => scenarioOf('x.ts', { helper: () => 1 })).toThrow(
+      'scenarios/x.ts exports 0 scenarios',
+    );
+    expect(() => scenarioOf('x.ts', { a: sc('x'), b: sc('y') })).toThrow('exports 2 scenarios');
+    expect(() => scenarioOf('x.ts', { a: sc('y') })).toThrow('its id must be its file name');
+    expect(scenarioOf('x.ts', { a: sc('x'), helper: 'not one' }).id).toBe('x');
+  });
+
+  it('places a new scenario by its order, ties by id, and refuses one with none', () => {
+    const smoke = SCENARIOS.find((s) => s.id === 'smoke')!; // 10
+    const areas = SCENARIOS.find((s) => s.id === 'areas')!; // 220
+    expect(ordered([areas, sc('b-new', 15), sc('a-new', 15), smoke]).map((s) => s.id)).toEqual([
+      'smoke',
+      'a-new',
+      'b-new',
+      'areas',
+    ]);
+    expect(() => ordered([smoke, sc('no-order')])).toThrow('scenario no-order has no order');
+    expect(() => ordered([smoke, sc('nan', NaN)])).toThrow('order must be a number above 10');
+    expect(() => ordered([smoke, sc('first', 10)])).toThrow('order must be a number above 10'); // smoke runs first
   });
 });
 

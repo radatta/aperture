@@ -54,27 +54,28 @@ export function pendingIds(entries: LedgerEntry[]): string[] {
 }
 
 // An `intent` with no `created` (or `refused`) after it in the same run: the create may have landed with its
-// id unknown.
+// id unknown. One to one, in order: each answer resolves the oldest open intent of its via and title, so a
+// dropped create retried under the same title still reads as an orphan (the retry's answer is the retry's).
 export function orphanIntents(entries: LedgerEntry[]): LedgerEntry[] {
-  const out: LedgerEntry[] = [];
-  for (const [i, e] of entries.entries()) {
-    if (e.op !== 'intent') continue;
-    const followed = entries
-      .slice(i + 1)
-      .some(
-        (n) =>
-          n.run === e.run &&
-          (n.op === 'created' || n.op === 'refused') &&
-          n.via === e.via &&
-          n.title === e.title,
-      );
-    if (!followed) out.push(e);
+  const open = new Map<string, LedgerEntry[]>();
+  const orphans = new Set<LedgerEntry>();
+  for (const e of entries) {
+    const k = `${e.run}\n${e.via}\n${e.title}`;
+    if (e.op === 'intent') {
+      orphans.add(e);
+      const q = open.get(k);
+      if (q) q.push(e);
+      else open.set(k, [e]);
+    } else if (e.op === 'created' || e.op === 'refused') {
+      const first = open.get(k)?.shift();
+      if (first) orphans.delete(first);
+    }
   }
-  return out;
+  return entries.filter((e) => orphans.has(e));
 }
 
 // A killed earlier run's orphan intents (its `run-end` never came, so no report named them), less those a
-// later run already `reported`. Per run: orphanIntents is quadratic, a run is a few hundred lines.
+// later run already `reported`.
 export function earlierOrphans(entries: LedgerEntry[], runId: string): LedgerEntry[] {
   const byRun = new Map<string, LedgerEntry[]>();
   for (const e of entries) {

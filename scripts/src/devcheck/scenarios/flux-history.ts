@@ -1,9 +1,20 @@
 // Flux history on dev (docs/areas/flux D47–D51): save one set through the guarded API, then prove the History
 // tab and the night home's Flux line show it. The headless browser has no camera, so the set is recorded
-// the way the stage would send it, not finished on screen. Cleanup deletes it by its ledger id (api.ts
-// records it before the call). The one UI delete (chip-order) takes a ledgered set, found by its own text,
-// so the sweep's delete of it is a no-op. The Library
-// tab's unlinked-Roll note rides along: the one Flux line dev can prove without a camera.
+// the way the stage would send it, not finished on screen. The Library tab's unlinked-Roll note rides along:
+// the one Flux line dev can prove without a camera.
+//
+// A Flux set is a ledger kind (DEV-CHECK.md → What it guarantees). A run writes five: two chin tucks, a finished
+// set and one stopped early, and three rotation sets. Their id is minted by the harness (the client mints it in
+// the app too — flux D47), so recordFluxSet records it as `created` with `via: api:recordFluxSet` before the
+// call — a set the server stored is never unrecorded. Cleanup, the sweep and the read-back go by that `via`: a
+// Flux id is read with listFluxSets and deleted with deleteFluxSet (a soft-delete), never through the task
+// methods (deleteTask refuses a Flux id). The one UI delete (row chip-order) picks the run's own stopped set by
+// its text; the sweep's delete of it is then a no-op. Its `day` is the app's day (the test user's dayStartHour),
+// not the calendar date, so the scenario also passes before 4am. Its two non-ledger writes, both Settings fields
+// on the test user's own row: a test user who never opened Flux has the disclaimer accepted (logged), and row
+// sets-remembered empties fluxSets first and puts the prior map back in the step's finally. One more a run
+// leaves behind: getFluxWeekNote stores the week's note row (fluxnote#<weekStart>) in the test user's
+// partition — derived from the sets, overwritten when they change, never listed as a leftover.
 import { randomInt } from 'node:crypto';
 import { assertDevOrigin, targetOrigin } from '../config';
 import type { PwResponse } from '../pw-types';

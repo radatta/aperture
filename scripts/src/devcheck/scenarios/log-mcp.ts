@@ -1,7 +1,12 @@
 // The Log over MCP on dev (docs/areas/mcp → Tools, log): seed entries through the API and the capture bar,
 // then prove search_log, list_log and get_day read them back as the test user. The tools only read; every
-// seeded entry and task is ledgered by id and cleaned by the pipeline (a log entry is tombstoned by
-// deleteLogEntry). Nothing is ever matched by text for cleanup — the nonce only finds rows on screen.
+// seeded entry and task is ledgered by id and cleaned by the pipeline. Nothing is ever matched by text for
+// cleanup — the nonce only finds rows on screen.
+//
+// A log entry is a ledger kind (DEV-CHECK.md → What it guarantees): recorded from the create's id
+// (`via: api:createLogEntry`; a capture-bar line from the POST's response, `ui:createLogEntry`), read back over
+// the whole test-user log (listLogRange({}), so a crashed run's leftover is found too) and tombstoned with
+// deleteLogEntry — an RPC that exists for this cleanup only (no UI, no MCP tool).
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 

@@ -16,7 +16,7 @@ import {
   type MainSync,
 } from './stale.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
-import type { Lock, TowerState } from './model.ts';
+import { conflictsOf, type LaneConflicts, type Lock, type TowerState } from './model.ts';
 import { CTX_STALE_MS, ctxOf, ctxView, type CtxFile, type CtxView } from './ctx.ts';
 import { mergedFromLog, mergedNumbers, REUSE_MS, type MainMerge } from './mergelog.ts';
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
@@ -60,6 +60,7 @@ export type LaneRow = {
   steps: LaneStep[] | null;
   eta: { next: Range | null; pr: Range | null; source: string; late: boolean } | null;
   ctx: number | null; // its session's context use, % (ctx.ts; amber ≥ 40, red ≥ 50), while ctx.json is fresh
+  conflicts: LaneConflicts | null; // what git can't merge it with (overlap.json; TOWER.md → Conflicts): amber only
 };
 export type LaneStep = {
   phase: string;
@@ -93,6 +94,7 @@ export type SlotCard = {
   failed: boolean;
   deploying: boolean; // dev with no live holder, a dispatch still running (a lock released mid-deploy): not free
   ctx: number | null; // the holder session's context use, %
+  conflicts: LaneConflicts | null; // the holder branch's, as a lane row's (TOWER.md → Conflicts)
 };
 export type SourceRow = {
   name: string;
@@ -405,6 +407,7 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     quiet: false,
     ...laneSteps(file, i.now, pr),
     ctx: null as number | null,
+    conflicts: conflictsOf(i.tower.conflicts, branch, i.now),
   };
   base.ctx = ctxOf(i.ctx, base.session, i.now);
   const row = (
@@ -632,6 +635,7 @@ function orderRow(
     quiet: false,
     phase: null,
     ctx: ctxOf(i.ctx, i.sessionsByBranch[o.branch] ?? null, i.now),
+    conflicts: conflictsOf(i.tower.conflicts, o.branch, i.now),
   };
 }
 
@@ -843,6 +847,7 @@ export function derive(i: Inputs): View {
       failed: lock?.failed ?? false,
       deploying: slot === 'dev' && !live && !!unattributedDispatch(i),
       ctx: null as number | null,
+      conflicts: conflictsOf(i.tower.conflicts, live ? lock.branch : null, i.now),
     };
   });
   for (const c of slots) c.ctx = ctxOf(i.ctx, c.session, i.now);

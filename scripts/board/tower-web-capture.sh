@@ -60,6 +60,9 @@ function stress(v) {
   }
   v.slots[0] = { ...v.slots[0], branch: 'a-fifty-character-branch-name-for-the-dev-slot-card', session: 'auto-6', detail: LONG('slot'), live: true, state: 'live' };
   v.behind = { head: 'f'.repeat(40), files: 12 }; // the header chip reads "behind main · N off"
+  // a conflict chip naming a long branch, its check old (TOWER.md → Conflicts), on a row NOW shows (it drops TESTING)
+  const cfLane = v.active.find((r) => r.state !== 'TESTING');
+  if (cfLane) cfLane.conflicts = { main: ['a.ts'], lanes: [{ branch: 'a-fifty-character-branch-name-for-the-dev-slot-card', files: [LONG('file')] }], oldMin: 12 };
   v.slots[1] = { ...v.slots[1], branch: null, live: false, state: 'unknown', why: `refresh failed (${LONG('why')}), last read 05:59`, asOf: now - 400000 };
   v.sources = v.sources.map((s, i) => (i < 12 ? { ...s, state: 'failed', detail: LONG('src') } : s));
   v.next.table = v.next.table.map((r) => ({ ...r, what: LONG('plan'), you: LONG('you').slice(0, 70) }));
@@ -149,8 +152,17 @@ async function boardChecks(page, tag, variant, phone) {
     const rows = [...document.querySelectorAll('#slipping .badge')].filter((e) => e.textContent === 'BOARD' && e.offsetParent !== null).length;
     const cx = document.querySelector('#ctx-chip');
     const ctxRow = [...document.querySelectorAll('#now .meta')].some((e) => /^ctx \d+%$/.test(e.textContent) && e.offsetParent !== null);
+    const cfs = [...document.querySelectorAll('#now .meta.cf')].filter((e) => /^✗ /.test(e.textContent) && e.offsetParent !== null);
+    const cfRow = cfs.some((e) => e.closest('.row')); // a lane row's, not only the slot card's
+    // an amber chip's tone shows: a row meta's own colour once outranked .t-warn, so every meta read the same grey
+    const plainMeta = [...document.querySelectorAll('#now .row .meta')].find((e) => !/\bt-/.test(e.className));
+    const cfToned = !plainMeta || cfs.filter((e) => e.classList.contains('t-warn')).every((e) => getComputedStyle(e).color !== getComputedStyle(plainMeta).color);
+    const cfDim = cfs.some((e) => e.classList.contains('t-dim')); // stress's chip is 12 min old
+    const cfSlot = [...document.querySelectorAll('#now .slot .meta.cf')].some((e) => e.offsetParent !== null); // the dev holder's
+    // every chip, rows' and slot cards', shows whole: never past its box, never in a box that clips (an ellipsis)
+    const cfCut = [...document.querySelectorAll('#now .meta.cf, #next .meta.cf')].filter((e) => e.offsetParent !== null && (e.getBoundingClientRect().right > (e.closest('.row, .slot') ?? e.parentElement).getBoundingClientRect().right + 1 || (getComputedStyle(e.parentElement).overflow === 'hidden' && e.parentElement.scrollWidth > e.parentElement.clientWidth + 1))).map((e) => e.textContent);
     // innerText: what shows, not a hidden span
-    return { board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow };
+    return { board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow, cfRow, cfToned, cfDim, cfSlot, cfCut };
   });
   const loud = /t-(warn|bad)/;
   if (variant === 'empty') {
@@ -161,6 +173,13 @@ async function boardChecks(page, tag, variant, phone) {
   // context (F240): the fixtures have a session over 50 %, so it leads the phone chip and shows on the desktop
   if (phone ? !/^\d+ ctx≥50/.test(r.sText) : !r.ctx || !/t-bad/.test(r.cCls)) fails.push(`${tag}: no context count (${phone ? r.sText : r.cCls})`);
   if (!variant.startsWith('x') && !r.ctxRow) fails.push(`${tag}: no row shows its session's ctx %`);
+  // conflicts: the fixture's overlap.json has echo-branch, a NOW row, against main
+  if (!variant.startsWith('x') && !r.cfRow) fails.push(`${tag}: no row shows a conflict chip`);
+  if (!r.cfToned) fails.push(`${tag}: a conflict chip shows in a row meta's plain colour, not its tone`);
+  // the fixture's dev holder, bravo-branch, conflicts with main: its slot card carries the chip
+  if (!variant.startsWith('x') && !r.cfSlot) fails.push(`${tag}: the dev slot card shows no conflict chip`);
+  if (variant === 'stress' && !r.cfDim) fails.push(`${tag}: stress's 12-min-old conflict chip isn't dim`);
+  if (r.cfCut.length) fails.push(`${tag}: a conflict chip is cut or runs past its box: ${r.cfCut.join(' | ')}`);
   if (phone) {
     if (r.board) fails.push(`${tag}: the board chip shows on the phone (the header has no room)`);
     // the chip holds the first two of ctx≥50, behind, stale, ctx≥40, off: a session over 50 % may push stale out

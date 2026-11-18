@@ -120,7 +120,7 @@ Lambda's own tests, `backend.test.ts`) and another user's id (two users on one t
 
 Cleanup by recorded id, as every scenario: a series is ledgered from its create response (the browser's
 `upsertSeries`, `recorder.ts`; the API's; MCP's `create_series`) with the `series` ledger kind, and
-`deleteSeries` (api.ts) deletes the occurrences the server spawned for it — `getDay` made them, so no create
+`deleteSeries` (`scripts/src/devcheck/api/tasks.ts`) deletes the occurrences the server spawned for it — `getDay` made them, so no create
 response ever named them; the series id is their record — then tombstones the series (D7). A `create_series`
 the server refuses as a param error resolves its `intent` with a `refused` line (nothing was written).
 

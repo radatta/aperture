@@ -316,6 +316,31 @@ function needs(v) {
 const ctxTone = (p) => (p >= 50 ? 't-bad' : p >= 40 ? 't-warn' : 't-dim');
 const ctxMeta = (p) =>
   p === null || p === undefined ? null : el('span', `meta ${ctxTone(p)}`, `ctx ${Math.round(p)}%`);
+// what git can't merge the lane with (overlap.json, TOWER.md → Conflicts): amber, dim once the check is old
+const cfTargets = (cf) => [
+  ...(cf.main ? [{ name: 'main', files: cf.main }] : []),
+  ...cf.lanes.map((x) => ({ name: x.branch, files: x.files })),
+];
+function cfMeta(cf) {
+  if (!cf) return null;
+  const t = cfTargets(cf);
+  const names = t.slice(0, 2).map((x) => x.name);
+  const m = el(
+    'span',
+    `meta cf ${cf.oldMin === null ? 't-warn' : 't-dim'}`,
+    `✗ ${names.join(', ')}${t.length > 2 ? ` +${t.length - 2}` : ''}`,
+  );
+  m.title = t.map((x) => `${x.name}: ${x.files.join(', ')}`).join(' · ');
+  return m;
+}
+// phones have no hover: the files go in the details too
+const cfMore = (cf) =>
+  cf
+    ? cfTargets(cf).map(
+        (x, n) =>
+          `conflicts with ${x.name}: ${x.files.join(', ')}${n === 0 && cf.oldMin !== null ? ` (${cf.oldMin} min old: is the sampler running?)` : ''}`,
+      )
+    : [];
 
 function laneItem(r, o = null) {
   const text = [el('b', null, r.branch)];
@@ -330,6 +355,7 @@ function laneItem(r, o = null) {
     text,
     track: r.steps ? stepBar(r.steps) : track(r.phase),
     meta: [
+      cfMeta(r.conflicts),
       ctxMeta(r.ctx),
       r.quiet ? el('span', 'meta t-warn', `quiet ${ago(v_now - r.fileAge * 1000, v_now)}`) : null,
       prEta(r),
@@ -338,6 +364,7 @@ function laneItem(r, o = null) {
     more: [
       o?.note ? `landing order: ${o.note}` : null,
       r.hold ? `held: ${r.hold}` : null,
+      ...cfMore(r.conflicts),
       // under a HOLD the row shows the hold, so the detail is only here
       r.detail && (r.hold || short(r.detail, 70) !== r.detail) ? r.detail : null,
       r.pr ? httpsLink(r.pr.url, `PR ${r.pr.number}: ${r.pr.title}`) : null,
@@ -373,6 +400,12 @@ function nowPanel(v) {
       const who = el('div', 'who', `${s.branch}${s.session ? ` · ${s.session}` : ''}`);
       if (s.ctx !== null && s.ctx !== undefined) who.append(' ', ctxMeta(s.ctx));
       c.append(who);
+      // its own line: the who line is cut with an ellipsis on the desktop, and the chip must show whole
+      if (s.conflicts) {
+        const line = el('div', 'what cf-line');
+        line.append(cfMeta(s.conflicts));
+        c.append(line);
+      }
       const what = el(
         'div',
         'what',
@@ -392,6 +425,7 @@ function nowPanel(v) {
     if (busy && s.detail && short(s.detail, 40) !== s.detail)
       more.append(el('div', null, s.detail));
     if (s.why) more.append(el('div', null, s.why));
+    if (busy) for (const m of cfMore(s.conflicts)) more.append(el('div', null, m));
     if (s.failed && s.state !== 'unknown')
       more.append(el('div', null, 'the last refresh failed; this read stands'));
     if (more.childNodes.length) c.append(more);

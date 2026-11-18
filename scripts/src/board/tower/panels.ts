@@ -14,7 +14,14 @@ import {
 } from './history.ts';
 import { layout, type PanelId, type Rect, type Wants } from './layout.ts';
 import { ttlProof } from './ledger.ts';
-import { RANGE_SEC, type FeedItem, type Lock, type Range, type TowerState } from './model.ts';
+import {
+  RANGE_SEC,
+  conflictsOf,
+  type FeedItem,
+  type Lock,
+  type Range,
+  type TowerState,
+} from './model.ts';
 import {
   queueAgeTone,
   type Lane,
@@ -315,6 +322,22 @@ export function sessions(s: TowerState, r: Rect): string[] {
     m.padStart(7) +
     (full ? t.padStart(5) + ' ' + fit(h, 5) : '');
   const body = [c(NORD.dim, row('name', 'state', 'branch', 'MiB', 'thr', 'heavy'))];
+  // A branch git can't merge (overlap.json, TOWER.md → Conflicts): `✗main` against main, `✗N` against N other lanes,
+  // right after the branch, which gives way first; dim once the check is CONFLICTS_OLD_MS old.
+  const branchCell = (branch: string | null) => {
+    const cf = conflictsOf(s.conflicts, branch, s.now);
+    if (!branch || !cf) return c(NORD.frost, branch ?? '');
+    let mark = [cf.main ? '✗main' : '', cf.lanes.length ? `✗${cf.lanes.length}` : '']
+      .filter(Boolean)
+      .join(' ');
+    if (bw - width(mark) - 1 < 4) mark = '✗';
+    const room = bw - width(mark) - 1;
+    return (
+      fit(c(NORD.frost, branch), Math.min(width(branch), room)) +
+      ' ' +
+      c(cf.oldMin === null ? NORD.amber : NORD.dim, mark)
+    );
+  };
   const [listed, idle] = sessionSplit(s);
   for (const x of listed) {
     const st = x.state === 'working' ? c(NORD.green, 'working') : c(NORD.dim, x.state);
@@ -322,7 +345,7 @@ export function sessions(s: TowerState, r: Rect): string[] {
       row(
         c(x.state === 'working' ? NORD.bright : NORD.fg, x.name),
         st,
-        c(NORD.frost, x.branch ?? ''),
+        branchCell(x.branch),
         String(Math.round(x.rssMiB)),
         String(x.thr),
         c(NORD.amber, x.heavy ?? ''),

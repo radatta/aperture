@@ -6,6 +6,16 @@ import { DEV_WORK_MIN, coachSlotOf, financeRowOf, ledgerKind, type ApiClient } f
 import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
+import {
+  DAY_START_HOUR,
+  SITTING_ACTIVE_ERROR,
+  budgetLine,
+  budgetReason,
+  capRefusal,
+  leftOpenReason,
+  startsToday,
+  type Refusal,
+} from './budget';
 import { DevcheckError, codeOf, detailOf, type ReasonCode } from './errors';
 import { IOS_NOTE, type Ios, type IosClient } from './ios';
 import { earlierOrphans, orphanIntents, pendingIds, type Ledger, type LedgerEntry } from './ledger';
@@ -57,7 +67,12 @@ export interface PipelineDeps {
   waitForDeploy?: () => Promise<DeployRun>; // absent with --no-deploy-wait
   fetchShell: () => Promise<string>;
   openBrowser: () => Promise<BrowserSession>;
-  makeApi: (token: () => string, fresh: () => Promise<void>) => ApiClient;
+  // onAnswer: every BFF answer the client got (the sitting budget's refusals, budget.ts — one a step swallowed too)
+  makeApi: (
+    token: () => string,
+    fresh: () => Promise<void>,
+    onAnswer: (method: string, status: number, text: string) => void,
+  ) => ApiClient;
   makeMcp: (token: () => string) => McpClient;
   now: () => number;
   log: (msg: string) => void;
@@ -196,7 +211,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const injectedRequests = new WeakSet<object>(); // the requests an intercept answered itself
 
   d.ledger.append({ run: d.runId, op: 'run-start' });
+  // The sitting budget (budget.ts): this step's cap refusal, from an answer the step may have swallowed or the page's
+  // own Start; the body reads it waits for before calling a failure. A read still in flight from an earlier step
+  // is that step's, never this one's (`stepNo`). `spent`: the reason, once the budget has run out this run.
+  let refusal: Refusal | null = null;
+  let stepNo = 0;
+  let spent: string | null = null;
+  const bodyReads: Promise<unknown>[] = [];
+  const noteRefusal = (text: string) => (refusal ??= capRefusal(text));
   try {
+    // the default day start's estimate, for a run that ends before the test user's settings are read
+    r.sittingStarts = startsToday(d.ledger.read(), d.now());
     if (d.waitForDeploy) r.deployUrl = (await d.waitForDeploy()).url;
 
     browser = await d.openBrowser();
@@ -244,6 +269,17 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       if (res.status() >= 400 && !injectedRequests.has(res.request()))
         r.failedLoads.push(`${res.status()} ${res.request().method()} ${loadUrl(res.url())}`);
     });
+    page.on('response', (res) => {
+      if (res.status() < 400 || new URL(res.url()).origin !== targetOrigin()) return;
+      if (methodOf(res.url()) !== 'lcSittingStart') return;
+      const n = stepNo;
+      bodyReads.push(
+        res.text().then(
+          (t) => n === stepNo && noteRefusal(t),
+          () => undefined,
+        ),
+      );
+    });
     page.on('requestfailed', (req) => {
       const why = req.failure?.()?.errorText ?? 'failed';
       // A navigation or unmount cancelling its own request is no failed load (and prints no console line).
@@ -254,8 +290,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     const shot = makeShot(page, ui, d.shotsDir, () => prefix, r.shots);
 
     session = await browser.signIn(shot);
-    api = d.makeApi(() => session!.accessToken, fresh);
-
+    api = d.makeApi(
+      () => session!.accessToken,
+      fresh,
+      (_method, status, text) => void (status !== 200 && noteRefusal(text)),
+    );
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
     for (const id of categoriesLast(pendingIds(d.ledger.read()))) {
       const out = await clean(api, id);
@@ -276,6 +315,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // only lc-coach-ai's steps, which turn it on for themselves. LeetCode Premium goes back on (lc-coach's progress
     // step switches it off and back on), and the plan mode back to auto (coach-fixes sets one per step).
     const settings = await api.reads.getSettings();
+    r.dayStart = settings.dayStartHour ?? DAY_START_HOUR; // the gate's day, as the BFF keys it
+    r.sittingStarts = startsToday(d.ledger.read(), d.now(), r.dayStart);
+    d.log(budgetLine(r.sittingStarts, r.dayStart));
     const base = {
       ...(settings.pomodoroWorkMin !== DEV_WORK_MIN ? { pomodoroWorkMin: DEV_WORK_MIN } : {}),
       ...(settings.coachAiPick !== false ? { coachAiPick: false } : {}),
@@ -366,6 +408,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           continue;
         }
         const s0 = d.now();
+        stepNo++;
+        refusal = null;
+        bodyReads.length = 0;
         try {
           await renewSession(); // a cached token can lapse mid-run, and a run with sim steps is minutes long
           if (step.cost === 'slow') await renewMcp();
@@ -382,9 +427,27 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
             res.ms = d.now() - s0;
             continue;
           }
+          const error = err instanceof Error ? err.message : String(err);
+          await Promise.allSettled(bodyReads);
+          const kind = capRefusal(error) ?? refusal;
+          const budget = kind
+            ? budgetReason(kind, startsToday(d.ledger.read(), d.now(), r.dayStart), r.dayStart)
+            : null;
+          const leftOpen: string | null =
+            !kind && spent && error.includes(SITTING_ACTIVE_ERROR) ? leftOpenReason(spent) : null;
+          const why: string | null = budget && 'needsYou' in budget ? budget.needsYou : leftOpen;
+          if (why) {
+            // The day's budget is spent: nothing broke, and every step after builds on a Start it can't get.
+            spent ??= why;
+            needs = why;
+            res.status = 'needs-you';
+            res.note = why;
+            res.ms = d.now() - s0;
+            continue;
+          }
           failed = true;
           res.status = 'fail';
-          res.error = err instanceof Error ? err.message : String(err);
+          res.error = budget && 'fail' in budget ? `${error} (${budget.fail})` : error;
           fail('STEP_FAILED');
           // A secret may have been on screen (scenario.ts hidingSecret): the error text stands alone.
           if (!shotWithheld(err))

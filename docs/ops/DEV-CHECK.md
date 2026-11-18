@@ -77,7 +77,16 @@ so prod's caps — 100 Starts and 400 Start attempts a user a day — ran a slot
 runs, and every sitting row then failed `Too many sittings started today.` until the app day turned over (04:00 PT).
 On a dev slot the BFF lifts them to 1000 and 4000, keyed off its `STAGE` (shared `sittings.ts` →
 `sittingStartsPerDay`, `lcStartAttemptsPerDay`); any other stage, an unset one included, keeps prod's. The gate
-row isn't readable through the API, so a cap refusal on dev reads only as that error.
+row isn't readable through the API, so the harness estimates it (`budget.ts`): every Start is in the slot's ledger
+before its call, so the report's header gives today's count over the app day the BFF keys the gate by (the test
+user's `dayStartHour`, read at run start: "Sitting starts today (ledger estimate): ~N of 1000, resets 04:00 PT"),
+and a step that fails on either cap's refusal — thrown, swallowed by the step (the API client's answers) or the
+page's own Start, while that step runs — reads **needs-you** with the reason, as does the rest of its scenario, and
+the run stays green. A starts refusal only when the count is plausible, half the cap or more: under it the step stays
+a failure, "check the gate counter" (a counter bug, or another writer on the test user, isn't a spent budget). An
+attempts refusal whenever the ledger has a Start today — that gate also counts resumes and refused Starts, which
+the ledger never sees. Once the budget has run out in a run, a later Start refused because a sitting the cut-short
+scenario opened is still open (`Another sitting is still open`) reads needs-you too.
 
 ## One-time setup
 
@@ -123,7 +132,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   only a presigned URL the dev BFF just minted, after `assertPresignedDevUrl` checks the host is the dev
   Files bucket (`aperturedata-dev-files…`, so never prod's), the key is under `u/`, and the URL is signed.
   A deleted object answers that GET with 403, not 404 — the roles have no `s3:ListBucket`, so S3 hides
-  `NoSuchKey` — and `isGone` (`api.ts`) counts both as gone.
+  `NoSuchKey` — and `isGone` (`api/core.ts`) counts both as gone.
 - **The test user only.** The env file must name the test user, and before any write the signed-in
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes. The MCP
   session is held to the same check (below). A step can outlive the hour-long token (an iOS step runs minutes
@@ -173,43 +182,13 @@ session before launch`.
 - **Attachments are written only on a run's own tasks.** `createAttachment`/`deleteAttachment` refuse a task the
   ledger never recorded, and `deleteAttachment` refuses an attachment this run didn't create. They're never
   ledgered themselves: the task's delete cascade removes them, bytes included.
-- **Flux sets are the other kind written** (`scenarios/flux-history.ts` writes five a run: two chin tucks, a finished set and one stopped early, and three rotation sets). Their id is minted by the
-  harness (the client mints it in the app too — [flux](../areas/flux/index.md) D47), so `recordFluxSet` records
-  it as `created` with `via: api:recordFluxSet` _before_ the call — a set the server stored is never unrecorded.
-  Cleanup, the sweep and the read-back go by that `via`: a Flux id is read with `listFluxSets` and deleted with
-  `deleteFluxSet` (a soft-delete), never through the task methods (`deleteTask` refuses a Flux id). The scenario's one UI delete
-  (row `chip-order`) picks the run's own stopped set by its text; the sweep's delete of it is then a no-op. Its `day` is the app's day (the test user's
-  `dayStartHour`), not the calendar date, so the scenario also passes before 4am. The scenario's two
-  non-ledger writes, both Settings fields on the test user's own row: a test user who never opened Flux has the
-  disclaimer accepted (logged), and row `sets-remembered` empties `fluxSets` first and puts the prior map back in
-  the step's `finally`.
-  One more a run leaves behind: `getFluxWeekNote` stores the week's note row (`fluxnote#<weekStart>`) in the
-  test user's partition — derived from the sets, overwritten when they change, never listed as a leftover.
-- **A log entry is one more kind** (`scenarios/log-mcp.ts`): recorded from the create's id (`via: api:createLogEntry`; a
-  capture-bar line from the POST's response, `ui:createLogEntry`), read back over the whole test-user log
-  (`listLogRange({})`, so a crashed run's leftover is found too) and tombstoned with `deleteLogEntry` — an RPC that exists
-  for this cleanup only (no UI, no MCP tool).
-- **A category is one more kind** (`scenarios/parts-v2b-reads.ts`): recorded from the create's id (`via: api:upsertCategory`),
-  deleted with `deleteCategory(id, null)`. Cleanup runs newest-first and the category is made after the run's tasks, so it goes
-  before them — a run task on a run category would make the delete refuse, so no scenario puts one there. The same scenario sets the
-  test user's own day row (capacity, intent) through the UI and puts the prior values back in the step's `finally` —
-  a singleton, nothing to ledger (an intent that was never set comes back as `''`; the API has no null intent).
-- **A habit is one more kind** (`scenarios/day-guards.ts`): recorded from the create's id (`via: api:upsertHabit`). The API
-  has no habit delete, so cleanup _archives_ it (`upsertHabit({ …, active: false })`) and "exists" means listed and active —
-  the run ends at 0 leftovers, and one archived `devcheck <nonce> habit` per run stays on the dev test user, by design, until a
-  tombstoning `deleteHabit` lands (day-guards' follow-up). Its checks are tombstones the archive leaves behind.
-- **Places and the place token are two more kinds** (`scenarios/places.ts`, [tasks/places](../areas/tasks/places.md)).
-  A place is recorded from the create's id (`via: api:upsertPlace`, or `ui:upsertPlace` when the browser's
-  request has no `id` — a rename is never recorded, so cleanup can't delete a place the run didn't make) and is
-  deleted with `deletePlace(id, null)` (finished errands keep the old slug — harmless, tasks are cleaned by id). The
-  token is recorded as `place-token:<run>` _before_ `rotatePlaceToken` (never the token itself), and
-  `revokePlaceToken` is refused unless a run-minted token is still unresolved — a Settings Generate/Rotate click records the same id first (`recordPlaceTokenMint`), so a browser-minted token is cleaned too; cleanup revokes it, which leaves the
-  test user an inactive `ptoken` pointer (never deleted), and a revoke racing another device throws; cleanup catches per id, so the loop goes on, the run reports it, and the next run's sweep retries it. A step that shows the token runs inside `hidingSecret`: any failure blanks the page (`about:blank`) and skips the failure screenshot, so the token never lands in `screenshots/`. `ledgerKind()` tells task, Flux, place and token apart by `via`, so a task delete refuses a
-  place id and vice versa. An unrecorded place that appears during the run is a `LEFTOVERS` failure, like a task.
-  The scenario drives the daily read cap on dev (sequential GETs to the server's own 429, ~40–60 s).
-  Every run, smoke included, lists places after the sweep — so this harness needs a dev build with the places
-  methods.
-- **Capture tokens are one more kind** (`scenarios/siri-capture.ts`, [tasks/capture](../areas/tasks/capture.md)): recorded by the id the mint answered with — never the token — through the API (`via: api:mintScopedToken`) or Settings › Capture's Make token (the browser's response, `ui:mintScopedToken`), and revoked by that id (`revokeScopedToken` refuses any other); "exists" means listed. A task the capture route made is recorded from its 200's `id` (`api:capture`) and deleted like any task. Every run lists the tokens after the sweep, and one that appears unrecorded is a `LEFTOVERS` failure, like a place — so this harness needs a dev build with the scoped-token methods.
+- **Every other kind is cleaned by id, by its own ledger `via`** (_Ledgers_ lists them; `ledgerKind()` in
+  `scripts/src/devcheck/api/core.ts` tells them apart, so a delete for one kind refuses another's id). Where a kind
+  needs more than that, the header of the scenario that writes it says how it's written, cleaned and what it leaves
+  behind — Flux sets (`scenarios/flux-history.ts`), log entries (`log-mcp.ts`), categories (`parts-v2b-reads.ts`),
+  habits, archived rather than deleted (`day-guards.ts`), places and the place token (`places.ts`), capture tokens
+  (`siri-capture.ts`) — and a new kind's goes there too, not here
+  (`git grep -l 'ledger kinds\? (DEV-CHECK' scripts/src/devcheck/scenarios` finds them).
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
   A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't
@@ -272,7 +251,7 @@ one of `run-start`, `intent` (an API create about to be sent — one with no `cr
 reported as a possible leak; `refused` is a param error, or a domain normalizer's refusal, the server raised before any write), `created`,
 `deleted`, `gone`, `swept`, `reported` (a killed earlier run's orphan `intent`, shown once; `of` names that
 run), `run-end`; `title` is for the report only. A `created`
-line's `via` names what cleanup reads back and removes (`api.ts` `ledgerKind`): a task, a Flux set, a place, the
+line's `via` names what cleanup reads back and removes (`ledgerKind`, `api/core.ts`): a task, a Flux set, a place, the
 place token (`place-token:<run>`), a finance rule, a recurring series (deleted with the occurrences `getDay`
 spawned for it — the series id is their record, [tasks/recurring](../areas/tasks/recurring.md) §6), and on the fixture bank's rows a bucket set
 (`finance-bucket:<run>:<row>`), a refund link (`finance-link:<run>:<row>`) or a period mark
@@ -313,13 +292,22 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Writing a scenario
 
-A feature adds `scripts/src/devcheck/scenarios/<feature>.ts` and lists it in `scenarios/index.ts`. Its `rows`
-are the plan's dev-test matrix (_Rows_, below); a Chrome runbook maps onto its steps one for one:
+A feature adds one file, `scripts/src/devcheck/scenarios/<feature>.ts`, and edits no list: `scenarios/index.ts`
+finds it on disk, and a file that exports no Scenario, two, or one whose `id` isn't its file name fails the load.
+It sets `order` to place itself in the run: the scenarios that predate discovery sit at 10, 20, … 440 in their old
+order (`LEGACY_ORDER`, whose comments say why each sits where it does), a tie breaks by `id`, and
+`pnpm --dir scripts exec tsx src/devcheck/list.ts` prints the result (`--json`: the fingerprint a refactor diffs
+before and after). Detail that's about this scenario alone — what it leaves behind, a kind it ledgers, why it
+sits where it does — goes in its header comment, not here. A new API or MCP method goes in its area's file
+(`api/<area>.ts`, `mcp/<area>.ts`, next to the composers `api.ts` and `mcp.ts`), so lanes don't all edit one
+client. Its `rows` are the plan's dev-test matrix (_Rows_, below); a Chrome runbook maps onto its steps one for
+one:
 
 ```ts
 export const quickAdd: Scenario = {
-  id: 'quick-add',
+  id: 'quick-add', // its file's name: quick-add.ts
   title: 'Quick add parses a line',
+  order: 65, // after capture-dock (60), before parts-v2 (70)
   tiers: ['full'],
   rows: [
     { id: 'save', entry: 'ui', kind: 'nominal', what: 'Auto Enter saves the parsed fields' },

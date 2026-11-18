@@ -67,6 +67,35 @@ describe('createApiClient', () => {
     });
   });
 
+  it('hands every answer to onAnswer, a refusal the caller swallows too (the sitting budget, budget.ts)', async () => {
+    const seen: [string, number, string][] = [];
+    const body = { error: 'Too many sittings started today.' };
+    const fetch = vi.fn<FetchLike>(async (url) =>
+      url.endsWith('/getTask') ? reply(200, null) : reply(400, body),
+    );
+    const api = createApiClient({
+      fetch,
+      token: () => 't',
+      ledger: memLedger(),
+      run: 'r1',
+      onAnswer: (...a) => seen.push(a),
+    });
+    await api.reads.getTask('t1');
+    await api.reads.getSettings().catch(() => undefined); // swallowed: onAnswer still saw it
+    expect(seen).toEqual([
+      ['getTask', 200, 'null'],
+      ['getSettings', 400, JSON.stringify(body)],
+    ]);
+  });
+
+  // Both runners hand the pipeline's onAnswer on to the client: without it a swallowed refusal reads as a failure.
+  it.each(['run.ts', 'local/run-local.ts'])('%s passes onAnswer to createApiClient', (f) => {
+    const src = readFileSync(new URL(f, import.meta.url), 'utf8');
+    expect(src).toMatch(
+      /makeApi: \(token, fresh, onAnswer\) =>\s+createApiClient\(\{[^}]*\bonAnswer\b[^}]*\}\)/,
+    );
+  });
+
   it('awaits fresh before reading the bearer, once a request however often it retries', async () => {
     let tok = 'a';
     const fresh = vi.fn(async () => {

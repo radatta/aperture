@@ -1,14 +1,21 @@
 // Voice capture — "Hey Siri, Aperture" / the Action Button / Raycast → a task (docs/areas/tasks/capture.md). A
 // capture token is made, kept through a cancelled revoke and a reload, and revoked in Settings › Capture; the
 // section's failed reads and writes are injected by the harness (ctx.intercept); the route itself (POST
-// /api/capture) is driven raw (api.ts captureRaw) with tokens minted through the guarded API. Tokens are
-// ledgered by the id the mint answered with (the browser's mintScopedToken response, recorder.ts, or the API's),
-// every task the route made by the 200's `id`; cleanup revokes and deletes by those records, and the scenario's
-// last step does it early so the scenarios after it see none of this. A token's plaintext lives in this
-// module's memory only — never in a log, an error, a screenshot or the ledger. Names and titles carry the run's
-// nonce. The time rows compute what the server should answer with the shared rules themselves
-// (packages/shared/src/spokenTime.ts, due.ts) at the moment of the call: the rules are the unit tests' (the
-// off-dev rows); these prove the route applies them, with the model's day and the server's clock, end to end.
+// /api/capture) is driven raw (api.ts captureRaw) with tokens minted through the guarded API. Cleanup revokes
+// and deletes by the ledger's records, and the scenario's last step does it early so the scenarios after it see
+// none of this. A token's plaintext lives in this module's memory only — never in a log, an error, a screenshot
+// or the ledger. Names and titles carry the run's nonce. The time rows compute what the server should answer
+// with the shared rules themselves (packages/shared/src/spokenTime.ts, due.ts) at the moment of the call: the
+// rules are the unit tests' (the off-dev rows); these prove the route applies them, with the model's day and
+// the server's clock, end to end.
+//
+// A capture token is a ledger kind (DEV-CHECK.md → What it guarantees): recorded by the id the mint answered
+// with — never the token — through the API (`via: api:mintScopedToken`) or Settings › Capture's Make token (the
+// browser's response through recorder.ts, `ui:mintScopedToken`), and revoked by that id (revokeScopedToken
+// refuses any other); "exists" means listed. A task the capture route made is recorded from its 200's `id`
+// (`api:capture`) and deleted like any task. Every run lists the tokens after the sweep, and one that appears
+// unrecorded is a LEFTOVERS failure, like a place — so the harness needs a dev build with the scoped-token
+// methods.
 import { randomBytes } from 'node:crypto';
 import type { DevCaptureResult, DevScopedToken } from '../api';
 import { targetOrigin } from '../config';

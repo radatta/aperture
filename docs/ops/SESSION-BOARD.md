@@ -270,10 +270,38 @@ Every 5th sampler tick `cli.ts overlap` lists each worktree on a branch (the det
 skipped) with its files — committed since the merge-base with `origin/main` ∪ uncommitted ∪ untracked, minus
 `localNotes/` — and intersects them pairwise into `board/overlap.json`. Files nearly every branch touches
 (`CLAUDE.md`, `docs/index.md`, `package.json`, `pnpm-lock.yaml`, `.claude/settings.json`, the hooks README,
-`run-fixtures.py`) go on a separate "small appends" line so real overlaps stand out. SessionStart injects this
-branch's lines, e.g. "flux also touches 2 of your files: app/src/data/seed.ts, app/src/data/stubClient.ts —
-SendMessage session `flux`; expect a rebase conflict whichever merges second." `origin/main` is whatever was
+`run-fixtures.py`) go on a separate "small appends" line so real overlaps stand out. `origin/main` is whatever was
 last fetched; the merge-base keeps that safe.
+
+**Real conflicts** (`conflicts.ts`): the same run merges each lane's committed head with `git merge-tree
+--write-tree` against `origin/main` and against every other lane — read-only, no checkout or index — and names
+the files git can't merge. A lane pair lists only files neither lane already conflicts on with main (a lane behind
+main would otherwise repeat its main conflicts against every rebased neighbour). Each overlap pair carries `git`:
+`conflict`, `clean` (git merges both heads; the line says so and sorts last), or `unchecked` (a shared file is
+uncommitted — merge-tree sees commits only, and a working tree git couldn't read counts as all uncommitted — the
+merge is pending, or it conflicts only on files a lane already conflicts on with main). Two lanes drop out of every
+list but for their uncommitted files, which still overlap (a parked lane picked up again):
+
+- **landed** — squash-merged, worktree not cleaned up: merging its head into main changes nothing, or into the
+  first-parent main commit that squashed it gives that commit's tree (it would otherwise read as conflicting with
+  its own squash once main moves over the same lines);
+- **stale** — no commit in 7 days (`STALE_DAYS`), and not landed (a stale lane is still checked for that, on the budget the
+  live lanes and their pairs left).
+
+Cost: one merge is 26–112 ms here (2026-11-17), so every merge is cached by its two shas in
+`board/conflicts-cache.json` — a run merges only what moved (a lane's commit: N merges; main moving: one per lane);
+entries whose shas are no longer a head or main drop out. A run stops new merges at 10 s (5 s per merge) and
+counts the rest as `pending`, picked up next run; a landed walk tries 200 main commits a run, oldest first. Merges
+write objects, so they go to a scratch object dir on the container's own disk (`$TMPDIR/aperture-conflicts-*`, the
+shared store as an alternate), deleted after the run — and one a killed run left, an hour on: no object, ref or lock
+is added to the shared store (git may touch an existing object's mtime). A failed merge is never cached.
+
+SessionStart injects this branch's lines, conflicts first: "merge conflict with main on 1 file: … — rebase onto
+origin/main now.", "flux will conflict with you on 2 files: … (git merge-tree) — SendMessage session `flux`; whichever
+merges second rebases.", then unchecked overlaps ("flux also touches 2 of your files: …; expect a rebase conflict
+whichever merges second.", with "(uncommitted: git can’t check it yet)" after the files when that's why), then clean ones ("… git merges both heads cleanly today; recheck after either
+commits."). `board.sh status` prints `conflicts:` above `overlaps:` (a clean pair ends `— merges clean`), then the
+landed and stale lines. The tower marks each conflicting lane (TOWER.md → _Conflicts_).
 
 ## Measurement protocol
 
@@ -421,7 +449,7 @@ unmerged items; merged ones are counted in the bar, legend and title, not listed
 unscheduled last (`--:--`); merges and the maintainer's items bright, an item past due dimmed with `?` and dropped 2 h
 after; its title is `next merge ~HH:MM` (the first `merge` with a time, `?` once past) or `n planned`.
 _Sessions_: the latest sample's sessions, a row for each working one and each holding a branch, working first, then one `idle: a, b, c`
-line (cut with `…`; the title counts both). _Machine_:
+line (cut with `…`; the title counts both); a branch git can't merge ends `✗main` / `✗N` (TOWER.md → _Conflicts_). _Machine_:
 CPU, memory, pids, heavy jobs and working sessions on one time axis, each bucket's peak, a sampler gap blank;
 under it the event ticks, one per column by precedence — `✗` a failed suite, a red `◆` a devcheck run that ended
 other than PASS, `▲` a merge, a green `◆` a PASS, `·` a passed suite — and a readout of the exact values at the
