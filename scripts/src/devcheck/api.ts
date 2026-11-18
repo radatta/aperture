@@ -462,6 +462,7 @@ export interface DevMockView {
   last: { id: string; day: string; scores: DevMockScores | null } | null;
   doneCount: number;
   upcoming: { id: string; day: string; kind: string; partner: string | null }[];
+  unlogged: { id: string; day: string; kind: string; partner: string | null }[];
   line: string;
 }
 // The coach's plan mode (packages/shared/src/coach.ts CoachPlanMode, CoachPlanModeView).

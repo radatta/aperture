@@ -836,6 +836,12 @@ export const lcCoach: Scenario = {
       what: 'Delete on the Patterns list asks once inline; Yes removes the mock',
     },
     {
+      id: 'mock-ui-unlogged',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A planned mock whose day passed waits under the card’s line with Log it and Cancel; Cancel removes it',
+    },
+    {
       id: 'mock-delete-idempotent',
       entry: 'api',
       kind: 'edge',
@@ -2383,6 +2389,7 @@ export const lcCoach: Scenario = {
         'mock-ui-log-planned',
         'mock-patterns',
         'mock-patterns-delete',
+        'mock-ui-unlogged',
         'mock-390',
       ],
       async run(ctx) {
@@ -2473,7 +2480,7 @@ export const lcCoach: Scenario = {
           .getByRole('listitem')
           .filter({ hasText: `with ${label}` })
           .filter({ hasText: 'today' });
-        await todayRow.getByRole('button', { name: 'Log it — mock today' }).click();
+        await todayRow.getByRole('button', { name: /^Log it — mock today/ }).click();
         form = block.getByRole('form', { name: 'Log the planned mock' });
         await form.getByRole('button', { name: 'Code 4 of 4' }).click();
         await form.getByRole('button', { name: 'Solve 3 of 4' }).click();
@@ -2499,7 +2506,8 @@ export const lcCoach: Scenario = {
         const item = ctx.page
           .getByRole('region', { name: 'Mock interviews' })
           .getByRole('listitem')
-          .filter({ hasText: `with ${label}` });
+          .filter({ hasText: `with ${label}` })
+          .filter({ hasText: 'Code 3 · Solve 2' }); // the Log it one is Code 4 · Solve 3
         await item.getByText('Code 3 · Solve 2', { exact: true }).waitFor({ timeout: 15_000 });
         await item.getByText(/^(First try that week \d+ of \d+|No first try that week)$/).waitFor();
         await ctx.shot('lc-coach-mock-patterns');
@@ -2518,8 +2526,32 @@ export const lcCoach: Scenario = {
 
         // Cancel the planned one from the card.
         c = await todayCard(ctx);
-        await row().getByRole('button', { name: 'Cancel — mock tomorrow' }).click();
+        await row()
+          .getByRole('button', { name: /^Cancel — mock tomorrow/ })
+          .click();
         await until('the planned mock gone', async () => !(await mine('planned')).length);
+
+        // One planned for yesterday (over MCP: the form can't plan a past day) waits under the line; Cancel there.
+        const past = `${label} p`.slice(0, 40);
+        await ctx.mcp.writes.logMock({
+          status: 'planned',
+          day: addDays(before.day, -1),
+          partner: past,
+        });
+        c = await todayCard(ctx);
+        const waiting = c
+          .getByRole('list', { name: 'Planned mocks not logged yet' })
+          .getByRole('listitem')
+          .filter({ hasText: `with ${past}` });
+        await waiting.waitFor({ timeout: 15_000 });
+        if (!(await waiting.getByRole('button', { name: /^Log it — mock yesterday/ }).count()))
+          fail('a passed planned mock offers no Log it');
+        await ctx.shot('lc-coach-mock-unlogged');
+        await waiting.getByRole('button', { name: /^Cancel — mock yesterday/ }).click();
+        await until(
+          'the passed planned mock gone',
+          async () => !(await ctx.api.reads.listMocks()).some((m) => m.partner === past),
+        );
         await row().waitFor({ state: 'hidden', timeout: 15_000 });
       },
     },
@@ -2532,9 +2564,10 @@ export const lcCoach: Scenario = {
         const label = `dc mcp ${tag(ctx)}`.slice(0, 40);
         const count = async () => (await ctx.api.reads.listMocks()).length;
         const n0 = await count();
+        const refusal = /scores\.code is required, a whole number from 1 to 4/; // normalizeMock's
         for (const [scores, why] of [
-          [{ code: 5, solve: 2 }, /scores\.code is required, a whole number from 1 to 4|maximum/],
-          [{ solve: 2 }, /scores\.code is required|code/],
+          [{ code: 5, solve: 2 }, refusal],
+          [{ solve: 2 }, refusal],
         ] as const) {
           let took = false;
           try {
@@ -2552,10 +2585,11 @@ export const lcCoach: Scenario = {
           partner: label,
           notes: `devcheck ${ctx.nonce}`,
         });
+        if (out.week === null) fail('log_mock saved, but its read of the week failed');
         if (
           out.mock.status !== 'done' ||
           out.mock.scores?.solve !== 3 ||
-          !out.week.startsWith('Mock this week')
+          !out.week!.startsWith('Mock this week')
         )
           fail(`log_mock: ${JSON.stringify(out)}`);
         const list = await ctx.mcp.reads.listMocks({ from: today() });

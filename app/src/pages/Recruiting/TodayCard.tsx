@@ -1,6 +1,12 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { fmtSpokenDay, MOCK_KIND_NAMES, PATTERN_NAMES, PATTERNS } from '@aperture/shared';
+import {
+  fmtPastDay,
+  fmtSpokenDay,
+  MOCK_KIND_NAMES,
+  PATTERN_NAMES,
+  PATTERNS,
+} from '@aperture/shared';
 import type { CoachSlot, CoachToday, MockBrief, PatternId } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -331,7 +337,8 @@ function PlannedMockRow({
   onLog: () => void;
   onCancel: () => void;
 }) {
-  const when = fmtSpokenDay(m.day, today);
+  const when = m.day < today ? fmtPastDay(m.day, today) : fmtSpokenDay(m.day, today);
+  const named = `mock ${when}${m.partner ? ` with ${m.partner}` : ''}`; // two the same day still differ
   return (
     <li className="flex flex-col">
       <div className="flex items-baseline justify-between gap-3">
@@ -349,11 +356,11 @@ function PlannedMockRow({
       <div className="-ml-2 flex flex-wrap gap-1">
         {/* From its day on: a mock not yet held has nothing to log. */}
         {m.day <= today && (
-          <Button variant="quiet" size="sm" onClick={onLog} aria-label={`Log it — mock ${when}`}>
+          <Button variant="quiet" size="sm" onClick={onLog} aria-label={`Log it — ${named}`}>
             Log it
           </Button>
         )}
-        <Button variant="quiet" size="sm" onClick={onCancel} aria-label={`Cancel — mock ${when}`}>
+        <Button variant="quiet" size="sm" onClick={onCancel} aria-label={`Cancel — ${named}`}>
           Cancel
         </Button>
       </div>
@@ -366,13 +373,21 @@ function PlannedMockRow({
 function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
   const none = today.mock.thisWeek === 'none' && !today.mock.upcoming.length;
   const unlogged = today.mock.unlogged ?? [];
+  // Back to Log a mock; while a form stays open (a row cancelled beside it), the section itself.
+  const section = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
-    if (!state.refocus.current || !state.trigger.current) return;
+    const to = state.trigger.current ?? section.current;
+    if (!state.refocus.current || !to) return;
     state.refocus.current = false;
-    returnFocus(state.trigger.current);
+    returnFocus(to);
   });
   return (
-    <section aria-label="Mock interviews" className="flex flex-col gap-2">
+    <section
+      ref={section}
+      tabIndex={-1}
+      aria-label="Mock interviews"
+      className="flex flex-col gap-2 outline-offset-2"
+    >
       <div className="flex flex-wrap items-center justify-between gap-x-2">
         <Text size="sm" tone={none ? 'muted' : 'ink'} data-testid="mock-line">
           {today.mock.line}

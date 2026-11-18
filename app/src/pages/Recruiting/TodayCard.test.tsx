@@ -579,4 +579,23 @@ describe('the Today card’s mocks', () => {
       expect((await api.listMocks())[0]?.scores).toEqual({ code: 1, solve: 1, communicate: 3 }),
     );
   });
+
+  it('Cancel on a row while a form is open keeps focus in the mock section; Log it focuses its form', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    await api.upsertMock({ status: 'planned', day: addDays(today, 1) });
+    await api.upsertMock({ status: 'planned', day: today, partner: 'Study group' });
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Log it — mock today with Study group' }),
+    );
+    const form = within(m).getByRole('form', { name: 'Log the planned mock' });
+    expect(document.activeElement).toBe(form); // the form, not its date field
+    await user.click(within(queue).getByRole('button', { name: 'Cancel — mock tomorrow' }));
+    await waitFor(() => expect(within(queue).queryByText('tomorrow')).toBeNull());
+    expect(document.activeElement).toBe(m);
+  });
 });

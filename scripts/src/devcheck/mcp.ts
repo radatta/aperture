@@ -65,6 +65,12 @@ export interface DevLiveSitting {
   trace?: string | null; // the trace comment before the first judged event (traced / none)
 }
 
+// What log_mock answers (coachTools.ts): `week` is null, with a note, when only the read after the save failed.
+export interface DevLoggedMock {
+  mock: DevMock;
+  week: string | null;
+  note?: string;
+}
 // What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
 export interface DevPeeked {
   slug: string;
@@ -720,16 +726,16 @@ export function createMcpClient({
       data<{ id: string; deleted: boolean }>('delete_attempt', { id: unknownId }),
     // log_mock: a new mock is recorded from its answer (an intent first, a refusal before any write resolves it);
     // one naming an id must name a mock this run recorded.
-    async logMock(input: Record<string, unknown>): Promise<{ mock: DevMock; week: string }> {
+    async logMock(input: Record<string, unknown>): Promise<DevLoggedMock> {
       if (input.id !== undefined) {
         assertLedger(String(input.id), 'mock');
-        return data<{ mock: DevMock; week: string }>('log_mock', input);
+        return data<DevLoggedMock>('log_mock', input);
       }
       const title = `mock ${String(input.status ?? 'done')} ${String(input.day ?? 'today')}`;
       ledger.append({ run, op: 'intent', via: MOCK_VIA, title });
-      let out: { mock: DevMock; week: string };
+      let out: DevLoggedMock;
       try {
-        out = await data<{ mock: DevMock; week: string }>('log_mock', input);
+        out = await data<DevLoggedMock>('log_mock', input);
       } catch (err) {
         if (refusedBeforeWrite(err)) ledger.append({ run, op: 'refused', via: MOCK_VIA, title });
         throw err;

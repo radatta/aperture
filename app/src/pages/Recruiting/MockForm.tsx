@@ -39,11 +39,13 @@ export function MockForm({
   const [notes, setNotes] = useState(mock?.notes ?? ''); // a planned mock's notes carry over to its log
   const [error, setError] = useState<string | null>(null);
   const done = status === 'done';
-  // The button that opened the form goes away with it: focus starts inside the form.
+  // The button that opened the form goes away with it: focus starts inside the form — on its first button, or the
+  // form itself when that would be a field (focusing a date input can open iOS's picker unasked).
   const form = useRef<HTMLFormElement>(null);
   useLayoutEffect(() => {
     const first = form.current?.querySelector<HTMLElement>('button, input, select, textarea');
-    if (first) returnFocus(first);
+    const to = first?.tagName === 'BUTTON' ? first : form.current;
+    if (to) returnFocus(to);
   }, []);
   // One save at a time: a ref, since a double tap lands both clicks before the pending state renders.
   const inFlight = useRef(false);
@@ -108,6 +110,7 @@ export function MockForm({
   return (
     <form
       ref={form}
+      tabIndex={-1}
       aria-label={mock ? 'Log the planned mock' : 'Log a mock'}
       className="flex flex-col gap-3 rounded-xl border border-line p-3"
       onSubmit={(e) => {

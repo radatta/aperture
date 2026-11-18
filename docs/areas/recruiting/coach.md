@@ -526,19 +526,26 @@ scores}`. A done mock is dated today or earlier (≤ 365 days back), a planned o
   is checked before the write; a refusal says why and writes nothing. `deleteMock` is a tombstone, idempotent; an id
   that isn't the user's is Not found (the user's partition holds no other).
 - **The day's view** (`mockView`, `CoachToday.mock`): `thisWeek` (`done`, else `planned`, else `none`, over the ISO
-  week of today), `last` (the newest done), `doneCount`, `upcoming` (planned, today through 2 days on) and one
-  `line`: "Mock this week: Code 3 · Solve 2", "Mock planned Thursday" (a passed one: ", not logged yet"), or "No mock
-  this week yet" — never a count of weeks without one. Re-solves keep `next48h`; a planned mock rides `upcoming`, so
-  no re-solve reader changed.
-- **The Today card**: the line (muted with none) and **Log a mock**, which opens the form inline (Done or Planned,
-  day, kind, who ran it, Code / Solve / Communication as 1–4 toggles, notes; inputs at 16 px). Save without Code
-  and Solve says why and keeps every field; a refused save shows the server's reason, a 5xx "may have saved".
-  The card's 48-hour list (**Next 48 hours**, re-solves and planned mocks) gives a planned mock **Log it** from its
-  day on (it saves onto that row) and **Cancel** (deletes it). Closing the form hands focus back to Log a mock.
-- **The Patterns tab** (`PatternsMocks.tsx`): Code and Solve over time (two lines, from two done mocks), each done
-  mock with its scores beside its ISO week's first-try rate (`mockRows`), newest first, ≤ 12, and **Delete** with an
-  inline Yes / No. One mock is noise; the trend is the signal.
+  week of today), `last` (the newest done), `doneCount`, `upcoming` (planned, today through 2 days on), `unlogged`
+  (planned for a day already past, newest first, ≤ 5) and one `line`: "Mock this week: Code 3 · Solve 2", "Mock
+  planned Thursday" (a passed one: ", not logged yet"), or "No mock this week yet" — never a count of weeks without
+  one. With none this week but one in `upcoming` (a Sunday's Monday mock), the line names that one while `thisWeek`
+  stays `none`. Re-solves keep `next48h`; planned mocks ride `upcoming` and `unlogged`, so no re-solve reader
+  changed.
+- **The Today card**: the line (muted only with none this week and none upcoming) and **Log a mock**, which opens
+  the form inline (Done or Planned, day, kind, who ran it, Code / Solve / Communication as 1–4 toggles, notes;
+  inputs at 16 px); focus moves into the form on open (its first button, or the form itself rather than a date
+  field). Save without Code and Solve says why and keeps every field; a refused save shows the server's reason, a
+  5xx "may have saved". The card's 48-hour list (**Next 48 hours**, re-solves and planned mocks) gives a planned
+  mock **Log it** on its day and **Cancel**; `unlogged` ones wait under the line with the same two. Log it saves onto
+  that row, its notes carried over. Closing the form hands focus back to Log a mock.
+- **The Patterns tab** (`PatternsMocks.tsx`, after the ranking): Code and Solve over time (two lines, from two done
+  mocks), each done mock with its scores beside its ISO week's first-try rate (`mockRows`; a week of re-solves only
+  has none), newest first, ≤ 12, and **Delete** with an inline Yes / No (No returns focus to Delete, Yes to the
+  section's heading). One mock is noise; the trend is the signal.
 - **Over MCP**: `log_mock {id?, day?, status?, kind?, partner?, sittingId?, problemSlug?, scores?, notes?}` (a write,
-  ask-first; leave it on **Ask**) answers the stored mock and the week's line; `list_mocks {from?, to?, limit?}`
+  ask-first; leave it on **Ask**) answers the stored mock and the week's line (null, with a note, when only that
+  read failed — the mock is saved); `list_mocks {from?, to?, limit?}`
   (read) answers the mocks newest first with `doneCount` and `trend` (the done ones' Code and Solve, oldest first).
-  `leetcode_today` carries `mock`, and its note asks for one suggestion when the week has none.
+  `leetcode_today` carries `mock`; its note asks for one suggestion when the week has none, and an offer to log
+  any `unlogged` one.
