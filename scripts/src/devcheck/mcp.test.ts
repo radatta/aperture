@@ -50,8 +50,13 @@ it('the agent-token header mirrors packages/shared (rpc.ts)', () => {
 
 describe('createMcpClient', () => {
   it('the agent-token probe sends only the bogus constant — no bearer — and returns the status', async () => {
-    const fetch = vi.fn(async () => new Response('{}', { status: 401 }));
-    expect(await client(fetch as unknown as FetchLike).reads.agentTokenProbe()).toBe(401);
+    const fetch = vi.fn(
+      async () => new Response('{"error":"Unauthorized: invalid agent token"}', { status: 401 }),
+    );
+    expect(await client(fetch as unknown as FetchLike).reads.agentTokenProbe()).toEqual({
+      status: 401,
+      error: 'Unauthorized: invalid agent token',
+    });
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe(`${DEV_ORIGIN}/mcp`);
     expect(init.headers).toEqual({

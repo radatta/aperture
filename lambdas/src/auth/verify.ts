@@ -71,6 +71,21 @@ export function createCognitoVerifier(
   };
 }
 
+// The BFF's verifier, wired only when the pool env is present (deployed); locally it's null → the dev user, and on
+// a stage a null verifier refuses (resolveUserId). clientId is left unset (single-client pool, no deploy cycle), but
+// a token minted for the claude.ai MCP client is DENIED (D14) — its ceiling is the /mcp tool surface. On a stage
+// with no MCP_CLIENT_ID that deny would silently vanish, so there it's null too: every call refuses.
+export function bffVerifier(
+  env: NodeJS.ProcessEnv,
+  make: typeof createCognitoVerifier = createCognitoVerifier,
+): Verifier | null {
+  const poolId = env.USER_POOL_ID;
+  if (!poolId) return null;
+  if (!env.MCP_CLIENT_ID)
+    return strictAuth(env) ? null : make(poolId, null, { rejectClientIds: [] });
+  return make(poolId, null, { rejectClientIds: [env.MCP_CLIENT_ID] });
+}
+
 function bearer(header: string | undefined): string | null {
   if (!header) return null;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
@@ -88,7 +103,7 @@ export async function resolveUserId(
   strict: boolean = strictAuth(),
 ): Promise<string> {
   if (!verifier) {
-    if (strict) throw new Error('Unauthorized: auth not configured on this stage');
+    if (strict) throw new Error('Unauthorized: invalid token'); // as a bad token: the config gap isn't the caller's to learn
     return 'local';
   }
   const token = bearer(authHeader);
@@ -113,7 +128,7 @@ export function resolveDeviceUserId(
   strict: boolean = strictAuth(),
 ): string {
   if (!expectedToken) {
-    if (strict) throw new Error('Unauthorized: device token not configured on this stage');
+    if (strict) throw new Error('Unauthorized: invalid device token'); // as a wrong token, so a caller can't tell
     return 'local'; // dev: no device token wired → same 'local' user as JWT-less dev
   }
   const token = bearer(authHeader);
@@ -140,7 +155,7 @@ export function resolveAgentUserId(
   strict: boolean = strictAuth(),
 ): string {
   if (!expectedToken) {
-    if (strict) throw new Error('Unauthorized: agent token not configured on this stage');
+    if (strict) throw new Error('Unauthorized: invalid agent token'); // as a wrong token, so a caller can't tell
     return 'local'; // dev: no agent token wired → same 'local' user as JWT-less dev
   }
   const token = headerValue?.trim();
@@ -154,9 +169,10 @@ export function resolveAgentUserId(
 }
 
 // The user a valid static token writes as (DEVICE_USER_ID). Unset: 'local' off a stage; on a stage a refusal,
-// so a token can't silently write under u#local (devb binds none, so its token paths refuse).
+// so a token can't silently write under u#local (devb binds none, so its token paths refuse). The refusal reads
+// like any bad credential; the cold-start log says why (strict.ts).
 function ownerOf(userId: string | undefined, strict: boolean): string {
   if (userId) return userId;
-  if (strict) throw new Error('Unauthorized: no user is bound to this token on this stage');
+  if (strict) throw new Error('Unauthorized: invalid token');
   return 'local';
 }

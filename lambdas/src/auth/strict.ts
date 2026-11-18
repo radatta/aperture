@@ -11,14 +11,20 @@ export const strictAuth = (env: NodeJS.ProcessEnv = process.env): boolean =>
 export const missingAuthEnv = (names: string[], env: NodeJS.ProcessEnv = process.env): string[] =>
   strictAuth(env) ? names.filter((n) => !env[n]) : [];
 
-// Logs once at cold start when a strict function lacks any of `names`; requests then refuse per path.
-export function logMissingAuthEnv(fn: string, names: string[]): void {
-  const missing = missingAuthEnv(names);
+// Logs once at cold start when a strict function lacks any of `required`; requests then refuse per path. An unset
+// `optional` one (DEVICE_USER_ID: devb binds none, by design) is a plain info line — its token paths refuse too.
+// Names only, never values. The refusals themselves read like any bad credential, so these lines are the diagnosis.
+export function logMissingAuthEnv(fn: string, required: string[], optional: string[] = []): void {
+  const missing = missingAuthEnv(required);
   if (missing.length) console.error(JSON.stringify({ event: 'auth_misconfigured', fn, missing }));
+  const unset = missingAuthEnv(optional);
+  if (unset.length) console.log(JSON.stringify({ event: 'auth_unbound', fn, unset }));
 }
 
 // The CloudFront origin gate (HTTP calls only — the caller checks): the stamped header must match the secret.
-// An unset secret skips the gate off a stage (local dev, tests) and refuses on one, logged per refusal.
+// An unset secret skips the gate off a stage (local dev, tests) and refuses on one, logged once per container so
+// public traffic can't drive log volume.
+let originUnsetLogged = false;
 export function originPasses(
   header: string | undefined,
   secret: string | undefined,
@@ -26,9 +32,15 @@ export function originPasses(
   strict: boolean = strictAuth(),
 ): boolean {
   if (secret) return header === secret;
-  if (strict) console.error(JSON.stringify({ event: 'origin_secret_unset', fn }));
+  if (strict && !originUnsetLogged) {
+    originUnsetLogged = true;
+    console.error(JSON.stringify({ event: 'origin_secret_unset', fn }));
+  }
   return !strict;
 }
+export const resetOriginLogForTest = (): void => {
+  originUnsetLogged = false;
+};
 
 // The OAuth state HMAC key: ORIGIN_SECRET, or the fixed dev key off a stage only.
 export const DEV_STATE_SECRET = 'dev-state-secret';

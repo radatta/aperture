@@ -139,13 +139,11 @@ export const createMcpHandler =
   (event: HttpEvent): Promise<HttpResult> =>
     handle(event, d);
 export const handler = createMcpHandler(live);
-logMissingAuthEnv('mcp', [
-  'USER_POOL_ID',
-  'MCP_CLIENT_ID',
-  'ORIGIN_SECRET',
-  'AGENT_TOKEN',
-  'DEVICE_USER_ID',
-]);
+logMissingAuthEnv(
+  'mcp',
+  ['USER_POOL_ID', 'MCP_CLIENT_ID', 'ORIGIN_SECRET', 'AGENT_TOKEN'],
+  ['DEVICE_USER_ID'],
+);
 
 async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
   const httpMethod = event.requestContext?.http?.method;

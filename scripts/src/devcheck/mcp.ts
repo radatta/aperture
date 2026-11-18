@@ -374,15 +374,21 @@ export function createMcpClient({
   const reads = {
     // A wrong agent token, no bearer: dev must answer 401 (mcp-auth-closed). The value is a fixed bogus
     // constant — never the real token — and `initialize` reads nothing, so even a regression changes nothing.
-    agentTokenProbe: async (): Promise<number> => {
+    agentTokenProbe: async (): Promise<{ status: number; error: string | null }> => {
       assertDevOrigin(mcpUrl());
       const res = await fetch(mcpUrl(), {
         method: 'POST',
         headers: { 'content-type': 'application/json', [AGENT_TOKEN_HEADER]: WRONG_AGENT_TOKEN },
         body: JSON.stringify({ jsonrpc: '2.0', id: nextId++, method: 'initialize', params: {} }),
       });
-      await res.text();
-      return res.status;
+      let error: string | null = null;
+      try {
+        const e = (JSON.parse(await res.text()) as { error?: unknown }).error;
+        if (typeof e === 'string') error = e;
+      } catch {
+        // not JSON (an edge page): error stays null
+      }
+      return { status: res.status, error };
     },
     toolsList: async () =>
       (await rpc<{ tools: { name: string }[] }>('tools/list', {})).tools.map((t) => t.name),

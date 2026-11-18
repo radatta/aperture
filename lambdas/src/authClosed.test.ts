@@ -6,6 +6,9 @@ import { createMcpHandler } from './mcp/index';
 import { localDeps } from './local/deps';
 import { signState } from './google/state';
 import { DEV_STATE_SECRET } from './auth/strict';
+import { BackendClient } from './backend';
+import { Repo } from './ddb/repo';
+import { liveWrites } from './ddb/writes';
 
 // Fail closed on a stage (auth/strict.ts): the real edges, with the Lambda runtime's reserved var set as on a
 // deployed function, refuse every credential path whose token or secret is unset — never the 'local' user. These
@@ -27,6 +30,13 @@ const ENV = [
 ];
 const ORIGIN = 'origin-s3cret';
 const init = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+// A tool call that reads the table, so a request that got past auth would show in the doc's reads.
+const backlog = JSON.stringify({
+  jsonrpc: '2.0',
+  id: 2,
+  method: 'tools/call',
+  params: { name: 'list_backlog', arguments: {} },
+});
 
 let deps: ReturnType<typeof localDeps>;
 const bff = (e: Ev, verifierless = false) =>
@@ -83,19 +93,22 @@ describe('fail closed on a stage — BFF', () => {
     untouched();
   });
 
-  it('no device token configured: an ingest call with no verifier is 401, never local', async () => {
+  it('the right device token with no user bound: ingest is 401, never local', async () => {
     process.env.ORIGIN_SECRET = ORIGIN;
-    const res = await bff(
-      http(
-        'POST',
-        '/api/lcSittingEvents',
-        { [ORIGIN_SECRET_HEADER]: ORIGIN, [AUTH_HEADER]: 'Bearer x' },
-        '{"args":[]}',
-      ),
-      true,
-    );
-    expect(res.statusCode).toBe(401);
+    process.env.DEVICE_TOKEN = 'device-tok';
+    const ingest = () =>
+      bff(
+        http(
+          'POST',
+          '/api/lcSittingEvents',
+          { [ORIGIN_SECRET_HEADER]: ORIGIN, [AUTH_HEADER]: 'Bearer device-tok' },
+          '{"args":[]}',
+        ),
+      );
+    expect((await ingest()).statusCode).toBe(401);
     untouched();
+    process.env.DEVICE_USER_ID = 'sub-1'; // control: bound, the token gets past auth
+    expect((await ingest()).statusCode).not.toBe(401);
   });
 
   it('no origin secret: a state signed with the dev key is refused on the Google callback (direct invoke)', async () => {
@@ -106,6 +119,22 @@ describe('fail closed on a stage — BFF', () => {
     } as Ev);
     expect(res.statusCode).toBe(400);
     expect(res.body).toContain('Invalid state');
+    // control: with the secret set, a state signed with it gets past the check (302 back to the app)
+    process.env.ORIGIN_SECRET = ORIGIN;
+    const ok = await bff({
+      rawPath: '/api/google/callback',
+      queryStringParameters: { code: 'c', state: signState('someone', ORIGIN) },
+    } as Ev);
+    expect(ok.statusCode).toBe(302);
+  });
+
+  it('no origin secret: Google connect can’t sign a state on a stage', async () => {
+    const userId = 'someone';
+    const client = new BackendClient(new Repo(deps.doc, liveWrites(deps.doc), userId), {
+      userId,
+      google: deps.bff.google,
+    });
+    await expect(client.googleConnectUrl()).rejects.toThrow(/not configured on this stage/);
   });
 });
 
@@ -120,7 +149,7 @@ describe('fail closed on a stage — MCP', () => {
     process.env.ORIGIN_SECRET = ORIGIN;
     process.env.DEVICE_USER_ID = 'sub-1';
     const res = await mcp(
-      http('POST', '/mcp', { [ORIGIN_SECRET_HEADER]: ORIGIN, [AGENT_TOKEN_HEADER]: 'x' }, init),
+      http('POST', '/mcp', { [ORIGIN_SECRET_HEADER]: ORIGIN, [AGENT_TOKEN_HEADER]: 'x' }, backlog),
     );
     expect(res.statusCode).toBe(401);
     untouched();

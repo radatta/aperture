@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign as cryptoSign } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   assertClientAllowed,
+  bffVerifier,
   createCognitoVerifier,
   resolveAgentUserId,
   resolveDeviceUserId,
@@ -24,7 +25,7 @@ describe('resolveUserId', () => {
 
   it('refuses on a stage when no verifier is wired — never the dev user', async () => {
     await expect(resolveUserId('Bearer anything', null, true)).rejects.toThrow(
-      /Unauthorized: auth not configured/,
+      /^Unauthorized: invalid token$/,
     );
   });
 
@@ -50,6 +51,32 @@ describe('resolveUserId', () => {
   });
 });
 
+describe('bffVerifier', () => {
+  const calls: unknown[][] = [];
+  const make = ((...a: unknown[]) => {
+    calls.push(a);
+    return okVerifier;
+  }) as unknown as typeof createCognitoVerifier;
+  it('denies the claude client (D14) when it is named, on a stage or off one', () => {
+    calls.length = 0;
+    expect(bffVerifier({ USER_POOL_ID: 'p', MCP_CLIENT_ID: 'claude', STAGE: 'dev' }, make)).toBe(
+      okVerifier,
+    );
+    expect(calls[0]).toEqual(['p', null, { rejectClientIds: ['claude'] }]);
+  });
+  it('no pool: null (the dev user off a stage, a refusal on one)', () => {
+    expect(bffVerifier({}, make)).toBeNull();
+    expect(bffVerifier({ STAGE: 'dev' }, make)).toBeNull();
+  });
+  it('no claude client id: null on a stage, so D14 can’t silently vanish; off a stage the pool alone', () => {
+    calls.length = 0;
+    expect(bffVerifier({ USER_POOL_ID: 'p', AWS_LAMBDA_FUNCTION_NAME: 'f' }, make)).toBeNull();
+    expect(calls).toEqual([]);
+    expect(bffVerifier({ USER_POOL_ID: 'p' }, make)).toBe(okVerifier);
+    expect(calls[0]).toEqual(['p', null, { rejectClientIds: [] }]);
+  });
+});
+
 describe('resolveDeviceUserId', () => {
   it('falls back to local when no device token is configured, off a stage (dev)', () => {
     expect(resolveDeviceUserId(undefined, undefined, undefined, false)).toBe('local');
@@ -64,10 +91,10 @@ describe('resolveDeviceUserId', () => {
 
   it('refuses on a stage when the token or its owner is unset — never local', () => {
     expect(() => resolveDeviceUserId('Bearer whatever', undefined, 'sub-1', true)).toThrow(
-      /Unauthorized: device token not configured/,
+      /^Unauthorized: invalid device token$/,
     );
     expect(() => resolveDeviceUserId('Bearer tok', 'tok', undefined, true)).toThrow(
-      /Unauthorized: no user is bound/,
+      /^Unauthorized: invalid token$/,
     );
     expect(() => resolveDeviceUserId('Bearer nope', 'tok', 'sub-1', true)).toThrow(/Unauthorized/);
   });
@@ -94,10 +121,10 @@ describe('resolveAgentUserId', () => {
 
   it('refuses on a stage when the token or its owner is unset — never local', () => {
     expect(() => resolveAgentUserId('whatever', undefined, 'sub-1', true)).toThrow(
-      /Unauthorized: agent token not configured/,
+      /^Unauthorized: invalid agent token$/,
     );
     expect(() => resolveAgentUserId('tok', 'tok', undefined, true)).toThrow(
-      /Unauthorized: no user is bound/,
+      /^Unauthorized: invalid token$/,
     );
     expect(() => resolveAgentUserId('nope', 'tok', 'sub-1', true)).toThrow(/Unauthorized/);
   });

@@ -10,9 +10,16 @@ const INDEX = 'lambdas/src/index.test.ts';
 const CLOSED = 'lambdas/src/authClosed.test.ts'; // fail closed on a stage (mcp-auth-closed)
 const UNSET = 'needs a deployed env var unset, and dev’s config is never changed to prove it';
 
-const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
+const offDev = (
+  id: string,
+  what: string,
+  file: string,
+  test: string,
+  why: string,
+  entry: Row['entry'] = 'api',
+): Row => ({
   id,
-  entry: 'api',
+  entry,
   kind: 'edge',
   what,
   offDev: { file, test, why },
@@ -138,20 +145,28 @@ export const bffHardening: Scenario = {
       id: 'mcp-test-user-ok',
       entry: 'mcp',
       kind: 'nominal',
-      what: '/mcp as the test user still lists its tools and reads the backlog',
+      what: '/mcp as the test user still lists its tools and reads the backlog (a configured stage isn’t refused)',
     },
     {
       id: 'mcp-wrong-agent-token',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A wrong agent token on /mcp (no bearer) is a 401',
+      what: 'A wrong agent token on /mcp (no bearer) is a 401 “invalid agent token” — a regression guard: the unset-token refusals are the off-dev rows',
     },
     offDev(
       'no-origin-secret',
-      'A stage with no origin secret 403s every HTTP call, health included',
+      'A stage with no origin secret 403s every BFF HTTP call, health included (a preflight still 204s)',
       CLOSED,
       'no origin secret: every HTTP call is 403, health included',
       UNSET,
+    ),
+    offDev(
+      'mcp-no-origin-secret',
+      'A stage with no origin secret 403s every /mcp call',
+      CLOSED,
+      'no origin secret: 403',
+      UNSET,
+      'mcp',
     ),
     offDev(
       'bff-no-verifier',
@@ -161,11 +176,11 @@ export const bffHardening: Scenario = {
       UNSET,
     ),
     offDev(
-      'bff-no-device-token',
-      'A stage with no device token refuses ingest instead of the local user',
+      'bff-device-token-no-user',
+      'The right device token with no user bound is refused on ingest (devb binds none)',
       CLOSED,
-      'no device token configured: an ingest call with no verifier is 401, never local',
-      UNSET,
+      'the right device token with no user bound: ingest is 401, never local',
+      'dev binds a user; devb binds none but the dev check never holds the device token, and never reads it',
     ),
     offDev(
       'oauth-state-no-secret',
@@ -180,6 +195,7 @@ export const bffHardening: Scenario = {
       CLOSED,
       'no agent token configured: the agent header is 401, never local',
       UNSET,
+      'mcp',
     ),
     offDev(
       'mcp-token-no-user',
@@ -187,6 +203,14 @@ export const bffHardening: Scenario = {
       CLOSED,
       'the right agent token with no user bound is 401',
       'dev binds a user; devb binds none but the dev check never holds the agent token, and never reads it',
+      'mcp',
+    ),
+    offDev(
+      'oauth-connect-no-secret',
+      'Google connect can’t sign a state on a stage with no origin secret',
+      CLOSED,
+      'no origin secret: Google connect can’t sign a state on a stage',
+      UNSET,
     ),
     offDev(
       'ci-smoke-event',
@@ -206,9 +230,12 @@ export const bffHardening: Scenario = {
         if (!(await ctx.mcp.reads.toolsList()).includes('list_backlog'))
           throw new Error('/mcp as the test user listed no list_backlog tool');
         await ctx.mcp.reads.listBacklog();
-        const status = await ctx.mcp.reads.agentTokenProbe();
-        if (status !== 401)
-          throw new Error(`a wrong agent token on /mcp answered HTTP ${status}, not 401`);
+        const got = await ctx.mcp.reads.agentTokenProbe();
+        // The body tells a refused token from a header CloudFront dropped (that one is "requires a credential").
+        if (got.status !== 401 || got.error !== 'Unauthorized: invalid agent token')
+          throw new Error(
+            `a wrong agent token on /mcp answered ${got.status} ${JSON.stringify(got.error)}`,
+          );
       },
     },
     {
