@@ -78,6 +78,31 @@ describe('Problem page', () => {
     expect(await screen.findByText('No problem by that name.')).toBeTruthy();
   });
 
+  it('pins the full list’s label: a record on it reads All LeetCode, not Off the list', async () => {
+    const api = freshApi();
+    await api.logCoachAttempts([
+      {
+        slug: 'some-synthetic-problem',
+        day: ago(2),
+        outcome: 'solved',
+        title: 'Some Synthetic Problem',
+      },
+    ]);
+    const real = api.listProblemRecords.bind(api);
+    // The Lambda fills `lists` from the imported catalog; the stub has none, so stand in its answer.
+    vi.spyOn(api, 'listProblemRecords').mockImplementation(async () =>
+      (await real()).map((r) => ({
+        ...r,
+        pattern: 'heap',
+        difficulty: 'Hard',
+        lists: ['leetcode'],
+      })),
+    );
+    renderApp({ api, path: '/recruiting/progress/some-synthetic-problem' });
+    expect(await screen.findByText('Heap / Priority Queue · Hard · All LeetCode')).toBeTruthy();
+    expect(screen.queryByText(/Off the list/)).toBeNull();
+  });
+
   it('back from a Solves row keeps the filters', async () => {
     const api = freshApi();
     await api.logCoachAttempts([{ slug: 'two-sum', day: ago(1), outcome: 'clean' }]);

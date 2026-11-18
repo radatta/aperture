@@ -1,4 +1,5 @@
 import {
+  normalizeCatalogImport,
   assertAttachmentAllowed,
   assertArea,
   assertCategoryDeletable,
@@ -328,6 +329,12 @@ import type { ObjectStore } from './s3/objects';
 import { noopAnthropic } from './anthropic/gateway';
 import { noopPickInvoker } from './coach/invoker';
 import type { CoachPickInvoker } from './coach/invoker';
+import { noopCatalogInvoker } from './catalog/invoker';
+import type { CatalogImportInvoker } from './catalog/invoker';
+import { ensureCatalog } from './catalog/loader';
+import { catalogStatus, stageComplete } from './catalog/store';
+import type { CatalogStore } from './catalog/store';
+import type { CatalogImportInput, CatalogStatus } from '@aperture/shared';
 import type { AnthropicGateway } from './anthropic/gateway';
 import { SITTING_DRAFT_TIMEOUT_MS, sittingDraftData } from './anthropic/sittingReviewPrompt';
 
@@ -351,6 +358,8 @@ export interface BackendOptions {
   // The LeetCode Start gate's daily caps; default by the STAGE env — prod's unless a dev slot (shared sittings.ts).
   sittingStartsPerDay?: number;
   lcStartAttemptsPerDay?: number;
+  catalog?: CatalogStore; // the full LeetCode catalog's partition (outside the user partition); none → absent
+  catalogInvoker?: CatalogImportInvoker; // starts the catalog import on the worker; defaults to disabled
 }
 
 // Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
@@ -483,6 +492,8 @@ export class BackendClient implements ApiClient {
   private readonly sessions: SessionService;
   private readonly anthropic: AnthropicGateway;
   private readonly coachPick: CoachPickInvoker;
+  private readonly catalog: CatalogStore | null;
+  private readonly catalogInvoker: CatalogImportInvoker;
   private readonly placeTokens: PlaceTokenStore;
   private readonly scopedTokens: ScopedTokenStore;
   private readonly push: PushService;
@@ -507,6 +518,8 @@ export class BackendClient implements ApiClient {
     this.objects = opts.objects ?? unconfiguredObjects;
     this.anthropic = opts.anthropic ?? noopAnthropic();
     this.coachPick = opts.coachPickInvoker ?? noopPickInvoker();
+    this.catalog = opts.catalog ?? null;
+    this.catalogInvoker = opts.catalogInvoker ?? noopCatalogInvoker();
     this.placeTokens = opts.placeTokens ?? unconfiguredPlaceTokens;
     this.scopedTokens = opts.scopedTokens ?? unconfiguredScopedTokens;
     this.finance = new FinanceService({
@@ -1522,9 +1535,10 @@ export class BackendClient implements ApiClient {
   // The AI pick reads only the server's today: a `day` argument never starts one.
   private async coachInput(day?: string, consistent = false): Promise<CoachInput> {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
+    const now = this.now();
+    await this.ensureCatalog();
     const settings = await this.ensureSettings();
     const { dayStartHour, leetcodePremium } = settings;
-    const now = this.now();
     const opts = { consistent };
     const [sittings, attempts, days, focus, legacy, voids] = await Promise.all([
       this.repo.listSittings(opts),
@@ -1748,6 +1762,7 @@ export class BackendClient implements ApiClient {
   // The legacy history's groups (read-only), with why each doesn't count.
   async listLegacyGroups(slug?: string): Promise<LegacyGroup[]> {
     if (slug !== undefined && typeof slug !== 'string') throw new Error('slug must be text');
+    await this.ensureCatalog(); // a group's title and difficulty read the full catalog when it is imported
     const [rows, voids] = await Promise.all([
       this.repo.listLegacyLeetcode({ consistent: true }),
       this.repo.listCoachVoids({ consistent: true }),
@@ -1800,6 +1815,42 @@ export class BackendClient implements ApiClient {
         ),
       );
     return out;
+  }
+  // The full catalog (catalog/loader.ts): loaded before any read that names problems; NeetCode 150 alone without it.
+  async ensureCatalog(): Promise<void> {
+    if (this.catalog) await ensureCatalog(this.catalog);
+  }
+  async getCatalogStatus(): Promise<CatalogStatus> {
+    if (!this.catalog) return catalogStatus(null, null, this.now());
+    const [meta, stage] = await Promise.all([this.catalog.meta(true), this.catalog.stage()]);
+    return catalogStatus(meta, stage, this.now());
+  }
+  // Stages a classification part, or kicks the import once the upload is whole (or with none). A job already
+  // running answers its status; an invoke that fails releases the claim with the error, and throws.
+  async startCatalogImport(input: CatalogImportInput): Promise<CatalogStatus> {
+    const i = normalizeCatalogImport(input);
+    if (!this.catalog || !this.catalogInvoker.enabled)
+      throw new Error('The catalog import is off on this stage');
+    const now = this.now();
+    if (i.classes !== undefined) {
+      const stage = await this.catalog.stagePart(i.part!, i.parts!, i.classes, now);
+      if (!stageComplete(stage)) return this.getCatalogStatus();
+    }
+    const runId = this.ulid();
+    if (await this.catalog.claim(runId, now))
+      try {
+        await this.catalogInvoker.invoke({ kind: 'catalog-import', runId, limit: i.limit });
+      } catch (err) {
+        const meta = await this.catalog.meta(true);
+        if (meta?.job?.runId === runId)
+          await this.catalog.finish(runId, this.now(), {
+            ok: false,
+            error: (err as Error).message,
+            costUsd: meta.costUsd,
+          });
+        throw err;
+      }
+    return this.getCatalogStatus();
   }
   async deleteCoachAttempt(id: string): Promise<void> {
     const now = this.now();

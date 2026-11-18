@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { SK_END } from './DocClient';
 import {
+  CATALOG_PK,
+  catalogSk,
   gsi1,
   pk,
   placeTokenPk,
@@ -15,6 +17,16 @@ import {
 describe('single-table keys', () => {
   it('partitions per user', () => {
     expect(pk('user-1')).toBe('u#user-1');
+  });
+
+  it('keeps the full catalog in its own partition, a slot’s chunks in order under one prefix', () => {
+    expect(CATALOG_PK.startsWith('u#')).toBe(false);
+    expect(catalogSk.chunk('a', 3)).toBe('slot#a#03');
+    expect(catalogSk.chunk('b', 0).startsWith(catalogSk.slotPrefix('b'))).toBe(true);
+    expect(catalogSk.chunk('a', 0).startsWith(catalogSk.slotPrefix('b'))).toBe(false);
+    expect(catalogSk.stagePart(3)).toBe('stagepart#03');
+    expect(catalogSk.stagePart(3).startsWith(catalogSk.stagePartPrefix())).toBe(true);
+    expect(catalogSk.stage().startsWith(catalogSk.stagePartPrefix())).toBe(false);
   });
 
   it('builds type-prefixed range keys that a prefix query can slice', () => {

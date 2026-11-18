@@ -28,6 +28,7 @@ import { identifierCleanup } from './identifier-cleanup';
 import { iosProbe } from './ios-probe';
 import { iosStandalone } from './ios-standalone';
 import { lcCoach } from './lc-coach';
+import { lcCatalog } from './lc-catalog';
 import { lcCoachAi } from './lc-coach-ai';
 import { lcExtension } from './lc-extension';
 import { lcSittings } from './lc-sittings';
@@ -81,6 +82,7 @@ export const SCENARIOS: Scenario[] = [
   // Before lcSittings and lcCoach: their sittings, attempts and slot changes today put the day under way on the
   // rules, which is never due a pick. Its pick (the setting on for its own steps only) leaves them the rules' plan.
   lcCoachAi,
+  lcCatalog,
   lcSittings, // its reps run in progress mid-scenario: after the Home and task scenarios that read the day
   lcCoach, // after lcSittings: it links its own roll, Starts on today's slot, and unlinks for the next
   coachFixes, // after lcCoach: its plan-mode counts start from what lcCoach (and lcCoachAi) left due; links its own roll

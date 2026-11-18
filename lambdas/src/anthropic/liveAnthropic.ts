@@ -22,6 +22,14 @@ import {
   NOTE_MODEL,
 } from './fluxNotePrompt';
 import {
+  CATALOG_CLASSIFY_EFFORT,
+  CATALOG_CLASSIFY_MAX_TOKENS,
+  CATALOG_CLASSIFY_MODEL,
+  catalogClassifyOutputSchema,
+  catalogClassifySystemPrompt,
+  catalogClassifyUserContent,
+} from './catalogClassifyPrompt';
+import {
   DRAFT_MODEL,
   sittingDraftOutputSchema,
   sittingDraftSystemPrompt,
@@ -287,6 +295,40 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
       return refused
         ? { ok: false as const, reason: 'refusal' as const, detail: 'refusal', ...common }
         : { ...out, ...common };
+    },
+    // Public problem metadata only (numbers, titles, tags); the log line carries counts and tokens.
+    async catalogClassify(req) {
+      const started = Date.now();
+      const { meta, ...out } = await call({
+        model: CATALOG_CLASSIFY_MODEL,
+        system: catalogClassifySystemPrompt(),
+        user: catalogClassifyUserContent(req.rows),
+        schema: catalogClassifyOutputSchema(req.rows),
+        maxTokens: CATALOG_CLASSIFY_MAX_TOKENS,
+        timeoutMs: req.timeoutMs,
+        thinking: 'omit',
+        effort: CATALOG_CLASSIFY_EFFORT,
+      });
+      const ms = Date.now() - started;
+      const usage =
+        meta?.usage?.input_tokens !== undefined || meta?.usage?.output_tokens !== undefined
+          ? { input: meta.usage.input_tokens ?? 0, output: meta.usage.output_tokens ?? 0 }
+          : null;
+      log(
+        JSON.stringify({
+          event: 'catalog_classify',
+          ok: out.ok,
+          reason: out.ok ? undefined : out.reason,
+          status: meta?.status,
+          stop_reason: meta?.stop,
+          ms,
+          rows: req.rows.length,
+          input_tokens: meta?.usage?.input_tokens,
+          output_tokens: meta?.usage?.output_tokens,
+          model: CATALOG_CLASSIFY_MODEL,
+        }),
+      );
+      return { ...out, model: CATALOG_CLASSIFY_MODEL, usage, ms };
     },
   };
 }

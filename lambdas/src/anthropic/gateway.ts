@@ -2,6 +2,7 @@ import type {
   CoachAiReason,
   CoachDayAi,
   CoachPickContext,
+  LcSourceRow,
   ModelOutcome,
   ParseCategory,
 } from '@aperture/shared';
@@ -46,6 +47,16 @@ export type CoachPickCall = (
   | { ok: false; reason: Exclude<CoachAiReason, 'invalid'>; detail?: string }
 ) & { model: string; usage: CoachDayAi['usage']; ms: number };
 
+// The full catalog's late rows (catalogClassifyPrompt.ts): a few problems the dataset added since the bulk pass.
+export interface CatalogClassifyRequest {
+  rows: readonly LcSourceRow[];
+  timeoutMs: number;
+}
+// `usage` is what the import job prices against its stop, even on a failure.
+export type CatalogClassifyCall = (
+  { ok: true; fields: unknown } | { ok: false; reason: string; detail?: string }
+) & { model: string; usage: { input: number; output: number } | null; ms: number };
+
 export interface AnthropicGateway {
   parseTask(req: ParseRequest): Promise<ModelOutcome>;
   // `fields` is `{ note }` on success; the backend validates it (fluxNoteText) before storing anything.
@@ -55,6 +66,8 @@ export interface AnthropicGateway {
   sittingReviewDraft(req: SittingDraftRequest): Promise<ModelOutcome>;
   // `fields` is the raw answer on success; the worker checks it (validateCoachPick) before storing anything.
   coachPick(req: CoachPickRequest): Promise<CoachPickCall>;
+  // `fields` is the raw answer on success; the import job checks it (validateCatalogClasses).
+  catalogClassify(req: CatalogClassifyRequest): Promise<CatalogClassifyCall>;
 }
 
 export function noopAnthropic(): AnthropicGateway {
@@ -71,6 +84,14 @@ export function noopAnthropic(): AnthropicGateway {
       detail: 'the model is off here',
     }),
     coachPick: async () => ({
+      ok: false,
+      reason: 'unavailable',
+      detail: 'the model is off here',
+      model: 'none',
+      usage: null,
+      ms: 0,
+    }),
+    catalogClassify: async () => ({
       ok: false,
       reason: 'unavailable',
       detail: 'the model is off here',
@@ -128,5 +149,19 @@ export class FakeAnthropic implements AnthropicGateway {
   async coachPick(req: CoachPickRequest): Promise<CoachPickCall> {
     this.pickCalls.push(req);
     return typeof this.nextPick === 'function' ? this.nextPick(req) : this.nextPick;
+  }
+
+  classifyCalls: CatalogClassifyRequest[] = [];
+  nextClassify: CatalogClassifyCall | ((req: CatalogClassifyRequest) => CatalogClassifyCall) = {
+    ok: false,
+    reason: 'unavailable',
+    detail: 'FakeAnthropic: no classification set',
+    model: 'fake',
+    usage: null,
+    ms: 0,
+  };
+  async catalogClassify(req: CatalogClassifyRequest): Promise<CatalogClassifyCall> {
+    this.classifyCalls.push(req);
+    return typeof this.nextClassify === 'function' ? this.nextClassify(req) : this.nextClassify;
   }
 }

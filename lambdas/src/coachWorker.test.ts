@@ -1,5 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handleCoachPick, parseCoachWorkerEvent } from './coachWorker';
+import {
+  catalogImportLimit,
+  handleCatalogImport,
+  handleCoachPick,
+  handleWorkerEvent,
+  parseCatalogImportEvent,
+  parseCoachWorkerEvent,
+} from './coachWorker';
+import {
+  buildCatalog,
+  catalogCounts,
+  catalogLoaded,
+  packCatalog,
+  trimSourceRows,
+  unloadCatalog,
+} from '@aperture/shared';
+import { FIXTURE_SOURCE } from './catalog/fixture';
+import { FakeCatalogSource } from './catalog/source';
+import { CatalogStore } from './catalog/store';
+import { liveWrites } from './ddb/writes';
 import { InMemoryDoc } from './ddb/DocClient';
 import { FakeAnthropic } from './anthropic/gateway';
 
@@ -50,5 +69,115 @@ describe('handleCoachPick', () => {
       handleCoachPick(new InMemoryDoc(), new FakeAnthropic(), { day: EVENT.day }),
     ).rejects.toThrow('userId');
     expect(log).not.toHaveBeenCalled();
+  });
+});
+
+describe('the catalog import on the worker', () => {
+  afterEach(() => unloadCatalog());
+
+  it('refuses a malformed event before any work', () => {
+    expect(parseCatalogImportEvent({ kind: 'catalog-import', runId: 'r', limit: 3, x: 1 })).toEqual(
+      {
+        kind: 'catalog-import',
+        runId: 'r',
+        limit: 3,
+      },
+    );
+    expect(() => parseCatalogImportEvent({ kind: 'catalog-import' })).toThrow('runId');
+    expect(() => parseCatalogImportEvent({ kind: 'catalog-import', runId: 'r', limit: 0 })).toThrow(
+      'limit',
+    );
+  });
+
+  it('runs a claimed import over the table', async () => {
+    const doc = new InMemoryDoc();
+    await new CatalogStore(doc, liveWrites(doc)).claim('run-1', 1);
+    const meta = await handleCatalogImport(
+      doc,
+      new FakeAnthropic(),
+      new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE }),
+      { kind: 'catalog-import', runId: 'run-1' },
+      { now: () => 2 },
+    );
+    expect(meta).toMatchObject({ live: 'a', count: 15, job: null });
+  });
+});
+
+describe('handleWorkerEvent', () => {
+  afterEach(() => unloadCatalog());
+  const src = () => new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE });
+
+  it('routes a catalog-import event to the import and anything else to the pick', async () => {
+    const doc = new InMemoryDoc();
+    await new CatalogStore(doc, liveWrites(doc)).claim('run-1', 1);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const meta = await handleWorkerEvent(
+      doc,
+      new FakeAnthropic(),
+      src(),
+      {
+        kind: 'catalog-import',
+        runId: 'run-1',
+      },
+      { now: () => 2 },
+    );
+    expect(meta).toMatchObject({ live: 'a', count: 15 });
+    await expect(handleWorkerEvent(doc, new FakeAnthropic(), src(), EVENT)).resolves.toBe(
+      'not-ours',
+    );
+  });
+
+  it('loads the live catalog before a pick, so the pick names problems by their catalog facts', async () => {
+    const doc = new InMemoryDoc();
+    const store = new CatalogStore(doc, liveWrites(doc));
+    const rows = buildCatalog(trimSourceRows(FIXTURE_SOURCE).rows, new Map());
+    await store.claim('run-1', 1);
+    const meta = await store.finish('run-1', 2, {
+      ok: true,
+      packed: packCatalog(rows),
+      classes: '',
+      sha: 'a'.repeat(40),
+      counts: catalogCounts(rows),
+      costUsd: 0,
+      modelError: null,
+      badClasses: null,
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await handleCoachPick(doc, new FakeAnthropic(), EVENT);
+    expect(catalogLoaded()).toEqual({ rev: meta.rev, count: rows.length });
+  });
+});
+
+describe('catalogImportLimit', () => {
+  it('caps a dev slot’s import at 300 whatever was sent, and leaves prod’s as sent', () => {
+    expect(catalogImportLimit(undefined, true)).toBe(300);
+    expect(catalogImportLimit(5000, true)).toBe(300);
+    expect(catalogImportLimit(50, true)).toBe(50);
+    expect(catalogImportLimit(undefined, false)).toBeUndefined();
+    expect(catalogImportLimit(5000, false)).toBe(5000);
+  });
+
+  it('builds a dev slot’s import capped whatever limit was sent', async () => {
+    const doc = new InMemoryDoc();
+    await new CatalogStore(doc, liveWrites(doc)).claim('run-1', 1);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const many = Array.from({ length: 310 }, (_, i) => ({
+      questionFrontendId: String(20_000 + i),
+      title: `Synthetic ${i}`,
+      difficulty: 'Easy',
+      isPaidOnly: false,
+      categoryTitle: 'Algorithms',
+      topicTags: [],
+      stats: '{}',
+      url: `https://leetcode.com/problems/synthetic-capped-${i}/`,
+    }));
+    const meta = await handleCatalogImport(
+      doc,
+      new FakeAnthropic(),
+      new FakeCatalogSource({ ok: true, data: many }),
+      { kind: 'catalog-import', runId: 'run-1', limit: 5000 },
+      { now: () => 2, devSlot: true },
+    );
+    expect(meta.count).toBe(300);
   });
 });

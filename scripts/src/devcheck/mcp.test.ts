@@ -63,6 +63,7 @@ describe('createMcpClient', () => {
   it('exposes exactly the declared reads and writes', () => {
     const c = client(server({}));
     expect(Object.keys(c.reads).sort()).toEqual([
+      'catalogStatus',
       'coachStats',
       'getAttachmentDownloadUrl',
       'getCalibration',
@@ -97,6 +98,7 @@ describe('createMcpClient', () => {
       'deleteAttempt',
       'deleteAttemptUnknown',
       'deleteTask',
+      'importCatalog',
       'logAttempt',
       'markPeeked',
       'markPeekedUnknown',

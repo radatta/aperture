@@ -1,9 +1,18 @@
 // @aperture/lambdas — the coach worker Lambda (cdk/src/lib/coach-worker.ts): the LeetCode coach's AI pick runs here,
 // invoked async (InvocationType 'Event') by the BFF or the MCP function, at most once a day a user
-// (docs/areas/recruiting/coach.md → The AI pick). It never serves HTTP. Its role reads the table and the Anthropic
-// key, nothing else. The logic is coach/pick.ts; this is the AWS edge.
-import { isDayKey } from '@aperture/shared';
+// (docs/areas/recruiting/coach.md → The AI pick). So does the full catalog's import (`kind: 'catalog-import'`,
+// catalog/import.ts → The catalog), which also fetches the pinned public source. It never serves HTTP. Its role reads
+// the table, puts rows and reads the Anthropic key, nothing else. The logic is coach/pick.ts and catalog/import.ts;
+// this is the AWS edge.
+import { isDayKey, isDevSlot } from '@aperture/shared';
 import { createLiveAnthropic } from './anthropic/liveAnthropic';
+import type { CatalogImportEvent } from './catalog/invoker';
+import { DEV_CATALOG_LIMIT, runCatalogImport } from './catalog/import';
+import { ensureCatalog } from './catalog/loader';
+import { liveCatalogSource } from './catalog/source';
+import type { CatalogSource } from './catalog/source';
+import { CatalogStore } from './catalog/store';
+import type { CatalogMeta } from './catalog/store';
 import type { AnthropicGateway } from './anthropic/gateway';
 import type { CoachPickEvent } from './coach/invoker';
 import { runCoachPick } from './coach/pick';
@@ -15,8 +24,43 @@ import { liveWrites } from './ddb/writes';
 
 const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 const anthropic = createLiveAnthropic({ stage: process.env.STAGE ?? 'dev' });
+const source = liveCatalogSource();
 
 export type CoachWorkerEvent = CoachPickEvent;
+
+// The catalog import's event, refused when malformed like a pick's.
+export function parseCatalogImportEvent(raw: unknown): CatalogImportEvent {
+  const e = (raw ?? {}) as Record<string, unknown>;
+  if (typeof e.runId !== 'string' || e.runId.trim() === '')
+    throw new Error('Invalid catalog import event: runId');
+  if (e.limit !== undefined && !(Number.isInteger(e.limit) && (e.limit as number) > 0))
+    throw new Error('Invalid catalog import event: limit');
+  return {
+    kind: 'catalog-import',
+    runId: e.runId,
+    ...(e.limit !== undefined ? { limit: e.limit as number } : {}),
+  };
+}
+export async function handleCatalogImport(
+  table: DocClient,
+  gateway: AnthropicGateway,
+  src: CatalogSource,
+  raw: unknown,
+  opts: { now?: () => number; devSlot?: boolean } = {},
+): Promise<CatalogMeta> {
+  const e = parseCatalogImportEvent(raw);
+  const store = new CatalogStore(table, liveWrites(table));
+  const limit = catalogImportLimit(e.limit, opts.devSlot === true);
+  return runCatalogImport(
+    { store, source: src, anthropic: gateway, now: opts.now ?? Date.now },
+    { runId: e.runId, limit },
+  );
+}
+// A dev slot's import is capped whatever the caller sent (DEV_CATALOG_LIMIT); prod's takes the caller's.
+export const catalogImportLimit = (limit: number | undefined, devSlot: boolean) =>
+  devSlot ? Math.min(limit ?? DEV_CATALOG_LIMIT, DEV_CATALOG_LIMIT) : limit;
+const isCatalogImport = (raw: unknown) =>
+  !!raw && typeof raw === 'object' && (raw as { kind?: unknown }).kind === 'catalog-import';
 
 // Anything else is a malformed invoke — refuse it before doing any work.
 export function parseCoachWorkerEvent(raw: unknown): CoachWorkerEvent {
@@ -38,6 +82,8 @@ export async function handleCoachPick(
   opts: { now?: () => number } = {},
 ): Promise<CoachPickRun> {
   const e = parseCoachWorkerEvent(raw);
+  // The pick names problems: the full catalog's facts, when imported (catalog/loader.ts).
+  await ensureCatalog(new CatalogStore(table, liveWrites(table)));
   const run = await runCoachPick(
     {
       repo: new Repo(table, liveWrites(table), e.userId),
@@ -50,6 +96,21 @@ export async function handleCoachPick(
   return run;
 }
 
-export async function handler(event: unknown): Promise<CoachPickRun> {
-  return handleCoachPick(doc, anthropic, event);
+// One worker, two jobs, told apart by `kind` (catalog/invoker.ts): a catalog import, else the day's pick.
+export async function handleWorkerEvent(
+  table: DocClient,
+  gateway: AnthropicGateway,
+  src: CatalogSource,
+  raw: unknown,
+  opts: { now?: () => number; devSlot?: boolean } = {},
+): Promise<CoachPickRun | CatalogMeta> {
+  return isCatalogImport(raw)
+    ? handleCatalogImport(table, gateway, src, raw, opts)
+    : handleCoachPick(table, gateway, raw, opts);
+}
+
+export async function handler(event: unknown): Promise<CoachPickRun | CatalogMeta> {
+  return handleWorkerEvent(doc, anthropic, source, event, {
+    devSlot: isDevSlot(process.env.STAGE),
+  });
 }

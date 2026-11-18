@@ -12,7 +12,7 @@ import {
   USER_TIME_ZONE,
   zonedEpoch,
 } from './dates';
-import { CATALOGS, DEFAULT_CATALOG, catalogProblem, listsOf } from './catalogs';
+import { CATALOGS, DEFAULT_CATALOG, catalogProblem, listsOf, onPlanList } from './catalogs';
 import type { CatalogId } from './catalogs';
 import { PATTERNS, PATTERN_NAMES, isPatternId } from './neetcode150';
 import type { CatalogProblem, Difficulty, PatternId } from './neetcode150';
@@ -478,7 +478,7 @@ export interface ProblemRecord {
   title: string;
   pattern: PatternId;
   difficulty: Difficulty | null;
-  inCatalog: boolean;
+  inCatalog: boolean; // on the list the plan picks from (onPlanList), whatever else is loaded
   attempts: number; // days tried
   firstDay: string;
   firstOutcome: AttemptOutcome; // the first try — the focus ranking's input
@@ -542,7 +542,7 @@ export function problemRecords(
       pattern: cat?.pattern ?? last.pattern,
       difficulty:
         cat?.difficulty ?? [...list].reverse().find((a) => a.difficulty)?.difficulty ?? null,
-      inCatalog: !!cat,
+      inCatalog: onPlanList(slug),
       attempts: list.length,
       firstDay: first.day,
       firstOutcome: first.outcome,
@@ -1774,7 +1774,7 @@ export function slotChangeInputs(ci: CoachInput): {
   const scope = coachScope(ci);
   const seen = seenBefore(all, scope, ci.today);
   const tried = new Set([...all.map((a) => a.slug), ...scope.history.keys()]);
-  return { seen, known: (slug) => !!catalogProblem(slug) || tried.has(slug) };
+  return { seen, known: (slug) => onPlanList(slug) || tried.has(slug) };
 }
 // An override on a pattern with nothing unseen left would leave no new slot: refused.
 export function focusRoomError(ci: CoachInput, pattern: PatternId): string | null {

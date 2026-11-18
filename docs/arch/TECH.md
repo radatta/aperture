@@ -38,7 +38,7 @@ React PWA (S3 + CloudFront) --Cognito JWT--> Lambda Function URL (auth NONE + or
 
 **Resolved (as built):** Lambda Function URL, not API Gateway (INFRA §4) · Cognito (§6) · single-table DDB (§5) · one multi-route BFF Lambda (§4; the others: _Beyond the BFF_, below) · CDK (§3) · custom domain (§8).
 
-**Beyond the BFF** (each in INFRA — §1, §3, §4 or §10 — and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the coach worker (the LeetCode coach's AI pick, [recruiting/coach](../areas/recruiting/coach.md)), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
+**Beyond the BFF** (each in INFRA — §1, §3, §4 or §10 — and its area doc): the MCP Lambda ([mcp](../areas/mcp/index.md)), the push dispatch ([tasks/reminders](../areas/tasks/reminders.md)), the coach worker (the LeetCode coach's AI pick and the full catalog's import, [recruiting/coach](../areas/recruiting/coach.md)) with its catalog source gateway (`lambdas/src/catalog/source.ts`: one GET of the pinned public dataset on raw.githubusercontent.com), the finance sync ([finances](../areas/finances/index.md)), the Google gateway (`lambdas/src/google/`, [calendar](../areas/calendar/index.md)), the Files bucket ([tasks/attachments](../areas/tasks/attachments.md)) and the dev account's kill switch (INFRA §3). The RPC boundary — argument shapes checked before any read or write, one failure-status mapping — is INFRA §4.
 
 **Offline stance (v1):** online-first. PWA installs and the shell loads offline, but data reads/writes need connectivity. Offline editing + a sync-on-reconnect write queue is a **later enhancement**, not v1 — bar per-feature crash-safety outboxes since: capture's (`app/src/modules/capture/captureOutbox.ts`), Flux sets' ([flux](../areas/flux/index.md)) and the extension's ([recruiting](../areas/recruiting/index.md)).
 
@@ -214,7 +214,7 @@ PK = push / SK = user#<userId> · health
                                 heartbeat — derived, never client-set, never exported (tasks/reminders.md)
 ```
 
-- **Three non-`u#` partitions:** `placetoken#<hash>`, `stoken#<hash>` and `push`. Everything else is under the user's.
+- **Four non-`u#` partitions:** `placetoken#<hash>`, `stoken#<hash>`, `push` and `catalog#leetcode` (the full LeetCode catalog, stage-wide public metadata: [recruiting/coach](../areas/recruiting/coach.md) → _The full LeetCode catalog_). Everything else is under the user's.
 - **One GSI, three key spaces:** calibration — done tasks by completion date (`GSI1PK = u#<userId>#done`, `GSI1SK = <completedAt>`); finance — transactions by date (`GSI1PK = u#<userId>#fintxn`, `GSI1SK` = the date's UTC-midnight epoch ms); reminders — what may ping, by when (`GSI1PK = u#<userId>#remind`, `GSI1SK` = fire time epoch ms) on open dated tasks, plans and Send-test rows, set atomically with the item's own write.
 - **Attachment bytes are NOT in this table** — only the metadata item above. Bytes live in the precious S3 Files bucket (INFRA §3), reached via presigned URLs.
 - **Denormalized** `task.actualAccruedMin` → no session-scan for "remaining".

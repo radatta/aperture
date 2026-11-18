@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   applySlotChange,
   attemptsOf,
@@ -25,7 +25,9 @@ import {
   slotChangeInputs,
 } from './coach';
 import type { CoachInput } from './coach';
+import { loadCatalog, unloadCatalog } from './catalogs';
 import { addDays, USER_TIME_ZONE, zonedEpoch } from './dates';
+import { buildCatalog } from './lcCatalog';
 import { NEETCODE_150 } from './neetcode150';
 import { emptySummary, mergeReview, patchReview } from './sittings';
 import type {
@@ -1439,5 +1441,82 @@ describe('minutes on a try', () => {
     expect(a).toMatchObject({ minutes: 35, note: 'used a hash map', historical: false });
     const [r] = listRecords({ now: NOW, today: TODAY, sittings, attempts: [logged] });
     expect(r!.tries[0]).toMatchObject({ minutes: 35, note: 'used a hash map' });
+  });
+});
+
+describe('the full catalog, once loaded', () => {
+  afterEach(() => unloadCatalog());
+  // Synthetic rows: an off-list problem the model filed under heap, whatever its tags say.
+  const load = () =>
+    loadCatalog(
+      buildCatalog(
+        [
+          {
+            id: 9101,
+            slug: 'some-graph-problem',
+            title: 'Some Heap Problem',
+            difficulty: 'Hard',
+            premium: false,
+            acRate: 30,
+            tags: ['Graph'],
+            algorithms: true,
+          },
+        ],
+        new Map([[9101, { pattern: 'heap', similar: [], harder: [] }]]),
+      ),
+      'rev-test',
+    );
+  const offList = () =>
+    sit({
+      slug: 'some-graph-problem',
+      on: day(-1),
+      submits: ['accepted'],
+      title: 'Sitting title',
+      tags: ['Graph'],
+    });
+
+  it('gives an off-list problem the catalog’s title, pattern and difficulty, still off the plan list', () => {
+    load();
+    const [r] = listRecords({ now: NOW, sittings: [offList()], attempts: [] });
+    expect(r).toMatchObject({
+      inCatalog: false,
+      title: 'Some Heap Problem',
+      pattern: 'heap',
+      difficulty: 'Hard',
+      lists: ['leetcode'],
+    });
+  });
+
+  it('leaves the day’s plan as it was: picks only from NeetCode 150', () => {
+    const sittings = [clean('two-sum', day(-3)), failed('valid-anagram', day(-2))];
+    const before = planDay(input({ sittings }));
+    // An unseen Easy in the focus pattern (arrays-hashing): a plan drawing from the loaded list would take it.
+    loadCatalog(
+      buildCatalog(
+        [
+          {
+            id: 9102,
+            slug: 'aaa-synthetic-easy-hash',
+            title: 'Synthetic Easy Hash',
+            difficulty: 'Easy',
+            premium: false,
+            acRate: 90,
+            tags: ['Array', 'Hash Table'],
+            algorithms: true,
+          },
+        ],
+        new Map(),
+      ),
+      'rev-plan',
+    );
+    const after = planDay(input({ sittings }));
+    expect(after.slots).toEqual(before.slots);
+    const plan = new Set(NEETCODE_150.map((p) => p.slug));
+    for (const s of after.slots) expect(plan.has(s.slug)).toBe(true);
+  });
+
+  it('never takes an untried off-list problem as a swap target', () => {
+    load();
+    expect(slotChangeInputs(input()).known('some-graph-problem')).toBe(false);
   });
 });

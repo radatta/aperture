@@ -107,6 +107,8 @@ export const API_METHODS = [
   'listLegacyGroups',
   'setCoachVoids',
   'setSittingClaudeNotes',
+  'getCatalogStatus',
+  'startCatalogImport',
   'recordFluxSet',
   'listFluxSets',
   'deleteFluxSet',

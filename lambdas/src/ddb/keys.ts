@@ -14,6 +14,11 @@
 // The third: `push`, the reminder poller's (reminders.md). `user#<uid>` lists who has a device to ping
 // (written on the first subscribe, removed with the last unsubscribe — the poller runs per user without a
 // fixed user id), and `health` is the poller's heartbeat. Derived, never client-set, never exported.
+//
+// The fourth: `catalog#leetcode`, the full LeetCode catalog (catalog/store.ts) — stage-wide public metadata, no
+// user's data: `meta` (the live slot and the import's state), `classes` (every class given), `stage` and
+// `stagepart#NN` (an upload under way) and two slots of the packed catalog's chunks, `slot#a#00…` / `slot#b#00…`.
+// Written by the BFF's import RPC and the import job, never exported.
 
 export const pk = (userId: string) => `u#${userId}`;
 export const placeTokenPk = (hash: string) => `placetoken#${hash}`;
@@ -25,6 +30,16 @@ export const pushSk = {
   user: (userId: string) => `user#${userId}`,
   userPrefix: () => `user#`,
   health: () => `health`,
+} as const;
+export const CATALOG_PK = 'catalog#leetcode';
+export const catalogSk = {
+  meta: () => 'meta',
+  stage: () => 'stage',
+  stagePart: (part: number) => `stagepart#${String(part).padStart(2, '0')}`,
+  stagePartPrefix: () => 'stagepart#',
+  classes: () => 'classes',
+  chunk: (slot: 'a' | 'b', i: number) => `slot#${slot}#${String(i).padStart(2, '0')}`,
+  slotPrefix: (slot: 'a' | 'b') => `slot#${slot}#`,
 } as const;
 
 // Plan order and GSI completion time are numbers we sort lexically inside the SK — pad to fixed width.
