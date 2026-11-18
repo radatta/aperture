@@ -42,7 +42,7 @@ If it fails after taking the lock, it frees dev again (unless the branch held de
 
 - Other lanes' slot-A devchecks and deploys wait through `pnpm bot lock wait`. Slot B is unaffected: its devchecks have their own run lock.
 - The lock's TTL is 45 minutes. The session that seeded renews it (`pnpm bot lock renew`) before each expiry, and a 5-run M1 bench needs several renewals.
-- **A merge waits for the lock, up to an hour a run** (CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_), then deploys anyway and the summary shows `devBuildChanged`. So only an M1 window renewed past an hour is one where dispatch holds merges.
+- **A merge waits for the lock, up to an hour from the later of the merge and the branch's taking of the lock** (a seed on a branch already holding dev keeps the earlier time; renewals and re-seeds don't stretch it, and each run waits 15 min at least; CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_), then deploys anyway and the summary shows `devBuildChanged`. So only an M1 window renewed past an hour is one where dispatch holds merges (past it, each later run still waits its 15 min).
 
 `pnpm sim-bench:seed --clean` deletes the seed by ledger id, recording it in the ledger, then releases the lock, even one this branch held before seeding: the bench is over. A seed it can't delete, or a sign-in that fails, leaves the seed pending in the ledger for the next devcheck's sweep, and still frees dev. `--clean` frees nothing when another branch holds dev.
 

@@ -20,6 +20,9 @@ export interface Holder {
   branch: string;
   sha: string;
   expiresAt: string;
+  // When this branch took the lock (acquire; renew and the holder's own live re-take keep it): main's wait counts a holder's turn from it
+  // (main-dev-wait.ts). Absent on a lock an older bot wrote.
+  takenAt?: string;
 }
 export interface LockState {
   holder: Holder | null; // null: ref present but unreadable (treated as expired)
@@ -36,7 +39,12 @@ const asHolder = (v: unknown): Holder | null => {
     typeof h.branch === 'string' &&
     typeof h.sha === 'string' &&
     typeof h.expiresAt === 'string'
-    ? { branch: h.branch, sha: h.sha, expiresAt: h.expiresAt }
+    ? {
+        branch: h.branch,
+        sha: h.sha,
+        expiresAt: h.expiresAt,
+        ...(typeof h.takenAt === 'string' ? { takenAt: h.takenAt } : {}),
+      }
     : null;
 };
 
@@ -127,7 +135,12 @@ export async function acquire(
   slot: Slot = 'dev',
 ): Promise<Holder> {
   const ref = lockRef(slot);
-  const holder: Holder = { branch, sha, expiresAt: new Date(nowMs + TTL_MS).toISOString() };
+  const holder: Holder = {
+    branch,
+    sha,
+    expiresAt: new Date(nowMs + TTL_MS).toISOString(),
+    takenAt: new Date(nowMs).toISOString(),
+  };
   const tagSha = await makeTag(api, holder, slot);
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -139,8 +152,15 @@ export async function acquire(
     const cur = await readLock(api, slot);
     if (!cur) continue; // released between our create and read — try again
     if (cur.holder?.branch === branch) {
-      await api('PATCH', `${R}/git/refs/${ref}`, { sha: tagSha, force: true });
-      return holder;
+      // Its own live lock (a redeploy): keep when it was taken, so a re-take never restarts the turn main's wait counts
+      // from (main-dev-wait.ts). A lapsed one is a fresh take.
+      const kept =
+        Date.parse(cur.holder.takenAt ?? '') <= nowMs && !isExpired(cur.holder, nowMs) // NaN or future: fresh
+          ? { ...holder, takenAt: cur.holder.takenAt }
+          : holder;
+      const sha = kept === holder ? tagSha : await makeTag(api, kept, slot);
+      await api('PATCH', `${R}/git/refs/${ref}`, { sha, force: true });
+      return kept;
     }
     if (!isExpired(cur.holder, nowMs)) throw new LockHeld(cur.holder, slot);
     // Expired: delete only if it still points at the tag we judged expired (narrows the take-over race).

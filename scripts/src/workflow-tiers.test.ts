@@ -222,8 +222,10 @@ describe('deploy.yml waits for each dev lock without gating on it', () => {
       expect(w).toContain('timeout-minutes: 70');
       expect(w).toContain('timeout-minutes: 65');
       expect(w).toContain('GITHUB_TOKEN: ${{ github.token }}');
-      // read-only: taking the lock is the bot's, never the workflow's
-      expect(w).toMatch(/permissions:\n {6}contents: read #[^\n]*\n {4}steps:/);
+      // read-only: taking the lock is the bot's, never the workflow's; actions: read lists main's runs for the cap
+      expect(w).toMatch(
+        /permissions:\n {6}contents: read #[^\n]*\n {6}actions: read #[^\n]*\n {4}steps:/,
+      );
     }
   });
 

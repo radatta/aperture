@@ -200,7 +200,7 @@ by the next acquire and by `gc`.
 
 `board.sh status`, the SessionStart hook and the status line's `dev:` show the real `refs/locks/dev`
 (`docs/ops/CI-BOT.md` → _Dev lock_), from one cache, `board/devlock.json`
-(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt} | null, failedAt?, failedWhy?, failedBy?, failedFor?}`); slot B's
+(`{v: 1, t, source: "peek" | "bot", holder: {branch, sha, expiresAt, takenAt?} | null, failedAt?, failedWhy?, failedBy?, failedFor?}`); slot B's
 `refs/locks/devb` has its own, `board/devlock.devb.json`, the same shape (_Dev slots_). `devlock.sh line` prints
 slot A as before, then ` · devb: free` / `· devb: <branch> (<session>) until HH:MM` once slot B has a cache; the
 status line's `dev:` and `board.sh json` still read slot A only. Two writers, each for both files:

@@ -16,7 +16,8 @@ on:
 # Serialize deploys per ref — never cancel a deploy mid-flight (a half-applied stack is worse than a queue). A running
 # deploy is safe, but GitHub keeps one pending run per group and cancels the older one, jobs and all, when merges
 # cluster. Classification doesn't depend on those runs: each stage diffs from what it last deployed. A run waiting for a
-# dev lock (wait-dev, up to 60 min) is running, never cancelled; merges behind it collapse to the newest.
+# dev lock (wait-dev) is running, never cancelled; merges behind it collapse to the newest, whose wait counts from the
+# oldest merge it carries (main-dev-wait.ts), so a supersede never restarts the cap.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -104,10 +105,11 @@ jobs:
   # (scripts/src/main-dev-wait.ts; docs/ops/CI-BOT.md → Dev deploys → A merge waits for the lock). Only once the deploy
   # will happen — `check` green or planned-skipped, as the deploy's own condition — so a red check fails the run at once
   # and the gap between reading "free" and deploying is a runner start. Never a gate: the deploys' `if:`s don't read
-  # these results, so a skipped, failed or timed-out wait still deploys — the module itself goes after 60 min, or after
-  # ~5 min of failed reads, and says so in a ::warning:: and the summary. Read-only (contents: read); the bot keeps other
-  # branches off the slot from the moment this wait starts until its deploy is done (main-pending.ts). Skipped when the
-  # slot gets nothing: a docs-only `none` touches no stack.
+  # these results, so a skipped, failed or timed-out wait still deploys — the module itself goes an hour after the later
+  # of the oldest merge riding in this run and the holder's taking of the lock (15–60 min after the wait starts), or
+  # after ~5 min of failed reads, and says so in a ::warning:: and the summary. Read-only (contents, actions: read); the
+  # bot keeps other branches off the slot from the moment this wait starts until its deploy is done (main-pending.ts).
+  # Skipped when the slot gets nothing: a docs-only `none` touches no stack.
   wait-dev:
     needs: [changes, check]
     if: ${{ !cancelled() && needs.changes.outputs.mode_dev != 'none' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
@@ -115,6 +117,7 @@ jobs:
     timeout-minutes: 70 # the module's 60-minute ceiling plus a checkout; past it the job ends cancelled → quiet-failure
     permissions:
       contents: read # the lock ref and its tag
+      actions: read # main's Deploy runs and their jobs: the cap counts from the oldest merge riding in this run
     steps:
       # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
       # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
@@ -146,6 +149,7 @@ jobs:
     timeout-minutes: 70 # as wait-dev's
     permissions:
       contents: read # the lock ref and its tag
+      actions: read # as wait-dev's
     steps:
       # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
       # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.

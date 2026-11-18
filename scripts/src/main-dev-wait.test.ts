@@ -2,23 +2,53 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { OWNER, REPO } from './bot/config';
+import type { Run } from './bot/dispatch';
 import { fakeClock } from './bot/fakes';
-import { CEILING_MS, MAX_ERRORS, SETTLE_MS, run } from './main-dev-wait';
+import {
+  CEILING_MS,
+  FLOOR_MS,
+  MAX_ERRORS,
+  SETTLE_MS,
+  WALK_MAX,
+  cancelledBefore,
+  deadlineOf,
+  run,
+} from './main-dev-wait';
 
 // deploy.yml's wait jobs run this against the real API only on main; here a scripted fetch stands in for GitHub.
 const R = `/repos/${OWNER}/${REPO}`;
 const T0 = Date.parse('2026-11-17T20:00:00Z');
 const MIN = 60_000;
 const sha = 'a'.repeat(40);
-const holder = (branch: string, expiresAt: number) =>
-  JSON.stringify({ branch, sha, expiresAt: new Date(expiresAt).toISOString() });
+const holder = (branch: string, expiresAt: number, takenAt?: number) =>
+  JSON.stringify({
+    branch,
+    sha,
+    expiresAt: new Date(expiresAt).toISOString(),
+    ...(takenAt === undefined ? {} : { takenAt: new Date(takenAt).toISOString() }),
+  });
 
 type Answer = { status: number; body?: unknown };
+// main's Deploy runs (the cap's anchor) and each run's job count; a bare Answer stands in for a failed listing.
+interface Runs {
+  runs?: Run[] | Answer;
+  jobs?: Record<number, number>;
+}
+const mainRun = (id: number, at: number, conclusion: string | null, status = 'completed'): Run => ({
+  id,
+  display_title: `merge ${id}`,
+  created_at: new Date(at).toISOString(),
+  status,
+  conclusion,
+  html_url: `https://github.com/x/y/actions/runs/${id}`,
+  head_sha: String(id).padStart(7, 'c') + 'f'.repeat(33),
+});
 // One answer per lock read: the ref and, when it's a tag, its message. `lock(n)` decides the nth read.
 const lockFetch = (
   slot: string,
   lock: (n: number, now: number) => Answer | string | null,
   now: () => number,
+  { runs = [], jobs = {} }: Runs = {},
 ) => {
   let n = 0;
   const paths: string[] = [];
@@ -37,18 +67,31 @@ const lockFetch = (
     }
     const tag = /\/git\/tags\/tag(\d+)$/.exec(path);
     if (tag) return reply({ status: 200, body: { message: lock(Number(tag[1]) - 1, now()) } });
+    if (path === `${R}/actions/workflows/deploy.yml/runs?per_page=30&event=push&branch=main`)
+      return reply(Array.isArray(runs) ? { status: 200, body: { workflow_runs: runs } } : runs);
+    const jobsOf = /\/actions\/runs\/(\d+)\/jobs\?per_page=50$/.exec(path);
+    if (jobsOf) {
+      const n = jobs[Number(jobsOf[1])] ?? 0;
+      if (n < 0) return reply({ status: 403, body: { message: 'Resource not accessible' } });
+      return reply({
+        status: 200,
+        body: { jobs: Array.from({ length: n }, (_, i) => ({ name: `j${i}` })) },
+      });
+    }
     return reply({ status: 599, body: { message: `unrouted ${path}` } });
   }) as typeof fetch;
   return { fetchImpl, paths, reads: () => n };
 };
 
+const ENV = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: `${OWNER}/${REPO}` };
 function harness(
   lock: (n: number, now: number) => Answer | string | null,
   argv: string[] = ['dev'],
-  env: NodeJS.ProcessEnv = { GITHUB_TOKEN: 't', GITHUB_REPOSITORY: `${OWNER}/${REPO}` },
+  env: NodeJS.ProcessEnv = ENV,
+  runs: Runs = {},
 ) {
   const clock = fakeClock(T0);
-  const f = lockFetch(argv[0] ?? 'dev', lock, clock.now);
+  const f = lockFetch(argv[0] ?? 'dev', lock, clock.now, runs);
   const lines: string[] = [];
   const summaries: string[] = [];
   const go = () =>
@@ -153,7 +196,10 @@ describe('main-dev-wait', () => {
     expect(await h.go()).toBe(0);
     expect(h.reads()).toBe(1);
     expect(h.clock.t).toBe(T0);
-    expect(h.lines).toEqual(['dev lock probe: lane-x @ aaaaaaa — read with the job token']);
+    expect(h.lines).toEqual([
+      'dev lock probe: lane-x @ aaaaaaa, no taken time — read with the job token',
+      'wait-cap probe: no main Deploy runs listed — read with the job token',
+    ]);
   });
 
   it('--once warns, never fails, when the read fails', async () => {
@@ -216,5 +262,350 @@ describe('main-dev-wait', () => {
     }
     expect(status).toBe(1);
     expect(out).toContain('usage: main-dev-wait.ts <dev|devb> [--once]');
+  });
+});
+
+// The cap is shared by the merges a run carries (CI-BOT.md → A merge waits for the lock): tonight's shape (2026-11-17)
+// was one run waiting, four merges superseded while pending (cancelled, no jobs), and the newest carrying them all.
+describe('main-dev-wait: the cap counts from the oldest merge riding in the run', () => {
+  const SELF = 100;
+  const START = T0 + SETTLE_MS;
+  const RUN_ENV = { ...ENV, GITHUB_RUN_ID: String(SELF), GITHUB_RUN_ATTEMPT: '1' };
+  const tonight = () => [
+    mainRun(101, T0 - 1 * MIN, null, 'pending'), // the next merge, queued behind this run
+    mainRun(SELF, T0 - 12 * MIN, null, 'in_progress'),
+    mainRun(99, T0 - 15 * MIN, 'cancelled'),
+    mainRun(98, T0 - 25 * MIN, 'cancelled'),
+    mainRun(97, T0 - 30 * MIN, 'cancelled'),
+    mainRun(96, T0 - 31 * MIN, 'cancelled'),
+    mainRun(95, T0 - 32 * MIN, 'success'), // waited, then deployed: the queue starts after it
+    mainRun(94, T0 - 90 * MIN, 'cancelled'), // behind a finished run: never reached
+  ];
+  // taken long before any merge here and renewed ever since: the merge's hour is the cap
+  const held = (_n: number, now: number) => holder('lane-x', now + 40 * MIN, T0 - 180 * MIN);
+  const jobReads = (paths: string[]) =>
+    paths.flatMap((p) => /\/runs\/(\d+)\/jobs/.exec(p)?.[1] ?? []).map(Number);
+
+  it('cancelledBefore: the cancelled runs just before this one, newest first, in id order whatever the listing', () => {
+    const ids = (rs: Run[]) => rs.map((r) => r.id);
+    expect(ids(cancelledBefore(tonight(), SELF))).toEqual([99, 98, 97, 96]);
+    expect(ids(cancelledBefore(tonight().reverse(), SELF))).toEqual([99, 98, 97, 96]);
+    expect(
+      cancelledBefore([mainRun(99, T0, 'failure'), mainRun(98, T0, 'cancelled')], SELF),
+    ).toEqual([]);
+    expect(cancelledBefore([mainRun(99, T0, null, 'in_progress')], SELF)).toEqual([]);
+    expect(cancelledBefore([mainRun(101, T0, 'cancelled')], SELF)).toEqual([]);
+  });
+
+  it("deadlineOf: an hour from the later of the merge and the holder's taking, within [start + 15, start + 60]", () => {
+    const h = (expiresAt: number, takenAt?: number) => ({
+      branch: 'lane-x',
+      sha,
+      expiresAt: new Date(expiresAt).toISOString(),
+      ...(takenAt === undefined ? {} : { takenAt: new Date(takenAt).toISOString() }),
+    });
+    const at = (deadline: number, by: string) => ({ deadline, by });
+    expect(deadlineOf(null, START)).toEqual(at(START + CEILING_MS, 'start'));
+    expect(deadlineOf(null, START, h(START + 40 * MIN, START))).toEqual(
+      at(START + CEILING_MS, 'start'),
+    );
+    expect(deadlineOf(START - 10 * MIN, START)).toEqual(at(START + 50 * MIN, 'merge'));
+    expect(deadlineOf(START - 50 * MIN, START)).toEqual(at(START + FLOOR_MS, 'floor'));
+    expect(deadlineOf(START - 90 * MIN, START)).toEqual(at(START + FLOOR_MS, 'floor'));
+    // a runner clock behind GitHub's: a future merge or taking counts as the start
+    expect(deadlineOf(START + 5 * MIN, START)).toEqual(at(START + CEILING_MS, 'merge'));
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 40 * MIN, START + 5 * MIN))).toEqual(
+      at(START + CEILING_MS, 'taken'),
+    );
+    // taken after the merge: the lane's own hour
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 40 * MIN, START - 20 * MIN))).toEqual(
+      at(START + 40 * MIN, 'taken'),
+    );
+    // taken before the merge and renewed since: the merge's hour, or the floor
+    expect(deadlineOf(START - 10 * MIN, START, h(START + 40 * MIN, START - 90 * MIN))).toEqual(
+      at(START + 50 * MIN, 'merge'),
+    );
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 40 * MIN, START - 90 * MIN))).toEqual(
+      at(START + FLOOR_MS, 'floor'),
+    );
+    // an older bot's lock (no takenAt): its expiry as first read
+    expect(deadlineOf(START - 50 * MIN, START, h(START + 30 * MIN))).toEqual(
+      at(START + 30 * MIN, 'ttl'),
+    );
+    // a lapsed holder grants nothing
+    expect(deadlineOf(START - 50 * MIN, START, h(START - MIN, START - 5 * MIN))).toEqual(
+      at(START + FLOOR_MS, 'floor'),
+    );
+  });
+
+  it("gives up 60 min after the oldest superseded merge, not 60 after this run's own wait starts", async () => {
+    const h = harness(held, ['dev'], RUN_ENV, { runs: tonight() });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(T0 - 31 * MIN + CEILING_MS);
+    expect(jobReads(h.paths)).toEqual([99, 98, 97, 96]);
+    expect(h.lines).toContain(
+      'dev: cap 20:29 UTC — 60 min from the oldest merge riding here, ccccc96 at 19:29 UTC (4 superseded runs ride here)',
+    );
+    const warn = h.lines.find((l) => l.startsWith('::warning '));
+    expect(warn).toContain('dev deploy waited 29 min and went anyway');
+    expect(warn).toContain('ccccc96 at 19:29 UTC');
+    expect(h.summaries.join('')).toContain('mid-test');
+  });
+
+  it('stops the walk at a run cancelled with jobs (cancelled mid-run, not superseded)', async () => {
+    const h = harness(held, ['dev'], RUN_ENV, { runs: tonight(), jobs: { 98: 3 } });
+    expect(await h.go()).toBe(0);
+    expect(jobReads(h.paths)).toEqual([99, 98]);
+    expect(h.clock.t).toBe(T0 - 15 * MIN + CEILING_MS);
+    expect(h.lines).toContain(
+      'dev: cap 20:45 UTC — 60 min from the oldest merge riding here, ccccc99 at 19:45 UTC (1 superseded run rides here)',
+    );
+    expect(h.lines).toContain(
+      'dev: run 98 was cancelled after its jobs started — the queue riding here starts after it',
+    );
+  });
+
+  it('with nothing superseded, counts from its own merge', async () => {
+    const runs = [
+      mainRun(SELF, T0 - 5 * MIN, null, 'in_progress'),
+      mainRun(99, T0 - 9 * MIN, 'success'),
+    ];
+    const h = harness(held, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(jobReads(h.paths)).toEqual([]);
+    expect(h.clock.t).toBe(T0 + 55 * MIN);
+  });
+
+  it(`reads at most ${WALK_MAX} superseded runs' jobs, then waits from the oldest it read`, async () => {
+    const runs = [
+      mainRun(SELF, T0 - 2 * MIN, null, 'in_progress'),
+      ...Array.from({ length: 15 }, (_, i) => mainRun(99 - i, T0 - (3 + i) * MIN, 'cancelled')),
+    ];
+    const h = harness(held, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(jobReads(h.paths)).toHaveLength(WALK_MAX);
+    expect(h.clock.t).toBe(T0 - (3 + WALK_MAX - 1) * MIN + CEILING_MS);
+  });
+
+  it('a queue already past the cap still waits the 15-minute minimum for a held lock', async () => {
+    const runs = [
+      mainRun(SELF, T0 - 70 * MIN, null, 'in_progress'),
+      mainRun(99, T0 - 120 * MIN, 'cancelled'),
+    ];
+    const h = harness(held, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(START + FLOOR_MS);
+    expect(h.lines.find((l) => l.startsWith('::warning '))).toContain(
+      'the 15-minute minimum (the oldest merge riding here, ccccc99 at 18:00 UTC (1 superseded run rides here))',
+    );
+  });
+
+  it('a queue past the cap deploys quietly when the lock is free', async () => {
+    const runs = [mainRun(SELF, T0 - 120 * MIN, null, 'in_progress')];
+    const h = harness(() => null, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(h.lines.at(-1)).toBe('dev lock free — deploying');
+    expect(h.summaries).toEqual([]);
+  });
+
+  it(`a queue past the cap still gets ${MAX_ERRORS} tries at a failing lock read`, async () => {
+    const runs = [mainRun(SELF, T0 - 120 * MIN, null, 'in_progress')];
+    const h = harness(() => ({ status: 502 }), ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(h.reads()).toBe(MAX_ERRORS + 1); // the holder read before the wait, then the wait's own tries
+    expect(h.lines.some((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toBe(
+      true,
+    );
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev deploy could not'))).toContain(
+      'could not read its lock',
+    );
+  });
+
+  it('falls back to 60 min from its own start, with a warning, when the runs listing fails', async () => {
+    const h = harness(held, ['dev'], RUN_ENV, {
+      runs: { status: 403, body: { message: 'Resource not accessible' } },
+    });
+    expect(await h.go()).toBe(0);
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toContain(
+      '403',
+    );
+    expect(h.clock.t).toBe(START + CEILING_MS);
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev deploy waited'))).toContain(
+      'dev deploy waited 60 min and went anyway',
+    );
+  });
+
+  it('falls back, with a warning, when this run is not in the listing', async () => {
+    const h = harness(held, ['dev'], { ...RUN_ENV, GITHUB_RUN_ID: '555' }, { runs: tonight() });
+    expect(await h.go()).toBe(0);
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toContain(
+      "run 555 isn't among main's newest 30 Deploy runs",
+    );
+    expect(h.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it.each([
+    [
+      'a re-run',
+      { ...RUN_ENV, GITHUB_RUN_ATTEMPT: '2' },
+      "dev: a re-run — the cap counts from this wait's start",
+    ],
+    ['no run id', ENV, "dev: no GITHUB_RUN_ID — the cap counts from this wait's start"],
+    [
+      'a garbled run id',
+      { ...RUN_ENV, GITHUB_RUN_ID: '12abc' },
+      "dev: no GITHUB_RUN_ID — the cap counts from this wait's start",
+    ],
+    [
+      'no run attempt',
+      { ...ENV, GITHUB_RUN_ID: String(SELF) },
+      "dev: no GITHUB_RUN_ATTEMPT — the cap counts from this wait's start",
+    ],
+  ])('%s: never lists runs, and counts 60 min from its own start', async (_name, env, line) => {
+    const h = harness(held, ['dev'], env, { runs: tonight() });
+    expect(await h.go()).toBe(0);
+    expect(h.paths.some((p) => p.includes('/actions/'))).toBe(false);
+    expect(h.lines).toContain(line);
+    expect(h.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it("neutralises a hostile run's head_sha in every line", async () => {
+    const runs = tonight().map((r) => (r.id === 96 ? { ...r, head_sha: 'x\n::error::pwned' } : r));
+    const h = harness(held, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    for (const l of [...h.lines, ...h.summaries]) {
+      expect(l).not.toContain('::error');
+      expect(l).not.toContain('pwned');
+    }
+    expect(h.lines).toContain(
+      'dev: cap 20:29 UTC — 60 min from the oldest merge riding here, ??????? at 19:29 UTC (4 superseded runs ride here)',
+    );
+  });
+
+  it("--once also lists main's runs and says what the newest would wait from", async () => {
+    const h = harness(() => null, ['devb', '--once'], ENV, { runs: tonight() });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(T0);
+    expect(h.lines).toEqual([
+      'devb lock probe: free — read with the job token',
+      "wait-cap probe: 8 main Deploy runs listed; cccc100's run would wait from ccccc96's merge at 2026-11-17T19:29Z, 4 superseded riding — read with the job token",
+    ]);
+  });
+
+  it('--once names a walk stopped at a run cancelled with jobs, and anchors the newest run when none has a cancelled predecessor', async () => {
+    const h = harness(() => null, ['dev', '--once'], ENV, { runs: tonight(), jobs: { 99: 2 } });
+    expect(await h.go()).toBe(0);
+    expect(h.lines[1]).toContain(
+      '0 superseded riding, walk stopped at run 99 (cancelled with jobs)',
+    );
+    const plain = harness(() => null, ['dev', '--once'], ENV, {
+      runs: [mainRun(7, T0 - MIN, 'success'), mainRun(6, T0 - 9 * MIN, 'success')],
+    });
+    expect(await plain.go()).toBe(0);
+    expect(plain.lines[1]).toContain("cccccc7's run would wait from cccccc7's merge");
+  });
+
+  it('a lane that took the lock after the merge gets its own hour from taking it', async () => {
+    const lane = (_n: number, now: number) => holder('lane-y', now + 40 * MIN, T0 - 5 * MIN);
+    const h = harness(lane, ['dev'], RUN_ENV, { runs: tonight() });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(T0 + 55 * MIN);
+    expect(h.lines).toContain(
+      'dev: cap 20:55 UTC — 60 min from lane-y @ aaaaaaa taking the lock at 19:55 UTC (after the oldest merge riding here, ccccc96 at 19:29 UTC (4 superseded runs ride here))',
+    );
+    expect(h.lines.find((l) => l.startsWith('::warning '))).toContain(
+      'a turn held past an hour after its taking',
+    );
+  });
+
+  it("an older bot's lock (no taken time) gets its expiry as first read", async () => {
+    const h = harness((_n, now) => holder('lane-z', now + 40 * MIN), ['dev'], RUN_ENV, {
+      runs: tonight(),
+    });
+    expect(await h.go()).toBe(0);
+    expect(h.clock.t).toBe(START + 40 * MIN);
+    expect(h.lines).toContain(
+      "dev: cap 20:40 UTC — lane-z @ aaaaaaa's lock expiry as first read (no taken time on it; the oldest merge riding here, ccccc96 at 19:29 UTC (4 superseded runs ride here))",
+    );
+  });
+
+  it("a failed holder read before the wait counts from the start: it can't tell a lane's fresh turn", async () => {
+    const h = harness(
+      (n, now) => (n === 0 ? { status: 502 } : holder('lane-y', now + 40 * MIN, T0 - 5 * MIN)),
+      ['dev'],
+      RUN_ENV,
+      { runs: tonight() },
+    );
+    expect(await h.go()).toBe(0);
+    expect(
+      h.lines.some(
+        (l) =>
+          l.startsWith('::warning title=dev wait cap fell back::the holder read failed (') &&
+          l.endsWith("the cap counts 60 min from this wait's start"),
+      ),
+    ).toBe(true);
+    expect(h.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it('--once prints when the lock was taken, as the job token reads it back', async () => {
+    const h = harness(
+      (_n, now) => holder('lane-x', now + 40 * MIN, T0 - 12 * MIN),
+      ['dev', '--once'],
+      ENV,
+      { runs: tonight() },
+    );
+    expect(await h.go()).toBe(0);
+    expect(h.lines[0]).toBe(
+      'dev lock probe: lane-x @ aaaaaaa, taken 2026-11-17T19:48Z — read with the job token',
+    );
+  });
+
+  it('--once gives up on a hung API within its budget, and still exits 0', async () => {
+    const hung = ((_url: string | URL, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        const stop = () => reject(new Error('aborted: probe budget'));
+        if (init?.signal?.aborted)
+          stop(); // as fetch does with a signal already spent
+        else init?.signal?.addEventListener('abort', stop);
+      })) as typeof fetch;
+    const lines: string[] = [];
+    const code = await run({
+      argv: ['dev', '--once'],
+      env: ENV,
+      fetchImpl: hung,
+      clock: fakeClock(T0),
+      log: (l) => lines.push(l),
+      summary: () => undefined,
+      probeMs: 50,
+    });
+    expect(code).toBe(0);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^::warning title=dev lock probe failed::/);
+    expect(lines[1]).toMatch(/^::warning title=wait-cap probe failed::/);
+  });
+
+  it("falls back, with a warning, when a superseded run's jobs read fails mid-walk", async () => {
+    const f = harness(held, ['dev'], RUN_ENV, { runs: tonight(), jobs: { 98: -1 } });
+    expect(await f.go()).toBe(0);
+    expect(f.lines.find((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toContain(
+      '403',
+    );
+    expect(f.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it('falls back, with a warning, on a created_at that will not parse', async () => {
+    const runs = tonight().map((r) => (r.id === 96 ? { ...r, created_at: 'soon' } : r));
+    const h = harness(held, ['dev'], RUN_ENV, { runs });
+    expect(await h.go()).toBe(0);
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toContain(
+      'run 96 has no readable created_at',
+    );
+    expect(h.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it('--once warns, never fails, when the runs listing fails', async () => {
+    const h = harness(() => null, ['dev', '--once'], ENV, { runs: { status: 403 } });
+    expect(await h.go()).toBe(0);
+    expect(h.lines[1]).toMatch(/^::warning title=wait-cap probe failed::.*403/);
   });
 });

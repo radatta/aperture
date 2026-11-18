@@ -78,6 +78,7 @@ describe('dev lock', () => {
       branch: 'ci-bot',
       sha: SHA,
       expiresAt: new Date(NOW + TTL_MS).toISOString(),
+      takenAt: new Date(NOW).toISOString(), // main's wait counts the holder's turn from it
     });
     expect(g.holder()).toEqual(h);
     expect(g.calls.find((c) => c.method === 'POST' && c.path.endsWith('/git/refs'))?.body).toEqual({
@@ -106,6 +107,25 @@ describe('dev lock', () => {
     const h = await acquire(g.api, 'ci-bot', SHA, NOW);
     expect(g.holder()).toEqual(h);
     expect(h.expiresAt).toBe(new Date(NOW + TTL_MS).toISOString());
+  });
+
+  it('re-acquiring its own live lock keeps when it was taken; a lapsed one is a fresh take', async () => {
+    const taken = new Date(NOW - 50 * 60_000).toISOString();
+    const g = github({ ...live('ci-bot'), takenAt: taken });
+    const h = await acquire(g.api, 'ci-bot', SHA, NOW);
+    expect(h.takenAt).toBe(taken); // a redeploy never restarts the turn main's wait counts from
+    expect(h.expiresAt).toBe(new Date(NOW + TTL_MS).toISOString());
+    expect(g.holder()).toEqual(h);
+    const lapsed = github({ ...expired('ci-bot'), takenAt: taken });
+    expect((await acquire(lapsed.api, 'ci-bot', SHA, NOW)).takenAt).toBe(
+      new Date(NOW).toISOString(),
+    );
+    const garbled = github({ ...live('ci-bot'), takenAt: 'soon' }); // never kept: a fresh take
+    expect((await acquire(garbled.api, 'ci-bot', SHA, NOW)).takenAt).toBe(
+      new Date(NOW).toISOString(),
+    );
+    const old = github(live('ci-bot')); // an older bot's lock: no takenAt to keep
+    expect((await acquire(old.api, 'ci-bot', SHA, NOW)).takenAt).toBe(new Date(NOW).toISOString());
   });
 
   it('loses the race when someone else re-takes it between attempts', async () => {
@@ -144,6 +164,16 @@ describe('dev lock', () => {
     const h = await renew(g.api, 'ci-bot', NOW + 5 * 60_000);
     expect(h.expiresAt).toBe(new Date(NOW + 5 * 60_000 + TTL_MS).toISOString());
     await expect(renew(g.api, 'dev-e2e', NOW)).rejects.toThrow(/does not hold/);
+  });
+
+  it('a renew keeps when the lock was taken, and a lock without it (an older bot) still reads', async () => {
+    const taken = new Date(NOW - 30 * 60_000).toISOString();
+    const g = github({ ...live('ci-bot'), takenAt: taken });
+    const h = await renew(g.api, 'ci-bot', NOW + 5 * 60_000);
+    expect(h.takenAt).toBe(taken);
+    expect(g.holder()).toEqual(h);
+    const old = github(live('ci-bot'));
+    expect((await renew(old.api, 'ci-bot', NOW)).takenAt).toBeUndefined();
   });
 
   it('never revives a lapsed lock: a merge may already be deploying there', async () => {
