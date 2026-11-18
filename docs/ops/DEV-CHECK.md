@@ -148,10 +148,32 @@ cloudformation describe-stacks --profile aperture-dev --region us-west-1 --stack
 "$id" >> .secrets/devcheck.dev.env && chmod 600 .secrets/devcheck.dev.env` (one line; a recreated dev stack
    means removing the old line and rerunning it).
    1b. **The browser lane's user** (slot A only; _Two users_). The same kind of user, `identifiers.json` →
-   `email.devTestUserWeb`, made by the same kind of operator line against dev's pool (under the break-glass profile: the freeze denies `AdminCreateUser` to every other principal, `cdk/src/lib/org-stack.ts`), writing
+   `email.devTestUserWeb`, made in dev's pool under the `aperture-dev` break-glass profile (the freeze denies
+   `AdminCreateUser` to every other principal, `cdk/src/lib/org-stack.ts`), writing
    `.secrets/devcheck.dev.web.env` with all seven keys (the claude client's included: the append line above writes
-   only the original user's file). Until it exists, slot A runs
-   one user. One more user in the pool costs nothing: Cognito's free tier on the Lite and Essentials plans is
+   only the original user's file). On the Mac, one line (`<email>` is `email.devTestUserWeb`): `cd <mac-repo> &&
+test -e .secrets/devcheck.dev.web.env && echo 'already there, not overwritten' || ( em=<email> && acct=$(aws sts
+get-caller-identity --profile aperture-dev --query Account --output text) && pool=$(aws cloudformation
+describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureData-dev --query
+"Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) && client=$(aws cloudformation
+describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureApp-dev --query
+"Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) && claude=$(aws cloudformation
+describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureApp-dev --query
+"Stacks[0].Outputs[?OutputKey=='McpClientId'].OutputValue" --output text) && [ -n "$pool" ] && [ -n "$client" ] &&
+[ -n "$claude" ] && { aws cognito-idp admin-get-user --profile aperture-dev --region us-west-1 --user-pool-id
+"$pool" --username "$em" >/dev/null 2>&1 || aws cognito-idp admin-create-user --profile aperture-dev --region
+us-west-1 --user-pool-id "$pool" --username "$em" --message-action SUPPRESS --user-attributes Name=email,Value="$em"
+Name=email_verified,Value=true >/dev/null; } && pw="$(openssl rand -base64 24)Aa1_" && printf
+'{"UserPoolId":"%s","Username":"%s","Password":"%s","Permanent":true}' "$pool" "$em" "$pw" | aws cognito-idp
+admin-set-user-password --profile aperture-dev --region us-west-1 --cli-input-json file:///dev/stdin && sub=$(aws
+cognito-idp admin-get-user --profile aperture-dev --region us-west-1 --user-pool-id "$pool" --username "$em" --query
+"UserAttributes[?Name=='sub'].Value" --output text) && umask 077 && printf
+'DEVCHECK_EMAIL=%s\nDEVCHECK_PASSWORD=%s\nDEVCHECK_SUB=%s\nDEVCHECK_COGNITO_HOST=%s\nDEVCHECK_CLIENT_ID=%s\nDEVCHECK_POOL_ID=%s\nDEVCHECK_CLAUDE_CLIENT_ID=%s\n'
+"$em" "$pw" "$sub" "aperture-dev-$acct.auth.us-west-1.amazoncognito.com" "$client" "$pool" "$claude" >
+.secrets/devcheck.dev.web.env && echo done )`. It refuses an existing file, reuses a user a failed earlier try
+   made, keeps the password off every argv (zsh's builtin `printf` into stdin; `_` is the guaranteed symbol, `!`
+   would trip zsh) and prints nothing secret; the subshell keeps `umask` and `pw` out of the operator's shell.
+   Until the file exists, slot A runs one user. One more user in the pool costs nothing: Cognito's free tier on the Lite and Essentials plans is
    10,000 monthly active users with no end date ([pricing](https://aws.amazon.com/cognito/pricing/); the pool sets
    no feature plan, so never Plus), the admin calls that create it carry no charge, and the claude client signs in
    with a code and PKCE, not the paid machine-to-machine grant. It needs no Keychain item: the Simulator stays the
