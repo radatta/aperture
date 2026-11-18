@@ -1,6 +1,10 @@
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { deployDev, deployTitle } from './deploy-dev.ts';
 import { MainPending } from './lock.ts';
+import { lockLog } from './lock-events.ts';
 import { fakeApi, fakeClock, fakeRun, ghError } from './fakes.ts';
 import type { Call } from './fakes.ts';
 
@@ -336,6 +340,39 @@ describe('deployDev', () => {
       throw new Error('board gone');
     });
     expect(r.conclusion).toBe('success');
+  });
+
+  // cli.ts wires onLock to the board's devlock events (lock-events.ts): one acquired however many renews.
+  it('through the devlock log: one acquired despite renews; a failed run adds its released', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'deploy-events-'));
+    const rows = () =>
+      readdirSync(join(dir, 'history')).flatMap((f) =>
+        readFileSync(join(dir, 'history', f), 'utf8')
+          .split('\n')
+          .filter(Boolean)
+          .map((l) => JSON.parse(l)),
+      );
+    const clock = fakeClock();
+    const log = lockLog(dir, clock.now);
+    const ok = github(clock, 40, 'success'); // long enough for a renew while it waits
+    await deployDev(repo().run, ok.api, clock, quiet, (h, slot) =>
+      log.changed(h, slot, 'deploy-dev'),
+    );
+    expect(rows().map((r) => [r.action, r.slot, r.waitSec])).toEqual([['acquired', 'dev', 0]]);
+
+    const bad = github(clock, 5, 'failure');
+    const log2 = lockLog(dir, clock.now);
+    await deployDev(repo().run, bad.api, clock, quiet, (h, slot) =>
+      log2.changed(h, slot, 'deploy-dev'),
+    ).catch(() => undefined);
+    expect(
+      rows()
+        .slice(1)
+        .map((r) => [r.action, r.heldSec ?? null, r.by ?? null]),
+    ).toEqual([
+      ['acquired', null, null],
+      ['released', expect.any(Number), 'deploy-dev'],
+    ]);
   });
 
   it('reports a release as null, and nothing when the release itself fails', async () => {

@@ -61,6 +61,35 @@ describe('rollup', () => {
   ];
   const r = rollup(samples, events, since);
 
+  it('ignores the bot’s devlock rows (lock-events.ts), in the jobs and the barriers alike', () => {
+    const devlock = [
+      {
+        v: 1,
+        t: '2026-10-13T12:00:00Z',
+        kind: 'devlock',
+        action: 'wait-start',
+        name: 's',
+        branch: 'b',
+        slots: ['dev'],
+      },
+      {
+        v: 1,
+        t: '2026-10-13T12:10:00Z',
+        kind: 'devlock',
+        action: 'acquired',
+        name: 's',
+        branch: 'b',
+        slot: 'dev',
+        waitSec: 600,
+      },
+    ] as unknown as JobEvent[];
+    const now = new Date('2026-10-14T00:00:00Z');
+    expect(rollup(samples, [...events, ...devlock], since, now)).toEqual(
+      rollup(samples, events, since, now),
+    );
+    expect(barriers([...events, ...devlock], since, now)).toEqual(barriers(events, since, now));
+  });
+
   it('buckets ticks by mix, most common first, inside the window', () => {
     expect(r.ticks).toBe(5);
     expect(r.gaps).toBe(1);

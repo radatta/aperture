@@ -7,6 +7,7 @@ import {
   TTL_MS,
   acquire,
   acquireSlot,
+  heldLock,
   heldSlot,
   lockRef,
   parseWaitMax,
@@ -304,6 +305,42 @@ describe('lock wait', () => {
     const r = await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN });
     expect(r.outcome).toBe('free');
     expect(clock.t).toBe(NOW + 106_000); // 0, 30, 46 (502), 76 (502), 106
+  });
+
+  it('onBlocked fires once, on the first read that finds nothing open, and never on an immediate free or ours', async () => {
+    const clock = fakeClock(NOW);
+    const g = timeline(clock, (t) => (t < NOW + 70_000 ? until('flux', 30 * MIN) : null));
+    const seen: string[][] = [];
+    const onBlocked = (r: { slot: string; cur: { holder: Holder | null } | null }[]) =>
+      void seen.push(r.map((x) => `${x.slot}:${x.cur?.holder?.branch ?? '-'}`));
+    expect(
+      (await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN, onBlocked })).outcome,
+    ).toBe('free');
+    expect(seen).toEqual([['dev:flux']]);
+    const free = timeline(clock, () => null);
+    await waitForLock(free.api, 'ci-bot', clock, { maxMs: 45 * MIN, onBlocked });
+    const ours = timeline(clock, () => until('ci-bot', 30 * MIN));
+    await waitForLock(ours.api, 'ci-bot', clock, { maxMs: 45 * MIN, onBlocked });
+    expect(seen).toHaveLength(1);
+    const from = clock.t;
+    const boom = timeline(clock, (t) => (t < from + 30_000 ? until('flux', 30 * MIN) : null));
+    const r = await waitForLock(boom.api, 'ci-bot', clock, {
+      maxMs: 45 * MIN,
+      onBlocked: () => {
+        throw new Error('board gone');
+      },
+    });
+    expect(r.outcome).toBe('free'); // a throwing hook never ends the wait
+  });
+
+  it('heldLock returns the slot and its holder; heldSlot the slot alone', async () => {
+    const g = github(live('flux'));
+    expect(await heldLock(g.api, 'flux')).toMatchObject({
+      slot: 'dev',
+      holder: { branch: 'flux' },
+    });
+    expect(await heldSlot(g.api, 'flux')).toBe('dev');
+    expect(await heldLock(g.api, 'other')).toBeNull();
   });
 
   it('an unreadable holder counts as expired', async () => {
