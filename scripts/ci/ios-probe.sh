@@ -17,8 +17,8 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 variant() {
   case "$SHARD" in
     1) echo "restore card nohub,light,hostlog,taplanded" ;;
-    2) echo "restore card nohub,light,hostlog,taplanded" ;;
-    *) echo "restore card nohub,light,hostlog,taplanded" ;;
+    2) echo "restore card nohub,light,hostlog,simlog,taplanded" ;;
+    *) echo "restore card nohub,light,taplanded" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -353,6 +353,16 @@ s_hostlog() {
   case ",$OPTS," in *,hostlog,*) ;; *) note "hostlog off"; return 0 ;; esac
   if cap 20 sudo -n launchctl bootout system/com.apple.diagnosticd >/dev/null 2>&1; then note "host diagnosticd booted out"; else note "host diagnosticd bootout refused"; fi
   note "diagnosticd now: $(pgrep -lf diagnosticd | cut -c1-200 | tr '\n' ';')"
+  return 0
+}
+# simlog (run 19): the sim's own diagnosticd (run 18: sim:diagnosticd ~15% at the card), disabled and booted out
+# inside the sim: the one logging knob the Mac could take too (in-sim only; never the Mac's host logging).
+s_simlog() {
+  case ",$OPTS," in *,simlog,*) ;; *) note "simlog off"; return 0 ;; esac
+  local e
+  cap 30 xcrun simctl spawn "$U" launchctl disable system/com.apple.diagnosticd >/dev/null 2>&1 || note "sim disable refused"
+  if e="$(cap 30 xcrun simctl spawn "$U" launchctl bootout system/com.apple.diagnosticd 2>&1)"; then note "sim diagnosticd booted out"
+  else note "sim bootout refused: $(printf '%s' "$e" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-100)"; fi
   return 0
 }
 s_boot_wait() {
@@ -879,6 +889,7 @@ step env s_env # beside the boot
 step axe-install s_axe_install
 step boot s_boot_wait
 step device-hub s_hub
+step simlog s_simlog
 step quiet s_quiet # run 16: didn't pay; kept so a `quiet` variant still means something
 procs after-boot
 # A rows shard leaves the readiness tree, the icon and the launch to sim.sh's own `launch` op (the same reads).
