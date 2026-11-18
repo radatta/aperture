@@ -71,9 +71,10 @@ export interface Step {
 export const BUDGET = 10;
 // A narrow gate is uncapped, so it stays near the sequential gate's peak: one 4-worker package beside tsc and eslint.
 export const NARROW_BUDGET = 6;
-// scripts' tests spawn shells and CLIs: ~216 threads and ~2 GB at its 2 workers (2026-11-17 replay), an app run's
-// weight. Costed so, it never overlaps app and extension together, nor app in a narrow gate.
-export const SCRIPTS_COST = 4;
+// scripts' tests spawn shells and CLIs: ~220 threads and ~2.2 GB at its 2 workers, an app run's weight (2026-11-17
+// replay: the two together made a wide gate's tree 7 GB against a suite's ≤ 5.2). Costed one past what app leaves
+// free, it never runs beside app; in a narrow gate it runs alone.
+export const SCRIPTS_COST = BUDGET - 4 + 1; // 4 = WIDE_WORKERS.app (a test pins it)
 // A wide gate's vitest workers per package, app the long pole. A narrow one keeps the container cap (4).
 export const WIDE_WORKERS: Record<string, number> = {
   app: 4,

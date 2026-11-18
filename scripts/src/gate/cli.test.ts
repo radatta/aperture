@@ -211,6 +211,8 @@ describe('steps', () => {
     for (const pkg of PACKAGES) expect(WIDE_WORKERS[pkg.dir], pkg.dir).toBeGreaterThan(0);
     expect(WIDE_WORKERS.app).toBe(Math.max(...Object.values(WIDE_WORKERS)));
     expect(WIDE_WORKERS.scripts).toBe(2);
+    expect(SCRIPTS_COST).toBe(BUDGET - WIDE_WORKERS.app + 1); // never beside app
+    expect(SCRIPTS_COST).toBeGreaterThan(NARROW_BUDGET); // alone in a narrow gate
   });
 
   it('NARROW_WORKERS is the container cap heavy.sh gives a plain suite (limits.json)', () => {
@@ -481,7 +483,9 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
   });
 
   it('the outer run: a signal to the gate is passed on to heavy.sh, and the gate exits 128+n', async () => {
-    const { dir, f } = stub(`trap 'echo got >${'${0%/*}'}/term; kill $!; exit 0' TERM; sleep 30 & wait`);
+    const { dir, f } = stub(
+      `trap 'echo got >${'${0%/*}'}/term; kill $!; exit 0' TERM; sleep 30 & wait`,
+    );
     let fire!: (sig: NodeJS.Signals, code: number) => void;
     let removed = false;
     const p = spawnOuter(
@@ -581,10 +585,11 @@ describe('main', () => {
       env: INNER,
     });
     await flush();
-    expect([...kids.keys()].sort()).toEqual(['lint', 'test-fast:scripts', 'typecheck']);
-    kids.get('test-fast:scripts')!.finish(2); // finishes first, but comes later in the order
+    expect([...kids.keys()].sort()).toEqual(['lint', 'typecheck']); // scripts runs alone in a narrow gate
     kids.get('lint')!.finish(1);
     kids.get('typecheck')!.finish(0);
+    await flush();
+    kids.get('test-fast:scripts')!.finish(2); // finishes last, and comes last in the order
     expect(await p).toBe(1);
     expect(out.join('\n')).not.toMatch(/changed path/);
     expect(out.at(-1)).toMatch(
@@ -612,7 +617,7 @@ describe('main', () => {
     kids.get('typecheck')!.finish(0);
     kids.get('lint')!.finish(0);
     await flush();
-    expect(started).toHaveLength(3); // 2 free, scripts costs 4
+    expect(started).toHaveLength(3); // scripts runs alone
     kids.get('test-fast:app')!.finish(0);
     await flush();
     expect(started.at(-1)).toBe('test-fast:scripts');
@@ -651,7 +656,7 @@ describe('main', () => {
     await flush();
     fire('SIGINT', 130);
     expect(await p).toBe(130);
-    expect(kids.length).toBe(3);
+    expect(kids.length).toBe(2); // scripts never started
     expect(kids.every((c) => c.stopped)).toBe(true);
     expect(removed).toBe(true);
   });

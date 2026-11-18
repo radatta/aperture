@@ -45,8 +45,9 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
      (`NARROW_BUDGET`: one 4-worker package beside tsc and eslint, near the sequential gate's peak, since a narrow
      gate is uncapped).
      - A test step costs its workers; typecheck and lint cost 1 each, since `tsc -b` and eslint are single-threaded.
-     - Scripts costs 4 (`SCRIPTS_COST`) at its 2 workers. Its tests spawn shells and CLIs, ~216 threads and ~2 GB, an
-       app run's weight. So it never runs beside app and extension together, nor beside app in a narrow gate.
+     - Scripts costs 7 (`SCRIPTS_COST`, one more than app leaves free) at its 2 workers. Its tests spawn shells and
+       CLIs, ~220 threads and ~2.2 GB, an app run's weight; beside app, a replayed wide gate's process tree reached
+       7 GB against a suite's 5.2 at most. So it never runs beside app, and in a narrow gate it runs alone.
    - **Start order:** longest first, a smaller step filling any gap: app, extension, typecheck, lint, cdk, lambdas,
      shared, and scripts last.
    - **Workers:** a wide gate uses `WIDE_WORKERS` (app 4; extension, lambdas, cdk and scripts 2; shared 1). A narrow
