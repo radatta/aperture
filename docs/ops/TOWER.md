@@ -260,8 +260,9 @@ and what the maintainer must do.
 | BUILDING · WAITING · NEXT FOR DEV · NEEDS YOU · READY · ON dev? | anything else: the lane file's phase and step; with no lane file, the queue's own `state` and its `waitingOn`                                                                                                                                                          |
 | PR (opened)                                                     | no lane file, and the queue says `pr-open` (the PR is open, its checks not green yet) before the PR list shows it; once it does, the PR rows above win                                                                                                                 |
 
-**The automatic HOLD** (`holdReason`, first match wins). A main merge redeploys dev over a dispatched branch
-(CI-BOT.md → _Dev deploys_), so:
+**The automatic HOLD** (`holdReason`, first match wins). A main merge used to redeploy dev over a dispatched branch;
+it now waits for the slot's lock (CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_), so a HOLD below costs only
+time — the rules stay until that wait has been seen working on main (a follow-up relaxes them):
 
 1. the `dev` lock is unknown: no cache, a failed or stale refresh (over 5 min), an unreadable expiry;
 2. another branch holds a live `dev` lock;

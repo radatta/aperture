@@ -11,6 +11,7 @@ import { DispatchRejected, dispatchAndWait, listJobs, listRuns } from './dispatc
 import { featureBranch, requirePushed, runKey } from './git.ts';
 import { iosFiles } from './ios-routing.ts';
 import { acquireSlot, release, renew } from './lock.ts';
+import { mainPendingGuard } from './main-pending.ts';
 import type { Holder, Slot } from './lock.ts';
 import type { Run as Sh } from './sh.ts';
 
@@ -64,12 +65,13 @@ const JOBS: Record<Slot, { main: string; dispatched: string }> = {
 
 // What dev serves now, so the workflow classifies the change against it. Judged by the dev-stack JOB (when it
 // finished, how), not the run — a main run finishes with prod, long after dev. The newest deciding dev job wins:
-// main's → '' (diff vs main); a dispatch's → its sha. Anything uncertain — a dev job still running, a failed one
+// main's → the sha that job deployed (head_sha) — never main's head, which a merge still in flight (queued, checking,
+// waiting for a lane's lock: main-pending.ts) or one that never landed (a red check) hasn't put there; a dispatch's →
+// its sha. Anything uncertain — a dev job still running, a failed one
 // (a half-applied stack), history beyond the page, an unparsable title, an API error — is 'unknown' → full
 // deploy: a wrong 'app' would leave another branch's infra on dev.
-// Slot B differs in two ways: main's lane deploys it only on a shape change (in full), so a main job's base is the sha
-// it deployed (head_sha), not '' (main's head — devb's code may be older); and a slot B with no deploy at all is
-// 'unknown' (its first dispatch creates it in full). No `dev` branch push ever deployed devb.
+// Slot B differs: a slot B with no deploy at all is 'unknown' (its first dispatch creates it in full); slot A with no
+// deploy in reach of a short history is '' (diff vs main). No `dev` branch push ever deployed devb.
 export async function currentBase(api: Api, slot: Slot = 'dev'): Promise<string> {
   try {
     const jobs = JOBS[slot];
@@ -91,7 +93,7 @@ export async function currentBase(api: Api, slot: Slot = 'dev'): Promise<string>
     const last = at(dispatched) > at(main) ? dispatched : main;
     if (!last) return slot === 'dev' ? '' : 'unknown';
     if (last.job.conclusion !== 'success') return 'unknown';
-    if (last === main) return slot === 'dev' ? '' : (last.run.head_sha ?? 'unknown');
+    if (last === main) return last.run.head_sha ?? 'unknown';
     return TITLE_RE.exec(last.run.display_title)?.[1] ?? 'unknown';
   } catch {
     return 'unknown';
@@ -144,19 +146,26 @@ export async function deployDev(
     log(
       `${branch} touches iOS paths (${ios.slice(0, 3).join(', ')}${ios.length > 3 ? ', …' : ''}) — the Simulator is slot A's, so this deploy goes to dev, never devb (a held dev means \`lock wait\`, even with devb free)`,
     );
-  const took = await acquireSlot(api, branch, sha, clock.now(), only, ios);
+  // Refused a slot main's Deploy run is still to land on, unless this branch is its live holder (main-pending.ts).
+  const took = await acquireSlot(api, branch, sha, clock.now(), only, ios, mainPendingGuard(api));
   slot = took.slot;
   let holder = took.holder;
   lockChanged(holder);
   log(`${slot} lock: ${branch} until ${holder.expiresAt}`);
-  // Renewal starts with 15 minutes left, so a transient failure just retries on the next poll.
+  // Renewal starts with 15 minutes left, so a transient failure just retries on the next poll. A lapsed lock can't be
+  // renewed (a merge's wait may already be deploying there: lock.ts → renew), so it stops trying and says so once.
+  const lapsed = () => Date.parse(holder.expiresAt) <= clock.now();
+  let gaveUp = false;
   const keepLock = async () => {
-    if (Date.parse(holder.expiresAt) - clock.now() >= RENEW_BELOW_MS) return;
+    if (gaveUp || Date.parse(holder.expiresAt) - clock.now() >= RENEW_BELOW_MS) return;
     try {
       holder = await renew(api, branch, clock.now(), slot);
       lockChanged(holder);
     } catch (err) {
-      log(`${slot} lock renewal failed (${(err as Error).message}) — retrying on the next poll`);
+      gaveUp = lapsed();
+      log(
+        `${slot} lock renewal failed (${(err as Error).message}) — ${gaveUp ? 'the lock lapsed; `pnpm bot lock acquire` takes it back after the deploy' : 'retrying on the next poll'}`,
+      );
     }
   };
   let run: Run;
@@ -182,7 +191,9 @@ export async function deployDev(
       throw new Error(`${err.message} — no run started; lock released`, { cause: err });
     }
     throw new Error(
-      `${(err as Error).message} — ${slot} lock left to expire at ${holder.expiresAt} (the run may still be deploying)`,
+      lapsed()
+        ? `${(err as Error).message} — ${slot} lock lapsed at ${holder.expiresAt} (the run may still be deploying); \`pnpm bot lock acquire --slot ${slot}\` re-takes it once the run ends`
+        : `${(err as Error).message} — ${slot} lock left to expire at ${holder.expiresAt} (the run may still be deploying)`,
       { cause: err },
     );
   }
@@ -202,7 +213,9 @@ export async function deployDev(
     );
   }
   log(
-    `${slot} now serves ${sha} (build marker APERTURE_BUILD_SHA). Lock held until ${holder.expiresAt} — \`pnpm bot lock release\` after the devcheck, \`pnpm bot lock renew\` to extend; \`pnpm devcheck\` aims at ${slot} because this branch holds its lock.`,
+    lapsed()
+      ? `${slot} now serves ${sha} (build marker APERTURE_BUILD_SHA), but this branch's lock lapsed and a merge may deploy there — \`pnpm bot deploy-dev\` again before the devcheck (it re-takes the lock and redeploys if main landed).`
+      : `${slot} now serves ${sha} (build marker APERTURE_BUILD_SHA). Lock held until ${holder.expiresAt} — \`pnpm bot lock release\` after the devcheck, \`pnpm bot lock renew\` to extend; \`pnpm devcheck\` aims at ${slot} because this branch holds its lock.`,
   );
   return run;
 }

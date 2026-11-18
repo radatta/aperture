@@ -16,6 +16,7 @@ import type { Spec } from './help.ts';
 import { iosFiles } from './ios-routing.ts';
 import {
   LockHeld,
+  MainPending,
   SLOTS,
   acquireSlot,
   formatStatus,
@@ -30,6 +31,7 @@ import {
 } from './lock.ts';
 import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
+import { mainPendingGuard, pendingMainDeploy } from './main-pending.ts';
 import { fetchLogs, refuseIdentifiers } from './logs.ts';
 import { pruneBranches } from './prune.ts';
 import { push } from './push.ts';
@@ -41,13 +43,15 @@ import type { Permissions } from './token.ts';
 export const USAGE = `pnpm bot <command>   (-h / --help on any command: its usage; nothing runs)
   push [--after-rebase]          push the current feature branch as the bot (--after-rebase: lease on the last push)
   deploy-dev                     take a dev slot's lock (the one this branch holds, else dev, else devb) + deploy
-                                 this pushed commit there; the lock stays held for the devcheck
+                                 this pushed commit there; the lock stays held for the devcheck. A slot main's
+                                 Deploy run is still to land on is refused, unless this branch holds it live
   lock status                    both slots' locks (dev = slot A, devb = slot B)
   lock acquire [--slot dev|devb] take a lock (by default as deploy-dev would; --slot names one)
   lock renew|release             the lock this branch holds, whichever slot
   lock wait [--max MIN] [--any | --slot devb]
-                                 block until another branch's lock frees or expires — slot A by default, either with
-                                 --any (default 45 min, at most 55); exit 75 if still held — run it in the background
+                                 block until another branch's lock frees or expires and main's Deploy run isn't still
+                                 to land there — slot A by default, either with --any (default 45 min, at most 55);
+                                 exit 75 if still held — run it in the background
   logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,coach-worker,bff-devb,…] [--filter P] [--query Q]
   run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
   run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs
@@ -109,23 +113,27 @@ const hubName = (): string | undefined => {
   }
 };
 
-async function lockWait(
+// `lock wait`, exported with its branch and clock injectable so a test drives it against a scripted GitHub.
+export async function lockWait(
   api: Api,
   flags: Record<string, string>,
   dir: string | null,
   cache: (h: Holder | null, slot: Slot) => void,
+  branch = featureBranch(run),
+  clk: Clock = clock,
 ): Promise<number> {
   const maxMs = parseWaitMax(flags.max);
   const one = parseSlot(flags.slot);
   if (one && flags.any) throw new Error('--any and --slot are exclusive');
   const slots = flags.any ? SLOTS : [one ?? 'dev'];
-  const branch = featureBranch(run);
-  const r = await waitForLock(api, branch, clock, {
+  const r = await waitForLock(api, branch, clk, {
     maxMs,
     log: console.log,
     sessionOf: (b) => holderSession(dir, b),
     onRead: (cur, slot) => cache(cur?.holder ?? null, slot),
     slots,
+    // A slot main's Deploy run is still to land on isn't free yet: deploy-dev would be refused it (main-pending.ts).
+    busy: async (slot) => (await pendingMainDeploy(api, slot)) !== null,
   });
   if (r.outcome === 'free') console.log(`${r.slot} lock: free — \`pnpm bot deploy-dev\` takes it`);
   else if (r.outcome === 'ours') console.log(`${r.slot} lock: ${branch} already holds it`);
@@ -133,9 +141,14 @@ async function lockWait(
     console.log(
       `${r.slot} lock: ${r.holder?.branch ?? 'an unreadable holder'}'s lock expired — \`pnpm bot deploy-dev\` takes it over`,
     );
-  else {
+  else if (r.main) {
+    console.log(
+      `${r.slot}: main's Deploy run is still to land there after ${maxMs / 60_000} min — tell the hub (a merge's deploy holds the slot until its dev job finishes)`,
+    );
+    return 75;
+  } else {
     const held = r.holder
-      ? holderLine(r.holder, clock.now(), holderSession(dir, r.holder.branch), r.slot)
+      ? holderLine(r.holder, clk.now(), holderSession(dir, r.holder.branch), r.slot)
       : `${r.slot} locked`;
     console.log(
       `${held} — still held after ${maxMs / 60_000} min; tell the user who holds it and until when`,
@@ -144,6 +157,27 @@ async function lockWait(
   }
   return 0;
 }
+
+// status and wait only read: a read-only token, which a 55-minute background wait holds. acquire and wait also read
+// main's Deploy runs (main-pending.ts); renew and release need neither.
+export const lockPerms = (sub: string | undefined): Permissions =>
+  sub === 'status'
+    ? PERMS.lockRead
+    : sub === 'wait'
+      ? PERMS.lockWait
+      : sub === 'acquire'
+        ? PERMS.lockAcquire
+        : PERMS.lock;
+
+// `lock acquire`: deploy-dev's acquire, guarded the same way — never a slot main's Deploy run is still to land on.
+export const acquireLock = (
+  api: Api,
+  branch: string,
+  sha: string,
+  nowMs: number,
+  only?: Slot,
+  ios: string[] = [],
+) => acquireSlot(api, branch, sha, nowMs, only, ios, mainPendingGuard(api));
 
 export interface TellContext {
   dir: string | null; // the board
@@ -160,7 +194,8 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
     return await f();
   } catch (err) {
     const held = err instanceof LockHeld ? err.held.filter((x) => x.holder) : [];
-    if (held.length) {
+    const main = err instanceof MainPending ? err.runs.map((r) => r.slot) : [];
+    if (held.length || main.length) {
       for (const { slot, holder } of held) writeLockCache(ctx.dir, holder, ctx.now(), slot);
       let branch = '<your branch>';
       try {
@@ -169,14 +204,25 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
         // only the notes' wording needs it
       }
       const wait =
-        held.length > 1
-          ? 'lock wait --any'
-          : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
+        err instanceof MainPending
+          ? err.wait
+          : held.length > 1
+            ? 'lock wait --any'
+            : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
+      const busy = main.length ? `main's deploy is still to land on ${main.join(' and ')}` : '';
+      const locked = held.length
+        ? `${held.length > 1 ? 'both dev slots are' : `${held[0]?.slot} is`} locked`
+        : '';
       ctx.log(
-        `${held.length > 1 ? 'both dev slots are' : `${held[0]?.slot} is`} locked — send these now, once each, then \`pnpm bot ${wait}\` in the background:`,
+        `${locked && busy ? `${locked} (and ${busy})` : locked || busy} — send these now, once each, then \`pnpm bot ${wait}\` in the background:`,
       );
-      const notes = queueNotes(branch, held as { slot: Slot; holder: Holder }[], ctx.hub(), (b) =>
-        holderSession(ctx.dir, b),
+      const notes = queueNotes(
+        branch,
+        held as { slot: Slot; holder: Holder }[],
+        ctx.hub(),
+        (b) => holderSession(ctx.dir, b),
+        wait,
+        main,
       );
       for (const l of notes) ctx.log(`  ${l}`);
     }
@@ -212,10 +258,7 @@ export async function main(argv: string[]): Promise<number> {
       return r.conclusion === 'success' ? 0 : 1;
     }
     case 'lock': {
-      // status and wait only read: a read-only token, which a 55-minute background wait holds
-      const api = makeApi(
-        await token(sub === 'status' || sub === 'wait' ? PERMS.lockRead : PERMS.lock),
-      );
+      const api = makeApi(await token(lockPerms(sub)));
       const dir = boardDir(run);
       const cache = (h: Holder | null, slot: Slot) => writeLockCache(dir, h, clock.now(), slot);
       if (sub === 'status') {
@@ -227,7 +270,7 @@ export async function main(argv: string[]): Promise<number> {
       } else if (sub === 'acquire') {
         const only = parseSlot(flags.slot);
         const { slot, holder } = await tellingWhoToTell(tellCtx(dir), () =>
-          acquireSlot(
+          acquireLock(
             api,
             featureBranch(run),
             requirePushed(run, featureBranch(run)),

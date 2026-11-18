@@ -182,6 +182,7 @@ describe('currentBase', () => {
     }).api;
   };
   const T = (h: number) => `2026-10-13T${String(h).padStart(2, '0')}:00:00Z`;
+  const MAIN = 'f'.repeat(40); // the sha a main run's dev job deployed
   // `cdk`: whether the dev job's `Deploy stacks` step ran (a full deploy) or was skipped (app/docs-only).
   const mainRun = (
     devAt: string,
@@ -189,7 +190,7 @@ describe('currentBase', () => {
     prodAt = T(23),
     cdk = true,
   ): [Partial<Run>, J[]] => [
-    { display_title: 'x' },
+    { display_title: 'x', head_sha: MAIN },
     [
       job('check / check', 'success', devAt),
       job('deploy-dev / deploy', devConclusion, devAt, 'completed', [
@@ -208,6 +209,22 @@ describe('currentBase', () => {
     [job('verify', 'success', devAt), job('deploy / deploy', conclusion, devAt, status)],
   ];
 
+  it('is the sha main last deployed, never main’s head: a merge in flight or never landed isn’t on the slot', async () => {
+    const queued: [Partial<Run>, J[]] = [{ status: 'queued', head_sha: 'a1'.repeat(20) }, []];
+    const checking: [Partial<Run>, J[]] = [
+      { status: 'in_progress', head_sha: 'a2'.repeat(20) },
+      [job('check / check', null, null, 'in_progress')],
+    ];
+    const redCheck: [Partial<Run>, J[]] = [
+      { status: 'completed', head_sha: 'a3'.repeat(20) },
+      [job('check / check', 'failure', T(13)), job('deploy-dev', 'skipped', T(13))],
+    ];
+    for (const newer of [queued, checking, redCheck])
+      expect(await currentBase(world([newer, mainRun(T(12))], [dispatch(SHA, T(11))]))).toBe(MAIN);
+    // a dispatch decides: its sha, merge in flight or not
+    expect(await currentBase(world([queued, mainRun(T(10))], [dispatch(SHA, T(11))]))).toBe(SHA);
+  });
+
   it('is the dispatched sha when its dev job finished after main’s dev job', async () => {
     expect(await currentBase(world([mainRun(T(10))], [dispatch(SHA, T(11))]))).toBe(SHA);
   });
@@ -220,8 +237,8 @@ describe('currentBase', () => {
   });
 
   it('is main ("") when main’s dev job is the newest, or nothing was ever dispatched', async () => {
-    expect(await currentBase(world([mainRun(T(12))], [dispatch(SHA, T(11))]))).toBe('');
-    expect(await currentBase(world([mainRun(T(12))], []))).toBe('');
+    expect(await currentBase(world([mainRun(T(12))], [dispatch(SHA, T(11))]))).toBe(MAIN);
+    expect(await currentBase(world([mainRun(T(12))], []))).toBe(MAIN);
     expect(await currentBase(world([], []))).toBe('');
   });
 
@@ -272,14 +289,14 @@ describe('currentBase', () => {
           [dispatch(SHA, T(11))],
         ),
       ),
-    ).toBe('');
+    ).toBe(MAIN);
   });
 
   it('is "unknown" when five full pages hold no deciding job — the decider is further back', async () => {
     const appOnly = Array.from({ length: 50 }, () => mainRun(T(12), 'success', T(23), false));
     expect(await currentBase(world(appOnly, []))).toBe('unknown');
     // a deciding job on page 2 is found
-    expect(await currentBase(world([...appOnly.slice(0, 12), mainRun(T(10))], []))).toBe('');
+    expect(await currentBase(world([...appOnly.slice(0, 12), mainRun(T(10))], []))).toBe(MAIN);
   });
 
   it('skips a dev job GitHub never expanded (verify failed) or never listed', async () => {

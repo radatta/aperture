@@ -8,14 +8,15 @@ name: Deploy
 # deploys dev as dev-main's, in the freeze-exempt lane). Origin secret injected from GitHub secrets per stage.
 # The actual deploy lives in the reusable deploy-stage.yml; this file orchestrates: classify each stage against what it
 # serves, and look up whether a PR run already checked this exact tree → check (all of it, the fixture suite alone, or
-# nothing) → deploy each stage at its own tier.
+# nothing) → wait for each dev slot's lock → deploy each stage at its own tier.
 on:
   push:
     branches: [main]
 
 # Serialize deploys per ref — never cancel a deploy mid-flight (a half-applied stack is worse than a queue). A running
 # deploy is safe, but GitHub keeps one pending run per group and cancels the older one, jobs and all, when merges
-# cluster. Classification doesn't depend on those runs: each stage diffs from what it last deployed.
+# cluster. Classification doesn't depend on those runs: each stage diffs from what it last deployed. A run waiting for a
+# dev lock (wait-dev, up to 60 min) is running, never cancelled; merges behind it collapse to the newest.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -99,10 +100,79 @@ jobs:
     with:
       fixtures_only: ${{ needs.changes.outputs.check == 'fixtures' }}
 
+  # A merge never replaces a lane's branch mid-test: each slot's deploy waits while that slot's lock is held and live
+  # (scripts/src/main-dev-wait.ts; docs/ops/CI-BOT.md → Dev deploys → A merge waits for the lock). Only once the deploy
+  # will happen — `check` green or planned-skipped, as the deploy's own condition — so a red check fails the run at once
+  # and the gap between reading "free" and deploying is a runner start. Never a gate: the deploys' `if:`s don't read
+  # these results, so a skipped, failed or timed-out wait still deploys — the module itself goes after 60 min, or after
+  # ~5 min of failed reads, and says so in a ::warning:: and the summary. Read-only (contents: read); the bot keeps other
+  # branches off the slot from the moment this wait starts until its deploy is done (main-pending.ts). Skipped when the
+  # slot gets nothing: a docs-only `none` touches no stack.
+  wait-dev:
+    needs: [changes, check]
+    if: ${{ !cancelled() && needs.changes.outputs.mode_dev != 'none' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70 # the module's 60-minute ceiling plus a checkout; past it the job ends cancelled → quiet-failure
+    permissions:
+      contents: read # the lock ref and its tag
+    steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
+      - uses: actions/checkout@v7
+      - name: Wait for the dev lock
+        timeout-minutes: 65
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/src/main-dev-wait.ts dev
+
+  # Slot B's twin, only when deploy-devb runs (a shape change); independent of wait-dev, so a held devb never delays
+  # this run's dev or prod — but it keeps the run in progress, so the next merge's whole run queues behind it (CI-BOT.md).
+  wait-devb:
+    needs: [changes, check]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 70 # as wait-dev's
+    permissions:
+      contents: read # the lock ref and its tag
+    steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
+      - uses: actions/checkout@v7
+      - name: Wait for the devb lock
+        timeout-minutes: 65
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/src/main-dev-wait.ts devb
+
   # `check` succeeded, or was skipped because `changes` said so — a check skipped for any other reason deploys nothing.
-  # Explicit results, not the implicit success(), which a skipped `check` would fail.
+  # Explicit results, not the implicit success(), which a skipped `check` would fail. `wait-dev` is in `needs` for its
+  # order only: the `if:` never reads it.
   deploy-dev:
-    needs: [check, changes]
+    needs: [check, changes, wait-dev]
     if: ${{ !cancelled() && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
     permissions:
       id-token: write
@@ -129,9 +199,9 @@ jobs:
   # changed its shape: a dispatch onto devb is accepted only if devb already runs main's shape, and every dispatch
   # brings devb's code to its branch anyway (docs/ops/CI-BOT.md → Dev slots). Parallel to deploy-dev and never
   # gating prod; skipped otherwise (a skipped job bills nothing). The job name is a contract: deploy-base.ts and the
-  # bot's currentBase tell devb's records by it.
+  # bot's currentBase tell devb's records by it. `wait-devb` orders it, as wait-dev does deploy-dev.
   deploy-devb:
-    needs: [check, changes]
+    needs: [check, changes, wait-devb]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.changes.outputs.mode_devb == 'full' && needs.changes.result == 'success' && (needs.check.result == 'success' || (needs.check.result == 'skipped' && needs.changes.outputs.check == 'skip')) }}
     permissions:
       id-token: write
@@ -179,7 +249,7 @@ jobs:
   # timeout, say, mid-CloudFormation — which may leave the run `cancelled` rather than failed. This job fails in both,
   # under always() so a cancelled run can't skip it. A skipped job bills nothing; a failed check already fails the run.
   quiet-failure:
-    needs: [changes, check, deploy-dev, deploy-devb, deploy-prod]
+    needs: [changes, check, wait-dev, wait-devb, deploy-dev, deploy-devb, deploy-prod]
     if: ${{ always() && ((!cancelled() && needs.changes.result == 'success' && needs.deploy-dev.result == 'skipped' && needs.check.result != 'failure') || contains(needs.*.result, 'cancelled')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -199,7 +269,7 @@ jobs:
           exit 1
       - name: Fail the run
         env:
-          RESULTS: changes=${{ needs.changes.result }} check=${{ needs.check.result }} dev=${{ needs.deploy-dev.result }} devb=${{ needs.deploy-devb.result }} prod=${{ needs.deploy-prod.result }} plan=${{ needs.changes.outputs.check }}
+          RESULTS: changes=${{ needs.changes.result }} check=${{ needs.check.result }} wait-dev=${{ needs.wait-dev.result }} wait-devb=${{ needs.wait-devb.result }} dev=${{ needs.deploy-dev.result }} devb=${{ needs.deploy-devb.result }} prod=${{ needs.deploy-prod.result }} plan=${{ needs.changes.outputs.check }}
         run: |
           echo "::error::a job was cancelled, or dev was skipped with nothing failing — $RESULTS"
           exit 1

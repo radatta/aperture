@@ -140,6 +140,9 @@ jobs:
           # PR run is green — the only real-API run of the module before a merge.
           merged_check=$(node scripts/src/checked-tree.ts "$SHA")
           echo "If merged now: check=$merged_check"
+          # The lock a merge's slot deploy would wait on (deploy.yml's wait-dev / wait-devb), read once as that job reads
+          # it: the only run of scripts/src/main-dev-wait.ts on a runner, with a job token, before a merge. Read-only.
+          node scripts/src/main-dev-wait.ts "$SLOT" --once
 
   deploy:
     needs: [verify]

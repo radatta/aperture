@@ -289,6 +289,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/lane/start.test.ts': 'temp dir',
   'scripts/src/mailroom/clip.test.ts': 'temp dir',
   'scripts/src/vapid-keys.test.ts': 'spawns its sibling vapid-keys.ts',
+  'scripts/src/main-dev-wait.test.ts': 'spawns its sibling main-dev-wait.ts (also imported)',
   'scripts/src/root-scripts.test.ts': 'reads the root package.json, a REPO_FULL trigger',
   'scripts/src/usage/cli.test.ts': 'temp dirs',
   'scripts/src/usage/scan.test.ts': 'temp dirs',

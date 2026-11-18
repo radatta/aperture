@@ -64,6 +64,13 @@ describe('mintToken', () => {
       expect(Object.keys(perms)).not.toContain('administration');
   });
 
+  it('reads Actions only where a lock command reads main’s Deploy runs (acquire, wait)', () => {
+    expect(PERMS.lockAcquire).toStrictEqual({ contents: 'write', actions: 'read' });
+    expect(PERMS.lockWait).toStrictEqual({ contents: 'read', actions: 'read' });
+    expect(PERMS.lock).toStrictEqual({ contents: 'write' }); // renew, release
+    expect(PERMS.lockRead).toStrictEqual({ contents: 'read' }); // status
+  });
+
   it('surfaces GitHub’s error without the token', async () => {
     const { f } = fakeFetch({
       '/app/installations': {
