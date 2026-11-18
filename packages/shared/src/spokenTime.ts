@@ -233,8 +233,9 @@ export function resolveSpoken(
     return { day: r.day, time: r.hhmm };
   }
   const calToday = zonedDayTime(ctx.now, zone).day;
-  // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward.
-  const bareHour = spoken.kind === 'bare' && spoken.part === null;
+  // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward. A model that
+  // dated a bare hour — or tonight's ("at 1 tonight") — calendar tomorrow with no day in the words isn't trusted.
+  const bareHour = spoken.kind === 'bare' && (spoken.part === null || spoken.part === 'tonight');
   const named =
     modelDay !== null &&
     modelDay > calToday &&

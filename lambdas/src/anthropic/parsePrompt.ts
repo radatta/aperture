@@ -1,4 +1,4 @@
-import { fmtWeekday, PARSE_TITLE_MAX } from '@aperture/shared';
+import { DUE_TIME_HALVES, fmtWeekday, PARSE_TITLE_MAX } from '@aperture/shared';
 import type { ParseCategory } from '@aperture/shared';
 
 // Quick add's one prompt — the BFF owns it, for the app, Siri and Raycast alike (the capture route,
@@ -17,7 +17,7 @@ export const PARSE_EFFORT = 'low';
 const VOICE_RULES = `
 The line was spoken, not typed:
 - Also remove from the title any spoken time ("at 5", "five o'clock", "at 8 tonight", "in 20 minutes", "in an hour", "tonight", "this morning", "tomorrow morning") and a leading "remind me to" or "remind me".
-- dueTime, instead of the rule above: the clock the user said, HH:MM 24h, read as said. "at 5" or "five o'clock" with no am/pm is 05:00 — give the hour as said; the server picks morning or evening. "5 pm" is 17:00, "quarter past five pm" 17:15, "half past 6 in the morning" 06:30, "at 8 tonight" 20:00, "at 1 tonight" 01:00, "noon" 12:00. "tonight" with no clock is 20:00; "this morning" or "tomorrow morning" with no clock is 09:00. A delay ("in 20 minutes", "in an hour") is not a clock: null, the server works it out. No time said: null. "at 12 tonight" is 00:00. When the words say the half of the day, give the 24h time: "at 5 in the evening" 17:00, "at 8 tomorrow evening" 20:00.
+- dueTime, instead of the rule above: the clock the user said, HH:MM 24h, read as said. "at 5" or "five o'clock" with nothing in the line saying its half of the day is 05:00 — give the hour as said; the server picks morning or evening. "5 pm" is 17:00, "quarter past five pm" 17:15, "half past 6 in the morning" 06:30, "at 8 tonight" 20:00, "at 1 tonight" 01:00, "noon" 12:00. "tonight" with no clock is 20:00; "this morning" or "tomorrow morning" with no clock is 09:00. A delay ("in 20 minutes", "in an hour") is not a clock: null, the server works it out. No time said: null. "at 12 tonight" is 00:00. When the words say the half of the day, anywhere in the line, give the 24h time: "at 5 in the evening" or "at 5 o'clock this evening" 17:00, "at 8 tomorrow evening" 20:00, "remind me this afternoon to call mum at 4" 16:00.
 - dueDay: only for a day the user said ("tomorrow", "friday", "next monday"). A spoken time alone, "today", "tonight" or "this morning" is not a day: null. For "friday night" or "tomorrow night" give that day even for a small hour ("at 1 friday night" is friday, 01:00) — never move the day yourself; the server does.
 - dueTimeHalf: whether the user's words say which half of the day dueTime is in. null when dueTime is null.
   "night": a night phrase about that time, anywhere in the line — "tonight", "at night", "friday night", "tomorrow night" ("at 8 tonight", "at 1 friday night", "remind me tonight to call mum at 9", "1 am friday night"), or "tonight" with no clock. It wins over "stated".
@@ -56,7 +56,7 @@ export function parseOutputSchema(
     ? {
         dueTimeHalf: nullable({
           type: 'string',
-          enum: ['stated', 'night', 'none'],
+          enum: [...DUE_TIME_HALVES],
           description:
             'Whether the words say which half of the day dueTime is in. null when dueTime is null.',
         }),

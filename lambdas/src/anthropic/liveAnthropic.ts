@@ -1,5 +1,5 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
-import type { ModelOutcome } from '@aperture/shared';
+import { isDueTimeHalf, type DueTimeHalf, type ModelOutcome } from '@aperture/shared';
 import type {
   AnthropicGateway,
   CoachPickRequest,
@@ -182,9 +182,9 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     return { ok: true, fields, meta };
   }
 
-  const halfOf = (f: unknown): string | null => {
+  const halfOf = (f: unknown): DueTimeHalf | null => {
     const v = (f as { dueTimeHalf?: unknown }).dueTimeHalf;
-    return v === 'stated' || v === 'night' || v === 'none' ? v : null;
+    return isDueTimeHalf(v) ? v : null;
   };
 
   return {

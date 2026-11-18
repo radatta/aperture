@@ -26,7 +26,10 @@ describe('parseSystemPrompt', () => {
 
   it('a spoken line asks for the clock as said — the server places it', () => {
     const voice = parseSystemPrompt('2026-11-17', [], { voice: true });
-    expect(voice).toContain('"at 5" or "five o\'clock" with no am/pm is 05:00');
+    expect(voice).toContain(
+      '"at 5" or "five o\'clock" with nothing in the line saying its half of the day is 05:00',
+    );
+    expect(voice).toContain('"remind me this afternoon to call mum at 4" 16:00');
     expect(voice).not.toContain('dueTime is always null');
   });
 

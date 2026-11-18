@@ -52,6 +52,7 @@ export interface Shared {
   ): { day: string; time: string };
   zonedEpoch(day: string, hhmm: string, timeZone: string): number;
   addDays(day: string, n: number): string;
+  fmtWeekday(day: string): string;
   dayKeyInZone(epochMs: number, timeZone: string, dayStartHour: number): string;
   nightDueDay(dueDay: string, dueTime: string, today: string, dayStartHour: number): string;
 }
@@ -71,6 +72,7 @@ export const SHARED_FUNCTIONS = [
   'resolveSpoken',
   'zonedEpoch',
   'addDays',
+  'fmtWeekday',
   'dayKeyInZone',
   'nightDueDay',
 ] as const;
@@ -1152,7 +1154,7 @@ export const siriCapture: Scenario = {
       cost: 'slow',
       proves: ['half-stated', 'half-noun', 'half-night'],
       title:
-        'The model’s half of the day, three real parses: a stated half, a day-part noun, a weekday night',
+        'The model’s half of the day, four real parses: a stated half, a day-part noun, a weekday night (bare and 1 am)',
       async run(ctx) {
         const S = await loadShared();
         await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight', 3 * MIN);
@@ -1171,7 +1173,8 @@ export const siriCapture: Scenario = {
           const { hour } = laClock(t0);
           const h = h12((hour + 15) % 24) === 12 ? (hour + 16) % 24 : (hour + 15) % 24;
           const half = h < 12 ? 'in the morning' : h < 17 ? 'in the afternoon' : 'in the evening';
-          const text = `${line(ctx, 'feed the cat')} at ${h12(h)} ${half}`;
+          // "o'clock": the prompt's "the hour as said" must not win over a half said in words.
+          const text = `${line(ctx, 'feed the cat')} at ${h12(h)} o'clock ${half}`;
           const r = await parsed(text, 'the stated half');
           const want = S.resolveSpoken(
             { said: '', kind: 'clock', hhmm: `${String(h).padStart(2, '0')}:00` },
@@ -1180,38 +1183,31 @@ export const siriCapture: Scenario = {
           );
           lands(r, want, 'the stated half');
         }
-        // 2. A PM hour whose bare reading is the next one (its AM already past): "morning" in the task says nothing.
+        // 2. "tomorrow at 1 … the morning report": a bare hour on a named day is the daytime one, 13:00 — "morning"
+        // belongs to the task. Read as a stated half it would be 01:00. Any hour of the run.
         {
-          const t0 = Date.now();
-          const { hour } = laClock(t0);
-          const pm = Math.max(13, hour + 2);
-          if (pm > 23 || pm > hour + 12)
-            ctx.log(`the noun row needs a PM hour ahead; none at ${hour}:xx — skipped`);
-          else {
-            const text = `remind me at ${h12(pm)} to ${marker(ctx.nonce)} send the morning report`;
-            const r = await parsed(text, 'the day-part noun');
-            const want = S.resolveSpoken(
-              { said: '', kind: 'bare', hour: h12(pm), minute: 0, part: null },
-              null,
-              { now: t0, today: laDay(new Date(t0)) },
-            );
-            lands(r, want, 'the day-part noun');
-            const title = (await getTask(ctx, r.id!)).title;
-            if (!/morning report/.test(title))
-              throw new Error(`the title lost its words: “${title}”`);
-          }
+          const r = await parsed(
+            `remind me tomorrow at 1 to ${marker(ctx.nonce)} send the morning report`,
+            'the day-part noun',
+          );
+          if (r.due?.time !== '13:00')
+            throw new Error(`the day-part noun: due ${JSON.stringify(r.due)}, want 13:00`);
+          const title = (await getTask(ctx, r.id!)).title;
+          if (!/morning report/.test(title))
+            throw new Error(`the title lost its words: “${title}”`);
         }
         // 3. "at 1 <weekday three days on> night": that night's small hours, the day after.
         {
           const day = S.addDays(laDay(new Date()), 3);
-          const weekday = new Date(`${day}T12:00:00Z`)
-            .toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })
-            .toLowerCase();
-          const r = await parsed(
-            `${line(ctx, 'call the vet')} at 1 ${weekday} night`,
-            'the weekday night',
-          );
-          lands(r, { day: S.addDays(day, 1), time: '01:00' }, 'the weekday night');
+          const weekday = S.fmtWeekday(day).toLowerCase();
+          // Both the bare and the stated "1 am" are that night's (a `stated` reading would land the night before).
+          for (const [said, what] of [
+            ['at 1', 'the weekday night'],
+            ['at 1 am', 'the weekday night, 1 am'],
+          ] as const) {
+            const r = await parsed(`${line(ctx, 'call the vet')} ${said} ${weekday} night`, what);
+            lands(r, { day: S.addDays(day, 1), time: '01:00' }, what);
+          }
         }
       },
     },

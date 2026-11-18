@@ -160,13 +160,18 @@ prompt — strip spoken times and a leading "remind me to" from the title; `dueT
 word that belongs to the task says nothing). The code then places it (`validateParsedTask` → `placeModelClock`,
 `spokenTime.ts` `resolveSpoken`):
 
-1. a delay ("in 20 minutes") is always the server clock's;
-2. a lone day-part the grammar read ("tonight", "tomorrow morning") at its rule time keeps the grammar's reading;
-3. `night`: a bare hour of the night — 4–11 the evening, 12 and 1–3 the small hours after the day;
-4. a stated clock the grammar read the same ("at 9 am") keeps the grammar's reading (its due phrase leaves the
+A delay ("in 20 minutes") is always the server clock's. A clock:
+
+1. a lone day-part the grammar read ("tonight", "tomorrow morning") at its rule time keeps the grammar's reading
+   (a day-part the model kept in its title is a noun — "send the morning report by nine" — and counts for nothing);
+2. `night`: a bare hour of the night — 4–11 the evening, 12 and 1–3 the small hours after the day — unless the
+   grammar read the same clock stated and the night would move it ("tonight … at 6 am" stays 06:00), or it's
+   13:00–15:59, no night hour (as stated);
+3. a stated clock the grammar read the same ("at 9 am") keeps the grammar's reading (its due phrase leaves the
    title);
-5. `stated`: the clock as said; `none` — or a missing or unknown value — a bare hour (rule 1, the daytime hour
-   with a named day). A wrong `none` rings early, never late.
+4. `stated`: the clock as said;
+5. `none` — or a missing or unknown value — a bare hour: rule 1's wrap with no day named (a wrong `none` rings
+   early, never late), the daytime hour with one (so "tomorrow morning at 6" read as `none` is 18:00).
 
 Every time rolls forward when past. With no model clock the grammar's reading fills, as before. The grammar on its
 own (precedence: relative → a stated clock → a bare hour → a day-part) is the fallback when the model doesn't run
@@ -290,6 +295,11 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
   the small-hours rule in code ("at 1 friday night" → Saturday 1 AM) without the model doing date arithmetic.
   Missing → `none`. The grammar fallback is main's again (it reads "morning" anywhere, so "at 5 … the morning
   report" is 5 AM without AI — accepted, said out loud). A task that names "the tonight show" is the model's call.
+  A day-part's words count as the due's only when a half placed it; when the grammar can't read the clock beside a
+  day-part ("tonight around eight", "tonight at five twenty"), the model's title stands as given, so words it
+  dropped there aren't restored (the price of never putting clock words back). The voice schema is its own
+  structured-output grammar, so the first spoken parse after a cache expiry may compile it (watch `parse_task` ms
+  on dev).
 
 ## 8. Build record
 
