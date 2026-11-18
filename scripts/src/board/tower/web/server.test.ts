@@ -242,6 +242,29 @@ describe('the derived files (board.line, stale.json)', () => {
   });
 });
 
+describe('conflicts (TOWER.md → Conflicts)', () => {
+  it("the fixture view's lane rows carry overlap.json's conflicts", () => {
+    const v = build({
+      ...parseArgs(['--fixtures', FIXTURES, '--now', '2026-11-08T06:10:00Z']),
+    }).view(false);
+    const lane = (b: string) => v.active.find((r) => r.branch === b);
+    expect(lane('bravo-branch')!.conflicts).toEqual({
+      main: ['docs/index.md'],
+      lanes: [
+        { branch: 'charlie-branch', files: ['packages/core/src/a.ts', 'packages/core/src/b.ts'] },
+      ],
+      oldMin: null,
+    });
+    expect(lane('echo-branch')!.conflicts).toEqual({
+      main: ['docs/ops/TOWER.md'],
+      lanes: [],
+      oldMin: null,
+    });
+    expect(lane('india-branch')!.conflicts).toBeNull();
+    expect(v.needs.some((n) => /✗|conflict/.test(n.what))).toBe(false);
+  });
+});
+
 describe('liveTests', () => {
   it('a missing leases dir is zero', () => {
     expect(liveTests('/nonexistent-board')).toBe(0);

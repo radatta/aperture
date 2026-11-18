@@ -301,7 +301,7 @@ origin/main now.", "flux will conflict with you on 2 files: … (git merge-tree)
 merges second rebases.", then unchecked overlaps ("flux also touches 2 of your files: …; expect a rebase conflict
 whichever merges second.", with "(uncommitted: git can’t check it yet)" after the files when that's why), then clean ones ("… git merges both heads cleanly today; recheck after either
 commits."). `board.sh status` prints `conflicts:` above `overlaps:` (a clean pair ends `— merges clean`), then the
-landed and stale lines.
+landed and stale lines. The tower marks each conflicting lane (TOWER.md → _Conflicts_).
 
 ## Measurement protocol
 
@@ -449,7 +449,7 @@ unmerged items; merged ones are counted in the bar, legend and title, not listed
 unscheduled last (`--:--`); merges and the maintainer's items bright, an item past due dimmed with `?` and dropped 2 h
 after; its title is `next merge ~HH:MM` (the first `merge` with a time, `?` once past) or `n planned`.
 _Sessions_: the latest sample's sessions, a row for each working one and each holding a branch, working first, then one `idle: a, b, c`
-line (cut with `…`; the title counts both). _Machine_:
+line (cut with `…`; the title counts both); a branch git can't merge ends `✗main` / `✗N` (TOWER.md → _Conflicts_). _Machine_:
 CPU, memory, pids, heavy jobs and working sessions on one time axis, each bucket's peak, a sampler gap blank;
 under it the event ticks, one per column by precedence — `✗` a failed suite, a red `◆` a devcheck run that ended
 other than PASS, `▲` a merge, a green `◆` a PASS, `·` a passed suite — and a readout of the exact values at the

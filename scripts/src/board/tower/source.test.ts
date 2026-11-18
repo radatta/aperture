@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Source } from './source.ts';
+import { Source, parseConflicts } from './source.ts';
 
 let dir = '';
 afterEach(() => dir && rmSync(dir, { recursive: true, force: true }));
@@ -172,5 +172,73 @@ describe('Source', () => {
       ['2026-11-08T01-00-00-full', 'dev'],
       ['2026-11-08T02-00-00-full', 'devb'],
     ]);
+  });
+});
+
+describe('parseConflicts (overlap.json)', () => {
+  const file = (o: Record<string, unknown>) => JSON.stringify({ v: 1, pairs: [], ...o });
+  it('reads the merge-tree conflicts and the file time', () => {
+    expect(
+      parseConflicts(
+        file({
+          t: '2026-11-08T06:08:00.123Z',
+          conflicts: [{ a: 'x', b: 'main', files: ['a.ts'] }],
+        }),
+      ),
+    ).toEqual({
+      at: Date.parse('2026-11-08T06:08:00.123Z'),
+      list: [{ a: 'x', b: 'main', files: ['a.ts'] }],
+    });
+  });
+  it('is null for a file from before the check, undefined for one that is not JSON', () => {
+    expect(parseConflicts(file({ t: '2026-11-08T06:08:00Z' }))).toBeNull();
+    expect(parseConflicts(file({ conflicts: {} }))).toBeNull();
+    expect(parseConflicts('[]')).toBeNull();
+    expect(parseConflicts('null')).toBeNull();
+    expect(parseConflicts('{')).toBeUndefined();
+    expect(parseConflicts('')).toBeUndefined();
+  });
+  it('drops malformed entries, cleans what it prints, and reads a garbled time as none', () => {
+    expect(
+      parseConflicts(
+        file({
+          t: 'soon',
+          conflicts: [
+            null,
+            { a: 'x', b: 'main' },
+            { a: 'x', b: 2, files: [] },
+            { a: 'x', b: 'y', files: ['ok.ts', 3] },
+            { a: 'x\u001b[31m', b: 'y\tz', files: ['f\u0007.ts'] },
+          ],
+        }),
+      ),
+    ).toEqual({ at: null, list: [{ a: 'x[31m', b: 'y z', files: ['f.ts'] }] });
+  });
+});
+
+describe('Source: overlap.json', () => {
+  const overlap = (a: string) =>
+    JSON.stringify({
+      v: 1,
+      t: '2026-11-08T00:00:00Z',
+      conflicts: [{ a, b: 'main', files: ['f'] }],
+    });
+  it('reads it on refresh, keeps the last list over a torn read, and clears on delete or an old file', () => {
+    const { board, src } = setup();
+    const t0 = Date.parse('2026-11-08T00:01:00Z');
+    const f = join(board, 'overlap.json');
+    expect(src.refresh(t0).conflicts).toBeNull(); // no file
+    writeFileSync(f, overlap('lane-a'));
+    expect(src.refresh(t0).conflicts!.list.map((c) => c.a)).toEqual(['lane-a']);
+    writeFileSync(f, '{"v":1,"conf'); // torn: the last list stays
+    expect(src.refresh(t0).conflicts!.list.map((c) => c.a)).toEqual(['lane-a']);
+    writeFileSync(f, overlap('lane-bb'));
+    expect(src.refresh(t0).conflicts!.list.map((c) => c.a)).toEqual(['lane-bb']);
+    writeFileSync(f, JSON.stringify({ v: 1, pairs: [] })); // written before the check: nothing to show
+    expect(src.refresh(t0).conflicts).toBeNull();
+    writeFileSync(f, overlap('lane-ccc'));
+    expect(src.refresh(t0).conflicts).not.toBeNull();
+    rmSync(f);
+    expect(src.refresh(t0).conflicts).toBeNull();
   });
 });

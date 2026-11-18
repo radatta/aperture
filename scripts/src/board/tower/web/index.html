@@ -373,6 +373,16 @@
         white-space: nowrap;
         font-variant-numeric: tabular-nums;
       }
+      /* a meta's tone (ctx %, quiet, a conflict) — `.row .meta` alone outranks the bare .t-* rules below */
+      .row .meta.t-good {
+        color: var(--good);
+      }
+      .row .meta.t-warn {
+        color: var(--hold);
+      }
+      .row .meta.t-bad {
+        color: var(--bad);
+      }
       .row .who {
         color: var(--ink2);
         font-size: 15px;
@@ -881,6 +891,12 @@
           flex: 1 1 14em;
           white-space: normal;
           overflow-wrap: anywhere;
+        }
+        /* a conflict chip can name a long branch: it wraps rather than push the row past the screen */
+        .row .meta.cf {
+          white-space: normal;
+          overflow-wrap: anywhere;
+          min-width: 0;
         }
         /* the chevron sits in the row's top-right corner, so a wrapped row never leaves it alone on a line */
         .item.has-more > .row {

@@ -8,7 +8,16 @@ import { clean, hhmm } from './fmt.ts';
 import { compactJob, compactSample } from './history.ts';
 import { DayFiles, parseLines, readNew, stamp, tail, type Tail } from './jsonl.ts';
 import { foldRuns, type Run } from './ledger.ts';
-import type { FeedItem, Gauges, Job, Lock, Point, Session, TowerState } from './model.ts';
+import type {
+  Conflicts,
+  FeedItem,
+  Gauges,
+  Job,
+  Lock,
+  Point,
+  Session,
+  TowerState,
+} from './model.ts';
 import { PrCache } from './prs.ts';
 import { parseQueue, type Queue, type QueueData } from './queue.ts';
 
@@ -98,6 +107,29 @@ function parseLimitsFile(text: string | null): Limits {
   };
 }
 
+// overlap.json's `conflicts` (board CLI `overlap`, docs/ops/SESSION-BOARD.md → Overlaps). Null for a file with no
+// `conflicts` list (written before the merge-tree check); undefined for one that isn't JSON (a torn read: the
+// caller keeps what it had). A malformed entry is dropped. Branch and file names are cleaned: the tower prints them.
+export function parseConflicts(text: string): Conflicts | null | undefined {
+  let o: unknown;
+  try {
+    o = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const { conflicts, t } = o as { conflicts?: unknown; t?: unknown };
+  if (!Array.isArray(conflicts)) return null;
+  const str = (x: unknown): x is string => typeof x === 'string';
+  const list = conflicts.flatMap((c: unknown) => {
+    const { a, b, files } = (c ?? {}) as { a?: unknown; b?: unknown; files?: unknown };
+    if (!str(a) || !str(b) || !Array.isArray(files) || !files.every(str)) return [];
+    return [{ a: clean(a), b: clean(b), files: files.map(clean) }];
+  });
+  const at = str(t) ? Date.parse(t) : NaN;
+  return { at: Number.isFinite(at) ? at : null, list };
+}
+
 type LockSlot = 'dev' | 'devb';
 type LockFile = {
   holder?: { branch?: string; sha?: string; expiresAt?: string } | null;
@@ -123,6 +155,7 @@ export class Source {
   private queue: Watched<Queue>;
   private benchTsv: Watched<string | null>;
   private benchLog: Watched<string | null>;
+  private overlap: Watched<Conflicts | null>;
   private lockFeed: FeedItem[] = [];
   private lastHolder: Record<LockSlot, string | null | undefined> = {
     dev: undefined,
@@ -158,6 +191,15 @@ export class Source {
     );
     this.benchTsv = new Watched(join(paths.bench, 'results.tsv'), null, (t) => t);
     this.benchLog = new Watched(join(paths.bench, 'bench.log'), null, (t) => t, tailText); // only its last line shows
+    // the writer renames into place, so a torn read is rare: it keeps the last list; a deleted file clears it
+    this.overlap = new Watched<Conflicts | null>(
+      join(paths.boardDir, 'overlap.json'),
+      null,
+      (t, prev) => {
+        const c = t === null ? null : parseConflicts(t);
+        return c === undefined ? prev : c;
+      },
+    );
   }
 
   refresh(now: number): TowerState {
@@ -213,6 +255,7 @@ export class Source {
       bench,
       lockFeed: this.lockFeed,
       leaseFeed: this.leaseFeed,
+      conflicts: this.overlap.get(),
     };
   }
 

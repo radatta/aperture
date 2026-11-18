@@ -329,6 +329,23 @@ every name in the tooltip); on the phone a session over 50 leads the sources chi
 the board's count. `board.line`'s `ctx` line gives the status line the same, red with the names at 50. A `ctx.json` over 5 min old counts nothing and SOURCES says so. The phone alert stays dispatch's: the
 tower never pings.
 
+### Conflicts
+
+`Source` reads `localNotes/board/overlap.json`'s merge-tree `conflicts` (SESSION-BOARD.md → _Overlaps_, the check
+itself), so the terminal and the page share one read. A lane git can't merge with main or with another lane is
+marked, amber, as a warning only: it never changes the lane's state, its tone or NEEDS YOU, and never turns anything
+red.
+
+- **Terminal:** the SESSIONS row's branch ends `✗main` (against main) and `✗N` (against N other lanes); the branch
+  is cut first, and a narrow panel shows a bare `✗`.
+- **Page:** the NOW row's first meta is `✗ main, <lane>` (two names, then `+n`), each target's files in its tooltip
+  and, for phones, in the row's details (`conflicts with main: …`). It wraps on a phone rather than overflow.
+- **Old:** from 10 min (the file's own `t`; `board.sh` uses the same line) the mark dims and the first detail line
+  adds `(N min old: is the sampler running?)`. Nothing is hidden: an old conflict is still likely real.
+- **No file,** one written before the check (no `conflicts` list), or one that isn't JSON shows nothing; an unreadable
+  rewrite keeps the last list. The fixture board's `overlap.json` puts bravo-branch against main and charlie-branch, and
+  echo-branch (a NOW row) against main.
+
 ### Main sync
 
 `scripts/board/sync.sh`, a plain bash loop with no tokens: every 2 min `cli.ts sync-main` (fetch, move the main

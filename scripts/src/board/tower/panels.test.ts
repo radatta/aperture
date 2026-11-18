@@ -6,7 +6,16 @@ import { build, parseArgs } from './main.ts';
 import type { TowerState } from './model.ts';
 import type { PlanItem } from './queue.ts';
 import { HISTORY_H, layout } from './layout.ts';
-import { compose, feedItems, nextMerge, since, waveItems, wants, type Ui } from './panels.ts';
+import {
+  compose,
+  feedItems,
+  nextMerge,
+  sessions,
+  since,
+  waveItems,
+  wants,
+  type Ui,
+} from './panels.ts';
 
 const PLAN_DEFAULTS = { you: null, eta: null, lane: null, done: false, doneAt: null };
 
@@ -469,5 +478,39 @@ describe('tower v2', () => {
     expect(withPlan([{ at: at - 60000, what: 'm', kind: 'merge', who: null }])).toMatch(
       /next merge \?22:09/,
     );
+  });
+});
+
+describe('sessions: merge-tree conflicts (TOWER.md → Conflicts)', () => {
+  const rect = (w: number) => ({ x: 0, y: 0, w, h: 14 });
+  const line = (lines: string[], name: string) =>
+    lines.find((l) => strip(l).startsWith(`│ ${name} `)) ?? '';
+  it("marks the fixture's lanes: ✗main and ✗N right after the branch, amber; the rest unmarked", () => {
+    const f = sessions(state, rect(100));
+    expect(strip(line(f, 'bravo'))).toMatch(/bravo-branch ✗main ✗1 /);
+    expect(strip(line(f, 'charlie'))).toMatch(/charlie-branch ✗1 /);
+    for (const n of ['alpha', 'delta']) expect(strip(line(f, n))).not.toContain('✗');
+    expect(line(f, 'bravo')).toContain(fgc(NORD.amber) + '✗main ✗1');
+    for (const l of f) expect(width(l)).toBe(100);
+  });
+  it('dims the mark once the check is 10 min old', () => {
+    const old = { ...state, conflicts: { ...state.conflicts!, at: state.now - 11 * 60_000 } };
+    expect(line(sessions(old, rect(100)), 'bravo')).toContain(fgc(NORD.dim) + '✗main ✗1');
+  });
+  it('cuts the branch before the mark, and a narrow panel keeps a bare ✗', () => {
+    for (const w of [70, 50, 40]) {
+      const f = sessions(state, rect(w));
+      for (const l of f) expect(width(l)).toBe(w);
+      expect(strip(line(f, 'bravo'))).toContain('✗');
+    }
+    expect(strip(line(sessions(state, rect(50)), 'bravo'))).toMatch(/ brav… ✗main ✗1 /);
+    expect(strip(line(sessions(state, rect(50)), 'charlie'))).toMatch(/ charlie-br… ✗1 /);
+    // 40: `✗main ✗1` would leave the branch under 4 columns, so a bare ✗
+    expect(strip(line(sessions(state, rect(40)), 'bravo'))).toMatch(/ bravo… ✗ /);
+    expect(strip(line(sessions(state, rect(40)), 'charlie'))).toMatch(/ char… ✗1 /);
+  });
+  it('no conflicts, no mark', () => {
+    const f = sessions({ ...state, conflicts: null }, rect(100));
+    expect(f.map(strip).join('\n')).not.toContain('✗');
   });
 });

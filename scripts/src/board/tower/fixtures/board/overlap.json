@@ -1,0 +1,28 @@
+{
+  "v": 1,
+  "t": "2026-11-08T06:08:00Z",
+  "pairs": [
+    {
+      "a": "bravo-branch",
+      "b": "charlie-branch",
+      "files": ["packages/core/src/a.ts", "packages/core/src/b.ts"],
+      "git": "conflict"
+    }
+  ],
+  "always": [],
+  "messages": {},
+  "conflicts": [
+    { "a": "bravo-branch", "b": "main", "files": ["docs/index.md"] },
+    {
+      "a": "bravo-branch",
+      "b": "charlie-branch",
+      "files": ["packages/core/src/a.ts", "packages/core/src/b.ts"]
+    },
+    { "a": "echo-branch", "b": "main", "files": ["docs/ops/TOWER.md"] }
+  ],
+  "clean": [],
+  "landed": [],
+  "stale": [],
+  "uncommitted": [],
+  "pending": 0
+}

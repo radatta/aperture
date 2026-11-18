@@ -12,7 +12,7 @@ import {
 import type { GhRun } from './gh.ts';
 import type { MacRead, MacStats, Costs } from './health.ts';
 import type { LaneFile } from './lanes.ts';
-import type { Lock, TowerState } from './model.ts';
+import { conflictsOf, type Lock, type TowerState } from './model.ts';
 import type { Pr } from './prs.ts';
 import type { Lane, PlanItem } from './queue.ts';
 
@@ -116,6 +116,7 @@ function inputs(
     mainLog?: Inputs['mainLog'];
     mainSync?: Inputs['mainSync'];
     ctx?: Inputs['ctx'];
+    conflicts?: TowerState['conflicts'];
     sessionsByBranch?: Record<string, string>;
   } = {},
 ): Inputs {
@@ -155,6 +156,7 @@ function inputs(
     bench: null,
     lockFeed: [],
     leaseFeed: [],
+    conflicts: over.conflicts ?? null,
   } as TowerState;
   return {
     now: NOW,
@@ -1506,5 +1508,62 @@ describe('tower-current: context per session (F240)', () => {
     ).toBe('stale');
     expect(sources(inputs()).find((r) => r.name === 'context')!.state).toBe('missing');
     expect(derive(inputs()).ctx).toBeNull();
+  });
+});
+
+describe('conflict-tools: merge-tree conflicts on a lane (TOWER.md → Conflicts)', () => {
+  const cf = (at: number | null = NOW - 2 * MIN): NonNullable<TowerState['conflicts']> => ({
+    at,
+    list: [
+      { a: 'echo', b: 'main', files: ['docs/x.md'] },
+      { a: 'zulu', b: 'echo', files: ['b.ts'] },
+      { a: 'echo', b: 'alpha', files: ['a.ts', 'c.ts'] },
+      { a: 'kilo', b: 'main', files: ['k.ts'] },
+    ],
+  });
+  it("gives a lane its main files and each other lane's, as a or b, lanes sorted by branch", () => {
+    expect(conflictsOf(cf(), 'echo', NOW)).toEqual({
+      main: ['docs/x.md'],
+      lanes: [
+        { branch: 'alpha', files: ['a.ts', 'c.ts'] },
+        { branch: 'zulu', files: ['b.ts'] },
+      ],
+      oldMin: null,
+    });
+    expect(conflictsOf(cf(), 'zulu', NOW)).toEqual({
+      main: null,
+      lanes: [{ branch: 'echo', files: ['b.ts'] }],
+      oldMin: null,
+    });
+    expect(conflictsOf(cf(), 'kilo', NOW)).toEqual({ main: ['k.ts'], lanes: [], oldMin: null });
+  });
+  it('is null for an unrelated lane, no branch, no file, or a file with no conflicts', () => {
+    expect(conflictsOf(cf(), 'lima', NOW)).toBeNull();
+    expect(conflictsOf(cf(), null, NOW)).toBeNull();
+    expect(conflictsOf(null, 'echo', NOW)).toBeNull();
+    expect(conflictsOf({ at: NOW, list: [] }, 'echo', NOW)).toBeNull();
+    // 'main' is only ever b: a lane named main is never matched as a's partner
+    expect(conflictsOf(cf(), 'main', NOW)).toBeNull();
+  });
+  it('is old from 10 min, in whole minutes; a file with no time counts as new (as board.sh)', () => {
+    expect(conflictsOf(cf(NOW - 10 * MIN + 1), 'echo', NOW)!.oldMin).toBeNull();
+    expect(conflictsOf(cf(NOW - 10 * MIN), 'echo', NOW)!.oldMin).toBe(10);
+    expect(conflictsOf(cf(NOW - 75.5 * MIN), 'echo', NOW)!.oldMin).toBe(75);
+    expect(conflictsOf(cf(null), 'echo', NOW)!.oldMin).toBeNull();
+  });
+  it('a lane row carries them and nothing else moves: state, tone, label, detail, needs', () => {
+    const lanes = [file({ phase: 'review', step: 'round 1' })];
+    const plain = inputs({ lanes });
+    const marked = inputs({ lanes, conflicts: cf() });
+    const a = row(plain, { file: lanes[0]! });
+    const b = row(marked, { file: lanes[0]! });
+    expect(a.conflicts).toBeNull();
+    expect(b.conflicts!.main).toEqual(['docs/x.md']);
+    expect({ ...b, conflicts: null }).toEqual(a);
+    const va = derive(plain);
+    const vb = derive(marked);
+    expect(vb.needs).toEqual(va.needs);
+    expect(vb.active[0]!.conflicts!.lanes.map((x) => x.branch)).toEqual(['alpha', 'zulu']);
+    expect({ ...vb.active[0]!, conflicts: null }).toEqual(va.active[0]);
   });
 });

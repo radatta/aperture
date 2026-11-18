@@ -16,7 +16,7 @@ import {
   type MainSync,
 } from './stale.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
-import type { Lock, TowerState } from './model.ts';
+import { conflictsOf, type LaneConflicts, type Lock, type TowerState } from './model.ts';
 import { CTX_STALE_MS, ctxOf, ctxView, type CtxFile, type CtxView } from './ctx.ts';
 import { mergedFromLog, mergedNumbers, REUSE_MS, type MainMerge } from './mergelog.ts';
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
@@ -60,6 +60,7 @@ export type LaneRow = {
   steps: LaneStep[] | null;
   eta: { next: Range | null; pr: Range | null; source: string; late: boolean } | null;
   ctx: number | null; // its session's context use, % (ctx.ts; amber ≥ 40, red ≥ 50), while ctx.json is fresh
+  conflicts: LaneConflicts | null; // what git can't merge it with (overlap.json; TOWER.md → Conflicts): amber only
 };
 export type LaneStep = {
   phase: string;
@@ -405,6 +406,7 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     quiet: false,
     ...laneSteps(file, i.now, pr),
     ctx: null as number | null,
+    conflicts: conflictsOf(i.tower.conflicts, branch, i.now),
   };
   base.ctx = ctxOf(i.ctx, base.session, i.now);
   const row = (
