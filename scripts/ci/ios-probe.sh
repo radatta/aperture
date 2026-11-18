@@ -238,8 +238,9 @@ s_axe_install() {
   mkdir -p "$WORK/axe18" "$w" && tar xzf "$t18" -C "$WORK/axe18" || { note "1.8.0 untar failed"; return 1; }
   a18="$(find "$WORK/axe18" -type f -name axe | head -1)"
   [ -n "$a18" ] && "$a18" --version >/dev/null 2>&1 || { note "1.8.0 won't run"; return 1; }
-  # sim.sh calls `axe` by name: this one sends a batch holding a home press to 1.8.0, the rest to 2.0.4
-  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" != "button home" ] || exec %q "$@"; done\nexec %q "$@"\n' "$a18" "$AXE" >"$w/axe"
+  # sim.sh calls `axe` by name: a batch with two or more home presses (only the switcher's double press, sim.sh
+  # sim_kill_switcher) goes to 1.8.0; single-press batches (launch, relaunch) and everything else to 2.0.4 (review S2)
+  printf '#!/bin/bash\nn=0; for a in "$@"; do [ "$a" != "button home" ] || n=$((n + 1)); done\n[ "$n" -lt 2 ] || exec %q "$@"\nexec %q "$@"\n' "$a18" "$AXE" >"$w/axe"
   chmod +x "$w/axe"
   note "axe2mix: switcher batches → 1.8.0 ($a18), the rest → 2.0.4"
 }
@@ -397,8 +398,7 @@ dyld_update() {
   case ",$OPTS," in *,dyld,*) ;; *) return 0 ;; esac
   local t0 rc=0
   t0=$(now_ms)
-  # this runtime only if simctl takes its identifier (4 runtimes on the image), else --all as DTS gave it; no --all
-  # after a timeout (rc 124), only after simctl refused the argument
+  # this runtime first (4 runtimes on the image), then --all as DTS gave it after any failure but a timeout (rc 124)
   cap 600 xcrun simctl runtime dyld_shared_cache update "$RUNTIME_ID" >"$OUT/dyld.log" 2>&1 || rc=$?
   if [ "$rc" != 0 ] && [ "$rc" != 124 ]; then rc=0; cap 600 xcrun simctl runtime dyld_shared_cache update --all >>"$OUT/dyld.log" 2>&1 || rc=$?; fi
   note "dyld update rc $rc in $(( ($(now_ms) - t0) / 1000 )) s: $(tail -1 "$OUT/dyld.log" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-100)"
