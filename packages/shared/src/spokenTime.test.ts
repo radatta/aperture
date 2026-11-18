@@ -69,13 +69,18 @@ describe('spokenTimeIn', () => {
     });
   });
 
-  it("a bare hour's day-part counts only beside it, a day word between allowed", () => {
+  it("a bare hour's day-part: beside it in any form, or anywhere as a time phrase — never a noun elsewhere", () => {
     const part = (line: string) => {
       const t = spokenTimeIn(line);
       return t?.kind === 'bare' ? t.part : `not bare: ${JSON.stringify(t)}`;
     };
     expect(part('remind me at 5 to send the morning report')).toBeNull();
-    expect(part('at 9 book the tonight show tickets')).toBeNull();
+    expect(part('at 9 book the night bus')).toBeNull();
+    expect(part('remind me tomorrow morning to go for a run at 6')).toBe('morning');
+    expect(part('remind me tonight to call mum at 9')).toBe('tonight');
+    // "<day> night" is tonight's part, so the small-hours rule holds ("at 1 friday night" is after Friday).
+    expect(part('call mum at 1 friday night')).toBe('tonight');
+    expect(part('call mum friday night at 9')).toBe('tonight');
     expect(part('call mum tomorrow morning at 9')).toBe('morning');
     expect(part('call mum at 9 friday morning')).toBe('morning');
     expect(part('call mum at 9 on friday morning')).toBe('morning');

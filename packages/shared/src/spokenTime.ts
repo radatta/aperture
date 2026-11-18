@@ -84,19 +84,35 @@ const MORE_NUMBER =
 export const DAY_WORD =
   /\b(tomorrow|tmrw?|tmw|today|days?|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|weekend|week|month|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december|\d{1,2}(st|nd|rd|th)|\d{1,2}\/\d{1,2})\b/i;
 const TONIGHT = /\btonight\b/i;
+const WEEKDAY =
+  'mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?';
+const NIGHT_DAY = `(?:tomorrow|tmrw?|tmw|${WEEKDAY})`; // "friday night", "tomorrow night": that night, the small hours after
 // A day said between a clock and its half of the day: "at 8 tomorrow evening", "at 9 on friday night".
-export const NEAR_DAY =
-  '(?:on\\s+)?(?:today|tomorrow|tmrw?|tmw|mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)';
-// A bare hour's day-part counts only beside it ("at 8 tonight", "tomorrow morning at 9", "at 9 friday morning"),
-// never from elsewhere in the line ("at 5 send the morning report" is a bare 5).
+export const NEAR_DAY = `(?:on\\s+)?(?:today|${NIGHT_DAY})`;
+// A half of the day said as a time wherever it sits in the line: "tonight", "tomorrow morning", "this evening",
+// "in the afternoon", "friday night". A bare day-part noun ("the morning report", "the night bus") is not one.
+export const HALF_PHRASE = `\\btonight\\b|\\bat night\\b|\\b(?:this|in the|${NIGHT_DAY})\\s+(?:morning|afternoon|evening)\\b|\\b${NIGHT_DAY}\\s+night\\b`;
+// A bare hour's day-part (the grammar knows morning and tonight; "<day> night" is tonight's): beside the clock in
+// any form ("at 8 tonight", "tomorrow morning at 9", "at 1 friday night"), or anywhere as a time phrase ("remind
+// me tonight to call mum at 9") — never a noun elsewhere ("at 5 send the morning report" is a bare 5).
 const PART_AFTER = new RegExp(
-  `^\\s*(?:o['’]?\\s?clock\\s*)?(?:${NEAR_DAY}\\s+)?(?:(?:in the|this)\\s+)?(tonight|morning)\\b`,
+  `^\\s*(?:o['’]?\\s?clock\\s*)?(?:(?:${NEAR_DAY}\\s+)?(?:(?:in the|this)\\s+)?(morning)\\b|tonight\\b|at night\\b|${NEAR_DAY}\\s+night\\b)`,
   'i',
 );
-const PART_BEFORE = /\b(tonight|morning)\s*,?\s*(?:at|by|around)?\s*$/i;
-const partBeside = (line: string, start: number, end: number): DayPart | null => {
-  const m = PART_AFTER.exec(line.slice(end)) ?? PART_BEFORE.exec(line.slice(0, start));
-  return m ? (/^t/i.test(m[1]!) ? 'tonight' : 'morning') : null;
+const PART_BEFORE = new RegExp(
+  `(?:\\b(morning)|\\btonight|\\bat night|\\b${NIGHT_DAY}\\s+night)\\s*,?\\s*(?:at|by|around)?\\s*$`,
+  'i',
+);
+const PART_PHRASE = new RegExp(
+  `\\btonight\\b|\\b(?:this|in the|${NIGHT_DAY})\\s+(morning)\\b|\\b${NIGHT_DAY}\\s+night\\b`,
+  'i',
+);
+const bareHourPart = (line: string, start: number, end: number): DayPart | null => {
+  const m =
+    PART_AFTER.exec(line.slice(end)) ??
+    PART_BEFORE.exec(line.slice(0, start)) ??
+    PART_PHRASE.exec(line);
+  return m ? (m[1] ? 'morning' : 'tonight') : null;
 };
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
@@ -168,7 +184,11 @@ export function spokenTimeIn(line: string): SpokenTime | null {
   if (at && !/clock$/i.test(at[0]) && MORE_NUMBER.test(line.slice(at.index + at[0].length)))
     return null;
   if (bare && hit && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
-    return { kind: 'bare', ...bare, part: partBeside(line, hit.index, hit.index + hit[0].length) };
+    return {
+      kind: 'bare',
+      ...bare,
+      part: bareHourPart(line, hit.index, hit.index + hit[0].length),
+    };
   return partMatch && part ? { said: partMatch[0], kind: 'part', part } : null;
 }
 

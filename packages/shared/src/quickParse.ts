@@ -22,6 +22,7 @@ import type { Category } from './types';
 import {
   DAY_PART_TIME,
   DAY_WORD,
+  HALF_PHRASE,
   NEAR_DAY,
   dueClock,
   resolveSpoken,
@@ -101,10 +102,11 @@ const rangesOf = (line: string, re: RegExp): Range[] =>
 const SPOKEN_CLOCK_HINT =
   /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
 
-// A spoken clock with its half of the day said, in its own words or right beside them: "5 pm", "17:30", "noon",
-// "at 5 in the evening", "at 8 tomorrow evening", "tonight at 9". Without one, the model's clock is a bare hour
-// and the server picks morning or evening. Only beside the clock: "at 9 book the night bus" says no half.
-// "5:30" is 12-hour, so only a 24-hour form ("17:30", "08:15") counts.
+// A spoken clock with its half of the day said: in its own words or right beside them ("5 pm", "17:30", "noon",
+// "at 5 in the evening", "at 8 tomorrow evening", "tonight at 9"), or as a time phrase anywhere in the line
+// ("remind me this evening to call mum at 6": HALF_PHRASE). Without one, the model's clock is a bare hour and the
+// server picks morning or evening. A day-part noun elsewhere says nothing: "at 9 book the night bus". "5:30" is
+// 12-hour, so only a 24-hour form ("17:30", "08:15") counts.
 const HALF_IN =
   /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
 const HALF_AFTER = new RegExp(
@@ -116,8 +118,10 @@ const HALF_BEFORE =
 // No clock the grammar could find ("at five twenty"): only the plain markers count, wherever they are — a
 // day-part word alone ("the night bus") isn't one.
 const HALF_LOOSE =
-  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight|tonight|at night)\b|\b(?:in the|this) (?:morning|afternoon|evening)\b/i;
+  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight)\b/i;
+const HALF_ANYWHERE = new RegExp(HALF_PHRASE, 'i');
 const halfSaid = (line: string, said: string): boolean => {
+  if (HALF_ANYWHERE.test(line)) return true;
   const at = said ? saidAt(line, said) : null;
   if (!at) return HALF_LOOSE.test(line);
   return (
@@ -396,8 +400,11 @@ function led(line: string, [s, e]: Range, lead: RegExp): Range {
 const CLOCKS = new RegExp(CLOCK_IN_LINE.source, 'gi');
 const DURATIONS = new RegExp(DURATION_IN_LINE.source, 'gi');
 const DAY_WORDS = /\b(today|tdy|tonight)\b|(?<!\bday\s+after\s+)\b(tomorrow|tmrw?|tmw)\b/gi;
-const DAY_PARTS =
-  /\b(?:(?:this|tomorrow|in the)\s+)?(?:morning|afternoon|evening|night)\b|\btonight\b/gi;
+// The words of a half of the day said as a time: a phrase anywhere (HALF_PHRASE), or a bare day-part word beside a
+// clock (BESIDE_CLOCK). "the night bus" is neither, so its words never count as the due's.
+const DAY_PARTS = new RegExp(HALF_PHRASE, 'gi');
+const DAY_PART_WORDS = /\b(?:morning|afternoon|evening|night)\b/gi;
+const BESIDE_CLOCK = /^\s*(?:o['’]?\s?clock)?\s*(?:in the|this)?\s*$/i;
 // A clock or day the task is about, not when it's due: "move standup to 5pm", "prep for this friday 5pm".
 const OBJECT_OF = /\b(?:to|for|of|about|from|than)\s+$/i;
 // A clock used as a noun is the task's too: "prep notes for the 3pm", "skip my 9am".
@@ -439,7 +446,14 @@ function titleMeta(
     const said =
       spoken && (ctx.voice || spoken.kind === 'clock') ? saidAt(line, spoken.said) : null;
     if (said) clocks.push(said);
-    clocks.push(...rangesOf(line, DAY_PARTS));
+    // Beside a clock: only spaces, "o'clock", "in the" or "this" between ("at 5 in the evening", "9 morning").
+    const beside = (r: Range) =>
+      clocks.some(
+        ([c0, c1]) =>
+          (c1 <= r[0] && BESIDE_CLOCK.test(line.slice(c1, r[0]))) ||
+          (r[1] <= c0 && BESIDE_CLOCK.test(line.slice(r[1], c0))),
+      );
+    clocks.push(...rangesOf(line, DAY_PARTS), ...rangesOf(line, DAY_PART_WORDS).filter(beside));
   }
   if (input.dueTime && !clocks.length) return null;
   // A clock the task is about isn't the due's: "move standup to 5pm" keeps "to 5pm".

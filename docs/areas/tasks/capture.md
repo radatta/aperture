@@ -146,7 +146,10 @@ maintainer, 2026-11-16):
 1. A bare "at N" is the next N o'clock, wrapping: 2 AM + "at 5" → 5 AM; 6 AM + "at 5" → 5 PM.
 2. A spoken time already past rolls forward to its next occurrence, and `say` names the day.
 3. "morning" is 9 AM, "tonight" 8 PM; "in N minutes/hours" is computed from the server clock, never by the
-   model.
+   model. A bare hour takes its half of the day from words beside it in any form ("at 8 tonight", "tomorrow
+   morning at 9", "at 1 friday night" — "<day> night" is that night's, so a small hour lands after the day), or
+   from a time phrase anywhere ("remind me tonight to call mum at 9"; "this", "in the" or a day before morning…
+   evening). A day-part noun elsewhere is no time: "at 5 send the morning report" is a bare 5 (2026-11-17).
 
 **The model reads the clock, the code places it** (since 2026-11-17, Sonnet; before, the grammar read it and the
 model's time was ignored). Every spoken line gets the voice rules on top of the typed prompt — strip spoken times
@@ -154,9 +157,9 @@ and a leading "remind me to" from the title; `dueTime` the clock as said ("at 5"
 "5 pm" → 17:00; "tonight" alone → 20:00, "morning" → 09:00; a delay → null); a day only when one was said. The
 code then places it (`validateParsedTask`, `spokenTime.ts`): a delay ("in 20 minutes") is always the server
 clock's; a model clock that agrees with the grammar's reading takes the grammar's placement (a bare hour wraps,
-"at 1 tonight" is the small hours); one that disagrees wins — a bare hour when no half of the day is said in or beside
-the clock (am/pm, a 24-hour clock, noon, morning…evening, tonight; a day word may sit between, "at 8 tomorrow
-evening"; "at 9 book the night bus" says none), else as stated — and rolls forward like any time. With
+"at 1 tonight" is the small hours); one that disagrees wins — a bare hour when no half of the day is said (am/pm, a 24-hour
+clock, noon, or a day-part beside the clock or as a time phrase anywhere, rule 3: "at 8 tomorrow evening",
+"remind me this evening to call mum at 6"; "at 9 book the night bus" says none), else as stated — and rolls forward like any time. With
 no model clock the grammar's reading fills, as before. The grammar on its own (precedence: relative → a stated
 clock → a bare hour → a day-part) is the fallback when the model doesn't run (§2 _Flow_).
 
@@ -183,6 +186,8 @@ Two checks keep the grammar honest:
 | same                                         | 6 PM        | tomorrow 5 AM                                    |
 | at 9 am / today at 9 am                      | 3 PM        | tomorrow 9 AM (rolled)                           |
 | at 8 tonight / at 8 in the morning           | any         | the day-part picks PM / AM, then next occurrence |
+| at 1 friday night                            | any         | Saturday 1 AM (the small hours after Friday)     |
+| at 5 … the morning report                    | 6 AM        | today 5 PM (the noun is no day-part)             |
 | tonight                                      | 3 PM / 9 PM | today 8 PM / tomorrow 8 PM                       |
 | this morning / tomorrow morning              | 10 AM       | tomorrow 9 AM                                    |
 | friday at 5 (a named day, a bare hour)       | any         | Friday 5 PM — the daytime hour, 07:00–18:59      |
