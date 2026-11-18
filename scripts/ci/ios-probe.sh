@@ -16,9 +16,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,hostlog" ;;
-    2) echo "restore card nohub,light,taplanded" ;;
-    *) echo "restore card nohub,light" ;;
+    1) echo "restore card nohub,light,hostlog,taplanded" ;;
+    2) echo "restore card nohub,light,hostlog,taplanded" ;;
+    *) echo "restore card nohub,light,hostlog,taplanded" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -341,7 +341,10 @@ procs() {
   { echo "== $1 $(date +%H:%M:%S)"
     cap 10 sysctl -n vm.swapusage
     cap 15 memory_pressure >"$WORK/mp.txt" 2>/dev/null; tail -1 "$WORK/mp.txt"
-    cap 15 ps -axro pid,ppid,pcpu,rss,etime,command >"$WORK/ps.txt" 2>/dev/null; head -25 "$WORK/ps.txt" | cut -c1-220
+    # comm, reduced to its name and marked sim: when it runs from the simulator runtime (run 17's paths hid the names)
+    cap 15 ps -axro pid,ppid,pcpu,rss,comm >"$WORK/ps.txt" 2>/dev/null
+    head -25 "$WORK/ps.txt" | awk 'NR == 1 { print; next } { c = ""; for (i = 5; i <= NF; i++) c = c (i > 5 ? " " : "") $i
+      w = (c ~ /SimulatorRuntime|CoreSimulator/) ? "sim:" : ""; sub(/.*\//, "", c); printf "%s %s %s %s %s%s\n", $1, $2, $3, $4, w, c }' 
   } >>"$OUT/procs.txt" 2>&1
 }
 # hostlog (CI only, never the Mac: a throwaway runner's own logging): SIP is off on the runner (run 16's csrutil), so
