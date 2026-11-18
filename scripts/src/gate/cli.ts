@@ -334,11 +334,17 @@ const CLI = fileURLToPath(import.meta.url);
 
 // The caller pass waits on the outer heavy.sh and forwards INT/TERM/HUP to it (heavy.sh stops its whole subtree),
 // so a signal to this pid alone never leaves the gate running unowned.
-export const spawnOuter: Outer = (heavy, root, args, env) =>
+export const spawnOuter = (
+  heavy: string,
+  root: string,
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  onSignal: OnSignal = onProcessSignal,
+): Promise<number> =>
   new Promise((resolve) => {
     const c = spawn(heavy, args, { cwd: root, stdio: 'inherit', env });
     let got = 0;
-    const off = onProcessSignal((sig, code) => {
+    const off = onSignal((sig, code) => {
       got ||= code;
       c.kill(sig);
     });
@@ -430,7 +436,12 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
       CLI,
       ...argv,
     ];
-    return outer(heavy, root, args, { ...caller, ...outerEnv(wide) });
+    const code = await outer(heavy, root, args, { ...caller, ...outerEnv(wide) });
+    if (code === 75)
+      out(
+        'gate:fast — no slot in time: run `pnpm gate:fast --wait 600` in the background (board.sh status shows who holds them)',
+      );
+    return code;
   }
   // The diff can widen during the slot wait (a background gate, files still being written): never run a wide plan
   // inside a narrow slot.

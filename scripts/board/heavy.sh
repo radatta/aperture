@@ -46,9 +46,9 @@ if { [ "$class" = test ] || [ "$class" = test-fast ]; } && sb_in_container; then
 fi
 
 # A step inside a slotted run (pnpm gate:fast) names that run's heavy.sh in HEAVY_NOSLOT. Honoured only while that
-# pid is our ancestor and holds a live slot: never a way past the cap from outside one.
+# pid is our ancestor and holds a live slot — a `test` one for a `test`-slot job: never a way past the cap.
 noslot_held() {
-  local w="${HEAVY_NOSLOT:-}" p=$$ ps st i f
+  local w="${HEAVY_NOSLOT:-}" p=$$ ps st i f c
   [[ "$w" =~ ^[0-9]+$ ]] || return 1
   for ((i = 0; i < 32; i++)); do
     read -r ps st < <(sb_stat "$p") || return 1
@@ -58,7 +58,11 @@ noslot_held() {
   done
   [ "$ps" = "$w" ] || return 1
   for f in "$BOARD_DIR"/leases/heavy/*.json; do
-    [ -e "$f" ] && [ "$(jq -r .wrapperPid "$f" 2>/dev/null)" = "$w" ] && sb_slot_live "$f" && return 0
+    [ -e "$f" ] || continue
+    read -r p c < <(jq -r '"\(.wrapperPid) \(.class)"' "$f" 2>/dev/null)
+    [ "$p" = "$w" ] && sb_slot_live "$f" || continue
+    [ "$slot_class" != test ] || [ "$c" = test ]
+    return
   done
   return 1
 }

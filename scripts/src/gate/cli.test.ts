@@ -472,6 +472,24 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
     expect(readFileSync(join(dir, 'seen'), 'utf8').trim()).toBe('--wait 5 -- x 1');
     expect(await spawnOuter(join(dir, 'missing.sh'), dir, [], {})).toBe(127);
   });
+
+  it('the outer run: a signal to the gate is passed on to heavy.sh, and the gate exits 128+n', async () => {
+    const { dir, f } = stub(`trap 'echo got >${'${0%/*}'}/term; exit 0' TERM; sleep 30 & wait`);
+    let fire!: (sig: NodeJS.Signals, code: number) => void;
+    let removed = false;
+    const p = spawnOuter(
+      f,
+      dir,
+      [],
+      { PATH: process.env.PATH },
+      (fn) => ((fire = fn), () => (removed = true)),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    fire('SIGTERM', 143);
+    expect(await p).toBe(143); // heavy.sh's own 0 doesn't mask the interrupt
+    expect(readFileSync(join(dir, 'term'), 'utf8').trim()).toBe('got');
+    expect(removed).toBe(true);
+  });
 });
 
 describe('main', () => {
@@ -515,6 +533,9 @@ describe('main', () => {
       HEAVY_LABEL: 'gate:narrow',
     });
     expect(out.join('\n')).toMatch(/gate:fast — 1 changed path/);
+    expect(out.at(-1)).toMatch(
+      /no slot in time: run `pnpm gate:fast --wait 600` in the background/,
+    );
   });
 
   it('a wide diff takes a `test` slot; --full too', async () => {

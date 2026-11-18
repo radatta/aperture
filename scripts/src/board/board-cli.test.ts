@@ -920,13 +920,27 @@ describe('heavy.sh test cap', () => {
 
   it('HEAVY_NOSLOT from outside a slotted run is no way past the cap: it takes a slot, and waits', () => {
     limits({ enforce: true });
-    testSlots(cap);
-    for (const v of ['1', String(process.pid), 'x']) {
+    const holder = liveSession();
+    testSlots(cap, holder); // a live slot's wrapper, but not an ancestor of the run
+    for (const v of ['1', String(process.pid), 'x', String(holder)]) {
       const r = heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test', HEAVY_NOSLOT: v });
       expect(r.code, v).toBe(75);
       expect(r.err).toMatch(/is no live slot above this run — taking a slot/);
     }
     expect(events().filter((e) => e.kind === 'job')).toEqual([]);
+  });
+
+  it('a `test` job inside a non-`test` slot (a narrow gate, a typecheck) still takes its own `test` slot', () => {
+    limits({ enforce: true });
+    testSlots(cap - 1); // the outer test-fast run takes no `test` place; the step finds the cap full only with it
+    testSlots(1, liveSession());
+    const step = `HEAVY_NOSLOT=$HEAVY_WRAPPER HEAVY_CLASS=test bash ${join(boardDir, 'heavy.sh')} --wait 0 -- true`;
+    const r = heavy(['--', 'bash', '-c', step], {
+      HEAVY_CLASS: 'gate-narrow',
+      HEAVY_SLOT_CLASS: 'test-fast',
+    });
+    expect(r.code).toBe(75);
+    expect(r.err).toMatch(/is no live slot above this run — taking a slot/);
   });
 
   it('HEAVY_SLOT_CLASS only raises a slot: anything but test/test-fast is ignored, a test job stays test', () => {
