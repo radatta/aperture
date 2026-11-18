@@ -2,7 +2,7 @@
 // extension API whose background answers like A1's server: the overlay's Start clicks LeetCode's own reset,
 // confirm and timer; the binding resumes a reload; SPA navigation re-prompts.
 import { createRequire } from 'node:module';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JSDOM } from 'jsdom';
 import {
   SITTING_ACTIVE_ERROR,
@@ -27,12 +27,85 @@ import {
 } from './load';
 
 // Fake timers: every wait the scripts pay (retry ladders, intervals, Start's step timeouts, the debug flush) runs
-// on a fake clock, and `until`/`settle` advance it in 10 ms steps (load.ts's real-time poll). Each step first
-// gives one real turn (`io`), so the relay's webcrypto sign and verify, which finish on node's threadpool rather
-// than as microtasks, land as they would in real time; a "nothing within N ms" check is then as strong as before.
-// Budgets are fake milliseconds, so each `until` bound is exact.
+// on a fake clock, and `until`/`settle` advance it in 10 ms steps (load.ts's real-time poll). The relay's
+// webcrypto (importKey, sign, verify) finishes on node's threadpool, not as a microtask, so each step first waits
+// in real time (`io`) until none is in flight: the fake clock is never more than one 10 ms step ahead of a sign or
+// verify (one started by a timer mid-step), however slow the threadpool — F242: under load it ran seconds ahead,
+// and timers fired that real time never would. Crypto takes no fake time, so a "nothing within N ms" check is as
+// strong as before, and each `until` bound is exact.
+// Opt-in stress, for a test that assumes timing (README → Tests): EXT_CRYPTO_JITTER_MS=N settles each call 0–N
+// real ms late (the order of completions, a "lands within one real turn" assumption: the run that found F242);
+// EXT_CRYPTO_LATENCY_MS=N adds 0–N fake ms (crypto racing the scripts' own timers); EXT_CRYPTO_SEED replays one.
 const realSetTimeout = setTimeout;
-const io = () => new Promise<void>((r) => realSetTimeout(r, 0));
+const envMs = (name: string) => {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isSafeInteger(n) || n < 0)
+    throw new Error(`${name}: whole milliseconds, not "${raw}"`);
+  return n;
+};
+const JITTER_MS = envMs('EXT_CRYPTO_JITTER_MS');
+const LATENCY_MS = envMs('EXT_CRYPTO_LATENCY_MS');
+const SEED = envMs('EXT_CRYPTO_SEED') || Math.floor(Math.random() * 2 ** 31) + 1;
+if (JITTER_MS || LATENCY_MS)
+  console.log(
+    `crypto stress: jitter ${JITTER_MS} ms, latency ${LATENCY_MS} ms, EXT_CRYPTO_SEED=${SEED}`,
+  );
+let seed = SEED;
+const rand = () => {
+  // mulberry32: small, seedable, enough for spreading delays
+  seed = (seed + 0x6d2b79f5) | 0;
+  let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
+const realWait = (ms: number) => new Promise<void>((r) => realSetTimeout(r, ms));
+const fakeWait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)); // the clock a test installed
+const delayed = <T>(p: Promise<T>, max: number, wait: (ms: number) => Promise<void>) => {
+  if (!max) return p;
+  const w = () => wait(Math.floor(rand() * (max + 1)));
+  return p.then(
+    (v) => w().then(() => v),
+    (e) =>
+      w().then(() => {
+        throw e;
+      }),
+  );
+};
+let cryptoInFlight = 0;
+const subtle = globalThis.crypto.subtle as unknown as Record<
+  string,
+  (...a: unknown[]) => Promise<unknown>
+>;
+const realSubtle = new Map<string, unknown>();
+for (const k of ['importKey', 'sign', 'verify']) {
+  const real = subtle[k]!.bind(subtle);
+  realSubtle.set(k, Object.getOwnPropertyDescriptor(subtle, k));
+  subtle[k] = (...a: unknown[]) => {
+    const p = real(...a); // a sync throw goes before the count goes up, so it can't stay up
+    cryptoInFlight++;
+    const done = delayed(p, JITTER_MS, realWait).finally(() => cryptoInFlight--);
+    return delayed(done, LATENCY_MS, fakeWait); // outside the count: the clock must run for it to end
+  };
+}
+afterAll(() => {
+  for (const [k, d] of realSubtle)
+    if (d) Object.defineProperty(subtle, k, d as PropertyDescriptor);
+    else delete subtle[k]; // back to the prototype's own
+});
+const turn = () => new Promise<void>((r) => realSetTimeout(r, 0));
+// A ceiling in real time, under vitest's 5 s test timeout, so a call that never settles fails as itself; real
+// waits are milliseconds, and a jitter run's backlog gets room for it.
+const IO_MAX_MS = 4_000 + 50 * JITTER_MS;
+const io = async () => {
+  const t0 = performance.now();
+  do {
+    await turn();
+    if (performance.now() - t0 > IO_MAX_MS)
+      throw new Error(`io: ${cryptoInFlight} crypto call(s) still in flight after ${IO_MAX_MS} ms`);
+  } while (cryptoInFlight > 0);
+};
 const STEP = 10;
 async function until<T>(fn: () => T | null | undefined | false, ms = 3000): Promise<T> {
   for (let t = 0; ; t += STEP) {
