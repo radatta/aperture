@@ -25,6 +25,7 @@ vi.mock('./sim.ts', async (orig) => ({
 vi.mock('./sim-trial.ts', async (orig) => ({
   ...(await orig<typeof import('./sim-trial.ts')>()),
   simTrial: vi.fn(reached),
+  switcherTrial: vi.fn(reached),
 }));
 vi.mock('./clip.ts', async (orig) => ({
   ...(await orig<typeof import('./clip.ts')>()),
@@ -42,6 +43,8 @@ const fakes = [
   (await import('./clip.ts')).clipProbe,
   (await import('./edit-pr.ts')).editPr,
   (await import('./fixtures-job.ts')).fixturesJob,
+  (await import('./sim-trial.ts')).simTrial,
+  (await import('./sim-trial.ts')).switcherTrial,
 ];
 
 let out: string[];
@@ -93,6 +96,7 @@ describe('pnpm mailroom … refuses what it does not know', () => {
     [['sim-trial', '--tag', 'x', '--icon', 'yes']],
     [['sim-trial', '--tag', 'x', '--keys=1']],
     [['sim-trial', '--tag', 'x', '--loaded']],
+    [['sim-trial', '--tag', 'x', '--switcher', 'yes']],
   ])('%j → exit 2, nothing run', async (argv) => {
     expect(await main(argv)).toBe(2);
     expect(err[0]).toMatch(/unknown|unexpected|takes no value|needs a value/);
@@ -114,11 +118,26 @@ describe('the guard lets real invocations through', () => {
     [['sim-trial', '--tag', 'quiet']],
     [['sim-trial', '--tag', 'quiet', '--round', '2', '--icon']],
     [['sim-trial', '--tag', 'k', '--keys']],
+    [['sim-trial', '--tag', 'sw', '--round', '1', '--switcher']],
   ])('%j reaches main', async (argv) => {
     await expect(main(argv)).rejects.toThrow(REACHED);
   });
   it('sim-trial --keys with --icon is two trials: exit 2, nothing run', async () => {
     expect(await main(['sim-trial', '--tag', 'x', '--keys', '--icon'])).toBe(2);
+    expect(err[0]).toMatch(/pick one/);
+    untouched();
+  });
+  it('sim-trial --switcher runs the switcher trial with its tag and round, not the input-gap one', async () => {
+    const trials = await import('./sim-trial.ts');
+    vi.mocked((await import('./submit.ts')).hostjobsDir).mockImplementationOnce(() => '/hj');
+    await expect(main(['sim-trial', '--tag', 'sw', '--round', '1', '--switcher'])).rejects.toThrow(
+      REACHED,
+    );
+    expect(trials.switcherTrial).toHaveBeenCalledWith(expect.anything(), 'sw', undefined, 1);
+    expect(trials.simTrial).not.toHaveBeenCalled();
+  });
+  it('sim-trial --switcher with --icon is two trials: exit 2, nothing run', async () => {
+    expect(await main(['sim-trial', '--tag', 'x', '--icon', '--switcher'])).toBe(2);
     expect(err[0]).toMatch(/pick one/);
     untouched();
   });

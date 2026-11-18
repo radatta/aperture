@@ -231,7 +231,18 @@ FULL = {'x': 0, 'y': 0, 'width': 440, 'height': 956}
 APPFRONT = [{'role': 'AXApplication', 'AXLabel': 'Web', 'frame': FULL, 'children': []}]  # the incident: the app, no pill
 SWITCHER = [{'role': 'AXApplication', 'AXLabel': 'SpringBoard', 'frame': FULL, 'children': [{**ICON, 'frame': {'x': 120, 'y': 200, 'width': 200, 'height': 430}}]}]
 KS = [L, {'op': 'kill', 'method': 'switcher'}, L, {'op': 'expect', 'signedIn': True}]
-DOUBLE, SWIPE, LEAVE, PRESS = 'button home --step sleep 0.15', 'swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40', 'tap -x 400 -y 880', 'home --step sleep 1 --udid'
+DOUBLE, LEAVE, PRESS = 'button home --step sleep 0.15', 'tap -x 400 -y 880', 'home --step sleep 1 --udid'
+# The switcher's card swipes (sim.sh: sim_card_rung), aimed at the default card frame 239,136 306x664: x 339 mid its
+# on-screen part, y at 70 % (600) or 88 % (720) of it. ANY is any card swipe; CARD a card read; POLLS the process
+# checks one swipe makes (1 + SIM_KILL_POLLS).
+ANY = '--end-y 40 --duration'
+S1 = 'swipe --start-x 339 --start-y 600 --end-x 339 --end-y 40 --duration 0.3 --udid'
+S2 = 'swipe --start-x 339 --start-y 600 --end-x 339 --end-y 40 --duration 0.3 --pre-delay 1 --post-delay 0.5 --udid'
+S3 = 'swipe --start-x 339 --start-y 720 --end-x 339 --end-y 40 --duration 0.6 --delta 20 --pre-delay 1 --post-delay 0.5 --udid'
+CARD, POLLS = '--point 340,560', 7
+CARDEL = el('AXGenericElement', 'Aperture', 'Active', 239, 136, 306, 664)
+def card(x, y=136, w=306, h=664, n=1): return pt(340, 560, el('AXGenericElement', 'Aperture', 'Active', x, y, w, h), n=n)
+def alive(n=0): return {'m': 'Web.app/Web', 'out': '4242', **({'n': n} if n else {})}
 WEB = 'pgrep -f RuntimeRoot/Applications/Web.app/Web'
 def sc(name, steps=None, **k):
     if steps is not None: k['patch'] = {**k.get('patch', {}), **ST(*steps)}
@@ -671,35 +682,81 @@ spass('sim: a stale first landmark read is read again', [L], tape=[pt(220, 895, 
       expect={'signedIn': 'already'})
 # The switcher and home presses are read back (job …192707Z…-relaunch-bd33: AXe reported presses iOS never got). One launch
 # reads the tree three times (ready, then two icon reads that agree), so a kill's own read is the fourth.
-spass('sim: kill by app switcher', KS, tape=[dtree(tree(), 4), dtree(SWITCHER, 2)], notes={'1': 'killed by switcher; web: gone'},
-      simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', SWIPE, 'tap -x 400 -y 880 --tap-style physical', WEB],
-      simCount={DOUBLE: 1, SWIPE: 1, LEAVE: 1})
+spass('sim: kill by app switcher', KS, tape=[dtree(tree(), 4), dtree(SWITCHER, 2)],
+      notes={'1': 'killed by switcher; web: gone; card 239,136 306x664 r2; s1 flick 339,600 gone@0'},
+      simIncludes=['batch --step button home --step sleep 0.15 --step button home --step sleep 1.5', S1, 'tap -x 400 -y 880 --tap-style physical', WEB],
+      simCount={DOUBLE: 1, ANY: 1, S1: 1, LEAVE: 1, CARD: 2})
 spass('sim: a dropped switcher press (the app still in front) is pressed again before any swipe', KS,
-      tape=[dtree(tree(), 4), dtree(APPFRONT, 1), dtree(SWITCHER, 2)], notes={'1': "killed by switcher; web: gone; the switcher didn't open (Web)"},
-      simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
+      tape=[dtree(tree(), 4), dtree(APPFRONT, 1), dtree(SWITCHER, 2)], notes={'1': "gone@0; the switcher didn't open (Web)"},
+      simCount={DOUBLE: 2, ANY: 1, LEAVE: 1})
 spass('sim: one press of the two landing (the Home Screen) is pressed again, not swiped', KS,
       tape=[dtree(tree(), 4), dtree(tree('SpringBoard'), 1), dtree(SWITCHER, 2)], notes={'1': "the switcher didn't open (SpringBoard, Page 2 of 2)"},
-      simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 1})
+      simCount={DOUBLE: 2, ANY: 1, LEAVE: 1})
 sfail('sim: the app still in front after two switcher tries is SWITCHER_FAILED, never swiped or tapped', 'SWITCHER_FAILED', KS,
-      tape=[dtree(tree(), 4), dtree(APPFRONT, 2)], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 0}, files=['shots/01-fail.png'])
-spass('sim: an app still running after the card swipe is swiped again', KS,
-      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), {'m': 'Web.app/Web', 'out': '4242', 'n': 2}], notes={'1': 'still running after the swipe'},
-      simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1, WEB: 5})  # 2 alive, then gone before and after the wait, then the note's
-serr('sim: an app still running after two card swipes is SWITCHER_FAILED, needs you (re-trial the gesture); the switcher is left', 'SWITCHER_FAILED', KS,
-     notes={'1': "the switcher swipe didn't kill the app: re-trial the gesture"},
-      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), {'m': 'Web.app/Web', 'out': '4242'}], simCount={DOUBLE: 1, SWIPE: 2, LEAVE: 1}, files=['shots/01-fail.png'])
+      tape=[dtree(tree(), 4), dtree(APPFRONT, 2)], simCount={DOUBLE: 2, ANY: 0, LEAVE: 0}, files=['shots/01-fail.png'])
+spass("sim: an app still running after the first card swipe takes the ladder's second rung", KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), alive(POLLS)], notes={'1': 'card 239,136 306x664 r2; s1 flick 339,600 alive>sw; s2 lead 339,600 gone@0'},
+      simCount={DOUBLE: 1, S1: 1, S2: 1, S3: 0, LEAVE: 1, WEB: POLLS + 2})  # rung 1's checks, rung 2's first, then the note's
+spass("sim: an app still running after two card swipes is killed by the third rung", KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 4), alive(2 * POLLS + 2)], notes={'1': 's2 lead 339,600 alive>sw; s3 drag 339,720 gone@1'},
+      simCount={DOUBLE: 1, S1: 1, S2: 1, S3: 1, LEAVE: 1, WEB: 2 * POLLS + 4})
+spass('sim: a process that exits inside the polls is the first rung, its time noted', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), alive(3)], notes={'1': 's1 flick 339,600 gone@1.5'}, simCount={S1: 1, S2: 0, LEAVE: 1})
+serr('sim: an app still running after all three card swipes is SWITCHER_FAILED, needs you; every swipe noted; the switcher is left', 'SWITCHER_FAILED', KS,
+     notes={'1': "the switcher swipe didn't kill the app; card 239,136 306x664 r2; s1 flick 339,600 alive>sw; s2 lead 339,600 alive>sw; s3 drag 339,720 alive>sw"},
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 5), alive()], simCount={DOUBLE: 1, S1: 1, S2: 1, S3: 1, LEAVE: 1}, files=['shots/01-fail.png'])
+serr('sim: a switcher that closed itself while the last polls ran is not tapped on the way out', 'SWITCHER_FAILED', KS,
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 4), dtree(tree('SpringBoard'), 1), alive()], simCount={S3: 1, LEAVE: 0})
+spass('sim: a card still moving is read until it holds still, and the swipe aims at where it settled', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), card(300)], notes={'1': 'card 239,136 306x664 r3; s1 flick 339,600 gone@0'}, simCount={CARD: 3, S1: 1})
+spass('sim: a card that never holds still is swiped at its last frame, noted moving', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), card(235), card(233), card(231), card(229)],
+      notes={'1': 'card 229,136 306x664 moving; s1 flick 334,600 gone@0'}, simCount={CARD: 4},
+      simIncludes=['swipe --start-x 334 --start-y 600 --end-x 334 --end-y 40 --duration 0.3 --udid'])
+spass('sim: a card frame without the read spot falls back to the spot, noted', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), card(0, 0, 0, 0, n=0)], notes={'1': 's1 flick 340,560 frame? gone@0'},
+      simIncludes=['swipe --start-x 340 --start-y 560 --end-x 340 --end-y 40 --duration 0.3 --udid'])
+serr('sim: a hung read while the card settles is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS,
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 1), pt(340, 560, CARDEL, n=1), HANG(CARD)], simCount={ANY: 0, CARD: 2})
+spass('sim: a swipe that opened the app instead is pressed again, then the next rung', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 1), dtree(APPFRONT, 1), dtree(SWITCHER, 2), alive(POLLS)],
+      notes={'1': 's1 flick 339,600 alive>app; s2 lead 339,600 gone@0'}, simCount={DOUBLE: 2, S1: 1, S2: 1, LEAVE: 1, WEB: POLLS + 2})
+sfail('sim: a swipe that opened the app, then a dropped press, is SWITCHER_FAILED (dropped input), never tapped into the app', 'SWITCHER_FAILED', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 1), dtree(APPFRONT, 2), alive()],
+      notes={'1': "s1 flick 339,600 alive>app; the switcher didn't open (Web): iOS dropped the input"}, simCount={DOUBLE: 2, ANY: 1, LEAVE: 0})
+spass('sim: a swiped card gone after the polls, with the process gone too, is the kill, late', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), alive(POLLS), pt(340, 560, CARDEL, n=2), pt(340, 560, {})],
+      notes={'1': 's1 flick 339,600 alive>sw; late'}, simCount={DOUBLE: 1, ANY: 1, LEAVE: 1})
+spass('sim: a swipe that left the app running on the Home Screen is pressed again, then the next rung', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1), dtree(SWITCHER, 2), alive(POLLS)],
+      notes={'1': 's1 flick 339,600 alive>home; s2 lead 339,600 gone@0'}, simCount={DOUBLE: 2, S1: 1, S2: 1, LEAVE: 1})
+spass('sim: a process that exits only after the last rung is the kill, late', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 5), alive(3 * POLLS)], notes={'1': 's3 drag 339,720 alive>sw; late'},
+      simCount={S1: 1, S2: 1, S3: 1, LEAVE: 1})
+serr('sim: a pgrep error never reads as gone: the ladder runs out, SWITCHER_FAILED', 'SWITCHER_FAILED', KS,
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 4), {'m': 'Web.app/Web', 'rc': 2}], notes={'1': 's3 drag 339,720 alive>sw'},
+     simCount={S1: 1, S2: 1, S3: 1})
+spass('sim: a card frame that moved between rungs is noted again, and the next swipe aims at it', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), alive(POLLS), pt(340, 560, CARDEL, n=2), card(250, n=0)],
+      notes={'1': 'card 239,136 306x664 r2; s1 flick 339,600 alive>sw; card 250,136 306x664 r2; s2 lead 345,600 gone@0'},
+      simIncludes=['swipe --start-x 345 --start-y 600 --end-x 345 --end-y 40 --duration 0.3 --pre-delay 1'])
+serr('sim: a card swipe AXe fails is AXE_FAILED, never a pass', 'AXE_FAILED', KS,
+     tape=[dtree(tree(), 4), dtree(SWITCHER, 2), {'m': S1, 'rc': 1}], simCount={S1: 1, S2: 0, LEAVE: 0})
+sfail('sim: a card gone after a swipe with the app alive and in front is never tapped; pressed again', 'SWITCHER_FAILED', KS,
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), dtree(APPFRONT, 0), alive(), pt(340, 560, CARDEL, n=2), pt(340, 560, {})],
+      notes={'1': "s1 flick 339,600 alive>sw; no Aperture card at 340,560"}, simCount={DOUBLE: 2, ANY: 1, LEAVE: 0})
 spass("sim: a switcher without Aperture's card at the swipe spot is not swiped; pressed again", KS,
-      tape=[dtree(tree(), 4), dtree(SWITCHER, 3), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
-      notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, SWIPE: 1, LEAVE: 2})
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 4), pt(340, 560, el('AXGenericElement', 'Safari', '', 0, 136, 230, 664), n=1)],
+      notes={'1': 'no Aperture card at 340,560 (AXGenericElement Safari)'}, simCount={DOUBLE: 2, ANY: 1, LEAVE: 2})
 sfail('sim: no Aperture card in two tries is SWITCHER_FAILED, never swiped', 'SWITCHER_FAILED', KS,
-      tape=[dtree(tree(), 4), dtree(SWITCHER, 2), pt(340, 560, {})], simCount={DOUBLE: 2, SWIPE: 0, LEAVE: 2},
+      tape=[dtree(tree(), 4), dtree(SWITCHER, 4), pt(340, 560, {})], simCount={DOUBLE: 2, ANY: 0, LEAVE: 2},
       notes={'1': 'no Aperture card in the app switcher in two tries'})
-serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 4), dtree(SWITCHER, 1), HANG('--point 340,560')], simCount={SWIPE: 0})
+serr('sim: a hung card read is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS, tape=[dtree(tree(), 4), dtree(SWITCHER, 1), HANG(CARD)], simCount={ANY: 0})
 spass('sim: a switcher that closed itself with the last card is not tapped (the spot is a dock icon)', KS,
       tape=[dtree(tree(), 4), dtree(SWITCHER, 1), dtree(tree('SpringBoard'), 1)], notes={'1': 'no switcher left to leave (SpringBoard, Page 2 of 2)'},
-      simCount={SWIPE: 1, LEAVE: 0})
+      simCount={ANY: 1, LEAVE: 0})
 serr('sim: an unreadable tree after the switcher press is AX_TIMEOUT, no swipe', 'AX_TIMEOUT', KS,
-     tape=[dtree(tree(), 4), {'m': 'describe-ui --udid', 'rc': 1}], simCount={SWIPE: 0, LEAVE: 0})
+     tape=[dtree(tree(), 4), {'m': 'describe-ui --udid', 'rc': 1}], simCount={ANY: 0, LEAVE: 0})
 spass('sim: kill by terminate says the web app is gone', [L, {'op': 'kill', 'method': 'terminate'}, L], notes={'1': 'killed by terminate; web: gone'})
 spass('sim: a dropped home press at launch (the app still in front) is pressed again', [L],
       tape=[dtree(tree(), 1), dtree(APPFRONT, 1)], notes={'0': 'home pressed 2 times'}, simCount={PRESS: 2}, simIncludes=['tap -x 371 -y 247'])
@@ -1048,6 +1105,9 @@ sfail('sim: no landmark and no keyboard is LANDMARK as before, no relaunch', 'LA
       tape=[pt(220, 895, {}), pt(220, 530, {}), pt(221, 856, {})], simCount={TERM: 0})
 spass('sim: a relaunch onto a web app already gone skips the terminate (simctl refuses one)', [L],
       tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3)], notes={'0': 'keyboard up; no web process though the tree showed the app, so not terminated)'}, simCount={TERM: 0, 'tap -x 371 -y 247': 2})
+serr('sim: a relaunch whose pgrep errors is TERMINATE (state unknown), never terminated or passed', 'TERMINATE', [L],
+     tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 2}], simCount={TERM: 0},
+     notes={'0': 'pgrep failed (rc 2)'})
 serr('sim: a web app that survives the relaunch\'s terminate is TERMINATE', 'TERMINATE', [L],
      tape=[pt(220, 895, {}, n=3), pt(220, 530, {}, n=3), {'m': 'Web.app/Web', 'rc': 0}], simCount={TERM: 1})
 

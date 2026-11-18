@@ -105,6 +105,13 @@ describe('mailroom runner', () => {
       'SIM_AX_CAP=8 ax describe-ui --point', // a point read's cap: a hung one costs 8 s, not ax's 30
       // F91: every lock the drain holds is touched (a hand run holds lock-fast too), never just the slow lane's
       'sim_touch() { for l in ${HELD:-lock}; do touch "${STATE:-.}/$l" 2>/dev/null || true; done; }',
+      // The switcher kill's ladder and polls (IOS-CHECK.md → Switcher kill); the double home's argv is what F209's CI-side
+      // AXe routing keys on (two `button home` steps in one batch), so it stays byte for byte.
+      '1) echo "flick 70 0.3 - - -" ;;',
+      '2) echo "lead 70 0.3 - 1 0.5" ;;',
+      '3) echo "drag 88 0.6 20 1 0.5" ;;',
+      'SIM_KILL_POLLS=6',
+      'ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5"',
     ])
       expect(sim).toContain(pin);
     expect(sim).not.toMatch(/touch "\$\{?STATE(:-\.)?\}?\/lock"/);

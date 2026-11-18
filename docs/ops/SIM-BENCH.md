@@ -174,20 +174,20 @@ This adds a "vs p50" and a ratio column per job and per op. The 2026-11-08 M3 pr
 - **Per op:** passing steps only, keyed `job / index / op + its tab, label, text, method, name, as`. Failed ops are under _Failures_ with their note.
 - **Signals** are counted from sim.sh's step notes (`tools/mailroom/jobs/sim.sh`):
 
-  | Signal                              | Note that counts                                                                                                   |
-  | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-  | `retap`                             | `tapped again (…)`                                                                                                 |
-  | `iconRetap`                         | `icon tapped N times`, counting N − 1                                                                              |
-  | `homeRepress`                       | `home pressed N times`, counting N − 1                                                                             |
-  | `keyboardSecondTap`                 | —                                                                                                                  |
-  | `settingsAgain`                     | readBuild's second trip                                                                                            |
-  | `retype`                            | `retyped once` / `twice`                                                                                           |
-  | `extraDelete`                       | `deleted N more`; `deleted more twice` counts 2                                                                    |
-  | `switcherRetry`                     | the kill-by-switcher's retries: `the switcher didn't open`, `no Aperture card at`, `still running after the swipe` |
-  | `keyboardLate`                      | —                                                                                                                  |
-  | `inputDrops`                        | **pending:** axe-input-gap's `drops N`, 0 until a benched sim.sh writes it                                         |
-  | `leftoverDraft`, `resumedMidTyping` | **pending:** sim-speedups-be's notes, likewise                                                                     |
-  | `expectBuildRelaunch`               | `first launch ran X, second Y`: the PWA's two-launch refresh, a relaunch the baseline paid in 3 of 4 runs          |
+  | Signal                              | Note that counts                                                                                                                                                                |
+  | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `retap`                             | `tapped again (…)`                                                                                                                                                              |
+  | `iconRetap`                         | `icon tapped N times`, counting N − 1                                                                                                                                           |
+  | `homeRepress`                       | `home pressed N times`, counting N − 1                                                                                                                                          |
+  | `keyboardSecondTap`                 | —                                                                                                                                                                               |
+  | `settingsAgain`                     | readBuild's second trip                                                                                                                                                         |
+  | `retype`                            | `retyped once` / `twice`                                                                                                                                                        |
+  | `extraDelete`                       | `deleted N more`; `deleted more twice` counts 2                                                                                                                                 |
+  | `switcherRetry`                     | the kill-by-switcher's retries: `the switcher didn't open`, `no Aperture card at`, and each swipe that left the app running (`; s<n> … alive>`; IOS-CHECK.md → _Switcher kill_) |
+  | `keyboardLate`                      | —                                                                                                                                                                               |
+  | `inputDrops`                        | **pending:** axe-input-gap's `drops N`, 0 until a benched sim.sh writes it                                                                                                      |
+  | `leftoverDraft`, `resumedMidTyping` | **pending:** sim-speedups-be's notes, likewise                                                                                                                                  |
+  | `expectBuildRelaunch`               | `first launch ran X, second Y`: the PWA's two-launch refresh, a relaunch the baseline paid in 3 of 4 runs                                                                       |
 
 - **Dropped-input fails** are jobs ending in:
   - `ICON_TAP_DROPPED`, `ICON_SCROLL_DROPPED`, `HOME_PRESS_DROPPED`, `TAP_DROPPED`, `NAV_UNCONFIRMED` after two tab taps, `TYPED` or `ERASED`;

@@ -60,7 +60,7 @@ def signal_counts($note):
    settingsAgain: ([$note | match("went to Settings again"; "g")] | length),
    retype: ([$note | match("retyped (once|twice)"; "g") | if .captures[0].string == "twice" then 2 else 1 end] | add // 0),
    extraDelete: ([$note | match("deleted [0-9]+ more|deleted more (twice)"; "g") | if .captures[0].string == "twice" then 2 else 1 end] | add // 0),
-   switcherRetry: ([$note | match("; (the switcher didn.t open|no Aperture card at |still running after the swipe)"; "g")] | length),
+   switcherRetry: ([$note | match("; (the switcher didn.t open|no Aperture card at |s[0-9] [a-z]+ -?[0-9]+,-?[0-9]+( frame.)? alive>)"; "g")] | length),
    keyboardLate: ([$note | match("the keyboard came up late"; "g")] | length),
    inputDrops: ([$note | match("drops ([0-9]+)"; "g") | .captures[0].string | tonumber] | add // 0),
    leftoverDraft: ([$note | match("deleted a leftover draft"; "g")] | length),
