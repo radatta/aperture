@@ -1,16 +1,43 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { acquireLock, lockPerms, lockWait, main, parseSlot, tellingWhoToTell } from './cli.ts';
+import {
+  acquireLock,
+  lockChange,
+  lockPerms,
+  lockRelease,
+  lockStatus,
+  lockWait,
+  main,
+  parseSlot,
+  tellingWhoToTell,
+} from './cli.ts';
 import { PERMS } from './token.ts';
 import { fakeApi, fakeClock, ghError } from './fakes.ts';
 import { LockHeld, MainPending } from './lock.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
 const holder = { branch: 'flux', sha: 'a'.repeat(40), expiresAt: '2026-10-13T20:30:00.000Z' };
+
+const devlockRows = (dir: string) => {
+  const h = join(dir, 'history');
+  return (existsSync(h) ? readdirSync(h) : []).flatMap((f) =>
+    readFileSync(join(h, f), 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l)),
+  );
+};
 
 function ctx(branch: () => string = () => 'ci-bot') {
   const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
@@ -45,6 +72,16 @@ describe('the refused acquire', () => {
     );
     expect(lines[2]).toMatch(/^ {2}SendMessage flux-session: "Queued behind you/);
     expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toEqual(holder);
+    // the wait starts at the refusal (lock-events.ts)
+    expect(devlockRows(dir)).toEqual([
+      expect.objectContaining({
+        action: 'wait-start',
+        branch: 'ci-bot',
+        slots: ['dev'],
+        behind: [{ slot: 'dev', branch: 'flux' }],
+        via: 'refused',
+      }),
+    ]);
   });
 
   it('passes other errors and successes through untouched', async () => {
@@ -62,6 +99,7 @@ describe('the refused acquire', () => {
     const refused = new LockHeld(holder);
     await expect(tellingWhoToTell(c, () => Promise.reject(refused))).rejects.toBe(refused);
     expect(lines[1]).toMatch(/\[lock\] <your branch> — queued behind flux;/);
+    expect(devlockRows(c.dir)).toEqual([]); // no branch, no wait to start
   });
 
   it('names both holders and caches each slot when both refused', async () => {
@@ -88,6 +126,11 @@ describe('the refused acquire', () => {
     expect(lines[1]).toMatch(
       /queued behind flux on devb and main's deploy on dev; lock wait --any next/,
     );
+    expect(devlockRows(c.dir)[0]).toMatchObject({
+      slots: ['dev', 'devb'],
+      behind: [{ slot: 'devb', branch: 'flux' }],
+      main: ['dev'],
+    });
   });
 
   it('still tells the hub when only main holds the slot up, and the holder main waits for', async () => {
@@ -218,6 +261,29 @@ describe('lock wait and lock acquire hold back for main', () => {
     log.mockRestore();
   });
 
+  it('lock wait logs the wait: its start at the first blocked read, its end with the outcome', async () => {
+    const log = quietLog();
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const g = github(clock, NOW + 90_000);
+    expect(await lockWait(g.api, {}, dir, () => undefined, 'ci-bot', clock)).toBe(0);
+    expect(devlockRows(dir)).toEqual([
+      expect.objectContaining({
+        action: 'wait-start',
+        slots: ['dev'],
+        behind: [],
+        main: ['dev'],
+        via: 'wait',
+      }),
+      expect.objectContaining({ action: 'wait-end', outcome: 'free', slot: 'dev', waitedSec: 90 }),
+    ]);
+    // a second wait on a free slot: the first closed nothing (no acquired), so it ends the same wait again
+    const free = github(clock, 0);
+    expect(await lockWait(free.api, {}, dir, () => undefined, 'ci-bot', clock)).toBe(0);
+    expect(devlockRows(dir).map((r) => r.action)).toEqual(['wait-start', 'wait-end', 'wait-end']);
+    log.mockRestore();
+  });
+
   it('lock wait gives up naming main, never a missing holder', async () => {
     const log = quietLog();
     const clock = fakeClock(NOW);
@@ -238,5 +304,102 @@ describe('lock wait and lock acquire hold back for main', () => {
     expect(err).toBeInstanceOf(MainPending);
     expect((err as Error).message).toMatch(/main's deploy is still to land on dev \(main-run\)/);
     expect(g.calls.filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+});
+
+describe('the lock subcommands log to the board (lock-events.ts)', () => {
+  const R = '/repos/radatta/aperture';
+  // One slot's lock, held by `h` until deleted; slot B free. `goneAfter`: the ref reads gone after that many reads
+  // (a take-over deleted it between heldLock's read and release's).
+  const oneLock = (h: object | null, goneAfter = Infinity) => {
+    let ref: object | null = h;
+    let reads = 0;
+    return fakeApi({
+      [`GET ${R}/git/ref/locks/dev`]: () => {
+        if (++reads > goneAfter) ref = null;
+        if (!ref) throw ghError(404);
+        return { object: { sha: 't1', type: 'tag' } };
+      },
+      [`GET ${R}/git/ref/locks/devb`]: () => {
+        throw ghError(404);
+      },
+      [`GET ${R}/git/tags/t1`]: () => ({ message: JSON.stringify(ref) }),
+      [`DELETE ${R}/git/refs/locks/dev`]: () => {
+        ref = null;
+        return undefined;
+      },
+    });
+  };
+  const mine = {
+    branch: 'ci-bot',
+    sha: 'c'.repeat(40),
+    takenAt: new Date(NOW - 20 * 60_000).toISOString(),
+    expiresAt: new Date(NOW + 25 * 60_000).toISOString(),
+  };
+
+  it('lockChange writes the cache, then one acquired per hold and a released on null', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const changed = lockChange(dir, clock);
+    changed(mine, 'dev');
+    changed({ ...mine, expiresAt: new Date(NOW + 45 * 60_000).toISOString() }, 'dev'); // a renew
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder.branch).toBe(
+      'ci-bot',
+    );
+    clock.t = NOW + 5 * 60_000;
+    changed(null, 'dev');
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toBeNull();
+    expect(devlockRows(dir).map((r) => [r.action, r.heldSec ?? null, r.by ?? null])).toEqual([
+      ['acquired', null, null],
+      ['released', 25 * 60, 'deploy-dev'],
+    ]);
+  });
+
+  it('lockRelease logs the hold it freed, and nothing when the branch holds none', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const said: string[] = [];
+    await lockRelease(oneLock(mine).api, 'ci-bot', dir, clock, (l) => void said.push(l));
+    await lockRelease(oneLock(null).api, 'ci-bot', dir, clock, (l) => void said.push(l));
+    await lockRelease(oneLock(holder).api, 'ci-bot', dir, clock, (l) => void said.push(l)); // flux's, not ours
+    await lockRelease(oneLock(mine, 1).api, 'ci-bot', dir, clock, (l) => void said.push(l)); // gone before the delete
+    expect(said).toEqual([
+      'dev lock released',
+      'ci-bot holds no dev lock — already free',
+      'ci-bot holds no dev lock — already free',
+      'dev lock released', // the cache is cleared, but this call freed nothing: no released row
+    ]);
+    expect(devlockRows(dir)).toEqual([
+      expect.objectContaining({
+        action: 'released',
+        branch: 'ci-bot',
+        slot: 'dev',
+        heldSec: 20 * 60,
+        by: 'release',
+      }),
+    ]);
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toBeNull();
+  });
+
+  it('lockStatus prints each slot, with its last take when one is logged', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const said: string[] = [];
+    await lockStatus(oneLock(holder).api, dir, clock, (l) => void said.push(l));
+    expect(said).toEqual([
+      expect.stringMatching(/^dev lock: flux @ aaaaaaa until /),
+      'devb lock: free',
+    ]);
+    lockChange(dir, clock)(mine, 'dev');
+    said.length = 0;
+    await lockStatus(oneLock(mine).api, dir, clock, (l) => void said.push(l));
+    expect(said).toEqual([
+      expect.stringMatching(/^dev lock: ci-bot @ ccccccc until /),
+      // the date only when the take falls on another local day, which some zones make it
+      expect.stringMatching(
+        /^ {2}last take of dev: ci-bot at (\d{4}-\d\d-\d\d )?\d\d:\d\d — no wait$/,
+      ),
+      'devb lock: free',
+    ]);
   });
 });

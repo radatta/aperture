@@ -59,8 +59,8 @@ while :; do
   u_prev=$u t_prev=$now
   push anon "$((an / 1048576))"
   push pcpu "$pc"
-  # Mac load history (mac-stats.json keeps only the latest reading).
-  l=$(jq -c --arg l5 "$l5" '{t, mac:.load, cpus, memFreePct:.mem.freePct, vm:$l5}' "$BOARD_DIR/mac-stats.json" 2>/dev/null) &&
+  # Mac load history (mac-stats.json keeps only the latest reading). Its fields: docs/ops/SESSION-BOARD.md → Watchers.
+  l=$(jq -c --arg l5 "$l5" '{t, mac:.load, cpus, memFreePct:.mem.freePct, vm:$l5, power}' "$BOARD_DIR/mac-stats.json" 2>/dev/null) &&
     wl_hist mac-load "$l"
   A=$(avg "${anon[@]}") C=$(avg "${cores[@]}") P=$(avg "${pcpu[@]}")
   # pace-control.json in one read: state, since and the held lanes whose trigger is met (a numeric load5Below above

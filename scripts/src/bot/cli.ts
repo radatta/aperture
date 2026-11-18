@@ -20,7 +20,7 @@ import {
   SLOTS,
   acquireSlot,
   formatStatus,
-  heldSlot,
+  heldLock,
   holderLine,
   parseWaitMax,
   queueNotes,
@@ -31,6 +31,7 @@ import {
 } from './lock.ts';
 import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
+import { lastTakes, lockLog, readLockEvents, takeLine } from './lock-events.ts';
 import { mainPendingGuard, pendingMainDeploy } from './main-pending.ts';
 import { fetchLogs, refuseIdentifiers } from './logs.ts';
 import { pruneBranches } from './prune.ts';
@@ -45,7 +46,7 @@ export const USAGE = `pnpm bot <command>   (-h / --help on any command: its usag
   deploy-dev                     take a dev slot's lock (the one this branch holds, else dev, else devb) + deploy
                                  this pushed commit there; the lock stays held for the devcheck. A slot main's
                                  Deploy run is still to land on is refused, unless this branch holds it live
-  lock status                    both slots' locks (dev = slot A, devb = slot B)
+  lock status                    both slots' locks (dev = slot A, devb = slot B), and each one's last take and its wait
   lock acquire [--slot dev|devb] take a lock (by default as deploy-dev would; --slot names one)
   lock renew|release             the lock this branch holds, whichever slot
   lock wait [--max MIN] [--any | --slot devb]
@@ -126,6 +127,8 @@ export async function lockWait(
   const one = parseSlot(flags.slot);
   if (one && flags.any) throw new Error('--any and --slot are exclusive');
   const slots = flags.any ? SLOTS : [one ?? 'dev'];
+  const events = lockLog(dir, clk.now);
+  const startedMs = clk.now();
   const r = await waitForLock(api, branch, clk, {
     maxMs,
     log: console.log,
@@ -134,7 +137,9 @@ export async function lockWait(
     slots,
     // A slot main's Deploy run is still to land on isn't free yet: deploy-dev would be refused it (main-pending.ts).
     busy: async (slot) => (await pendingMainDeploy(api, slot)) !== null,
+    onBlocked: (reads, main) => events.blocked(branch, reads, main, slots, startedMs),
   });
+  events.waitEnd(branch, r, slots, startedMs);
   if (r.outcome === 'free') console.log(`${r.slot} lock: free — \`pnpm bot deploy-dev\` takes it`);
   else if (r.outcome === 'ours') console.log(`${r.slot} lock: ${branch} already holds it`);
   else if (r.outcome === 'expired')
@@ -156,6 +161,49 @@ export async function lockWait(
     return 75;
   }
   return 0;
+}
+
+// Each lock change deploy-dev or `lock acquire` makes: the board's cache, then its devlock log (a new hold is an
+// `acquired` row; null, deploy-dev's release of a failed run, a `released` one).
+export const lockChange = (dir: string | null, clk: Clock = clock) => {
+  const events = lockLog(dir, clk.now);
+  return (h: Holder | null, slot: Slot) => {
+    writeLockCache(dir, h, clk.now(), slot);
+    events.changed(h, slot, 'deploy-dev');
+  };
+};
+
+// `lock status`: both slots' locks, each with its last logged take.
+export async function lockStatus(
+  api: Api,
+  dir: string | null,
+  clk: Clock = clock,
+  log = console.log,
+) {
+  const takes = lastTakes(readLockEvents(dir, clk.now()));
+  for (const slot of SLOTS) {
+    const cur = await readLock(api, slot);
+    writeLockCache(dir, cur?.holder ?? null, clk.now(), slot);
+    log(formatStatus(cur, clk.now(), slot));
+    const take = takeLine(takes[slot], slot, clk.now());
+    if (take) log(take);
+  }
+}
+
+// `lock release`: the lock this branch holds, whichever slot; the hold is logged only when this call freed it.
+export async function lockRelease(
+  api: Api,
+  branch: string,
+  dir: string | null,
+  clk: Clock = clock,
+  log = console.log,
+) {
+  const held = await heldLock(api, branch);
+  if (!held) return void log(`${branch} holds no dev lock — already free`);
+  const freed = await release(api, branch, held.slot);
+  writeLockCache(dir, null, clk.now(), held.slot);
+  if (freed) lockLog(dir, clk.now).released(held.holder, held.slot, 'release');
+  log(`${held.slot} lock released`);
 }
 
 // status and wait only read: a read-only token, which a 55-minute background wait holds. acquire and wait also read
@@ -200,8 +248,10 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
       let branch = '<your branch>';
       try {
         branch = ctx.branch();
+        // the wait starts here, at the refusal (docs/ops/SESSION-BOARD.md → Dev-lock events)
+        if (err instanceof LockHeld) lockLog(ctx.dir, ctx.now).refused(branch, err, main);
       } catch {
-        // only the notes' wording needs it
+        // only the notes' wording and the wait-start need it
       }
       const wait =
         err instanceof MainPending
@@ -251,9 +301,7 @@ export async function main(argv: string[]): Promise<number> {
       const dir = boardDir(run);
       const api = makeApi(await token(PERMS.deployDev));
       const r = await tellingWhoToTell(tellCtx(dir), () =>
-        deployDev(run, api, clock, console.log, (h, slot) =>
-          writeLockCache(dir, h, clock.now(), slot),
-        ),
+        deployDev(run, api, clock, console.log, lockChange(dir, clock)),
       );
       return r.conclusion === 'success' ? 0 : 1;
     }
@@ -261,13 +309,8 @@ export async function main(argv: string[]): Promise<number> {
       const api = makeApi(await token(lockPerms(sub)));
       const dir = boardDir(run);
       const cache = (h: Holder | null, slot: Slot) => writeLockCache(dir, h, clock.now(), slot);
-      if (sub === 'status') {
-        for (const slot of SLOTS) {
-          const cur = await readLock(api, slot);
-          cache(cur?.holder ?? null, slot);
-          console.log(formatStatus(cur, clock.now(), slot));
-        }
-      } else if (sub === 'acquire') {
+      if (sub === 'status') await lockStatus(api, dir);
+      else if (sub === 'acquire') {
         const only = parseSlot(flags.slot);
         const { slot, holder } = await tellingWhoToTell(tellCtx(dir), () =>
           acquireLock(
@@ -279,26 +322,17 @@ export async function main(argv: string[]): Promise<number> {
             iosFiles(run),
           ),
         );
-        cache(holder, slot);
+        lockChange(dir, clock)(holder, slot);
         console.log(`${slot} held until ${holder.expiresAt}`);
-      } else if (sub === 'renew' || sub === 'release') {
+      } else if (sub === 'release') await lockRelease(api, featureBranch(run), dir);
+      else if (sub === 'renew') {
         const branch = featureBranch(run);
-        const slot = await heldSlot(api, branch);
-        if (sub === 'release') {
-          if (!slot) {
-            console.log(`${branch} holds no dev lock — already free`);
-            return 0;
-          }
-          await release(api, branch, slot);
-          cache(null, slot);
-          console.log(`${slot} lock released`);
-        } else {
-          if (!slot)
-            throw new Error(`${branch} holds no dev lock — \`pnpm bot deploy-dev\` takes one`);
-          const h = await renew(api, branch, clock.now(), slot);
-          cache(h, slot);
-          console.log(`${slot} renewed until ${h.expiresAt}`);
-        }
+        const slot = (await heldLock(api, branch))?.slot;
+        if (!slot)
+          throw new Error(`${branch} holds no dev lock — \`pnpm bot deploy-dev\` takes one`);
+        const h = await renew(api, branch, clock.now(), slot);
+        cache(h, slot);
+        console.log(`${slot} renewed until ${h.expiresAt}`);
       } else if (sub === 'wait') return lockWait(api, flags, dir, cache);
       else {
         console.error(USAGE);

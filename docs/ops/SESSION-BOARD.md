@@ -107,6 +107,28 @@ anon, pids and cores; measures an idle session directly (RSS, threads); estimate
 from heavy-free ticks; and summarises real jobs per class — load-test runs (`loadTest: true`: `matrix.sh`'s
 guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
 
+**Dev-lock events** (`scripts/src/bot/lock-events.ts`) — the bot logs each dev-slot wait and hold as `kind: "devlock"`,
+`{v, t, name (the branch's board session, else null), branch, action, …}`, so a wait for a slot is measured, not read
+off lane reports. Best effort: no board or an unwritable one writes nothing and never fails a bot command.
+
+| `action`     | Extra fields                                                                                                              | Written when                                                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait-start` | `slots`, `behind: [{slot, branch}]` (live holders), `main` (slots main's run is still to land on), `via: refused\|wait`   | a refused `deploy-dev` / `lock acquire`, or `lock wait`'s first read that finds nothing open — unless the branch's wait is already open |
+| `wait-end`   | `outcome: free\|expired\|gave-up`, `slot`, `slots`, `main?`, `waitedSec` (that `lock wait` alone)                         | `lock wait` returns while the wait is open; it never closes the wait                                                                    |
+| `acquired`   | `slot`, `sha`, `takenAt`, `waitSec` (0 without a wait), `waitFrom?`                                                       | a new hold — a `takenAt` not logged before; renews and a live re-take keep it, so write nothing                                         |
+| `released`   | `slot`, `sha`, `takenAt`, `heldSec` (null without `takenAt`), `lapsed?` (stops at `expiresAt`), `by: release\|deploy-dev` | `lock release`, or deploy-dev's release of a failed run                                                                                 |
+
+A wait is **open** from its `wait-start` until an `acquired` of the same branch, while its last start or end is at most
+60 min old (`OPEN_WAIT_MS`: `lock wait`'s 55-minute cap plus slack) — judged, for a `lock wait`'s end, as of that wait's
+own start — so a refusal, a `lock wait` that gave up and the next one are one wait; the bot reads today's and
+yesterday's files to pair them across UTC midnight. An unpaired start is a wait abandoned. `waitSec` runs from the
+first start to the take, so it includes the session's reaction after a `wait-end`; the `wait-end` rows split the two.
+Hold start is `takenAt`, not `t` (a lost first row is written late, on the next re-take). Not logged: a lock left to
+lapse, and `acquireSlot` letting go of the branch's own lapsed lock. `pnpm bot lock status` prints each slot's last
+take in those two UTC days and its wait (nothing for an older one). By hand, in the container: `jq -c 'select(.kind ==
+"devlock" and .action == "acquired") | {t, slot, branch, waitSec}' /workspace/localNotes/board/history/events-*.jsonl`.
+The older `lease: "dev"` rows are the retired board lease (_Leases_).
+
 **Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
 envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard"|"lock", cap: {max, running,
 full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?, interrupted?}`.
@@ -590,7 +612,11 @@ Three no-AI loops the hub runs in the background (`docs/ops/HUB.md` → _Watcher
 tick and **exits only when the hub should wake**, so the hub spends nothing while they're quiet. They source
 `watch-lib.sh` (on `lib.sh`), read every threshold from `limits.json` → `watchers` at startup (an edit takes effect at
 the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
-has one home. A bad argument or env override is exit 2. History files are named by local day with local-offset `t`. Tests: `scripts/src/board/watchers.test.ts`
+has one home. A bad argument or env override is exit 2. History files are named by local day with local-offset `t`. A
+`mac-load` row is `{t, mac, cpus, memFreePct, vm, power}`: `t` is `mac-stats.json`'s own UTC stamp (it repeats while
+the Mac agent is stale), `mac` the Mac's load 1/5/15, `cpus` its cores, `memFreePct` its free memory, `vm` the
+**container's** load5 from `/proc/loadavg` as a JSON string, and `power` the agent's power object (`docs/ops/TOWER.md`
+→ _Mac stats_: AC or battery, charge, Low Power Mode, thermal) or null from an agent older than it. Tests: `scripts/src/board/watchers.test.ts`
 (PATH shims for `sleep` and `date` drive a file clock over a fake cgroup, loadavg and meter dir).
 
 | Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                     | Exits                                                              |

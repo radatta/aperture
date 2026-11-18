@@ -369,9 +369,24 @@ describe('pace-watch.sh', () => {
     const mac = JSON.stringify({ t: 'x', load: [1, 2, 3], cpus: 12, mem: { freePct: 30 } });
     const m = pace(T10, 2, all({ files: { 'board/mac-stats.json': mac } }));
     const ml = lines(m, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l));
+    // an agent from before power (PR 198) reports none: the row says null, never drops the key
     expect(ml).toEqual([
-      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3' },
-      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3' },
+      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3', power: null },
+      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3', power: null },
+    ]);
+    // the power reading rides along whole: battery, Low Power Mode and thermal told apart in history (F120)
+    const power = {
+      source: 'battery',
+      batteryPct: 41,
+      state: 'discharging',
+      remainingMin: 95,
+      lowPowerMode: true,
+      thermal: { warningLevel: null, cpuSpeedLimit: 80 },
+    };
+    const withPower = JSON.stringify({ ...JSON.parse(mac), power });
+    const p2 = pace(T10, 1, all({ files: { 'board/mac-stats.json': withPower } }));
+    expect(lines(p2, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l))).toEqual([
+      { t: 'x', mac: [1, 2, 3], cpus: 12, memFreePct: 30, vm: '3', power },
     ]);
   });
 

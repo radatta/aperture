@@ -177,11 +177,19 @@ export async function acquire(
   );
 }
 
-// The slot this branch holds a lock on (live or not), else null. A branch holds at most one.
-export async function heldSlot(api: Api, branch: string): Promise<Slot | null> {
-  for (const slot of SLOTS) if ((await readLock(api, slot))?.holder?.branch === branch) return slot;
+// The slot this branch holds a lock on (live or not) and its holder, else null. A branch holds at most one.
+export async function heldLock(
+  api: Api,
+  branch: string,
+): Promise<{ slot: Slot; holder: Holder } | null> {
+  for (const slot of SLOTS) {
+    const holder = (await readLock(api, slot))?.holder;
+    if (holder?.branch === branch) return { slot, holder };
+  }
   return null;
 }
+export const heldSlot = async (api: Api, branch: string): Promise<Slot | null> =>
+  (await heldLock(api, branch))?.slot ?? null;
 
 // deploy-dev's acquire (docs/ops/CI-BOT.md → Dev lock): the slot this branch already holds, renewed; else the first
 // free one, A before B; else LockHeld naming every holder. `only` asks for one slot by name (`lock acquire --slot`),
@@ -320,6 +328,9 @@ export interface WaitOptions {
   // A free or lapsed slot still busy (main's Deploy run is still to land on it: main-pending.ts) isn't free yet. A
   // failure counts as a failed read.
   busy?: (slot: Slot) => Promise<boolean>;
+  // Once, on the first good read that finds nothing open: the wait really began (the board's devlock events). `main`
+  // is the free or lapsed slots main's run is still to land on.
+  onBlocked?: (reads: { slot: Slot; cur: LockState | null }[], main: Slot[]) => void;
 }
 
 export const POLL_MS = 30_000;
@@ -350,6 +361,7 @@ export async function waitForLock(
   let loggedAt = -Infinity;
   let loggedBusy = '';
   let heldBack: Slot[] = []; // free or lapsed, but main's run is still to land there (`busy`)
+  let blocked = false;
   for (;;) {
     let reads: { slot: Slot; cur: LockState | null }[] | undefined;
     const now = clock.now();
@@ -385,6 +397,14 @@ export async function waitForLock(
         if (cur?.holder?.branch === branch) return { outcome: 'ours', holder: cur.holder, slot };
       const [first] = open;
       if (first) return first;
+      if (!blocked) {
+        blocked = true;
+        try {
+          o.onBlocked?.(reads, heldBack);
+        } catch {
+          // a log hook never ends a wait
+        }
+      }
       // Every slot is live and someone else's, or busy with main: watch the live lock that frees soonest (a lapsed
       // one main is still to land on has no expiry left to wake at — it waits a poll).
       last = null;
