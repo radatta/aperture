@@ -15,8 +15,8 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light" ;;
-    2) echo "restore card nohub,light" ;;
+    1) echo "restore card nohub,light,quiet" ;;
+    2) echo "restore card nohub,light,quiet" ;;
     *) echo "restore card nohub,light" ;;
   esac
 }
@@ -192,6 +192,7 @@ s_env() {
   XCODE_VER="$(xcode_version)"
   XCODE_MAJOR="${XCODE_VER%%.*}"
   note "image ${ImageOS:-?} ${ImageVersion:-?}, macOS $(sw_vers -productVersion), Xcode $XCODE_VER"
+  [ "${XCODE_MAJOR:-0}" -gt 0 ] 2>/dev/null || { note "Xcode version unreadable from $(xcode-select -p)/../Info.plist"; return 2; }
 }
 env_dump() {
   {
@@ -282,6 +283,56 @@ s_hub() {
     sleep 1
   done
   note "Device Hub didn't start in 15 s: sim.sh gets the shim"
+}
+# quiet (run 16): run 14's CPU went to diagnosticd, kernel_task and iOS 27's widget extensions on 3 cores. simslim's
+# (pkg.go.dev/github.com/mobai-app/simslim) labels for what no row touches: widgets, Siri, search, health, photos,
+# stock apps, family, telemetry. Left on: Safari/web, push (apsd), sharingd, accounts, contacts, connectivity, and
+# (review) PosterBoard (SpringBoard hosts the wallpaper: the Home Screen path) and Screen Time (WebKit asks it per page).
+# Disabled in the sim's launchd (persists on iOS 18.5+, per simslim) and booted out now; diagnosticd killed per
+# CircleCI's recipe (support.circleci.com 46737392770203), and on the host only if SIP allows it.
+QUIET_LABELS="com.apple.chronod com.apple.liveactivitiesd
+com.apple.assistant_cdmd com.apple.assistant_service com.apple.siriactionsd com.apple.siriinferenced com.apple.siriknowledged
+com.apple.sirittsd com.apple.siri.context.service com.apple.siri.acousticsignature com.apple.corespeechd com.apple.voiced
+com.apple.voicebankingd com.apple.speechmodeltrainingd com.apple.intelligenceplatformd com.apple.intelligencecontextd
+com.apple.intelligenceflowd com.apple.intelligencetasksd com.apple.generativeexperiencesd com.apple.knowledgeconstructiond
+com.apple.naturallanguaged com.apple.textunderstandingd com.apple.modelcatalogd com.apple.modelmanagerd com.apple.mlhostd
+com.apple.mlruntimed com.apple.suggestd com.apple.parsecd com.apple.parsec-fbf com.apple.proactiveeventtrackerd
+com.apple.searchd com.apple.searchtoold com.apple.spotlightknowledged com.apple.spotlightknowledged.updater
+com.apple.corespotlightservice
+com.apple.healthd com.apple.healthappd com.apple.healthcontentd com.apple.healtheventsd com.apple.healthrecordsd
+com.apple.finhealthd com.apple.homed com.apple.homeeventsd com.apple.fitcore com.apple.fitcore.session
+com.apple.fitnesscoachingd com.apple.fitnessintelligenced com.apple.activityawardsd com.apple.activitysharingd
+com.apple.photoanalysisd com.apple.photosface com.apple.mediaanalysisd com.apple.mediaanalysisd.service
+com.apple.mediastream.mstreamd com.apple.medialibraryd
+com.apple.newsd com.apple.weatherd com.apple.Maps.mapssyncd com.apple.Maps.mapspushd com.apple.Maps.geocorrectiond
+com.apple.maps.destinationd com.apple.tipsd com.apple.gamesaved
+com.apple.FamilyControlsAgent com.apple.familynotification com.apple.askpermissiond com.apple.asktod
+com.apple.ap.adprivacyd com.apple.ap.promotedcontentd com.apple.diagnosticextensionsd com.apple.feedbackd
+com.apple.rtcreportingd com.apple.securityuploadd com.apple.geoanalyticsd com.apple.triald com.apple.followupd
+com.apple.devicecheckd"
+s_quiet() {
+  case ",$OPTS," in *,quiet,*) ;; *) note "quiet off"; return 0 ;; esac
+  local l e n=0 out=0 ref=0 err="" pids="" sc
+  sc="$(xcrun -f simctl)"
+  : >"$WORK/quiet.o"; : >"$WORK/quiet.e"
+  for l in $QUIET_LABELS; do
+    (cap 30 "$sc" spawn "$U" launchctl disable "system/$l" >/dev/null 2>&1 # writes the override, loaded or not
+     if e="$(cap 30 "$sc" spawn "$U" launchctl bootout "system/$l" 2>&1)"; then echo o >>"$WORK/quiet.o"; else echo "$l: $e" >>"$WORK/quiet.e"; fi) &
+    pids="$pids $!"
+    n=$((n + 1))
+    [ $((n % 8)) != 0 ] || { wait $pids 2>/dev/null; pids=""; } # 8 at a time, as simslim's fallback
+  done
+  [ -z "$pids" ] || wait $pids 2>/dev/null # never a bare wait: it would also wait on the CPU sampler
+  out=$(wc -l <"$WORK/quiet.o")
+  ref=$(wc -l <"$WORK/quiet.e")
+  err="$(head -1 "$WORK/quiet.e" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-120)"
+  # a refusal is also a label that wasn't loaded: only "booted out" proves something stopped
+  note "sim launchd: $n labels disabled, $((out)) booted out, $((ref)) refused${err:+ (first: $err)}"
+  if cap 15 xcrun simctl spawn "$U" killall diagnosticd >/dev/null 2>&1; then note "sim diagnosticd killed"; else note "sim killall diagnosticd failed"; fi
+  note "host $(csrutil status 2>/dev/null | tr -cd 'A-Za-z .' | cut -c1-60)"
+  # killall, not bootout (review): launchd relaunches it on demand, so a sim `log stream` (sim.sh trial jobs) still works
+  if cap 15 sudo killall diagnosticd >/dev/null 2>&1; then note "host diagnosticd killed"; else note "host killall diagnosticd failed"; fi
+  return 0
 }
 s_boot_wait() {
   wait "$BOOT_PID" 2>/dev/null || true
@@ -591,6 +642,9 @@ run_sim_ci() (
   if [ "$HUB" != up ]; then
     pgrep() { if [ "${1:-}" = -x ] && [ "${2:-}" = DeviceHub ]; then return 0; fi; command pgrep "$@"; }
   fi
+  # sim.sh reads the version per job (sim.sh: SIM_XCODE); one call took 70 s here (run 14), so it gets the plist read
+  # (one line: SIM_XCODE loses the build number; an unread version falls through to the real call)
+  xcodebuild() { if [ "${1:-}" = -version ] && [ "${XCODE_VER:-0}" != 0 ]; then echo "Xcode $XCODE_VER"; return 0; fi; command xcodebuild "$@"; }
   security() {
     if [ "${1:-}" = find-generic-password ]; then
       case " $* " in *" -w "*) printf '%s' "$PW" ;; esac
@@ -764,8 +818,8 @@ finish() {
   printf 'total\t%s\t%s\t\n' "$([ "$rc" = 0 ] && echo pass || echo fail)" "$(($(now_ms) - T0))" >>"$OUT/steps.tsv"
   kill "$CPU_PID" 2>/dev/null || true
   [ -z "$U" ] || xcrun simctl shutdown "$U" >/dev/null 2>&1 || true
-  cap 120 env_dump || true # off the clock
   summary
+  cap 120 env_dump || true # off the clock, after the summary so a cancel here can't lose it
   exit "$rc"
 }
 T0=$(now_ms)
@@ -783,6 +837,7 @@ step env s_env # beside the boot
 step axe-install s_axe_install
 step boot s_boot_wait
 step device-hub s_hub
+step quiet s_quiet
 # A rows shard leaves the readiness tree, the icon and the launch to sim.sh's own `launch` op (the same reads).
 [ "$AFTER" = rows ] || step axe-ready s_axe_ready
 step origin s_origin
