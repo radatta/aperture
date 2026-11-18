@@ -16,9 +16,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,axe2,taplanded" ;;
-    2) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
-    *) echo "restore card nohub,light,axe2,hostlog,dyld,taplanded" ;;
+    1) echo "restore card nohub,light,axe2,hostlogafter,simlog,taplanded" ;;
+    2) echo "restore card nohub,light,taplanded" ;;
+    *) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
