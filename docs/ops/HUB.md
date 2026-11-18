@@ -140,8 +140,8 @@ user's typed go itself; the user talks only to the hub, so in a lane that sessio
 hub, 2026-11-18). A lane never edits those paths, in either mode; a session outside a lane still takes the go in its
 own pane. Git binds the go to the bytes: the hub shows the diff between base commit `B` and tree `T`, and the commit
 exists only when the worktree's index is exactly `T`. `pnpm claude-edit` runs every check, always from `/workspace`
-(main's code, never a lane's copy, with git's global, system and attribute config switched off); what it refuses and
-why lives in `scripts/src/claude-edit/` and its tests.
+(main's code, never a lane's copy, with git's global, system and attribute config switched off; git 2.40 or later);
+what it refuses and why lives in `scripts/src/claude-edit/` and its tests.
 
 1. **The lane writes the patch**, the files untouched, following `.claude/rules/agent-config.md` (Read it first: its
    `paths:` don't match the copies). Copy each target to `localNotes/claude-edit-<n>/<path>`, edit the copy, then
@@ -153,42 +153,53 @@ why lives in `scripts/src/claude-edit/` and its tests.
    prettier-ignored, so the redirect is the check), and the lane's own `pnpm claude-edit check <branch> <n>` passes
    (a PRE-CHECK from its checkout: nothing recorded).
 2. **The review reads the patch before the ask** (`docs/ops/REVIEW.md` → _Picking lenses_). The lane asks before
-   phase 8; a patch that turns up later waits until the lane's dev run is done and its dev lock released, then the
-   lane pushes the new head and reruns `gate:ci`. It commits its other work first. Once it asks, the patch is frozen
+   phase 8; a patch that turns up while the lane holds a dev lock waits until its dev run is done and the lock
+   released, then the lane pushes the new head and reruns `gate:ci`. It commits its other work first. Once it asks, the patch is frozen
    (any change is n+1) and until the `[relay]` the lane runs no `git commit`, `add`, `stash`, `rebase` or `checkout`
    in the worktree; read-only git and the gate are fine.
 3. **The lane asks**, naming each new executable (`--exec`) and any change to permissions, hook registration or a
    guard: `[ask-maintainer] <branch> — claude-edit-<n>: <each file, what changes, why>. Go in the hub's pane.`
-4. **The hub checks and shows:** `pnpm claude-edit check <branch> <n> [--exec <path>]` writes the showing file,
-   `/workspace/localNotes/claude-edits/<branch>-<T8>.md` (the diff in one fence, readable in a proportional-font
-   Markdown viewer), and prints a short header — branch, `B`, `T`, what the go names, files with M/A/D and +/-,
-   flags, untracked files, and the file's Mac path. The hub pastes the header whole as the last thing in one message
+4. **The hub checks and shows:** `pnpm -C /workspace claude-edit check <branch> <n> [--exec <path>]` writes the
+   showing file, `/workspace/localNotes/claude-edits/<branch>-<T8>.md` (the diff in one fence, readable in a
+   proportional-font Markdown viewer, and under it the changed part of each long line edited in place), and prints a
+   short header — branch, `B`, `T`, what the go names, files with M/A/D and +/-, flags, untracked files, and the
+   file's Mac path. Every hub call is `pnpm -C /workspace`, so none depends on the directory the session is in. The hub pastes the header whole as the last thing in one message
    for that patch alone, and says its flags line in words; the user reads the diff in the file. The lane's summary
    never stands in for it, and the hub never edits a patch: a change the user asks for goes back to the lane as n+1.
    After a compaction the hub runs `check` and shows again before taking a go.
 5. **The go:** the user's own typed turn in the hub's pane, after that showing, naming what its `go names` line
-   says — the branch or `T`'s first 8 characters, only those 8 from a branch's second showing on. An earlier go, a
+   says — the branch or `T`'s first 8 characters while `T` is the only tree shown on the branch, only those 8 once a
+   second one has been. An earlier go, a
    bare yes while another ask is open, a go a message reports, or a hook's, watcher's, scheduled or peer text is not
    it.
-6. **The hub applies:** `pnpm claude-edit stage <branch> --base <B> --tree <T>` — it refuses unless the showing
-   file still gives `T`, and the hub then shows the new version — then the three lines it prints, each
-   its own Bash call (the commit guard reads the session's directory before the command runs), then
-   `pnpm claude-edit record <branch> --base <B> --tree <T>`. The `[relay]` carries the go verbatim and the record;
+6. **The hub applies:** `pnpm -C /workspace claude-edit stage <branch> --base <B> --tree <T> --message "<commit
+message>"` — it re-runs check's checks and refuses unless the showing file is byte for byte the one `check` last
+   wrote, its diff exactly `B..T` (the hub then shows again) — then the three lines it prints, each its own Bash call
+   (the commit guard reads the session's directory before the command runs; the commit line checks the directory,
+   branch, `HEAD` and index first), then the `record` line it prints. A commit the guard denies, or a go withdrawn,
+   leaves `T` staged: the printed `unstage` line backs it out. The `[relay]` carries the go verbatim and the record;
    the lane copies it into its `decisions.md` (the report and PR paraphrase it: `docs/ops/PUBLIC-CONTENT.md`).
 7. **The lane re-reads the files**, runs the hook fixtures when a hook changed, and carries on.
 
 **A refusal (exit 1) changes nothing:** the hub says which check, and the lane sends n+1 for a new showing and a new
-go. **Exit 3** means the worktree or a landed commit needs a person: the hub stops and reports, with no reset. **On
+go; a `record` refusal comes after the commit, so the hub fixes the call and runs it again. **Exit 3** means the worktree or a landed commit needs a person: the hub stops and reports, with no reset. **On
 a rebase** that conflicts in the hub's commit, the lane drops that commit whole (`git rebase --skip`, never a hand
 merge) and sends n+1 on the new base. **The ledger**, `/workspace/localNotes/claude-edits.jsonl`, is the hub's
-alone. After `git fetch origin`, `pnpm claude-edit verify [<branch>]` fails on any commit touching these paths with
-no approved patch for its branch: the hub runs it at `[pr-open]`, before it writes a merge line (the line names the
-head it verified) and after any push to an open PR; a pending patch blocks phase 10. With no hub the patch waits
-(_Missing hub_). A rule change the hub itself wants is a lane like any other. Accepted residuals: the ledger, the
-showing files and this section are files any session can write (a file swapped while the user reads it and swapped
-back before `stage` gets past the re-derive), and with the worktree as its directory the commit guard runs the
-lane's copy of the identifier and identity scans (push and `open-pr` rescan both); the user reading the PR diff
-before the merge is behind all of them. Secrets, MCP writes, prod or settings changes and destructive steps stay in
+alone. After `git fetch origin`, `pnpm -C /workspace claude-edit verify <branch>` fails on any commit on it touching
+these paths with no approved patch for that branch (the patch-id pins each line's place: a moved line is a new
+patch), and prints the head it verified. The hub runs it at `[pr-open]`, before it writes a merge line and after any
+push to an open PR — these three, here only; the merge line carries `--match-head-commit <that head>` and, when the
+branch has agent-rule commits, says "changes agent rules: <files>, approved <T8>", so the user reads that part of the
+PR diff. A pending patch blocks phase 10. A commit approved under the earlier in-pane rule (before this section
+landed: this lane's own bootstrap patch and any branch cut before it) has no ledger row, so `verify` fails on it; the
+hub checks that commit by hand against the go its lane quoted in `decisions.md` and says so in the merge line. With
+no hub the patch waits (_Missing hub_). A rule change the hub itself wants is a lane like any other. Accepted
+residuals, all of one class — any file or pane in the container can be written by any session: the ledger, the
+showing files, this section and `/workspace`'s CLI code (a showing file and its ledger row rewritten together, or a
+file swapped while the user reads it and swapped back, gets past `stage`); `~/.gitconfig` hooks still run on the
+hub's plain `git commit` (`record` catches a wrong tree after the fact, exit 3); and with the worktree as its
+directory the commit guard runs the lane's copy of the identifier and identity scans (push and `open-pr` rescan
+both). The user reading the PR diff before the merge is behind all of them. Secrets, MCP writes, prod or settings changes and destructive steps stay in
 the acting lane's pane: actions on live state, with no whole diff to show, no undo and no merge behind them.
 
 ## The hub's duties
@@ -213,7 +224,8 @@ the acting lane's pane: actions on live state, with no whole diff to show, no un
   lanes means more tokens an hour, and the usage lines govern that (_Watchers_ → `usage-watch.sh`), never the budget.
 - **Asks.** Relay each `[ask-maintainer]` to the user with the hub's own recommendation, and the answer back as a
   `[relay]`, verbatim, plus what it means for the lane. Every ask put to the user — a lane's or the hub's own — goes
-  into `queue.json` `asks[]` first (_Asks_ below), so the user answers by id and letter. An agent-rule patch the hub shows and applies itself with `pnpm claude-edit`, and verifies at `[pr-open]`, each merge line and each push to an open PR (_Approval_ → _Agent-rule edits_).
+  into `queue.json` `asks[]` first (_Asks_ below), so the user answers by id and letter. An agent-rule patch the hub
+  shows, applies and verifies itself with `pnpm claude-edit` (_Approval_ → _Agent-rule edits_).
 - **Lens gaps.** The hub alone writes `/workspace/localNotes/review-gaps.md` from the `lens-gap:` lines lanes send
   in `[pr-open]`; a second gap of the same lens and kind becomes a `followups[]` entry to widen that lens — an
   `.claude/agents/` edit, so the lane that takes it sends a patch the hub applies on the user's go (_Approval_ →

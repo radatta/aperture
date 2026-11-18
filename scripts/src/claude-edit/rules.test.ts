@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  caseTwins,
+  changedSpans,
   charProblems,
   decodeStrict,
   extractDiff,
@@ -7,11 +9,13 @@ import {
   flagsFor,
   goNames,
   judgeEntries,
+  messageProblem,
   renderFile,
   renderHeader,
   parseLedger,
   parseRaw,
   pathAllowed,
+  safePath,
   showingNumber,
   unapproved,
 } from './rules.ts';
@@ -44,10 +48,21 @@ describe('pathAllowed', () => {
     '.claude//x',
     '.claude/./x',
     '',
+    'claude.md',
+    'claude.MD',
+    '.CLAUDE/x',
+    '.Claude/hooks/x.sh',
   ])('refuses %s', (p) => expect(pathAllowed(p)).toBe(false));
-  it('compares case-insensitively, as the checkout does', () => {
-    expect(pathAllowed('claude.MD')).toBe(true);
-    expect(pathAllowed('.CLAUDE/x')).toBe(true);
+  it('names case twins: one file on a case-folding checkout', () => {
+    expect(caseTwins(['CLAUDE.md', '.claude/a.md', '.claude/A.md'])).toEqual([
+      '.claude/a.md and .claude/A.md differ only in case',
+    ]);
+    expect(caseTwins(['CLAUDE.md', '.claude/a.md'])).toEqual([]);
+  });
+  it('a safe path has the safe charset and no empty, . or .. segment', () => {
+    expect(safePath('.claude/x-1_@+.md')).toBe(true);
+    expect(safePath('.claude/x\n```diff')).toBe(false);
+    expect(safePath('.claude/../x')).toBe(false);
   });
 });
 
@@ -94,7 +109,7 @@ describe('parseRaw', () => {
 });
 
 describe('flagsFor', () => {
-  it('names settings, guards, agents and attributes in words', () => {
+  it('names settings, guards, agents, skills, executables and attributes in words', () => {
     const f = flagsFor([
       e('M', '.claude/settings.json'),
       e('A', '.claude/hooks/x.sh', '000000', '100755'),
@@ -102,6 +117,9 @@ describe('flagsFor', () => {
       e('M', '.claude/agents/a.md'),
       e('A', '.claude/.gitattributes', '000000'),
       e('M', '.claude/rules/r.md'),
+      e('A', '.claude/skills/s/run.sh', '000000', '100755'),
+      e('M', '.claude/commands/c.md'),
+      e('A', '.claude/tools/t.sh', '000000', '100755'),
     ]);
     expect(f).toEqual([
       'permissions or hook registration changed: .claude/settings.json',
@@ -109,6 +127,9 @@ describe('flagsFor', () => {
       'guard deleted: .claude/hooks/y.sh',
       'agent changed: .claude/agents/a.md',
       'checkout attributes new: .claude/.gitattributes',
+      'skill or command new (executable): .claude/skills/s/run.sh',
+      'skill or command changed: .claude/commands/c.md',
+      'executable new: .claude/tools/t.sh',
     ]);
   });
 });
@@ -125,6 +146,15 @@ describe('charProblems', () => {
     ['private use', '+\n'],
     ['tag character', '+\u{e0041}\n'],
     ['unassigned', '+\u{50000}\n'],
+    ['variation selector 16', '+a\ufe0f\n'],
+    ['variation selector 17', '+a\u{e0100}\n'],
+    ['combining grapheme joiner', '+a\u034f\n'],
+    ['Hangul filler', '+\u3164\n'],
+    ['halfwidth Hangul filler', '+\uffa0\n'],
+    ['Hangul choseong filler', '+\u115f\n'],
+    ['braille blank', '+\u2800\n'],
+    ['no-break space', '+a\u00a0b\n'],
+    ['combining acute', '+e\u0301\n'],
   ])('refuses %s', (_, t) => expect(charProblems(t)).not.toEqual([]));
   it('allows tab, LF, accents, arrows and CJK', () =>
     expect(charProblems('+\ta — → é 漢字\n-x\n')).toEqual([]));
@@ -139,6 +169,7 @@ describe('the showing file and header', () => {
     branch: 'lane-x',
     n: 1,
     showing,
+    trees: showing,
     base: 'b'.repeat(40),
     tree: T,
     files: ['M CLAUDE.md (+1 -1)'],
@@ -155,6 +186,20 @@ describe('the showing file and header', () => {
   ])('takes back %s byte for byte', (_, text) =>
     expect(extractDiff(renderFile(show(text)))).toBe(text),
   );
+  it('adds the changed part of a long line under the diff, outside its fence', () => {
+    const head = 'x'.repeat(250);
+    const text = `diff --git a/CLAUDE.md b/CLAUDE.md\n--- a/CLAUDE.md\n+++ b/CLAUDE.md\n@@ -1 +1 @@\n-${head} old words tail\n+${head} new words tail\n`;
+    const md = renderFile(show(text));
+    expect(extractDiff(md)).toBe(text);
+    expect(changedSpans(text)).toEqual([
+      'CLAUDE.md',
+      `was: …${'x'.repeat(29)} ⟦old⟧ words tail`,
+      `now: …${'x'.repeat(29)} ⟦new⟧ words tail`,
+      '',
+    ]);
+    expect(md).toContain('⟦new⟧');
+    expect(changedSpans('@@ -1 +1 @@\n-short\n+SHORT\n')).toEqual([]);
+  });
   it('fences past the longest backtick run', () => {
     expect(fence('a')).toBe('```');
     expect(fence('a ```` b')).toBe('`````');
@@ -183,10 +228,22 @@ describe('the showing file and header', () => {
 });
 
 describe('the go and the ledger', () => {
-  it('names the branch or T8 first, only T8 from the second showing', () => {
+  it('names the branch or T8 while one tree is shown on the branch, only T8 once there are two', () => {
     expect(goNames(T, 1)).toBe('the branch or `aaaaaaaa`');
     expect(goNames(T, 2)).toBe('`aaaaaaaa`');
   });
+  it.each([
+    ['fixed cache policy ttl', null],
+    ['added claude-edit CLI for hub', null],
+    ['too short', /words/],
+    ['one two three four five six seven', /words/],
+    ['Fixed cache policy ttl', /lowercase/],
+    ['fixed it; rm -f x', /only/],
+    ['fixed `x` quoted it', /only/],
+    ['fixed  double space here', /single/],
+  ])('commit message %j', (m, want) =>
+    want ? expect(messageProblem(m)).toMatch(want) : expect(messageProblem(m)).toBeNull(),
+  );
   const rows: Row[] = [
     { t: '', kind: 'shown', branch: 'b', n: 1, base: 'B', tree: 'T1' },
     { t: '', kind: 'shown', branch: 'b', n: 2, base: 'B', tree: 'T2' },
@@ -211,11 +268,11 @@ describe('the go and the ledger', () => {
       patchId: 'p9',
     },
   ];
-  it('numbers showings by distinct tree', () => {
-    expect(showingNumber(rows, 'b', 'T1')).toBe(1);
-    expect(showingNumber(rows, 'b', 'T2')).toBe(2);
-    expect(showingNumber(rows, 'b', 'T3')).toBe(3);
-    expect(showingNumber(rows, 'new', 'T1')).toBe(1);
+  it('numbers showings by distinct tree and counts the trees', () => {
+    expect(showingNumber(rows, 'b', 'T1')).toEqual({ showing: 1, trees: 2 });
+    expect(showingNumber(rows, 'b', 'T2')).toEqual({ showing: 2, trees: 2 });
+    expect(showingNumber(rows, 'b', 'T3')).toEqual({ showing: 3, trees: 3 });
+    expect(showingNumber(rows, 'new', 'T1')).toEqual({ showing: 1, trees: 1 });
   });
   it('approves a patch-id only for its own branch', () => {
     const commits = [

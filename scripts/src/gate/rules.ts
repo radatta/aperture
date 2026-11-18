@@ -411,6 +411,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/board/vitest-stats.test.ts': 'temp dir',
   'scripts/src/devcheck/heavy-detail.test.ts': 'temp dir',
   'scripts/src/bot/logs.test.ts': 'temp dir',
+  'scripts/src/claude-edit/cli.test.ts': 'temp dirs, and spawns the cli',
   'scripts/src/claude-edit/steps.test.ts': 'temp repos',
   'scripts/src/commit-identity.test.ts': 'temp repos; spawns its sibling commit-identity.ts',
   'scripts/src/devcheck/ios-plans.test.ts': 'reads devcheck/scenarios (same area)',

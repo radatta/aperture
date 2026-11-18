@@ -132,8 +132,8 @@ hub message (the checkpoints stay).
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
    rebase (CLAUDE.md → _Claude behavior_), then re-run the gate (and the recheck, after a rebase that resolved
    conflicts: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_; a conflict in the hub's agent-rule commit:
-   `docs/ops/HUB.md` → _Agent-rule edits_). An agent-rule patch that turns up now waits for the dev run to end
-   (same section). Then a green
+   `docs/ops/HUB.md` → _Agent-rule edits_). An agent-rule patch that turns up now is asked for at once, or, once
+   the lane holds a dev lock, after the dev run ends (same section). Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
    the lock, a green one proves nothing about dev.
    - **Before the first `pnpm bot push`, scan for publication.** The repo is public, so a push publishes; an amend
@@ -183,8 +183,8 @@ hub message (the checkpoints stay).
    scenario's row likewise (_Other scenarios (regression)_) — a row the report shows `fail` or `skipped` is untested
    (a `deferred` slow row counts like off dev, with `ios-standalone`'s caveat: `docs/ops/DEV-CHECK.md` → _Slow
    tier_), whatever the status line says. Autonomous: the all-clear is the green full run with every row so.
-10. **PR** — a pending agent-rule patch blocks it, and the hub runs `pnpm claude-edit verify` at `[pr-open]` and
-    after any push to an open PR (`docs/ops/HUB.md` → _Agent-rule edits_). On the all-clear, scan the PR title, body and the report against `docs/ops/PUBLIC-CONTENT.md`, then
+10. **PR** — a pending agent-rule patch blocks it, and the hub verifies the branch's agent-rule commits
+    (`docs/ops/HUB.md` → _Agent-rule edits_). On the all-clear, scan the PR title, body and the report against `docs/ops/PUBLIC-CONTENT.md`, then
     `pnpm bot lock release` (**→ hub:** `[lock]` released), `pnpm bot push`, then `pnpm mailroom open-pr`
     (`docs/ops/MAILROOM.md` → _Using it_; **→ hub:** `[pr-open]` with the URL, or `[pr-ready]` when the mailroom was
     unreachable). A push to an open PR after a rebase is `pnpm bot push --after-rebase` (a `.github/workflows/`

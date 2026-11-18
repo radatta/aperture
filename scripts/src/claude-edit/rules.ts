@@ -40,13 +40,31 @@ export function parseNumstat(z: string): { added: string; deleted: string; path:
 
 const SAFE = /^[A-Za-z0-9._/@+-]+$/;
 
-// CLAUDE.md or .claude/** — never .claude/worktrees — compared case-insensitively (the checkout has core.ignorecase).
+// A path name a showing can print as is: the safe charset, no empty, `.` or `..` segment.
+export const safePath = (p: string) =>
+  SAFE.test(p) && !p.split('/').some((s) => s === '' || s === '.' || s === '..');
+
+// Exactly CLAUDE.md or .claude/**, never .claude/worktrees. Case-exact: the checkout folds case (core.ignorecase,
+// a case-insensitive mount), so `claude.md` or `.Claude/x` would land beside the real file or under another name.
 export function pathAllowed(p: string): boolean {
-  if (!SAFE.test(p) || p.split('/').some((s) => s === '' || s === '.' || s === '..')) return false;
-  const l = p.toLowerCase();
-  if (l === 'claude.md') return true;
-  if (!l.startsWith('.claude/')) return false;
+  if (!safePath(p)) return false;
+  if (p === 'CLAUDE.md') return true;
+  if (!p.startsWith('.claude/')) return false;
+  const l = p.toLowerCase(); // .claude/WORKTREES is the worktrees directory on this checkout
   return l !== '.claude/worktrees' && !l.startsWith('.claude/worktrees/');
+}
+
+// Paths in a tree that differ only in case: on this checkout they are one file.
+export function caseTwins(paths: string[]): string[] {
+  const seen = new Map<string, string>();
+  const out: string[] = [];
+  for (const p of paths) {
+    const l = p.toLowerCase();
+    const o = seen.get(l);
+    if (o !== undefined && o !== p) out.push(`${o} and ${p} differ only in case`);
+    else seen.set(l, p);
+  }
+  return out;
 }
 
 // Each entry: M with its mode unchanged, A at 100644 (100755 only when named with --exec), D of a regular file;
@@ -83,22 +101,25 @@ export function judgeEntries(
 export function flagsFor(entries: Entry[]): string[] {
   const out: string[] = [];
   for (const e of entries) {
-    const l = e.path.toLowerCase();
+    const p = e.path;
     const how = e.status === 'A' ? 'new' : e.status === 'D' ? 'deleted' : 'changed';
-    if (/^\.claude\/settings[^/]*\.json$/.test(l))
-      out.push(`permissions or hook registration ${how}: ${e.path}`);
-    else if (l.startsWith('.claude/hooks/'))
-      out.push(
-        `guard ${how}${e.dstMode === '100755' && e.status === 'A' ? ' (executable)' : ''}: ${e.path}`,
-      );
-    else if (l.startsWith('.claude/agents/')) out.push(`agent ${how}: ${e.path}`);
-    if (l.endsWith('.gitattributes')) out.push(`checkout attributes ${how}: ${e.path}`);
+    const x = e.status !== 'D' && e.dstMode === '100755' ? ' (executable)' : '';
+    if (/^\.claude\/settings[^/]*\.json$/.test(p))
+      out.push(`permissions or hook registration ${how}: ${p}`);
+    else if (p.startsWith('.claude/hooks/')) out.push(`guard ${how}${x}: ${p}`);
+    else if (p.startsWith('.claude/agents/')) out.push(`agent ${how}${x}: ${p}`);
+    else if (p.startsWith('.claude/skills/') || p.startsWith('.claude/commands/'))
+      out.push(`skill or command ${how}${x}: ${p}`);
+    else if (x) out.push(`executable ${how}: ${p}`);
+    if (p.endsWith('.gitattributes')) out.push(`checkout attributes ${how}: ${p}`);
   }
   return out;
 }
 
-// Characters a terminal may not draw: Cc but tab and LF, and Cf, Zl, Zp, Co, Cn. The text must be strict UTF-8.
-const HIDDEN = /[^\P{Cc}\t\n]|[\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}]/gu;
+// Characters a reader may not see: Cc but tab and LF; Cf, Zl, Zp, Co, Cn; every default-ignorable (variation
+// selectors, Hangul fillers, CGJ); combining marks; any space but U+0020; the braille blank. Strict UTF-8 only.
+const HIDDEN =
+  /[^\P{Cc}\t\n]|[\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Default_Ignorable_Code_Point}\p{Mn}\p{Me}\u2800]|[^\P{Zs} ]/gu;
 export function decodeStrict(buf: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true }).decode(buf);
@@ -121,14 +142,16 @@ export const longestBacktickRun = (text: string) =>
   Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
 export const fence = (text: string) => '`'.repeat(Math.max(3, longestBacktickRun(text) + 1));
 
-// What the user's go must name: the branch or T's first 8, only the 8 from a branch's second showing on.
-export const goNames = (tree: string, showing: number) =>
-  showing >= 2 ? `\`${tree.slice(0, 8)}\`` : `the branch or \`${tree.slice(0, 8)}\``;
+// What the user's go must name: the branch or T's first 8 while this is the only tree shown on the branch, only the 8
+// once a second tree has been shown there (a re-showing of the first one included).
+export const goNames = (tree: string, trees: number) =>
+  trees >= 2 ? `\`${tree.slice(0, 8)}\`` : `the branch or \`${tree.slice(0, 8)}\``;
 
 export interface Showing {
   branch: string;
   n: number;
   showing: number;
+  trees: number; // distinct trees shown on the branch, this one counted
   base: string;
   tree: string;
   files: string[];
@@ -137,7 +160,7 @@ export interface Showing {
   text: string;
 }
 
-const lineCount = (text: string) => text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+export const lineCount = (text: string) => text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 
 // The short header the hub pastes; `file` is where the user reads the diff (a Mac path), null for a PRE-CHECK.
 export function renderHeader(s: Showing, file: string | null): string {
@@ -146,7 +169,7 @@ export function renderHeader(s: Showing, file: string | null): string {
     ...(file ? [] : ['PRE-CHECK (lane copy, not a showing: nothing written or recorded)']),
     `claude-edit check — ${s.branch} claude-edit-${s.n}, showing ${s.showing} on this branch`,
     `B ${s.base}`,
-    `T ${s.tree}   go names: ${goNames(s.tree, s.showing)}`,
+    `T ${s.tree}   go names: ${goNames(s.tree, s.trees)}`,
     `files: ${s.files.join('; ')}`,
     `flags: ${s.flags.length ? s.flags.join('; ') : 'none'}`,
     `untracked under .claude/: ${s.untracked.length ? s.untracked.join(', ') : 'none'}`,
@@ -162,7 +185,7 @@ export function renderFile(s: Showing): string {
   return [
     `# claude-edit — ${s.branch} claude-edit-${s.n}`,
     '',
-    `Showing ${s.showing} on this branch. Your go names ${goNames(s.tree, s.showing)}.`,
+    `Showing ${s.showing} on this branch. Your go names ${goNames(s.tree, s.trees)}.`,
     '',
     `- B \`${s.base}\``,
     `- T \`${s.tree}\``,
@@ -174,7 +197,61 @@ export function renderFile(s: Showing): string {
     `${f}diff`,
     s.text + f,
     '',
+    ...spansBlock(s.text),
   ].join('\n');
+}
+
+function spansBlock(text: string): string[] {
+  const spans = changedSpans(text);
+  if (!spans.length) return [];
+  const body = spans.join('\n');
+  const f = fence(body);
+  return [
+    'Long lines changed in place: the changed part between ⟦ ⟧, 30 characters each side.',
+    '',
+    `${f}text`,
+    body + f,
+    '',
+  ];
+}
+
+// For each long line changed in place (a run of - lines then as many + lines, paired in order), the part that
+// changed: the shared head and tail trimmed to `ctx` characters, the change between ⟦ ⟧. The eye can't find one
+// phrase in two 600-character lines.
+export function changedSpans(text: string, over = 200, ctx = 30): string[] {
+  const out: string[] = [];
+  const lines = text.split('\n');
+  let file = '';
+  let hunk = false;
+  const cut = (l: string, p: number, s: number) =>
+    `${p > ctx ? '…' : ''}${l.slice(Math.max(0, p - ctx), p)}⟦${l.slice(p, l.length - s)}⟧${l.slice(l.length - s, l.length - s + ctx)}${s > ctx ? '…' : ''}`;
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i]!;
+    if (l.startsWith('diff --git ')) hunk = false;
+    else if (!hunk && l.startsWith('+++ b/')) file = l.slice('+++ b/'.length);
+    else if (l.startsWith('@@')) hunk = true;
+    else if (hunk && l.startsWith('-')) {
+      let j = i;
+      while (j < lines.length && lines[j]!.startsWith('-')) j++;
+      let k = j;
+      while (k < lines.length && lines[k]!.startsWith('+')) k++;
+      if (k - j === j - i)
+        for (let x = 0; x < j - i; x++) {
+          const was = lines[i + x]!.slice(1);
+          const now = lines[j + x]!.slice(1);
+          if (Math.max(was.length, now.length) <= over) continue;
+          let p = 0;
+          while (p < was.length && p < now.length && was[p] === now[p]) p++;
+          let q = 0;
+          while (q < was.length - p && q < now.length - p && was.at(-1 - q) === now.at(-1 - q)) q++;
+          out.push(`${file}`, `was: ${cut(was, p, q)}`, `now: ${cut(now, p, q)}`, '');
+        }
+      i = k;
+      continue;
+    }
+    i++;
+  }
+  return out;
 }
 
 export function extractDiff(md: string): string {
@@ -199,6 +276,7 @@ export interface Row {
   tree: string;
   commit?: string;
   patchId?: string;
+  file?: string; // shown: sha256 of the showing file check wrote
 }
 
 export function parseLedger(text: string): Row[] {
@@ -216,17 +294,27 @@ export function parseLedger(text: string): Row[] {
   return rows;
 }
 
-// The showing number a new check of `tree` gets on `branch`: distinct trees shown there, this one counted.
-export function showingNumber(rows: Row[], branch: string, tree: string): number {
+// A check of `tree` on `branch`: its showing number (distinct trees shown there, in first-shown order, this one
+// counted) and how many distinct trees that makes.
+export function showingNumber(rows: Row[], branch: string, tree: string) {
   const trees = [
     ...new Set(rows.filter((r) => r.kind === 'shown' && r.branch === branch).map((r) => r.tree)),
   ];
   const i = trees.indexOf(tree);
-  return i >= 0 ? i + 1 : trees.length + 1;
+  return i >= 0
+    ? { showing: i + 1, trees: trees.length }
+    : { showing: trees.length + 1, trees: trees.length + 1 };
 }
 
+const shownRows = (rows: Row[], branch: string, base: string, tree: string) =>
+  rows.filter(
+    (r) => r.kind === 'shown' && r.branch === branch && r.base === base && r.tree === tree,
+  );
 export const wasShown = (rows: Row[], branch: string, base: string, tree: string) =>
-  rows.some((r) => r.kind === 'shown' && r.branch === branch && r.base === base && r.tree === tree);
+  shownRows(rows, branch, base, tree).length > 0;
+// The showing file's hash on the last showing of this B and T: the file stage takes must still be that one.
+export const lastShownFile = (rows: Row[], branch: string, base: string, tree: string) =>
+  shownRows(rows, branch, base, tree).at(-1)?.file;
 
 // Commits on a branch that touch CLAUDE.md or .claude/ with no applied row for that branch.
 export function unapproved(
@@ -240,5 +328,16 @@ export function unapproved(
   return commits.filter((c) => !ok.has(c.patchId)).map((c) => c.sha);
 }
 
-export const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+export const BRANCH = /^(?!(?:main|dev|master|HEAD)$)[A-Za-z0-9][A-Za-z0-9._-]*$/; // never a deploy branch
+export const SHA = /^[0-9a-f]{40}$/; // sha1 repos only: EMPTY_TREE is sha1's
+
+// The hub's commit message, checked before it is printed into a shell line: CLAUDE.md's rule (one lowercase line,
+// 4–6 words) and nothing a shell or the guard would read differently.
+export function messageProblem(m: string): string | null {
+  if (!/^[A-Za-z0-9 .,:_/+-]+$/.test(m)) return 'letters, digits, spaces and .,:_/+- only';
+  const words = m.trim().split(/\s+/).length;
+  if (words < 4 || words > 6) return `${words} words: 4–6`;
+  if (m !== m.trim() || /\s\s/.test(m)) return 'single spaces, no leading or trailing space';
+  if (!/^[a-z]/.test(m)) return 'starts lowercase';
+  return null;
+}
