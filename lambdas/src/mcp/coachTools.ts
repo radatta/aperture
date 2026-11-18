@@ -14,8 +14,13 @@ import {
   LOG_ATTEMPTS_MAX,
   PATTERN_NAMES,
   PATTERNS,
+  catalogDetail,
   catalogProblem,
   isPatternId,
+  LC_CATALOG_PART_MAX_CHARS,
+  LC_CATALOG_PARTS_MAX,
+  listsOf,
+  onPlanList,
   patternOfTags,
   sittingMinutes,
   sittingProblemUrl,
@@ -24,6 +29,7 @@ import {
   COACH_VOIDS_MAX,
 } from '@aperture/shared';
 import type {
+  CatalogStatus,
   CoachAttempt,
   CoachFocus,
   CoachSlot,
@@ -41,9 +47,10 @@ import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
 // The LeetCode coach for Claude (docs/areas/recruiting/coach.md; docs/areas/mcp → Tools). leetcode_today,
-// list_problems, get_problem, coach_stats and list_stories read; mark_peeked, set_cause_tag, swap_slot,
-// log_attempt, set_focus_pattern, delete_attempt, set_void and set_claude_notes write the user's data, each only on
-// their yes.
+// list_problems, get_problem, coach_stats, list_stories and catalog_status read; mark_peeked, set_cause_tag,
+// swap_slot, log_attempt, set_focus_pattern, delete_attempt, set_void and set_claude_notes write the user's data,
+// each only on their yes, and import_catalog writes the stage's full problem catalog (stage-wide metadata, no user
+// data), on their yes too.
 
 // Every write's description opens with this, so the posture travels with the tool (MCP has no annotations).
 const ASK_FIRST =
@@ -299,6 +306,26 @@ const trackArg = (v: unknown): ResolveState['track'] | undefined => {
 };
 const todayDay = async (ctx: ToolContext) =>
   ((await ctx.dispatch('getCoachToday', [])) as CoachToday).day;
+
+// The full catalog's own facts about a problem (catalogs.ts → catalogDetail), when imported; nothing otherwise.
+function catalogFacts(slug: string) {
+  const d = catalogDetail(slug);
+  if (!d) return {};
+  const title = (x: string) => catalogProblem(x)?.title ?? x;
+  return {
+    number: d.id,
+    premium: d.premium === true,
+    tags: d.tags,
+    acceptance: d.acRate,
+    similar: d.similar.map((x) => ({ slug: x, title: title(x) })),
+    harder: d.harder.map((x) => ({ slug: x, title: title(x) })),
+  };
+}
+const catalogView = (s: CatalogStatus) => ({
+  ...s,
+  importedAt: s.importedAt === null ? null : iso(s.importedAt),
+  costUsd: Math.round(s.costUsd * 10_000) / 10_000,
+});
 
 export const COACH_TOOLS: Tool[] = [
   {
@@ -769,7 +796,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'get_problem',
     description: [
-      'One problem in full, by slug: its catalog place (pattern, difficulty, link), every day tried oldest first (outcome, help, cause, minutes, note, `historical` for a solve from before the coach, where it came from — `sources`: sitting, manual, peek-seed, legacy — the sitting and logged-attempt ids — `delete_attempt` takes a logged one — and Claude’s notes on that day’s sittings, to coach a re-solve from last time), its sittings (minutes, submits, runs, accepted, review, Claude’s notes), the re-solve state with its due day, and `legacy`: the pre-sittings capture’s days on it, with whether each counts (set_void changes that).',
+      'One problem in full, by slug: its catalog place (pattern, difficulty, link, the lists it is on, and from the full LeetCode catalog when imported: number, tags, acceptance, Premium, up to two similar and two harder problems), every day tried oldest first (outcome, help, cause, minutes, note, `historical` for a solve from before the coach, where it came from — `sources`: sitting, manual, peek-seed, legacy — the sitting and logged-attempt ids — `delete_attempt` takes a logged one — and Claude’s notes on that day’s sittings, to coach a re-solve from last time), its sittings (minutes, submits, runs, accepted, review, Claude’s notes), the re-solve state with its due day, and `legacy`: the pre-sittings capture’s days on it, with whether each counts (set_void changes that).',
       'A problem with no counted attempt comes back with `record: null` (its uncounted sittings still listed). Read-only.',
     ].join(' '),
     inputSchema: {
@@ -802,7 +829,7 @@ export const COACH_TOOLS: Tool[] = [
       const mine = all.filter((s) => s.problemSlug === slug);
       if (!r && !cat && !mine.length && !legacy.length)
         throw new Error(
-          `No record of "${slug}" and it isn\u2019t on the roadmap — list_problems lists the ones tried`,
+          `No record of "${slug}" and it isn\u2019t in the catalog — list_problems lists the ones tried`,
         );
       const t = now(ctx);
       const sittings = mine.map((s) => problemSitting(s, t));
@@ -831,7 +858,9 @@ export const COACH_TOOLS: Tool[] = [
         pattern: PATTERN_NAMES[src.pattern],
         patternId: src.pattern,
         difficulty: src.difficulty,
-        onRoadmap: !!cat,
+        onRoadmap: onPlanList(slug), // the list the plan picks from (NeetCode 150), whatever else is loaded
+        lists: listsOf(slug),
+        ...catalogFacts(slug),
         url: sittingProblemUrl(slug),
       };
       // Sittings that never counted (a test, or too short with no accept) still show, so they can be talked about.
@@ -987,6 +1016,43 @@ export const COACH_TOOLS: Tool[] = [
         nextDue: nextDue(after, hit.r.slug),
         stillTried: after.some((r) => r.slug === hit.r.slug),
       };
+    },
+  },
+  {
+    name: 'catalog_status',
+    description:
+      'The full LeetCode problem catalog (metadata only: numbers, titles, difficulty, tags, acceptance, Premium; never a statement) — whether it is imported on this stage and how: `state` (absent, staging, running, ready, partial, failed), the source commit, the count and how each problem got its pattern (`by`: neetcode, rule, model, tags), an upload\u2019s parts so far, the server model spend and the last error. Stage-wide, not the user\u2019s data. Read-only.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    async run(_args, ctx) {
+      return catalogView((await ctx.dispatch('getCatalogStatus', [])) as CatalogStatus);
+    },
+  },
+  {
+    name: 'import_catalog',
+    description: [
+      ASK_FIRST,
+      `Builds the stage\u2019s full LeetCode problem catalog from the pinned public dataset (stage-wide metadata, not the user\u2019s data; their plan still picks from NeetCode 150). Optional \`classes\`: the classification file (one problem per line: number, pattern, similar numbers, harder numbers, tab-separated), at most ${LC_CATALOG_PART_MAX_CHARS} characters a call — split a longer one into \`parts\` (≤ ${LC_CATALOG_PARTS_MAX}) sent as \`part\` 1…n; the last part in starts the import. With no \`classes\` it starts an import with the classes already stored, and a few new problems are classified on the server each time.`,
+      'Returns the catalog_status after the call — read back its `state` (`staging` with parts so far, `running`, then call catalog_status until `ready` or `partial`). Calling again while one runs starts nothing.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        classes: { type: 'string', description: 'One part of the classification file' },
+        part: { type: 'integer', description: 'This part\u2019s number, from 1 (default 1)' },
+        parts: { type: 'integer', description: 'How many parts the file has (default 1)' },
+        limit: {
+          type: 'integer',
+          description:
+            'Keep only the first n problems besides NeetCode 150\u2019s (a capped test import)',
+        },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      const input: Record<string, unknown> = {};
+      for (const k of ['classes', 'part', 'parts', 'limit'] as const)
+        if (args[k] !== undefined) input[k] = args[k];
+      return catalogView((await ctx.dispatch('startCatalogImport', [input])) as CatalogStatus);
     },
   },
 ];

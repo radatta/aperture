@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { emptySummary, ulid, type ApiMethod, type Sitting } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
@@ -14,6 +14,13 @@ import type { CoachPickCall } from '../anthropic/gateway';
 import { inlinePickInvoker } from '../coach/invoker';
 import type { CoachPickInvoker } from '../coach/invoker';
 import { runCoachPick } from '../coach/pick';
+import { unloadCatalog } from '@aperture/shared';
+import { FIXTURE_CLASSES, FIXTURE_SOURCE } from '../catalog/fixture';
+import { runCatalogImport } from '../catalog/import';
+import { inlineCatalogInvoker } from '../catalog/invoker';
+import { recheckCatalogSoon } from '../catalog/loader';
+import { FakeCatalogSource } from '../catalog/source';
+import { CatalogStore } from '../catalog/store';
 
 // The coach's MCP tools over the real handleRpc path (docs/areas/recruiting/coach.md). Synthetic data only.
 const U = 'local';
@@ -244,6 +251,7 @@ describe('writes ask first', () => {
       'delete_attempt',
       'set_void',
       'set_claude_notes',
+      'import_catalog',
     ])
       expect(TOOLS.find((x) => x.name === name)!.description).toMatch(
         /^Writes to their Aperture data\. Before calling, say exactly what you will write and wait for their yes/,
@@ -688,5 +696,80 @@ describe('ownership', () => {
     expect(t.slots.every((s) => s.status === 'open')).toBe(true);
     await other.deleteCoachAttempt((await repo.listCoachAttempts())[0]!.id);
     expect(await repo.listCoachAttempts()).toHaveLength(1);
+  });
+});
+
+describe('the full catalog over MCP', () => {
+  function catalogCtx() {
+    const store = new CatalogStore(doc, liveWrites(doc));
+    const catalogInvoker = inlineCatalogInvoker((e) =>
+      runCatalogImport(
+        {
+          store,
+          source: new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE }),
+          anthropic: new FakeAnthropic(),
+          now,
+          log: () => {},
+        },
+        e,
+      ),
+    );
+    ctx = {
+      dispatch: (method: ApiMethod, args: unknown[]) =>
+        handleRpc(doc, { userId: U, method, args, now }, { catalogInvoker }),
+      upload: async () => {},
+      now,
+    };
+  }
+  const reset = () => {
+    unloadCatalog();
+    recheckCatalogSoon();
+  };
+  beforeEach(reset);
+  afterEach(reset);
+
+  it('reads absent, imports from an uploaded file in parts, then reads the result', async () => {
+    catalogCtx();
+    expect(await call('catalog_status')).toMatchObject({ state: 'absent', count: 0 });
+    const lines = FIXTURE_CLASSES.split('\n');
+    expect(
+      await call('import_catalog', { classes: lines.slice(0, 2).join('\n'), part: 1, parts: 2 }),
+    ).toMatchObject({ state: 'staging', staged: { have: 1, of: 2 } });
+    const done = await call('import_catalog', {
+      classes: lines.slice(2).join('\n'),
+      part: 2,
+      parts: 2,
+    });
+    expect(done).toMatchObject({ state: 'partial', count: 14, by: { model: 5 } });
+    expect(done.importedAt).toMatch(/^2026-11-09T/);
+  });
+
+  it('get_problem knows an untried problem from the catalog, off the roadmap, with its related ones', async () => {
+    catalogCtx();
+    await call('import_catalog', { classes: FIXTURE_CLASSES });
+    recheckCatalogSoon();
+    const out = await call('get_problem', { slug: 'synthetic-window-sum' });
+    expect(out.problem).toMatchObject({
+      title: 'Synthetic Window Sum',
+      patternId: 'sliding-window',
+      difficulty: 'Medium',
+      onRoadmap: false,
+      lists: ['leetcode'],
+      number: 9001,
+      premium: false,
+      similar: [{ slug: 'synthetic-greedy-jumps', title: 'Synthetic Greedy Jumps' }],
+      harder: [{ slug: 'synthetic-heap-merge', title: 'Synthetic Heap Merge' }],
+    });
+    expect(out.record).toBeNull();
+    const ns = await call('get_problem', { slug: 'two-sum' });
+    expect(ns.problem).toMatchObject({ onRoadmap: true, lists: ['neetcode150', 'leetcode'] });
+  });
+
+  it('refuses a malformed import before writing anything', async () => {
+    catalogCtx();
+    await expect(call('import_catalog', { classes: 'x', part: 3, parts: 2 })).rejects.toThrow(
+      /part must/,
+    );
+    expect((await call('catalog_status')).state).toBe('absent');
   });
 });
