@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fakeApi, fakeClock, ghError } from './fakes.ts';
 import {
   LockHeld,
+  MainPending,
   SLOTS,
   TTL_MS,
   acquire,
@@ -537,5 +538,221 @@ describe('dev slots', () => {
     const r = await waitForLock(g.api, 'ci-bot', clock, { maxMs: 5 * MIN, slots: SLOTS });
     expect(r).toMatchObject({ outcome: 'gave-up', slot: 'devb' });
     expect(r.holder?.branch).toBe('lc');
+  });
+});
+
+// A merge's slot deploy waits for the lock (main-dev-wait.ts); the guard keeps every other branch off the slot while
+// main's Deploy run is still to land there (main-pending.ts), checked before the ref is written and again after.
+describe('main pending', () => {
+  const RUN = 'https://github.com/radatta/aperture/actions/runs/1';
+  // `busy` says which slots main is pending on; `after` flips a slot to pending once its lock has been written.
+  function guard(busy: ('dev' | 'devb')[], after: ('dev' | 'devb')[] = []) {
+    const calls: string[] = [];
+    let wrote: string[] = [];
+    const g = {
+      calls,
+      wrote: (slot: string) => (wrote = [...wrote, slot]),
+      fn: async (slot: 'dev' | 'devb') => {
+        calls.push(slot);
+        const hit = busy.includes(slot) || (after.includes(slot) && wrote.includes(slot));
+        return hit ? RUN : null;
+      },
+    };
+    return g;
+  }
+  // Marks a slot written when its ref is created, so `after` sees the order: write, then read the runs.
+  const withWrites = (g: ReturnType<typeof slots>, p: ReturnType<typeof guard>) => {
+    const api = (async (method: string, path: string, body?: unknown) => {
+      const out = await g.api(method, path, body);
+      if (method === 'POST' && path.endsWith('/git/refs'))
+        p.wrote(((body as { ref: string }).ref.split('/').pop() ?? '') as string);
+      return out;
+    }) as typeof g.api;
+    return api;
+  };
+
+  it('refuses slot A while main is pending there, before writing, and takes B', async () => {
+    const g = slots();
+    const p = guard(['dev']);
+    const { slot } = await acquireSlot(g.api, 'ci-bot', SHA, NOW, undefined, [], p.fn);
+    expect(slot).toBe('devb');
+    expect(g.holderOf('dev')).toBeNull();
+    expect(
+      g.calls.some(
+        (c) => c.method === 'POST' && (c.body as { ref?: string })?.ref === 'refs/locks/dev',
+      ),
+    ).toBe(false);
+  });
+
+  it('takes A when main is pending only on B', async () => {
+    const g = slots();
+    expect(
+      (await acquireSlot(g.api, 'ci-bot', SHA, NOW, undefined, [], guard(['devb']).fn)).slot,
+    ).toBe('dev');
+  });
+
+  it('refuses an iOS-pinned branch with MainPending and plain `lock wait`, leaving no lock', async () => {
+    const g = slots();
+    const err = await acquireSlot(
+      g.api,
+      'ci-bot',
+      SHA,
+      NOW,
+      undefined,
+      ['app/src/auth/x.ts'],
+      guard(['dev']).fn,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MainPending);
+    expect((err as MainPending).wait).toBe('lock wait');
+    expect((err as MainPending).runs).toEqual([{ slot: 'dev', url: RUN }]);
+    expect((err as MainPending).message).toMatch(
+      /main's deploy is still to land on dev \(https:.*\) — `pnpm bot lock wait`/,
+    );
+    expect(g.holderOf('dev')).toBeNull();
+    expect(g.holderOf('devb')).toBeNull();
+  });
+
+  it('names main and the holder, with `lock wait --any`, when A is pending and B held', async () => {
+    const g = slots({ devb: live('lc') });
+    const err = await acquireSlot(
+      g.api,
+      'ci-bot',
+      SHA,
+      NOW,
+      undefined,
+      [],
+      guard(['dev']).fn,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MainPending);
+    expect(err).toBeInstanceOf(LockHeld); // the CLI still prints the holder's notes
+    expect((err as MainPending).held.map((x) => [x.slot, x.holder?.branch ?? null])).toEqual([
+      ['dev', null],
+      ['devb', 'lc'],
+    ]);
+    expect((err as MainPending).wait).toBe('lock wait --any');
+    expect((err as MainPending).message).toMatch(/devb is locked by lc/);
+  });
+
+  it('releases a lock it just wrote when the second read sees main, and moves on', async () => {
+    const g = slots();
+    const p = guard([], ['dev']);
+    const { slot } = await acquireSlot(withWrites(g, p), 'ci-bot', SHA, NOW, undefined, [], p.fn);
+    expect(slot).toBe('devb');
+    expect(p.calls).toEqual(['dev', 'dev', 'devb', 'devb']);
+    expect(g.holderOf('dev')).toBeNull(); // released
+    expect(g.holderOf('devb')?.branch).toBe('ci-bot');
+  });
+
+  it('fails closed: a guard error after the write releases the lock and rethrows', async () => {
+    const g = slots();
+    let n = 0;
+    const flaky = async () => {
+      if (++n === 2) throw new Error('runs read failed');
+      return null;
+    };
+    await expect(acquireSlot(g.api, 'ci-bot', SHA, NOW, undefined, [], flaky)).rejects.toThrow(
+      /runs read failed/,
+    );
+    expect(g.holderOf('dev')).toBeNull();
+    const before = slots();
+    await expect(
+      acquireSlot(before.api, 'ci-bot', SHA, NOW, undefined, [], () =>
+        Promise.reject(new Error('down')),
+      ),
+    ).rejects.toThrow(/down/);
+    expect(before.calls.some((c) => c.method === 'POST' && c.path.endsWith('/git/refs'))).toBe(
+      false,
+    );
+  });
+
+  it('lets the live holder redeploy while main waits for it, without asking', async () => {
+    const g = slots({ dev: live('ci-bot') });
+    const p = guard(['dev']);
+    const { slot } = await acquireSlot(g.api, 'ci-bot', SHA, NOW, undefined, [], p.fn);
+    expect(slot).toBe('dev');
+    expect(p.calls).toEqual([]);
+    expect(Date.parse(g.holderOf('dev')?.expiresAt ?? '')).toBe(NOW + TTL_MS);
+  });
+
+  it('treats a lapsed own lock as new: let go when main is pending there, renewed when not', async () => {
+    const pending = slots({ dev: expired('ci-bot') });
+    const { slot } = await acquireSlot(
+      pending.api,
+      'ci-bot',
+      SHA,
+      NOW,
+      undefined,
+      [],
+      guard(['dev']).fn,
+    );
+    expect(slot).toBe('devb');
+    expect(pending.holderOf('dev')).toBeNull(); // a branch holds at most one
+    const quiet = slots({ dev: expired('ci-bot') });
+    const p = guard([]);
+    expect((await acquireSlot(quiet.api, 'ci-bot', SHA, NOW, undefined, [], p.fn)).slot).toBe(
+      'dev',
+    );
+    expect(p.calls).toEqual(['dev', 'dev']);
+    expect(Date.parse(quiet.holderOf('dev')?.expiresAt ?? '')).toBe(NOW + TTL_MS);
+  });
+
+  it('wait: a free slot main is still to land on is not free yet', async () => {
+    const clock = fakeClock(NOW);
+    const g = slots();
+    let polls = 0;
+    const lines: string[] = [];
+    const r = await waitForLock(g.api, 'ci-bot', clock, {
+      maxMs: 45 * MIN,
+      log: (l) => lines.push(l),
+      busy: async () => ++polls <= 2,
+    });
+    expect(r).toMatchObject({ outcome: 'free', slot: 'dev' });
+    expect(clock.t).toBe(NOW + 60_000);
+    expect(lines).toEqual(["waiting: main's deploy is still to land on dev"]); // once, not per poll
+  });
+
+  it('wait --any: returns the slot main is not pending on', async () => {
+    const clock = fakeClock(NOW);
+    const g = slots({ devb: until('lc', 20 * MIN) });
+    const r = await waitForLock(g.api, 'ci-bot', clock, {
+      maxMs: 45 * MIN,
+      slots: SLOTS,
+      busy: async (slot) => slot === 'dev' && clock.t < NOW + 2 * MIN,
+    });
+    expect(r).toMatchObject({ outcome: 'free', slot: 'dev' });
+    expect(clock.t).toBe(NOW + 2 * MIN); // polled every 30 s, never slept to lc's expiry in one go
+  });
+
+  it('wait: a lapsed lock main is pending on polls, never spins', async () => {
+    const clock = fakeClock(NOW);
+    const g = slots({ dev: expired('flux') });
+    let sleeps = 0;
+    const sleeping = {
+      now: clock.now,
+      sleep: async (ms: number) => (sleeps++, expect(ms).toBe(30_000), clock.sleep(ms)),
+    };
+    const r = await waitForLock(g.api, 'ci-bot', sleeping, {
+      maxMs: 2 * MIN,
+      busy: async () => true,
+    });
+    expect(r.outcome).toBe('gave-up');
+    expect(sleeps).toBe(4);
+  });
+
+  it('wait: a failing busy check counts as a failed read; maxErrors sets how many', async () => {
+    const clock = fakeClock(NOW);
+    const g = slots();
+    let n = 0;
+    const busy = async () => {
+      if (++n <= 4) throw new Error('runs 502');
+      return false;
+    };
+    expect(
+      (await waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN, busy, maxErrors: 5 })).outcome,
+    ).toBe('free');
+    n = 0;
+    await expect(waitForLock(g.api, 'ci-bot', clock, { maxMs: 45 * MIN, busy })).rejects.toThrow(
+      /runs 502/,
+    );
   });
 });

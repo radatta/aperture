@@ -191,6 +191,13 @@ devb …` to the hub, and, for each holder whose live session the board names, a
 3. On 0, `pnpm bot deploy-dev` again — it takes the freed slot (an expired one is taken over). The `[lock]` taken
    message names the slot: `[lock] <branch> — taken devb until <HH:MM>, ETA <n> min.`
 
+**A merge waits too.** A merge's slot deploy waits while that slot's lock is held, and until it lands the slot is
+refused to every branch but its holder: the refusal says "main's deploy is still to land on dev (<run>)" and names
+the wait (step 2; `lock wait` waits for main as well). No holder notes for main — there's no one to tell. So the hub
+no longer orders merges around a lane's dev test: a merge during one waits for its release, up to an hour (CI-BOT.md
+→ _Dev deploys_ → _A merge waits for the lock_). A holder about to merge its own PR releases first (phase 10), or
+its merge waits on itself.
+
 **In a named dev order, lanes take the lock themselves** (the user, 2026-11-08). The hub sends the order and
 keeps it current as `devQueue` in `queue.json`, in file order; only the hub changes it. A lane is ready once its
 own local check is green (`pnpm devcheck:local`, phase 8); it sends the hub `[local]` as information and never

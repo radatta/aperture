@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { deployDev, deployTitle } from './deploy-dev.ts';
+import { MainPending } from './lock.ts';
 import { fakeApi, fakeClock, fakeRun, ghError } from './fakes.ts';
 import type { Call } from './fakes.ts';
 
@@ -26,6 +27,7 @@ function github(
   minutes: number,
   conclusion: string,
   heldA?: { branch: string; sha: string; expiresAt: string },
+  mainPending = false, // a main Deploy run still queued (no jobs listed yet): pending on both slots
 ) {
   const refs: Record<string, string | null> = { dev: null, devb: null };
   let tags = 0;
@@ -64,7 +66,21 @@ function github(
       refs[slotOf(c.path)] = null;
       return undefined;
     },
-    [`GET ${R}/actions/workflows/deploy.yml/runs`]: () => ({ workflow_runs: [] }),
+    [`GET ${R}/actions/workflows/deploy.yml/runs`]: () => ({
+      workflow_runs: mainPending
+        ? [
+            {
+              id: 9,
+              display_title: 'm',
+              created_at: '',
+              status: 'queued',
+              conclusion: null,
+              html_url: 'main-run',
+            },
+          ]
+        : [],
+    }),
+    [`GET ${R}/actions/runs/9/jobs`]: () => ({ jobs: [] }),
     [`POST ${R}/actions/workflows/deploy-dev.yml/dispatches`]: (c: Call) => {
       inputs.push((c.body as { inputs: Record<string, string> }).inputs);
       dispatchedAt = clock.now();
@@ -107,6 +123,31 @@ function github(
 }
 
 describe('deployDev', () => {
+  it("is refused every slot while main's Deploy run is still to land, dispatching nothing and holding nothing", async () => {
+    const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
+    const g = github(clock, 3, 'success', undefined, true);
+    const err = await deployDev(repo().run, g.api, clock, quiet).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MainPending);
+    expect((err as MainPending).wait).toBe('lock wait --any');
+    expect((err as Error).message).toMatch(/main's deploy is still to land on dev \(main-run\)/);
+    expect(g.inputs).toHaveLength(0);
+    expect(g.lockOf('dev')).toBeNull();
+    expect(g.lockOf('devb')).toBeNull();
+  });
+
+  it('lets the live holder of slot A redeploy a fix while main waits for it', async () => {
+    const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
+    const mine = {
+      branch: 'ci-bot',
+      sha: SHA,
+      expiresAt: new Date(clock.now() + 20 * 60_000).toISOString(),
+    };
+    const g = github(clock, 3, 'success', mine, true);
+    await deployDev(repo().run, g.api, clock, quiet);
+    expect(g.inputs).toHaveLength(1);
+    expect(g.lockOf('dev')?.branch).toBe('ci-bot');
+  });
+
   it('takes slot B when another branch holds A, dispatches devb, and leaves A alone', async () => {
     const clock = fakeClock(Date.parse('2026-10-13T20:00:00Z'));
     const flux = {

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { main, parseSlot, tellingWhoToTell } from './cli.ts';
-import { LockHeld } from './lock.ts';
+import { LockHeld, MainPending } from './lock.ts';
 
 const NOW = Date.parse('2026-10-13T20:00:00Z');
 const holder = { branch: 'flux', sha: 'a'.repeat(40), expiresAt: '2026-10-13T20:30:00.000Z' };
@@ -71,6 +71,26 @@ describe('the refused acquire', () => {
     expect(lines[1]).toMatch(/queued behind flux on dev and lc on devb; lock wait --any next/);
     expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toEqual(holder);
     expect(JSON.parse(readFileSync(join(dir, 'devlock.devb.json'), 'utf8')).holder).toEqual(lc);
+  });
+
+  it("names main's pending deploy beside the holder, with the wait that covers both", async () => {
+    const { lines, c } = ctx();
+    const refused = new MainPending([
+      { slot: 'dev', holder: null, run: 'https://github.com/radatta/aperture/actions/runs/1' },
+      { slot: 'devb', holder },
+    ]);
+    await expect(tellingWhoToTell(c, () => Promise.reject(refused))).rejects.toBe(refused);
+    expect(lines[0]).toMatch(
+      /^devb is locked \(and main's deploy is still to land on dev\) — .*`pnpm bot lock wait --any`/,
+    );
+    expect(lines[1]).toMatch(/queued behind flux on devb; lock wait --any next/);
+  });
+
+  it('prints no notes when only main holds the slot up — there is no one to tell', async () => {
+    const { lines, c } = ctx();
+    const refused = new MainPending([{ slot: 'dev', holder: null, run: 'u' }]);
+    await expect(tellingWhoToTell(c, () => Promise.reject(refused))).rejects.toBe(refused);
+    expect(lines).toEqual([]);
   });
 });
 

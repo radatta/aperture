@@ -11,8 +11,9 @@ export type Permissions = Partial<Record<'contents' | 'actions', 'read' | 'write
 // pull requests — the user opens PRs (docs/ops/CI-BOT.md → App permissions).
 export const PERMS = {
   push: { contents: 'write' },
-  lock: { contents: 'write' },
-  lockRead: { contents: 'read' }, // lock status / lock wait
+  // actions: read — acquire and wait also see main's Deploy runs, which a slot waits for (bot/main-pending.ts)
+  lock: { contents: 'write', actions: 'read' },
+  lockRead: { contents: 'read', actions: 'read' }, // lock status / lock wait
   deployDev: { contents: 'write', actions: 'write' },
   logs: { actions: 'write', contents: 'read' }, // contents: the dev locks, for the held slot's default groups
   run: { actions: 'write' }, // cancel/rerun a PR check run (run.ts reads the run first and refuses any other)

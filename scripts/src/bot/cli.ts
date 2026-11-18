@@ -16,6 +16,7 @@ import type { Spec } from './help.ts';
 import { iosFiles } from './ios-routing.ts';
 import {
   LockHeld,
+  MainPending,
   SLOTS,
   acquireSlot,
   formatStatus,
@@ -30,6 +31,7 @@ import {
 } from './lock.ts';
 import type { Holder, Slot } from './lock.ts';
 import { boardDir, holderSession, writeLockCache } from './lock-cache.ts';
+import { mainPendingGuard, pendingMainDeploy } from './main-pending.ts';
 import { fetchLogs, refuseIdentifiers } from './logs.ts';
 import { pruneBranches } from './prune.ts';
 import { push } from './push.ts';
@@ -41,13 +43,15 @@ import type { Permissions } from './token.ts';
 export const USAGE = `pnpm bot <command>   (-h / --help on any command: its usage; nothing runs)
   push [--after-rebase]          push the current feature branch as the bot (--after-rebase: lease on the last push)
   deploy-dev                     take a dev slot's lock (the one this branch holds, else dev, else devb) + deploy
-                                 this pushed commit there; the lock stays held for the devcheck
+                                 this pushed commit there; the lock stays held for the devcheck. A slot main's
+                                 Deploy run is still to land on is refused, unless this branch holds it live
   lock status                    both slots' locks (dev = slot A, devb = slot B)
   lock acquire [--slot dev|devb] take a lock (by default as deploy-dev would; --slot names one)
   lock renew|release             the lock this branch holds, whichever slot
   lock wait [--max MIN] [--any | --slot devb]
-                                 block until another branch's lock frees or expires — slot A by default, either with
-                                 --any (default 45 min, at most 55); exit 75 if still held — run it in the background
+                                 block until another branch's lock frees or expires and main's Deploy run isn't still
+                                 to land there — slot A by default, either with --any (default 45 min, at most 55);
+                                 exit 75 if still held — run it in the background
   logs [--since 30m | --start ISO --end ISO] [--groups bff,mcp,finance-sync,push-dispatch,coach-worker,bff-devb,…] [--filter P] [--query Q]
   run cancel <run-id>            cancel a superseded PR check run (the PR workflow, on a feature branch, only)
   run rerun <run-id> [--failed]  rerun a finished PR check run, or only its failed jobs
@@ -126,6 +130,8 @@ async function lockWait(
     sessionOf: (b) => holderSession(dir, b),
     onRead: (cur, slot) => cache(cur?.holder ?? null, slot),
     slots,
+    // A slot main's Deploy run is still to land on isn't free yet: deploy-dev would be refused it (main-pending.ts).
+    busy: async (slot) => (await pendingMainDeploy(api, slot)) !== null,
   });
   if (r.outcome === 'free') console.log(`${r.slot} lock: free — \`pnpm bot deploy-dev\` takes it`);
   else if (r.outcome === 'ours') console.log(`${r.slot} lock: ${branch} already holds it`);
@@ -169,14 +175,20 @@ export async function tellingWhoToTell<T>(ctx: TellContext, f: () => Promise<T>)
         // only the notes' wording needs it
       }
       const wait =
-        held.length > 1
-          ? 'lock wait --any'
-          : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
+        err instanceof MainPending
+          ? err.wait
+          : held.length > 1
+            ? 'lock wait --any'
+            : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
       ctx.log(
-        `${held.length > 1 ? 'both dev slots are' : `${held[0]?.slot} is`} locked — send these now, once each, then \`pnpm bot ${wait}\` in the background:`,
+        `${held.length > 1 ? 'both dev slots are' : `${held[0]?.slot} is`} locked${err instanceof MainPending ? ` (and main's deploy is still to land on ${err.runs.map((r) => r.slot).join(' and ')})` : ''} — send these now, once each, then \`pnpm bot ${wait}\` in the background:`,
       );
-      const notes = queueNotes(branch, held as { slot: Slot; holder: Holder }[], ctx.hub(), (b) =>
-        holderSession(ctx.dir, b),
+      const notes = queueNotes(
+        branch,
+        held as { slot: Slot; holder: Holder }[],
+        ctx.hub(),
+        (b) => holderSession(ctx.dir, b),
+        wait,
       );
       for (const l of notes) ctx.log(`  ${l}`);
     }
@@ -234,6 +246,7 @@ export async function main(argv: string[]): Promise<number> {
             clock.now(),
             only,
             iosFiles(run),
+            mainPendingGuard(api),
           ),
         );
         cache(holder, slot);

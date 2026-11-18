@@ -91,6 +91,33 @@ export class LockHeld extends Error {
   }
 }
 
+// A slot refused because a main Deploy run is still to land on it (main-pending.ts), maybe with the other slot held
+// too: `held` keeps every refusal, a main one with no holder and its run's URL. A LockHeld, so the CLI still prints the
+// notes for the holders among them; `wait` is the command that wakes when one is free of both.
+export type PendingGuard = (slot: Slot) => Promise<string | null>; // the pending run's URL, or null
+export class MainPending extends LockHeld {
+  readonly runs: { slot: Slot; url: string }[];
+  readonly wait: string;
+  constructor(refused: { slot: Slot; holder: Holder | null; run?: string }[]) {
+    const [first, ...more] = refused;
+    super(first?.holder ?? null, first?.slot, more);
+    this.runs = refused.flatMap((x) => (x.run ? [{ slot: x.slot, url: x.run }] : []));
+    this.wait =
+      refused.length > 1
+        ? 'lock wait --any'
+        : `lock wait${first?.slot === 'devb' ? ' --slot devb' : ''}`;
+    this.message = `${refused
+      .map((x) =>
+        x.run
+          ? `main's deploy is still to land on ${x.slot} (${x.run})`
+          : `${x.slot} is locked by ${describe(x.holder)}`,
+      )
+      .join(
+        '; ',
+      )} — \`pnpm bot ${this.wait}\` (in the background) wakes you when ${refused.length > 1 ? 'one is' : 'it is'} free (docs/ops/CI-BOT.md → Dev deploys)`;
+  }
+}
+
 // Acquire (or, if this branch already holds it, renew). Throws LockHeld when another live holder has it.
 export async function acquire(
   api: Api,
@@ -141,6 +168,10 @@ export async function heldSlot(api: Api, branch: string): Promise<Slot | null> {
 // and is refused while the branch holds the other — a branch never holds both. `ios`, the branch's changed files that
 // only slot A's Simulator proves (ios-routing.ts), pins it to dev: held → LockHeld for dev alone, so the session
 // waits for A rather than taking a free devb; holding devb, or asking for it, is refused.
+// `pending` (main-pending.ts) refuses a slot main's Deploy run is still to land on, to any branch but its live holder
+// (a lane mid-test may redeploy a fix while main waits for it). Checked before the ref is written, and again after —
+// the authoritative read: main's wait reads the lock after its run exists, so either it sees our lock or we see its
+// run. A refusal after the write releases it; so does a guard that fails after it (fail closed, then rethrow).
 export async function acquireSlot(
   api: Api,
   branch: string,
@@ -148,6 +179,7 @@ export async function acquireSlot(
   nowMs: number,
   only?: Slot,
   ios: string[] = [],
+  pending?: PendingGuard,
 ): Promise<{ slot: Slot; holder: Holder }> {
   const mine = await heldSlot(api, branch);
   if (ios.length) {
@@ -164,16 +196,39 @@ export async function acquireSlot(
     throw new Error(
       `${branch} holds the ${mine} lock — \`pnpm bot lock release\` first to move to ${only}`,
     );
-  if (mine) return { slot: mine, holder: await acquire(api, branch, sha, nowMs, mine) };
-  const refused: { slot: Slot; holder: Holder | null }[] = [];
-  for (const slot of only ? [only] : SLOTS) {
+  // A live holder renews as before; a lapsed one is a new acquire (the guard applies), trying its own slot first.
+  if (mine && (!pending || !isExpired((await readLock(api, mine))?.holder ?? null, nowMs)))
+    return { slot: mine, holder: await acquire(api, branch, sha, nowMs, mine) };
+  const order = only ? [only] : mine ? [mine, ...SLOTS.filter((s) => s !== mine)] : SLOTS;
+  const letGo = (slot: Slot) => release(api, branch, slot).catch(() => false);
+  const refused: { slot: Slot; holder: Holder | null; run?: string }[] = [];
+  for (const slot of order) {
+    const before = pending ? await pending(slot) : null;
+    if (before) {
+      if (slot === mine) await letGo(slot); // our lapsed lock: a branch holds at most one
+      refused.push({ slot, holder: null, run: before });
+      continue;
+    }
+    let holder: Holder;
     try {
-      return { slot, holder: await acquire(api, branch, sha, nowMs, slot) };
+      holder = await acquire(api, branch, sha, nowMs, slot);
     } catch (err) {
       if (!(err instanceof LockHeld)) throw err;
       refused.push({ slot, holder: err.holder });
+      continue;
     }
+    let after: string | null;
+    try {
+      after = pending ? await pending(slot) : null;
+    } catch (err) {
+      await letGo(slot);
+      throw err;
+    }
+    if (!after) return { slot, holder };
+    await letGo(slot);
+    refused.push({ slot, holder: null, run: after });
   }
+  if (refused.some((x) => x.run)) throw new MainPending(refused);
   const [first, ...more] = refused;
   throw new LockHeld(first?.holder ?? null, first?.slot, more);
 }
@@ -228,6 +283,10 @@ export interface WaitOptions {
   sessionOf?: (branch: string) => string | undefined; // the holder's board session, for the log line
   onRead?: (cur: LockState | null, slot: Slot) => void; // every successful read (the board's lock cache)
   slots?: readonly Slot[]; // which locks to watch; slot A by default
+  maxErrors?: number; // failed reads in a row before it throws; 3 by default
+  // A free or lapsed slot still busy (main's Deploy run is still to land on it: main-pending.ts) isn't free yet. A
+  // failure counts as a failed read.
+  busy?: (slot: Slot) => Promise<boolean>;
 }
 
 export const POLL_MS = 30_000;
@@ -256,29 +315,50 @@ export async function waitForLock(
   let last: { slot: Slot; holder: Holder } | null = null;
   let loggedExpiry = '';
   let loggedAt = -Infinity;
+  let loggedBusy = '';
   for (;;) {
     let reads: { slot: Slot; cur: LockState | null }[] | undefined;
+    const now = clock.now();
+    let open: { outcome: 'free' | 'expired'; holder: Holder | null; slot: Slot }[] = [];
     try {
       reads = [];
       for (const slot of slots) reads.push({ slot, cur: await readLock(api, slot) });
+      for (const { slot, cur } of reads) {
+        if (cur?.holder?.branch === branch) continue;
+        if (!cur) open.push({ outcome: 'free', holder: null, slot });
+        else if (isExpired(cur.holder, now))
+          open.push({ outcome: 'expired', holder: cur.holder, slot });
+      }
+      if (o.busy) {
+        const still: Slot[] = [];
+        for (const x of open) if (await o.busy(x.slot)) still.push(x.slot);
+        open = open.filter((x) => !still.includes(x.slot));
+        const said = still.join(',');
+        if (said && said !== loggedBusy)
+          log(`waiting: main's deploy is still to land on ${still.join(' and ')}`);
+        loggedBusy = said;
+      }
       errors = 0;
     } catch (err) {
       reads = undefined;
-      if (++errors >= 3) throw err;
+      if (++errors >= (o.maxErrors ?? 3)) throw err;
       log(`lock read failed (${(err as Error).message}) — retrying`);
     }
     for (const { slot, cur } of reads ?? []) o.onRead?.(cur, slot);
-    const now = clock.now();
     if (reads) {
-      for (const { slot, cur } of reads) {
-        if (!cur) return { outcome: 'free', holder: null, slot };
-        if (cur.holder?.branch === branch) return { outcome: 'ours', holder: cur.holder, slot };
-        if (isExpired(cur.holder, now)) return { outcome: 'expired', holder: cur.holder, slot };
-      }
-      // Every slot is live and someone else's: watch the one that frees soonest.
+      for (const { slot, cur } of reads)
+        if (cur?.holder?.branch === branch) return { outcome: 'ours', holder: cur.holder, slot };
+      const [first] = open;
+      if (first) return first;
+      // Every slot is live and someone else's, or busy with main: watch the live lock that frees soonest (a lapsed
+      // one main is still to land on has no expiry left to wake at — it waits a poll).
       last = null;
       for (const { slot, cur } of reads)
-        if (cur?.holder && (!last || cur.holder.expiresAt < last.holder.expiresAt))
+        if (
+          cur?.holder &&
+          !isExpired(cur.holder, now) &&
+          (!last || cur.holder.expiresAt < last.holder.expiresAt)
+        )
           last = { slot, holder: cur.holder };
       if (last && (last.holder.expiresAt !== loggedExpiry || now - loggedAt >= LOG_EVERY_MS)) {
         log(
@@ -318,6 +398,7 @@ export function queueNotes(
   held: { slot: Slot; holder: Holder }[],
   hub?: string,
   sessionOf: (branch: string) => string | undefined = () => undefined,
+  next?: string, // the wait to name, when the refusal knows better than `held` (MainPending: a slot main holds up)
 ): string[] {
   const who = held
     .map(({ slot, holder }) => {
@@ -326,9 +407,10 @@ export function queueNotes(
     })
     .join(' and ');
   const wait =
-    held.length > 1
+    next ??
+    (held.length > 1
       ? 'lock wait --any'
-      : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`;
+      : `lock wait${held[0]?.slot === 'devb' ? ' --slot devb' : ''}`);
   return [
     `SendMessage ${hub ?? '<hub — scripts/board/hub.json>'}: "[lock] ${branch} — queued behind ${who}; ${wait} next."`,
     ...held.flatMap(({ slot, holder }) => {

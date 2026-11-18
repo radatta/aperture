@@ -11,6 +11,7 @@ import { DispatchRejected, dispatchAndWait, listJobs, listRuns } from './dispatc
 import { featureBranch, requirePushed, runKey } from './git.ts';
 import { iosFiles } from './ios-routing.ts';
 import { acquireSlot, release, renew } from './lock.ts';
+import { mainPendingGuard } from './main-pending.ts';
 import type { Holder, Slot } from './lock.ts';
 import type { Run as Sh } from './sh.ts';
 
@@ -144,7 +145,8 @@ export async function deployDev(
     log(
       `${branch} touches iOS paths (${ios.slice(0, 3).join(', ')}${ios.length > 3 ? ', …' : ''}) — the Simulator is slot A's, so this deploy goes to dev, never devb (a held dev means \`lock wait\`, even with devb free)`,
     );
-  const took = await acquireSlot(api, branch, sha, clock.now(), only, ios);
+  // Refused a slot main's Deploy run is still to land on, unless this branch is its live holder (main-pending.ts).
+  const took = await acquireSlot(api, branch, sha, clock.now(), only, ios, mainPendingGuard(api));
   slot = took.slot;
   let holder = took.holder;
   lockChanged(holder);
