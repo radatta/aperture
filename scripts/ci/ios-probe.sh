@@ -15,9 +15,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore rows" ;;
-    2) echo "seed rows" ;;
-    *) echo "restore rows" ;;
+    1) echo "restore recon" ;;
+    2) echo "restore recon" ;;
+    *) echo "seed card" ;;
   esac
 }
 KEY="ios-probe-dev-26.5-v2" # the cached device; bump to re-save (cache keys are immutable)
@@ -41,6 +41,11 @@ read -r SRC AFTER <<<"$(variant)"
 # Only a rows shard holds the password, and only as an unexported shell variable: no child process inherits it.
 PW=""
 [ "$AFTER" != rows ] || PW="${DEVCHECK_PASSWORD:-}"
+# recon reads only the secret's shape (yes/no), at once, and keeps nothing
+SHAPE=""
+if [ "$AFTER" = recon ]; then
+  SHAPE="$([ -n "${DEVCHECK_PASSWORD:-}" ] && echo set || echo unset), $([[ "${DEVCHECK_PASSWORD:-}" =~ ^[[:space:]] || "${DEVCHECK_PASSWORD:-}" =~ [[:space:]]$ ]] && echo edge-space || echo no-edge-space), $([[ "${DEVCHECK_PASSWORD:-}" == *$'\r'* ]] && echo cr || echo no-cr), $([[ "${DEVCHECK_PASSWORD:-}" =~ ^[\"\'] || "${DEVCHECK_PASSWORD:-}" =~ [\"\']$ ]] && echo quoted || echo unquoted)"
+fi
 unset DEVCHECK_PASSWORD
 # The workflow asks for this shard's cache keys before it restores anything.
 if [ "${1:-}" = cache-keys ]; then
@@ -587,6 +592,40 @@ lock_ok() {
   note "slot A's lock isn't ios-ci-probe's after 3 min: no sign-in"
   return 1
 }
+# Sign-in recon, no password: from the Sign in card, open dev's Cognito sheet and measure where iOS 26 puts what
+# sim.sh's sign-in reads (its points were measured on iOS 27: the address bar at 228,85, Email ys 256–296, Password
+# 326–396, submit 414–474). Nothing is typed, so the reads and the sheet's shot hold no secret and no user data; the
+# address bar's value is kept only as its host class.
+s_recon() {
+  local hit y i e x out=""
+  note "secret: $SHAPE"
+  hit="$(scan_text 'Sign in' 400 700)" || { note "no Sign in button"; return 1; }
+  y="${hit%% *}"
+  tap_at "$X_MID" "$y" || return 1
+  for i in $(seq 1 30); do
+    sleep 2
+    e="$(cap 8 "$AXE" describe-ui --point 228,85 --udid "$U" 2>/dev/null)" || continue
+    if jq -e '(if type == "array" then .[0] else . end) | .AXLabel == "Address"' <<<"$e" >/dev/null 2>&1; then break; fi
+  done
+  note "sheet after ~$((i * 2)) s"
+  sleep 2
+  evidence signin-sheet tree
+  : >"$OUT/recon.tsv"
+  for x in 228 220; do
+    for y in $(seq 30 6 720); do
+      e="$(cap 8 "$AXE" describe-ui --point "$x,$y" --udid "$U" 2>/dev/null)" || continue
+      jq -r --argjson x "$x" --argjson y "$y" --arg re 'amazoncognito\.com$' '(if type == "array" then .[0] else . end) as $e
+        | ($e.AXValue // "" | tostring | gsub("^[\u200e\u200f]+"; "")) as $v
+        | [$x, $y, ($e.role // "-"), ($e.AXLabel // "" | tostring | .[0:40]), ($e.AXUniqueId // "" | tostring | .[0:20]),
+           ($e.pid // "-"), (if ($v | test($re)) then "cognito-host" elif $v == "" then "empty" else "text(\($v | length))" end),
+           ($e.frame // {} | "\(.x // 0 | floor),\(.y // 0 | floor),\(.width // 0 | floor),\(.height // 0 | floor)")] | @tsv' \
+        <<<"$e" >>"$OUT/recon.tsv" 2>/dev/null || true
+    done
+  done
+  out="$(awk -F'\t' '$4 != "" && !s[$3 FS $4 FS $8]++ { printf "%s %s @%s,%s [%s] pid %s %s; ", $3, $4, $1, $2, $8, $6, $7 }' "$OUT/recon.tsv" | cut -c1-900)"
+  note "sheet: $out"
+  xcrun simctl terminate "$U" com.apple.webapp >/dev/null 2>&1 || true
+}
 # The real rows: ios-standalone's own plans, in its order. Only op, status, ms and reason codes leave the runner.
 s_rows() {
   local sha j job out st rs js t left try dt last="${ROW_JOBS##* }" bad=""
@@ -698,5 +737,6 @@ fi
 case "$AFTER" in
   save) step save s_save ;;
   rows) step rows s_rows ;;
+  recon) step signin-recon s_recon ;;
 esac
 [ -z "$FAILED" ]
