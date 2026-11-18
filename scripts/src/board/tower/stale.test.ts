@@ -363,6 +363,8 @@ describe('the derived files', () => {
     expect(mac({ load: [1, 2], cpus: 12 })).toBe(`${head}\n`);
     expect(mac({ load: [1, NaN, 3], cpus: 12 })).toBe(`${head}\n`);
     expect(mac({ load: [1, 2, 3], cpus: NaN })).toBe(`${head}\n`);
+    expect(mac({ load: [1, 2, 3], cpus: 0 })).toBe(`${head}\n`);
+    expect(mac({ load: [-1, 2, 3], cpus: 12 })).toBe(`${head}\n`);
   });
   it('pnpm board stale: age, count, tone and each item with its fix; missing and unreadable say so', () => {
     const it = {

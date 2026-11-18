@@ -7,7 +7,8 @@
 import type { Job } from './model.ts';
 
 // lib.sh sb_classify, plus the gate's (heavy.sh HEAVY_CLASS): its eslint step, which runs beside tsc in either gate,
-// and its outer runs. The rest are too mixed; gate-typecheck too, its tsc cache hits make it bimodal (0.6–59 s)
+// and its outer runs. The rest are too mixed. gate-typecheck stays out: tsc cache hits make it bimodal like plain
+// typecheck (0.8–47 s), and gate-lint already speaks for the gate
 export const SLOW_CLASSES = [
   'typecheck',
   'lint',
@@ -27,6 +28,7 @@ export const SLOW_BAD = 2;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
+const HHMM_MS = 20 * HOUR;
 export const SLOW_STALE_MS = 2 * HOUR;
 const LOOKBACK_D = 7; // the job history both loaders read (source.ts JOB_DAYS, cli.ts machine)
 const SHORT: Record<string, string> = {
@@ -111,13 +113,15 @@ export function slowdown(jobs: Job[], now: number, hm: (t: number) => string): S
   return out;
 }
 
-// "no data since 22:58" within a day; an HH:MM from days ago would mislead, so older is a day count
-const noData = (lastAt: number | null, now: number, hm: (t: number) => string) =>
-  lastAt === null
-    ? `no data in ${LOOKBACK_D} d`
-    : now - lastAt <= DAY
-      ? `no data since ${hm(lastAt)}`
-      : `no data in ${Math.floor((now - lastAt) / DAY)} d`;
+// "no data since 22:58" under 20 h: an HH:MM near a day old would read as the current minute, so then hours, then days
+const noData = (lastAt: number | null, now: number, hm: (t: number) => string) => {
+  if (lastAt === null) return `no data in ${LOOKBACK_D} d`;
+  const age = now - lastAt;
+  if (age < HHMM_MS) return `no data since ${hm(lastAt)}`;
+  return age < 2 * DAY
+    ? `no data in ${Math.floor(age / HOUR)} h`
+    : `no data in ${Math.floor(age / DAY)} d`;
+};
 
 // "test ×1.8 (3/41) · typecheck ×1.1 (2/37) · lint – (1 recent) · ui – (no data since 14:02)": counts are
 // recent/baseline runs.
@@ -137,14 +141,15 @@ export function slowdownLine(
     .join(' · ');
 }
 
-// The status line's cut, typecheck, lint and the gate classes: "slow 30m tc×1.2 lint– gw×1.1 · gn no data since 19:02".
+// The status line's cut, typecheck, lint and the gate classes: "slow 30m tc×1.2 lint– gl×1.0 gw×1.1 · gn no data
+// since 19:02".
 // Stale classes share one tail at the newest of their last runs, which is true of each.
 export function slowdownShort(
   s: Pick<Slowdown, 'classes'>,
   now: number,
   hm: (t: number) => string,
 ): string {
-  const cs = s.classes.filter((c) => c.cls in SHORT);
+  const cs = s.classes.filter((c) => Object.hasOwn(SHORT, c.cls));
   const live = cs.filter((c) => !c.stale);
   const stale = cs.filter((c) => c.stale);
   const dated = stale.map((c) => c.lastAt).filter((t) => t !== null);

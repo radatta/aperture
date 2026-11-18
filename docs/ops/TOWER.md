@@ -319,13 +319,14 @@ beside `queue.json` every 30 s, tmp + rename:
   commas become `_`.
 
 **Status line.** `scripts/board/statusline-board.sh` (builtins only, sourced by `statusline-snippet.sh`) prints
-`· mac 6 8 12/12 · vm 2 5 9/9 · slow 30m tc×1.2 gl×1.0 gn– gw×1.1 · usage … · board 12m · 3 stale · next ~19:40
-<what>`, the next merge last with `?` once its time has passed, the usage part only while under 15 min old. `vm` is
+`· mac 6 8 12/12 · vm 2 5 9/9 · slow 30m tc×1.2 gl×1.0 gn– gw×1.1 · lint no data since 16:58 · usage … · board 12m ·
+3 stale · next ~19:40 <what>`, the next merge last with `?` once its time has passed, the usage part only while under 15 min old. `vm` is
 the container's live `/proc/loadavg` (1, 5, 15 min) over its cores; `slow` is the slowdown's cut (SESSION-BOARD.md →
 _History_ → _Slowdown_), dim, amber or red. A `board.line` over 3 min old prints `vm` and red `tower down`, nothing
-else. It replaces dispatch's `localNotes/board/next-merge.sh`, which read `plan[]` raw, and
+else; a missing or garbled one, `vm` alone (no core count). It replaces dispatch's `localNotes/board/next-merge.sh`, which read `plan[]` raw, and
 `localNotes/board/slowdown-line.sh`, which spawned node from the status line (F293): while that file is still in the
-board dir it prints `mac`, `vm` and `slow` itself, so this leaves them out.
+board dir it prints `mac`, `vm` and `slow` itself, so this leaves them out. So the hand-over is renaming that file;
+the sourcing line in `~/.claude/statusline-command.sh` is then a no-op, deleted after the rename, never before.
 
 ### Context per session
 

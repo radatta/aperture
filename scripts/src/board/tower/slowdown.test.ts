@@ -149,7 +149,7 @@ describe('slowdown', () => {
     expect(sd(jobs)).toMatchObject({ worst: { cls: 'gate-lint', ratio: 2.5 }, tone: 'bad' });
   });
 
-  it('stale past 2 h: since HH:MM within a day, then a day count', () => {
+  it('stale past 2 h: since HH:MM under 20 h, then hours, then days', () => {
     const at = (ms: number) => of([job('lint', 0, 4, { t: NOW - ms })], 'lint');
     expect(at(SLOW_STALE_MS)).toMatchObject({ stale: false, lastAt: NOW - SLOW_STALE_MS });
     expect(at(SLOW_STALE_MS + 1)).toMatchObject({ stale: true });
@@ -157,8 +157,10 @@ describe('slowdown', () => {
       slowdownLine(sd([job('lint', 0, 4, { t: NOW - ms })]), NOW, hm).split(' · ')[1];
     expect(line(SLOW_STALE_MS)).toBe('lint – (0 recent)');
     expect(line(SLOW_STALE_MS + 1)).toBe('lint – (no data since 17:59)');
-    expect(line(24 * 60 * MIN)).toBe('lint – (no data since 20:00)');
-    expect(line(25 * 60 * MIN)).toBe('lint – (no data in 1 d)');
+    expect(line(20 * 60 * MIN - 1)).toBe('lint – (no data since 00:00)');
+    expect(line(20 * 60 * MIN)).toBe('lint – (no data in 20 h)');
+    expect(line(48 * 60 * MIN - 1)).toBe('lint – (no data in 47 h)');
+    expect(line(48 * 60 * MIN)).toBe('lint – (no data in 2 d)');
     expect(line(3 * 24 * 60 * MIN + MIN)).toBe('lint – (no data in 3 d)');
   });
 

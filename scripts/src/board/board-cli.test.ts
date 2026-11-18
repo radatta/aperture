@@ -14,6 +14,7 @@ import {
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { boardLine } from './tower/stale.ts';
 
 const boardDir = fileURLToPath(new URL('../../board/', import.meta.url));
 const GiB = 1073741824;
@@ -839,13 +840,44 @@ describe('statusline-board.sh', () => {
       ' \x1b[31m· tower down (board.line 10 min old)\x1b[0m',
     );
   });
-  it('missing, empty or garbled: silent, exit 0, nothing leaked under set -u', () => {
+  it('missing, empty or garbled: silent but the live load, exit 0, nothing leaked under set -u', () => {
     const avg = join(tmp, 'loadavg-ok');
     writeFileSync(avg, '1.59 5.26 8.59 3/900 12345\n');
-    for (const l of [null, '', 'garbage here\n', '\n\nmerge x y\n'])
-      expect(run(l, { APERTURE_LOADAVG: avg })).toMatchObject({ code: 0, out: '', err: '' });
+    for (const l of [null, '', 'garbage here\n', '\n\nmerge x y\n']) {
+      rmSync(join(tmp, 'sl', 'board.line'), { force: true });
+      expect(run(l)).toMatchObject({ code: 0, out: '', err: '' });
+      expect(run(l, { APERTURE_LOADAVG: avg })).toMatchObject({
+        code: 0,
+        out: ' \x1b[2m· vm 2 5 9\x1b[0m',
+        err: '',
+      });
+    }
   });
-
+  it('sourced, as the status line does: no _bl_ variable survives, whatever the file said', () => {
+    const avg = join(tmp, 'loadavg-ok');
+    writeFileSync(avg, '1.59 5.26 8.59 3/900 12345\n');
+    const t = now();
+    const lines = [
+      null,
+      `${t} ${t - 60} 0 dim\nslow warn slow 30m tc×1.6\nmac 1 2 3 12\nvm 9\nctx 2 1 a\nmerge ${t} 19:40 x\nusage ${t} u\n`,
+      `${t - 600} ${t - 700} 0 dim\n`,
+    ];
+    for (const l of lines) {
+      const dir = join(tmp, 'sl-src');
+      rmSync(dir, { recursive: true, force: true });
+      mkdirSync(dir, { recursive: true });
+      if (l !== null) writeFileSync(join(dir, 'board.line'), l);
+      const r = spawnSync(
+        'bash',
+        ['-uc', '. "$1" >/dev/null; compgen -v _bl_', '_', join(boardDir, 'statusline-board.sh')],
+        {
+          env: { ...env, APERTURE_BOARD_DIR: dir, APERTURE_LOADAVG: avg },
+          encoding: 'utf8',
+        },
+      );
+      expect(r).toMatchObject({ stdout: '', stderr: '' });
+    }
+  });
   describe('the load and slowdown segments (F293)', () => {
     const avg = () => join(tmp, 'loadavg'); // tmp is set in beforeAll
     const dim = (s: string) => ` \x1b[2m· ${s}\x1b[0m`;
@@ -912,6 +944,22 @@ describe('statusline-board.sh', () => {
       const t = now();
       expect(run(`${t} ${t - 60} 0 dim\n`, { APERTURE_LOADAVG: avg() }).out).toBe(
         dim('vm 2 5 9') + dim('board 1m'),
+      );
+    });
+    it("reads what the tower's boardLine writes", () => {
+      writeFileSync(avg(), '1.59 5.26 8.59 3/900 12345\n');
+      const t = Date.now();
+      const b = { items: [], unsure: null, tone: 'dim' as const, why: null, updatedAt: t - 60_000 };
+      const line = boardLine(b, [], t, () => '00:00', null, null, {
+        slow: { tone: 'bad', short: 'slow 30m tc×2.1 gl×0.7 · lint no data since 22:02' },
+        mac: { load: [6.31, 7.86, 12.36], cpus: 12 },
+        cores: 9,
+      });
+      expect(run(line, { APERTURE_LOADAVG: avg() }).out).toBe(
+        dim('mac 6 8 12/12') +
+          dim('vm 2 5 9/9') +
+          ' \x1b[31m· slow 30m tc×2.1 gl×0.7 · lint no data since 22:02\x1b[0m' +
+          dim('board 1m'),
       );
     });
     it("while localNotes' slowdown-line.sh is still there, it prints these itself: none of the three here", () => {

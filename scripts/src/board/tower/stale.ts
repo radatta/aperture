@@ -303,6 +303,7 @@ export function boardTone(
 //   slow <ok|warn|bad> <text>          the slowdown's status line cut and its tone (slowdown.ts); absent without one
 //   mac <l1> <l5> <l15> <cpus>         the Mac's load averages, whole numbers; absent unless mac-stats.json is fresh
 //   vm <cores>                         the container's core count, for the live /proc/loadavg the status line reads
+// mac rounds half up and the shell's vm half to even (printf %.0f), as slowdown-line.sh did: a whole-number glance
 export const NEXT_MERGE_PAST_MS = 2 * 3600e3; // next-merge.sh's window
 export type UsageLine = { at: number; text: string };
 export type LoadLine = {
@@ -311,6 +312,7 @@ export type LoadLine = {
   cores: number | null;
 };
 const whole = (n: number) => Number.isFinite(n) && n >= 0;
+const count = (n: number) => Number.isFinite(n) && n >= 1;
 // one line, no control bytes: every session's status line prints these as they are (an ESC would reach the terminal)
 const oneLine = (s: string) =>
   Array.from(s, (c) => {
@@ -347,10 +349,10 @@ export function boardLine(
     load?.slow && oneLine(load.slow.short)
       ? `slow ${load.slow.tone} ${oneLine(load.slow.short)}`
       : null,
-    load?.mac && load.mac.load.length === 3 && [...load.mac.load, load.mac.cpus].every(whole)
+    load?.mac && load.mac.load.length === 3 && load.mac.load.every(whole) && count(load.mac.cpus)
       ? `mac ${load.mac.load.map(Math.round).join(' ')} ${Math.round(load.mac.cpus)}`
       : null,
-    load?.cores && whole(load.cores) ? `vm ${Math.round(load.cores)}` : null,
+    load?.cores && count(load.cores) ? `vm ${Math.round(load.cores)}` : null,
   ]
     .filter((l) => l !== null)
     .map((l) => `${l}\n`)
