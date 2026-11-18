@@ -10,15 +10,20 @@ import { closeSync, openSync } from 'node:fs';
 
 export const MAIN_LOCK = process.env.APERTURE_MAIN_LOCK || '/tmp/aperture-main-checkout.lock';
 
+// The web tower's restart (sync-main.ts): two callers that both see a stale tower (the main-sync loop and a lanes
+// end) restart it one at a time, and the second re-reads what it serves and finds nothing to do.
+export const TOWER_RESTART_LOCK =
+  process.env.APERTURE_TOWER_RESTART_LOCK || '/tmp/aperture-tower-restart.lock';
+
 export class MainBusy extends Error {}
 
-let depth = 0;
+const depth = new Map<string, number>(); // per lock file: nesting one lock never skips taking another
 
 export type LockOpts = { waitSec?: number; file?: string; warn?: (s: string) => void };
 
 export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
-  if (depth) return nest(fn);
   const file = o.file ?? MAIN_LOCK;
+  if (depth.get(file)) return nest(file, fn);
   const wait = o.waitSec ?? 120;
   const warn = o.warn ?? ((s: string) => console.error(s));
   let fd: number;
@@ -51,17 +56,20 @@ export function withMainLock<T>(fn: () => T, o: LockOpts = {}): T {
         }
       }
     }
-    return nest(fn);
+    return nest(file, fn);
   } finally {
     closeSync(fd);
   }
 }
 
-function nest<T>(fn: () => T): T {
-  depth++;
+export const withRestartLock = <T>(fn: () => T): T =>
+  withMainLock(fn, { file: TOWER_RESTART_LOCK, waitSec: 30, warn: () => undefined });
+
+function nest<T>(file: string, fn: () => T): T {
+  depth.set(file, (depth.get(file) ?? 0) + 1);
   try {
     return fn();
   } finally {
-    depth--;
+    depth.set(file, depth.get(file)! - 1);
   }
 }

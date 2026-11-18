@@ -114,6 +114,7 @@ function inputs(
     plan?: (Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'> & Partial<PlanItem>)[];
     planNotes?: string[];
     mainLog?: Inputs['mainLog'];
+    mainSync?: Inputs['mainSync'];
     sessionsByBranch?: Record<string, string>;
   } = {},
 ): Inputs {
@@ -174,6 +175,7 @@ function inputs(
     macInstallReady: true,
     dayStart: Date.parse('2026-11-13T08:00:00Z'),
     mainLog: over.mainLog ?? [],
+    mainSync: over.mainSync === undefined ? { at: NOW - MIN, ok: true, msg: '' } : over.mainSync,
   };
 }
 const green = { [sha('e')]: [run(), run({ id: 2, name: 'Secret scan' })] };
@@ -667,6 +669,7 @@ describe('sources: every source with its age; failed is failed, never empty', ()
       'dev lock',
       'devb lock',
       'queue.json',
+      'main sync',
       'gh PRs',
       'gh runs',
       'gh checks',
@@ -1386,5 +1389,34 @@ describe('tower-current: the board freshness view', () => {
     i.tower.prs = { list: [merged], at: NOW - MIN, error: null };
     i.tower.lock = lock(null, { asOf: NOW - 10 * MIN });
     expect(derive(i).board.unsure).toMatch(/^dev lock cache stale/);
+  });
+});
+
+describe('tower-current: the main sync heartbeat', () => {
+  const src = (ms: Inputs['mainSync']) =>
+    sources(inputs({ mainSync: ms })).find((s) => s.name === 'main sync')!;
+  it('a SOURCES row: missing, failed with why, silent past 5 min, else ok', () => {
+    expect(src(null)).toMatchObject({
+      state: 'missing',
+      detail: 'no heartbeat: board.sh sync start',
+    });
+    expect(src({ at: NOW - MIN, ok: false, msg: 'tracked changes' })).toMatchObject({
+      state: 'failed',
+      detail: 'tracked changes',
+    });
+    expect(src({ at: NOW - 6 * MIN, ok: true, msg: '' }).state).toBe('stale');
+    expect(src({ at: NOW - MIN, ok: true, msg: '' }).state).toBe('ok');
+  });
+  it('a failed or silent loop turns the board red; a missing one does not', () => {
+    expect(
+      derive(inputs({ mainSync: { at: NOW - MIN, ok: false, msg: 'dirty' } })).board,
+    ).toMatchObject({
+      tone: 'bad',
+      why: 'main sync failed: dirty',
+    });
+    expect(
+      derive(inputs({ mainSync: { at: NOW - 6 * MIN, ok: true, msg: '' } })).board.why,
+    ).toMatch(/^main sync silent since /);
+    expect(derive(inputs({ mainSync: null })).board.tone).toBe('dim');
   });
 });

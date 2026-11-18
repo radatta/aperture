@@ -9,7 +9,7 @@ import { cliGuard, emit } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { boardDir } from '../bot/lock-cache.ts';
 import { run } from '../bot/sh.ts';
-import { withMainLock } from '../board/main-lock.ts';
+import { withMainLock, withRestartLock } from '../board/main-lock.ts';
 import { macLine } from '../board/machine.ts';
 import { execRun, syncMain } from '../board/sync-main.ts';
 import { readLanes, writeLane } from '../board/tower/lanes.ts';
@@ -96,7 +96,7 @@ function realDeps(): Deps {
       slug: REPO_SLUG,
       procDir: '/proc',
     },
-    syncMain: () => syncMain(execRun, mainRoot, withMainLock),
+    syncMain: () => syncMain(execRun, mainRoot, withMainLock, withRestartLock),
     lock: withMainLock,
   };
 }

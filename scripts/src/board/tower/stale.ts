@@ -36,6 +36,30 @@ export type Board = {
   why: string | null; // what made it red
 };
 
+// The main-sync loop's heartbeat (sync.sh → main-sync.json): one round every 2 min.
+export type MainSync = { at: number; ok: boolean; msg: string };
+export const SYNC_SILENT_MS = 5 * 60e3;
+export function parseMainSync(text: string | null): MainSync | null {
+  if (text === null) return null;
+  try {
+    const j = JSON.parse(text) as { t?: unknown; ok?: unknown; msg?: unknown };
+    const at = typeof j.t === 'string' ? Date.parse(j.t) : NaN;
+    if (Number.isNaN(at) || typeof j.ok !== 'boolean') return null;
+    return { at, ok: j.ok, msg: typeof j.msg === 'string' ? j.msg : '' };
+  } catch {
+    return null;
+  }
+}
+// Red on the chip: the loop failed its last round, or went silent. Missing (never started) isn't: SOURCES says it.
+export const syncBad = (s: MainSync | null, now: number, hm: (t: number) => string) =>
+  !s
+    ? null
+    : !s.ok
+      ? `main sync failed: ${s.msg || 'no message'}`
+      : now - s.at > SYNC_SILENT_MS
+        ? `main sync silent since ${hm(s.at)}`
+        : null;
+
 export const PLAN_STALE_MS = 6 * 3600e3; // pq-check's rule: plan[], mergeOrder, maintainer[] rewritten together
 export const ORPHAN_MS = 24 * 3600e3; // a lane file this long past its merge was never ended
 export const ITEM_RED_MS = 30 * 60e3;

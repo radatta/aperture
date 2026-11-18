@@ -17,7 +17,7 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
-import { withMainLock } from './main-lock.ts';
+import { withMainLock, withRestartLock } from './main-lock.ts';
 import { execRun, syncMain } from './sync-main.ts';
 import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
@@ -217,6 +217,7 @@ export function main(argv: string[], stdin: () => string): string {
         execRun,
         process.env.INIT_CWD ?? process.cwd(), // pnpm runs scripts from the root; INIT_CWD is where it was typed
         withMainLock,
+        withRestartLock,
       );
     case 'stale': {
       const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());

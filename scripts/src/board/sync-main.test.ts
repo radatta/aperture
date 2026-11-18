@@ -223,6 +223,38 @@ describe('sync-main', () => {
     expect(f.calls.slice(at('out')).map(line)).toContain('restart');
   });
 
+  it('the tower check and restart run under the restart lock, the move outside it', () => {
+    const f = fake({
+      head: A,
+      origin: B,
+      tower: 'running',
+      served: A,
+      changed: { [`${A}..${B}`]: ['x'] },
+    });
+    let start = -1;
+    let end = -1;
+    syncMain(
+      f.run,
+      MAIN,
+      (fn) => fn(),
+      (fn) => {
+        start = f.calls.length;
+        try {
+          return fn();
+        } finally {
+          end = f.calls.length;
+        }
+      },
+    );
+    const inside = f.calls
+      .slice(start, end)
+      .map((c) => (c.cmd === 'git' ? `git ${c.args[0]}` : c.args[2]));
+    expect(inside[0]).toBe('status'); // board.sh tower status: re-read inside, so a second caller finds it done
+    expect(inside).toContain('version');
+    expect(inside.at(-1)).toBe('restart');
+    expect(f.calls.slice(0, start).map((c) => c.args[0])).toContain('switch');
+  });
+
   it('the fetch carries a 60 s timeout', () => {
     const f = fake({ head: A, origin: A, tower: 'stopped' });
     syncMain(f.run, MAIN);

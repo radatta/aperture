@@ -7,7 +7,14 @@ import type { Behind } from './behind.ts';
 import type { Checks, Cached, GhRun } from './gh.ts';
 import { powerSummary, type Costs, type MacRead, type PowerSummary } from './health.ts';
 import { slowdown, type Slowdown } from './slowdown.ts';
-import { boardTone, staleItems, type Board } from './stale.ts';
+import {
+  SYNC_SILENT_MS,
+  boardTone,
+  staleItems,
+  syncBad,
+  type Board,
+  type MainSync,
+} from './stale.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
 import { mergedFromLog, mergedNumbers, type MainMerge } from './mergelog.ts';
@@ -179,6 +186,7 @@ export type Inputs = {
   macInstallReady: boolean; // tools/macstats/install.sh is on origin/main (the install line fetches it from there)
   dayStart: number; // where DONE TODAY begins: local midnight, reaching back 12 h before noon (web/main.ts dayStart)
   mainLog: MainMerge[]; // main's squash merges (mergelog.ts): merged truth past gh's newest 40
+  mainSync: MainSync | null; // the main-sync loop's heartbeat (sync.sh); null = none written
 };
 
 // Freshness thresholds, seconds (TOWER.md → Sources): past them a source shows amber with its age.
@@ -998,7 +1006,7 @@ export function derive(i: Inputs): View {
     updatedAt: q?.updatedAt ?? null,
     items,
     unsure,
-    ...boardTone(items, unsure, i.now),
+    ...boardTone(items, unsure, i.now, syncBad(i.mainSync, i.now, hhmm)),
   };
 
   const active = rows.filter((r) => nowStates.includes(r.state));
@@ -1125,6 +1133,21 @@ export function sources(i: Inputs): SourceRow[] {
             at: q.data!.updatedAt,
             detail: null,
           },
+  );
+  const ms = i.mainSync;
+  out.push(
+    !ms
+      ? {
+          name: 'main sync',
+          state: 'missing',
+          at: null,
+          detail: 'no heartbeat: board.sh sync start',
+        }
+      : !ms.ok
+        ? { name: 'main sync', state: 'failed', at: ms.at, detail: ms.msg || null }
+        : i.now - ms.at > SYNC_SILENT_MS
+          ? { name: 'main sync', state: 'stale', at: ms.at, detail: 'silent: board.sh sync status' }
+          : { name: 'main sync', state: 'ok', at: ms.at, detail: null },
   );
   const forks = t.prs.forks ?? 0;
   const prRow = gh('gh PRs', { at: t.prs.at, error: t.prs.error }, i.now);

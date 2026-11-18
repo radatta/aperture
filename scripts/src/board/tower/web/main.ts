@@ -31,7 +31,7 @@ import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
 import { PrCache, ghFetch, type Fetch } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
-import { boardLine, staleFile } from '../stale.ts';
+import { boardLine, parseMainSync, staleFile, SYNC_SILENT_MS } from '../stale.ts';
 import { createHandler, serve } from './server.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
@@ -284,6 +284,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       macInstallReady: installReady(now),
       dayStart: dayStart(now),
       mainLog: readMainLog(now),
+      mainSync: readMainSync(paths.boardDir),
     };
     const v = derive(inputs);
     const sparks = {
@@ -309,6 +310,14 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
   }
   return { poll, view, sample, clock, paths, version };
 }
+
+const readMainSync = (dir: string) => {
+  try {
+    return parseMainSync(readFileSync(join(dir, 'main-sync.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+};
 
 // The derived files beside queue.json (stale.ts → board.line, stale.json): tmp + rename, so a reader never sees half.
 const DERIVED_MS = 30000;
@@ -376,6 +385,18 @@ async function run(a: Args) {
     };
     setTimeout(derived, 5000); // after the first gh poll has had its chance
     setInterval(derived, DERIVED_MS);
+    // the main sync heals from here too: a loop gone silent (or never started) is started again, by its own lock and
+    // only for the real board (`sync ensure`: a test's server on a temp board never starts one)
+    setInterval(() => {
+      const s = readMainSync(t.paths.boardDir);
+      if (!s || t.clock() - s.at > SYNC_SILENT_MS)
+        execFile(
+          'bash',
+          [join(REPO, 'scripts/board/board.sh'), 'sync', 'ensure'],
+          { timeout: 30000 },
+          () => undefined,
+        );
+    }, DEVLOCK_MS);
   }
   const stop = () => server.close(() => process.exit(0));
   process.on('SIGTERM', stop);

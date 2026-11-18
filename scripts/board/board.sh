@@ -5,7 +5,9 @@
 #   board.sh register | heartbeat working|idle | end | note "<text>"   (hooks; --pid/--sid/--cwd override)
 #   board.sh sampler start|restart|stop|status
 #   board.sh tower start|restart|stop|status|version   (the web tower on :6183, docs/ops/TOWER.md; version: the commit
-#     it serves, which pnpm board sync-main compares)
+#     it serves, which pnpm board sync-main compares; start also starts the main sync)
+#   board.sh sync start|restart|stop|status|once|ensure   (the no-token main sync loop, sync.sh; docs/ops/TOWER.md →
+#     Main sync; ensure: start it only for the real board, as tower start and the tower's minute tick do)
 #   board.sh gc
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -205,6 +207,58 @@ cmd_sampler() {
   esac
 }
 
+# --- main sync lifecycle (sync.sh, docs/ops/TOWER.md → Main sync) ---
+
+# Running = something holds its lock (a probe's hold is over in microseconds; sync.sh waits 5 s for it).
+sync_running() { ! flock -n "$SYNC_LOCK" true 2>/dev/null; }
+# Always the main checkout's loop, whichever checkout asks: a worktree's older copy must never be the one running.
+sync_script() {
+  [ -n "${APERTURE_SYNC_SCRIPT:-}" ] && { printf '%s' "$APERTURE_SYNC_SCRIPT"; return; }
+  local common; common=$(git -C "$SB_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [ -n "$common" ] && [ -r "${common%/*}/scripts/board/sync.sh" ]; then printf '%s' "${common%/*}/scripts/board/sync.sh"
+  else printf '%s' "$SB_SCRIPTS/sync.sh"; fi
+}
+cmd_sync() {
+  local p i last
+  case "${1:-status}" in
+    start)
+      sync_running && { echo "sync: already running (pid $(cat "$SYNC_PID" 2>/dev/null))"; return 0; }
+      sb_init_dirs
+      setsid nohup bash "$(sync_script)" </dev/null >>"$BOARD_DIR/main-sync.log" 2>&1 &
+      for ((i = 0; i < 25; i++)); do
+        sync_running && { echo "sync: started (pid in $SYNC_PID, log $BOARD_DIR/main-sync.log)"; return 0; }
+        sleep 0.2
+      done
+      echo "sync: did not start — see $BOARD_DIR/main-sync.log" >&2
+      return 1 ;;
+    stop|restart)
+      p=$(cat "$SYNC_PID" 2>/dev/null)
+      # kill by PID only, and only when it is the loop: alive, holding the lock, bash running sync.sh
+      if [[ "$p" =~ ^[0-9]+$ ]] && sync_running && [ "$(sb_comm "$p")" = bash ] \
+        && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q 'sync\.sh'; then
+        kill "$p" && echo "sync: stopped $p"
+      fi
+      for ((i = 0; i < 25; i++)); do sync_running || break; sleep 0.2; done
+      sync_running && { echo "sync: still running (pid ${p:-?}); not stopped" >&2; return 1; }
+      [ "$1" = restart ] && { cmd_sync start; return; }
+      return 0 ;;
+    status)
+      last=$(jq -r '"\(.t) \(if .ok then "ok" else "FAILED" end) · \(.msg)"' "$BOARD_DIR/main-sync.json" 2>/dev/null)
+      if sync_running; then echo "sync: running (pid $(cat "$SYNC_PID" 2>/dev/null)), last round ${last:-none yet}"
+      else echo "sync: stopped — board.sh sync start${last:+ (last round $last)}"; return 1; fi ;;
+    once) bash "$(sync_script)" --once ;;
+    ensure)
+      # only the real board's loop (a test's temp board never starts one); APERTURE_SYNC=on|off overrides
+      case "${APERTURE_SYNC:-}" in
+        off) return 0 ;;
+        on) ;;
+        *) [ "$BOARD_DIR" = "$SB_HOME_BOARD" ] || return 0 ;;
+      esac
+      sync_running || cmd_sync start ;;
+    *) echo "usage: board.sh sync start|restart|stop|status|once|ensure" >&2; return 2 ;;
+  esac
+}
+
 # --- web tower lifecycle (docs/ops/TOWER.md) ---
 
 # Running = the tower's node, found by its pidfile (written once the server has bound the port) or, when that's
@@ -231,6 +285,8 @@ cmd_tower() {
   local p i
   case "${1:-status}" in
     start)
+      # the main sync rides along (a container restart's SessionStart, and the stopgap's cutover, come through here)
+      cmd_sync ensure >/dev/null 2>&1 || true
       p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:$TOWER_PORT"; return 0; }
       sb_init_dirs
       APERTURE_TOWER_PID="$TOWER_PID" setsid nohup bash "$SB_SCRIPTS/tower-web.sh" --port "$TOWER_PORT" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
@@ -300,7 +356,8 @@ case "${1:-status}" in
   note) shift; cmd_note "$@" ;;
   sampler) shift; cmd_sampler "$@" ;;
   tower) shift; cmd_tower "$@" ;;
+  sync) shift; cmd_sync "$@" ;;
   hub) cmd_hub ;;
   gc) cmd_gc ;;
-  *) sed -n '2,8p' "${BASH_SOURCE[0]}"; exit 2 ;;
+  *) sed -n '2,10p' "${BASH_SOURCE[0]}"; exit 2 ;;
 esac

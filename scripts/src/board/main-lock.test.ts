@@ -47,6 +47,22 @@ describe('withMainLock', () => {
     ).toBe(2);
   });
 
+  it('nesting is per lock file: inside one, another held elsewhere is still waited for', async () => {
+    const outer = lockFile();
+    const inner = lockFile();
+    const release = await holder(inner, 5);
+    try {
+      expect(() =>
+        withMainLock(() => withMainLock(() => 1, { file: inner, waitSec: 1, warn: () => {} }), {
+          file: outer,
+          waitSec: 1,
+        }),
+      ).toThrow(MainBusy);
+    } finally {
+      release();
+    }
+  });
+
   it('a lock held elsewhere times out with the busy message, after saying it waits', async () => {
     const file = lockFile();
     const stop = await holder(file, 10);
