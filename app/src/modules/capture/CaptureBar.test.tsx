@@ -699,7 +699,7 @@ describe('CaptureBar', () => {
     });
   });
 
-  // Quick add (docs/areas/tasks/quick-add.md): the stub's heuristic stands in for Haiku, through the
+  // Quick add (docs/areas/tasks/quick-add.md): the stub's heuristic stands in for the model, through the
   // same shared flow and validator as the Lambda.
   describe('quick add', () => {
     const adminId = async (api: { listCategories(): Promise<{ id: string; label: string }[]> }) =>

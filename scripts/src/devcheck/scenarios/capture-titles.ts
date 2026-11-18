@@ -246,7 +246,7 @@ export const captureTitles: Scenario = {
       id: 'no-force-ui',
       entry: 'ui',
       kind: 'edge',
-      what: 'The capture bar’s Review, with one category no line is about: the preview files the line under none (F229)',
+      what: 'The capture bar’s Review, with a category no line is about live: the preview’s parse never files the line under it (F229)',
     },
     {
       id: 'mcp-parse',

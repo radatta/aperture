@@ -19,7 +19,7 @@ capture rule; it's the plan pass wearing a keyboard.
 
 Capture later took the same grammar as an _optional_ single line (2026-09-28): typing `#Aperture` at
 capture time was wanted, and an opt-in token asks nothing of a bare capture. Since 2026-10-12 a Task line
-_without_ `|` is parsed by Claude Haiku instead ([quick-add.md](quick-add.md)); `|` is the deterministic
+_without_ `|` is parsed by the Claude model (Sonnet since 2026-11-17) instead ([quick-add.md](quick-add.md)); `|` is the deterministic
 bypass — the model never sees a grammar line.
 
 ## 2. Decision log

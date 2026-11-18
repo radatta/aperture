@@ -81,7 +81,7 @@ documented anywhere (searched 2026-11-17: no limit for Get Contents of URL or Si
 in under 8 s with a one-sentence `say`; the `api-latency` dev row logs p50 / p95 / max and fails past 8 s.
 
 **Logging:** one line per request, `{event: 'capture', ok, reason, ms, raw?, duplicate?, voice?, parseMs?,
-fallback?}` (`fallback` the parse's failure reason), with fixed reason
+fallback?}` (`fallback` why the model's reading wasn't used: `long`, `cap`, or the parse's failure reason), with fixed reason
 codes. Never the text, header, token, hash or an error message. The parse's own line logs only `chars` and
 token counts.
 
@@ -129,10 +129,10 @@ Per UTC day — guards, not UX:
   so only a manual retry after an unclear failure can double up. A first still unsaved after 20 s
   (`CAPTURE_IN_FLIGHT_MS` — past the Lambda's 15 s timeout) died, so the same line then is a new capture;
   inside those 20 s the answer hedges ("…if it isn't in the app in a minute, say it again").
-- **Leaked tokens:** 40 × ~~$0.003–0.006 (Sonnet, 512 output tokens at most, 600 characters in; ~$0.008 at most a
-  parse) ≈ $0.12–0.24 a day, ~$3.60–7.20 a month, however many tokens leak, plus junk tasks. The hard ceiling,
-  with all five tokens racing their claims at once, is 5 × 40 = 200 parses a day (~~$1.60). It sits inside the maintainer's Claude
-  API credit, which his ~$1 rogue-cost rule doesn't cover (2026-11-17). Revoke in Settings stops it at once. Not
+- **Leaked tokens:** 40 × about $0.003–0.006 (Sonnet, 512 output tokens at most, 600 characters in; about $0.008 at most a
+  parse) ≈ $0.12–0.24 a day, about $3.60–7.20 a month, however many tokens leak, plus junk tasks. The hard ceiling,
+  with all five tokens racing their claims at once, is 5 × 40 = 200 parses a day (about $1.60). It sits inside the maintainer's Claude
+  API credit, which his about-$1 rogue-cost rule doesn't cover (2026-11-17). Revoke in Settings stops it at once. Not
   capped: the request floor (a missing or malformed header costs nothing, an unknown token one GetItem);
   reserved concurrency would cap the whole shared BFF.
 
@@ -154,8 +154,9 @@ and a leading "remind me to" from the title; `dueTime` the clock as said ("at 5"
 "5 pm" → 17:00; "tonight" alone → 20:00, "morning" → 09:00; a delay → null); a day only when one was said. The
 code then places it (`validateParsedTask`, `spokenTime.ts`): a delay ("in 20 minutes") is always the server
 clock's; a model clock that agrees with the grammar's reading takes the grammar's placement (a bare hour wraps,
-"at 1 tonight" is the small hours); one that disagrees wins — a bare hour when the line names no half of the day
-(no am/pm, 24-hour clock, noon, morning…evening, tonight), else as stated — and rolls forward like any time. With
+"at 1 tonight" is the small hours); one that disagrees wins — a bare hour when no half of the day is said in or beside
+the clock (am/pm, a 24-hour clock, noon, morning…evening, tonight; a day word may sit between, "at 8 tomorrow
+evening"; "at 9 book the night bus" says none), else as stated — and rolls forward like any time. With
 no model clock the grammar's reading fills, as before. The grammar on its own (precedence: relative → a stated
 clock → a bare hour → a day-part) is the fallback when the model doesn't run (§2 _Flow_).
 

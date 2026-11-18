@@ -1,8 +1,8 @@
 import { fmtWeekday, PARSE_TITLE_MAX } from '@aperture/shared';
 import type { ParseCategory } from '@aperture/shared';
 
-// Quick add's one prompt — the BFF owns it, for the app and Raycast alike (tools/raycast/aperture-add.sh
-// calls the parse_task MCP tool). Pure, so a snapshot pins the exact wording sent to the model.
+// Quick add's one prompt — the BFF owns it, for the app, Siri and Raycast alike (the capture route,
+// /api/capture) and the parse_task MCP tool. Pure, so a snapshot pins the exact wording sent to the model.
 
 // Sonnet, not Haiku (the maintainer, 2026-11-17: the parse is every capture's path, the app's ✨ and Siri alike).
 // Thinking off (`between_tools` — Sonnet 5.5 refuses `disabled`) at low effort: the parse is on Siri's clock.

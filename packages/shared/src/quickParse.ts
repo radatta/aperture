@@ -1,7 +1,7 @@
 // Quick add: one natural-language capture line ("aperture, fix login bug due fri 30m") → create_task
-// fields. Claude Haiku does the parsing server-side (the BFF owns the one prompt — lambdas/src/anthropic);
+// fields. Claude (Sonnet) does the parsing server-side (the BFF owns the one prompt — lambdas/src/anthropic);
 // this module is everything around it that both the Lambda and the app's stub share: the result
-// contract, the validator for Haiku's untrusted JSON, and the flow (grammar bypass → model → validate).
+// contract, the validator for the model's untrusted JSON, and the flow (grammar bypass → model → validate).
 // Design record: docs/areas/tasks/quick-add.md.
 
 import {
@@ -22,6 +22,7 @@ import type { Category } from './types';
 import {
   DAY_PART_TIME,
   DAY_WORD,
+  NEAR_DAY,
   dueClock,
   resolveSpoken,
   spokenTimeIn,
@@ -101,22 +102,28 @@ const SPOKEN_CLOCK_HINT =
   /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
 
 // A spoken clock with its half of the day said, in its own words or right beside them: "5 pm", "17:30", "noon",
-// "at 5 in the evening", "tonight at 9". Without one, the model's clock is a bare hour and the server picks
-// morning or evening. Only beside the clock: "at 9 book the night bus" says no half. "5:30" is 12-hour, so
-// only a 24-hour form ("17:30", "08:15") counts.
+// "at 5 in the evening", "at 8 tomorrow evening", "tonight at 9". Without one, the model's clock is a bare hour
+// and the server picks morning or evening. Only beside the clock: "at 9 book the night bus" says no half.
+// "5:30" is 12-hour, so only a 24-hour form ("17:30", "08:15") counts.
 const HALF_IN =
   /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
-const HALF_AFTER =
-  /^\s*(?:o['’]?\s?clock\s*)?(?:a\.?m\b|p\.?m\b|(?:in the|this) (?:morning|afternoon|evening)\b|at night\b|tonight\b)/i;
+const HALF_AFTER = new RegExp(
+  `^\\s*(?:o['’]?\\s?clock\\s*)?(?:a\\.?m\\b|p\\.?m\\b|tonight\\b|at night\\b|(?:${NEAR_DAY}\\s+)?(?:(?:in the|this)\\s+)?(?:morning|afternoon|evening|night)\\b)`,
+  'i',
+);
 const HALF_BEFORE =
-  /\b(?:tonight|this (?:morning|afternoon|evening)|morning|afternoon|evening|night)\s*(?:at|by|around)?\s*$/i;
+  /\b(?:tonight|this (?:morning|afternoon|evening)|morning|afternoon|evening|night)\s*,?\s*(?:at|by|around)?\s*$/i;
+// No clock the grammar could find ("at five twenty"): only the plain markers count, wherever they are — a
+// day-part word alone ("the night bus") isn't one.
+const HALF_LOOSE =
+  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight|tonight|at night)\b|\b(?:in the|this) (?:morning|afternoon|evening)\b/i;
 const halfSaid = (line: string, said: string): boolean => {
-  const i = said ? line.toLowerCase().indexOf(said.toLowerCase()) : -1;
-  if (i < 0) return HALF_IN.test(line); // the grammar found no clock: the line is all there is
+  const at = said ? saidAt(line, said) : null;
+  if (!at) return HALF_LOOSE.test(line);
   return (
     HALF_IN.test(said) ||
-    HALF_AFTER.test(line.slice(i + said.length)) ||
-    HALF_BEFORE.test(line.slice(0, i))
+    HALF_AFTER.test(line.slice(at[1])) ||
+    HALF_BEFORE.test(line.slice(0, at[0]))
   );
 };
 

@@ -454,6 +454,16 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(made.dropped).toEqual(['dropped due time']);
   });
 
+  it('a day-part word away from the clock never places it (R2-02)', () => {
+    // 06:00: "morning" belongs to the report, not the 5 — the model's 17:00 stands (it was 5 AM tomorrow).
+    expect(
+      voice('remind me at 5 to send the morning report', {
+        title: 'send the morning report',
+        dueTime: '17:00',
+      }).input,
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+  });
+
   it('a named day from the model stays; "today" rolls a past time forward', () => {
     expect(voice('call mum friday at 5', { dueDay: '2026-11-20' }).input).toMatchObject({
       dueDay: '2026-11-20',
@@ -507,6 +517,23 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     expect(
       at('at 4 book the night bus', { title: 'book the night bus', dueTime: '16:00' }),
     ).toMatchObject({ dueDay: '2026-11-16', dueTime: '04:00' });
+    // A day word between the clock and its half still says the half (R2-01): the model's evening stands.
+    expect(
+      at('call mum at 8 tomorrow evening', { dueDay: '2026-11-16', dueTime: '20:00' }),
+    ).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '20:00',
+    });
+    expect(
+      at('call mum at 9 friday night', { dueDay: '2026-11-20', dueTime: '21:00' }),
+    ).toMatchObject({
+      dueDay: '2026-11-20',
+      dueTime: '21:00',
+    });
+    // The half found beside the right clock, not inside "flat 4" (R2-03).
+    expect(
+      at('call flat 4 owner at 4 this afternoon', { title: 'call flat 4 owner', dueTime: '16:00' }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '16:00' });
     // Before the clock counts too: "this evening at 5".
     expect(at('call mum this evening at 5', { dueTime: '17:00' })).toMatchObject({
       dueTime: '17:00',
@@ -914,6 +941,12 @@ describe('spokenFallbackDue (a spoken line saved without the model)', () => {
     });
     expect(spokenFallbackDue('call mum friday at 5', c)).toBeNull();
     expect(spokenFallbackDue('call mum the day after tomorrow at 5', c)).toBeNull();
+  });
+  it('a day-part word away from the clock leaves the bare hour', () => {
+    expect(spokenFallbackDue('remind me at 5 to send the morning report', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
   });
   it('no time in the words: none', () => {
     expect(spokenFallbackDue('call mum', c)).toBeNull();

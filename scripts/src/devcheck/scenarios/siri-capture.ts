@@ -207,13 +207,13 @@ async function capture(
   opts: { voice?: boolean; tag?: string } = {},
 ) {
   const body = opts.voice === false ? { text } : { text, voice: true };
+  const day = new Date().toISOString().slice(0, 10); // the claim's UTC day: before the call, not after
   const got = await ctx.api.writes.captureRaw(token, body, opts.tag ? { tag: opts.tag } : {});
   const r = ok(got, what);
   if (r.id && !r.duplicate && !taskIds.includes(r.id)) taskIds.push(r.id);
   // A parsed, non-grammar line through tokenB spent one of the user's model calls (its UTC day kept): the
   // parse-cap row needs the refusal to come that much sooner, or the cap is per token, not per user.
-  if (token === tokenB && !r.raw && !r.duplicate && !text.includes('|'))
-    parsedB.push(new Date().toISOString().slice(0, 10));
+  if (token === tokenB && !r.raw && !r.duplicate && !text.includes('|')) parsedB.push(day);
   return r;
 }
 const tokenById = async (ctx: Ctx, id: string) =>
@@ -656,6 +656,7 @@ export const siriCapture: Scenario = {
       title: 'Settings › Capture: name it, Make token → shown once, then listed “ends …<last 4>”',
       async run(ctx) {
         taskIds = [];
+        parsedB.length = 0;
         const S = await loadShared();
         // A token a crashed run minted is swept first; one nothing recorded (the pipeline reports those) can
         // still crowd the run out of the room it needs: this one and the neighbour at once, then one more.
@@ -1333,6 +1334,7 @@ export const siriCapture: Scenario = {
           }
           ctx.log(`8 at once: ${8 - busy} added, ${busy} answered busy`);
           // Eight tries with backoff each: more than one of eight giving up means the retry isn't working.
+          // Provisional until a dev run measures the spread (logged above) — then set from it.
           if (busy > 1)
             throw new Error(`${busy} of 8 answered busy — the lost-race retry isn't landing`);
         });

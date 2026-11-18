@@ -69,6 +69,20 @@ describe('spokenTimeIn', () => {
     });
   });
 
+  it("a bare hour's day-part counts only beside it, a day word between allowed", () => {
+    const part = (line: string) => {
+      const t = spokenTimeIn(line);
+      return t?.kind === 'bare' ? t.part : `not bare: ${JSON.stringify(t)}`;
+    };
+    expect(part('remind me at 5 to send the morning report')).toBeNull();
+    expect(part('at 9 book the tonight show tickets')).toBeNull();
+    expect(part('call mum tomorrow morning at 9')).toBe('morning');
+    expect(part('call mum at 9 friday morning')).toBe('morning');
+    expect(part('call mum at 9 on friday morning')).toBe('morning');
+    expect(part('call mum tonight at 9')).toBe('tonight');
+    expect(part("call mum at 8 o'clock tonight")).toBe('tonight');
+  });
+
   it('reads the relative phrases Siri writes', () => {
     const mins = (line: string) => {
       const s = spokenTimeIn(line);
