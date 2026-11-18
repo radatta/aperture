@@ -13,6 +13,8 @@ Suites:
   secrets-read-guard.sh       <- secrets-read-fixtures.jsonl  (Read/Grep/Glob payloads; "tool" per case)
   compaction hooks            <- compaction-fixtures.jsonl  (precompact-handoff.sh against stub-claude.sh,
                                  post-compact-summary.sh, post-compact-context.sh; each case names its "hook")
+  board-hub-nudge.sh check    <- hub-nudge-fixtures.jsonl  (the hub self-check's matcher: one synthetic turn per
+                                 case on stdin, its prompt and reply through the environment)
 
 WHY THIS EXISTS AS A FILE-DRIVEN RUNNER, and not as an inline shell loop:
 COI's monitor matches its reverse-shell patterns against every process's argv.
@@ -571,6 +573,46 @@ def run_compaction_suite(root: str) -> tuple[int, int]:
     return failures, total
 
 
+# --- Hub self-check (hub-nudge-fixtures.jsonl) ---
+# board-hub-nudge.sh check: a case's turn (its "tools" as assistant tool_use lines, or "lines", or "raw" text) on
+# stdin, TURN_PROMPT / TURN_REPLY in the environment, and the ids it prints compared with "expect" in order.
+
+
+def hub_nudge_turn(case: dict) -> str:
+    if "raw" in case:
+        return case["raw"]
+    lines = case.get("lines")
+    if lines is None:
+        lines = [
+            {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": t["name"], "input": t["input"]}]}}
+            for t in case.get("tools", [])
+        ]
+    return "".join(json.dumps(line) + "\n" for line in lines)
+
+
+def run_hub_nudge_suite() -> tuple[int, int]:
+    print("\n== board-hub-nudge.sh ==")
+    failures = total = 0
+    for line in (HERE / "hub-nudge-fixtures.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        total += 1
+        case = json.loads(line)
+        env = {**os.environ, "TURN_PROMPT": case.get("prompt", ""), "TURN_REPLY": case.get("reply", "")}
+        r = subprocess.run(
+            ["bash", str(HERE.parent / "board-hub-nudge.sh"), "check"],
+            input=hub_nudge_turn(case), capture_output=True, text=True, env=env, timeout=20,
+        )
+        got = [x for x in r.stdout.splitlines() if x]
+        problems = [f"rc={r.returncode} {r.stderr.strip()[:120]}"] if r.returncode or r.stderr else []
+        problems += [] if got == case["expect"] else [f"want {case['expect']}, got {got}"]
+        failures += bool(problems)
+        print(f"{'FAIL' if problems else 'ok  '}  {case['why'][:88]}")
+        for problem in problems:
+            print(f"          {problem}")
+    return failures, total
+
+
 def main() -> int:
     failures, total = check_registration()
     with tempfile.TemporaryDirectory() as root:  # each repo-needing fixture gets a fresh repo under here
@@ -582,6 +624,9 @@ def main() -> int:
         f, t = run_compaction_suite(root)
         failures += f
         total += t
+    f, t = run_hub_nudge_suite()
+    failures += f
+    total += t
     print(f"\n{total - failures}/{total} passed")
     return 1 if failures else 0
 

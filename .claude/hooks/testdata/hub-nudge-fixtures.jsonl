@@ -1,0 +1,19 @@
+{"why": "a plain status reply fires nothing", "reply": "coach-fixes is on devb; extension-tidy waits on it. Nothing for you right now.", "tools": [], "expect": []}
+{"why": "cant: 'doesn't support' with no search fires", "reply": "Safari doesn't support that API on iOS 26.", "tools": [], "expect": ["cant"]}
+{"why": "cant: cleared by a search-specialist agent this turn", "reply": "Safari doesn't support that API on iOS 26 (from: WebKit status page).", "tools": [{"name": "Agent", "input": {"subagent_type": "search-specialist", "prompt": "x"}}], "expect": []}
+{"why": "cant: cleared by WebSearch this turn", "reply": "It's not available on the free plan.", "tools": [{"name": "WebSearch", "input": {"query": "x"}}], "expect": []}
+{"why": "cant: asking permission to check is itself the moment", "reply": "Not sure the runner has that label. Want me to check?", "tools": [], "expect": ["cant"]}
+{"why": "cant: an ordinary can't about a lane's own order is not a platform claim", "reply": "extension-tidy can't start until coach-fixes merges.", "tools": [], "expect": []}
+{"why": "eta: a time range with no source fires", "reply": "PR ~19:30–20:00.", "tools": [], "expect": ["eta"]}
+{"why": "eta: a percent with no source fires", "reply": "Usage is at 41% of the week.", "tools": [], "expect": ["eta"]}
+{"why": "eta: a speedup fires", "reply": "The new gate is 2.4x faster.", "tools": [], "expect": ["eta"]}
+{"why": "eta: cleared by a (from: ...) marker", "reply": "PR ~19:30–20:00 (from: the lane's fresh estimate).", "tools": [], "expect": []}
+{"why": "eta: a lone clock time is not an ETA range", "reply": "Merged at 17:20.", "tools": [], "expect": []}
+{"why": "env: a relayed flake with no check fires", "reply": "devcheck-flakes says the iOS row failure is a flake, unrelated to its diff.", "tools": [], "expect": ["env"]}
+{"why": "env: cleared by a Read of a primary source", "reply": "The Mac was unreachable for 4 min; it's back.", "tools": [{"name": "Read", "input": {"file_path": "/workspace/.hostjobs/results/x.json"}}], "expect": []}
+{"why": "pace: a [merged] turn with no pace.json read fires", "prompt": "[merged] coach-fixes — PR 207 merged, deploy green", "reply": "Logged.", "tools": [{"name": "SendMessage", "input": {"to": "x", "message": "y"}}], "expect": ["pace"]}
+{"why": "pace: cleared by reading pace.json", "prompt": "[pr-open] tower-current — PR 208", "reply": "Logged; no lane to start (pace.json: at cap).", "tools": [{"name": "Bash", "input": {"command": "jq . /workspace/localNotes/board/pace.json"}}], "expect": []}
+{"why": "pace: an ordinary prompt never fires it", "prompt": "how is the tower lane doing", "reply": "Building section 4.", "tools": [], "expect": []}
+{"why": "several at once, in table order", "prompt": "[merged] x", "reply": "Mac unreachable again; ETA 18:10–18:40.", "tools": [], "expect": ["eta", "env", "pace"]}
+{"why": "the reply is the text after the last tool call: earlier text in the turn is not checked", "lines": [{"type": "assistant", "message": {"content": [{"type": "text", "text": "Checking whether it doesn't support that..."}]}}, {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "true"}}]}}, {"type": "assistant", "message": {"content": [{"type": "text", "text": "All good."}]}}], "expect": []}
+{"why": "torn or non-JSON lines are skipped, never an error", "raw": "{\"type\": \"assist\nnot json\n", "reply": "fine", "expect": []}

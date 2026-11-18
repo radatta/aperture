@@ -167,6 +167,10 @@ no script writes it: the Mac never runs anything from the shared folder.
   their change is on main. The tower never writes it: what it derives (merges, slots, lane phases) shows over the
   hand-written fields, and each fact it contradicts is a stale item for the hub to fix — `pnpm board stale`, the
   header chip, SLIPPING (`docs/ops/TOWER.md` → _Board freshness_).
+- **Self-check.** `board-hub-nudge.sh`, the hub's only hook (`.claude/hooks/README.md` → _Board hooks_), nudges at the
+  end of a turn and never blocks: "can't" with no search, an ETA or rate with no "(from: …)", a lane's environment
+  claim relayed unchecked, a `[pr-open]`/`[merged]` with no `pace.json` read, lanes messaged with `queue.json`
+  untouched. It shows them then and hands them to the next turn; its CHECKS table holds the patterns.
 - **Collisions.** On each `[kickoff]`, compare its areas with _In flight_ and with `localNotes/board/overlap.json`
   (the board's file-level overlaps, every 2.5 min). Warn **both** sessions: `collision: <a> and <b> both
 touch <area>; whichever merges second rebases — agree an order.`
