@@ -22,7 +22,8 @@ export interface ParseRequest {
   today: string; // the user's day (dayStartHour), YYYY-MM-DD
   categories: readonly ParseCategory[]; // active only
   timeoutMs: number;
-  voice?: boolean; // a spoken line (capture.md): the prompt leaves the time to the server
+  voice?: boolean; // a spoken line (capture.md): the model reads the clock as said, the server places it
+  maxTokens?: number; // the output cap; default 2048 (a long line's overflow comes back as notes)
 }
 
 export interface FluxNoteRequest {

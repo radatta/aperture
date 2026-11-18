@@ -20,6 +20,7 @@ import { keepTitleWords, type Range, type TitleMeta } from './titleWords';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
 import {
+  DAY_PART_TIME,
   DAY_WORD,
   dueClock,
   resolveSpoken,
@@ -98,6 +99,30 @@ const rangesOf = (line: string, re: RegExp): Range[] =>
 // half ("quarter past five", "half 6").
 const SPOKEN_CLOCK_HINT =
   /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
+
+// A spoken clock with its half of the day said: "5 pm", "5 o'clock pm", "17:30", "noon", "in the evening",
+// "tonight". Without one, the model's clock is a bare hour and the server picks morning or evening.
+const HALF_SAID =
+  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b\d{1,2}:\d{2}\b|\b(?:noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
+
+// Where the model's spoken clock lands: the grammar's own reading when the two agree (it keeps the rules a bare
+// hour, "tonight" and "morning" carry), else the model's — a bare hour when the line says no half of the day.
+function placeModelClock(hhmm: string, spoken: SpokenTime | null, line: string): SpokenTime {
+  const [h, m] = hhmm.split(':').map(Number) as [number, number];
+  const agrees =
+    spoken?.kind === 'clock'
+      ? spoken.hhmm === hhmm
+      : spoken?.kind === 'bare'
+        ? spoken.hour % 12 === h % 12 && spoken.minute === m
+        : spoken?.kind === 'part'
+          ? DAY_PART_TIME[spoken.part] === hhmm
+          : false;
+  if (spoken && agrees) return spoken;
+  const said = spoken?.said ?? '';
+  return HALF_SAID.test(line)
+    ? { said, kind: 'clock', hhmm }
+    : { said, kind: 'bare', hour: h % 12 || 12, minute: m, part: null };
+}
 
 // The model's outcome, as the flow sees it. A failure never throws — every one is a raw save.
 export type ModelOutcome =
@@ -227,23 +252,28 @@ export function validateParsedTask(
     input.dueDay = r.day;
     input.dueTime = r.time;
   };
-  // Spoken: the time is the words', never the model's (spokenTime.ts) — and with it the day, when the words
-  // were relative or the time had already passed. A day the model gave stays only as "the day named".
+  // Spoken: the model reads the clock as said, the code places it (spokenTime.ts) — a bare hour's morning or
+  // evening, a past time rolled forward, "in 20 minutes" from the server's clock — and with it the day, when the
+  // words were relative or the time had already passed. A day the model gave stays only as "the day named". The
+  // grammar's own reading is the fallback (the maintainer, 2026-11-17: the model is the parser): it places a
+  // clock the model agrees with, and fills one the model missed.
   if (ctx.voice) {
     // The model kept the words in its title: it read them as part of the task, not a time ("look at one
     // of the leases", "email the team about the 3pm meeting") — unless they were an at/by clock. A delay
     // ("in 20 minutes") is a time whatever the model did with its title.
     const kept = !!spoken && spoken.kind !== 'relative' && keptWords(spoken);
-    if (spoken && (!kept || due)) {
+    // A line with no number or hour word in it had no clock to read: a time there is one the model made up.
+    const modelClock =
+      str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(line ?? '') ? clock : null;
+    if (spoken?.kind === 'relative') resolve(spoken);
+    else if (modelClock && (!spoken || !kept || due)) {
+      const placed = placeModelClock(modelClock, spoken, line ?? '');
+      resolve(placed);
+      if (due && placed === spoken) input.title = due.title;
+    } else if (spoken && (!kept || due)) {
       resolve(spoken);
       if (due) input.title = due.title;
-    }
-    // Words the grammar can't read ("quarter past five"): the model was given the typed prompt, which
-    // sets a clock only when one was said — taken, and rolled forward like any stated time.
-    // A line with no number or hour word in it had no clock to read: a time there is one the model made up.
-    else if (!spoken && str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(line ?? ''))
-      resolve({ said: '', kind: 'clock', hhmm: clock });
-    else if (p.dueTime != null) dropped.push('dropped due time');
+    } else if (p.dueTime != null) dropped.push('dropped due time');
   }
   // Typed: the model's clock when the line states one; a time whose day was dropped is dropped too. A clock
   // the line states outright that the model missed ("call the bank at 6 pm" back with no time, dev 2026-11-16)
@@ -511,6 +541,31 @@ export async function runQuickParse(
   if (!v) return { ok: false, reason: 'empty-title' };
   if (place) v.input.place = place.slug;
   return { ok: true, source: 'haiku', ...v, placeName: place?.name ?? null, today: ctx.today };
+}
+
+// A spoken line saved without the model (it failed, timed out, or was past a cap): the time its own words say,
+// placed by the voice rules, so a reminder still rings (the maintainer, 2026-11-17: the grammar is the fallback).
+// "today" / "tonight" name no other day and "tomorrow" is the calendar's next; any other day word ("friday",
+// "in 2 days", "the 20th") the grammar can't place, so no time at all — a wrong day is worse than none.
+export function spokenFallbackDue(
+  line: string,
+  ctx: Pick<ParseContext, 'now' | 'today'>,
+): { dueDay: string; dueTime: string } | null {
+  const spoken = spokenTimeIn(line);
+  if (!spoken) return null;
+  const tomorrow = spoken.kind !== 'relative' && TOMORROW_WORD.test(line);
+  const rest = line.replace(new RegExp(TODAY_WORD.source, 'gi'), ' ').replace(
+    new RegExp(TOMORROW_WORD.source, 'gi'),
+    ' ',
+  );
+  if (spoken.kind !== 'relative' && DAY_WORD.test(rest)) return null;
+  const calToday = zonedDayTime(ctx.now, USER_TIME_ZONE).day;
+  const r = resolveSpoken(spoken, tomorrow ? addDays(calToday, 1) : null, {
+    now: ctx.now,
+    today: ctx.today,
+    dayInWords: tomorrow,
+  });
+  return { dueDay: r.day, dueTime: r.time };
 }
 
 // One line for a toast or receipt: why a parse fell back to a raw save.

@@ -14,7 +14,13 @@ import {
   coachPickSystemPrompt,
   coachPickUserContent,
 } from './coachPickPrompt';
-import { PARSE_MODEL, parseOutputSchema, parseSystemPrompt } from './parsePrompt';
+import {
+  PARSE_EFFORT,
+  PARSE_MODEL,
+  PARSE_THINKING,
+  parseOutputSchema,
+  parseSystemPrompt,
+} from './parsePrompt';
 import {
   fluxNoteOutputSchema,
   fluxNoteSystemPrompt,
@@ -93,8 +99,8 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     maxTokens: number;
     timeoutMs: number;
     // Haiku's calls turn thinking off and run at low effort; Opus 5.5 can't turn it off (a 400), so its call omits
-    // `thinking` and names its effort.
-    thinking?: 'disabled' | 'omit';
+    // `thinking` and names its effort. Sonnet 5.5 refuses `disabled` too: off there is `between_tools`.
+    thinking?: 'disabled' | 'between_tools' | 'omit';
     effort?: 'low' | 'medium' | 'high';
   }
 
@@ -123,7 +129,7 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         body: JSON.stringify({
           model: req.model,
           max_tokens: req.maxTokens,
-          ...(req.thinking === 'omit' ? {} : { thinking: { type: 'disabled' } }),
+          ...(req.thinking === 'omit' ? {} : { thinking: { type: req.thinking ?? 'disabled' } }),
           output_config: {
             effort: req.effort ?? 'low',
             format: { type: 'json_schema', schema: req.schema },
@@ -184,8 +190,10 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         system: parseSystemPrompt(req.today, req.categories, { voice: req.voice }),
         user: req.text,
         schema: parseOutputSchema(req.categories.map((c) => c.id)),
-        maxTokens: 2048,
+        maxTokens: req.maxTokens ?? 2048,
         timeoutMs: req.timeoutMs,
+        thinking: PARSE_THINKING,
+        effort: PARSE_EFFORT,
       });
       // status + stop_reason tell a revoked key (401) from a rate limit (429), an overload (529), a
       // refusal or max_tokens — all `reason: 'api'` to the caller.
@@ -197,6 +205,8 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
           status: meta?.status,
           stop_reason: meta?.stop,
           ms: Date.now() - started,
+          model: PARSE_MODEL,
+          voice: req.voice === true,
           chars: req.text.length,
           input_tokens: meta?.usage?.input_tokens,
           output_tokens: meta?.usage?.output_tokens,

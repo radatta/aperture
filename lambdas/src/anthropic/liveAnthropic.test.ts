@@ -79,15 +79,23 @@ describe('createLiveAnthropic', () => {
     expect(init.signal).toBeInstanceOf(AbortSignal);
     const body = JSON.parse(init.body as string);
     expect(body).toMatchObject({
-      model: 'claude-haiku-5-5',
+      model: 'claude-sonnet-5-5',
       max_tokens: 2048,
-      thinking: { type: 'disabled' },
+      // Sonnet 5.5 400s on `disabled`: thinking off is `between_tools`, and nothing else may sit beside it.
+      thinking: { type: 'between_tools' },
       output_config: { effort: 'low', format: { type: 'json_schema' } },
       messages: [{ role: 'user', content: LINE }],
     });
+    expect(body.thinking).toEqual({ type: 'between_tools' });
     expect(body.system).toContain('Today is 2026-10-12 (Monday)');
     expect(body.system).toContain('c1: Aperture');
     expect(body.output_config.format.schema.properties.categoryId.anyOf[0].enum).toEqual(['c1']);
+  });
+
+  it('a caller-set output cap replaces the default (the capture route bounds its spend)', async () => {
+    const { gw, calls } = setup(() => message(JSON.stringify(FIELDS)));
+    await gw.parseTask({ ...req, maxTokens: 512, voice: true });
+    expect(JSON.parse(calls[0]!.init.body as string).max_tokens).toBe(512);
   });
 
   it('reads the key once per warm container', async () => {
@@ -253,6 +261,8 @@ describe('createLiveAnthropic', () => {
       input_tokens: 420,
       output_tokens: 37,
       chars: LINE.length,
+      model: 'claude-sonnet-5-5',
+      voice: false,
     });
     // The status is what tells a revoked key from a rate limit or an overload in CloudWatch.
     expect(JSON.parse(failing.logs[0]!)).toMatchObject({
@@ -353,12 +363,21 @@ describe('coachPick', () => {
     ).toMatchObject({ ok: false, reason: 'api', usage: null });
   });
 
-  it('the other calls still turn thinking off at low effort', async () => {
-    const { gw, calls } = setup(() => message(JSON.stringify(FIELDS)));
+  it('the Haiku calls still turn thinking off with `disabled`, the Sonnet parse with `between_tools`', async () => {
+    const { gw, calls } = setup(() => message(JSON.stringify({ note: 'ok' })));
+    const summary = {
+      weekStart: '2026-11-02',
+      weekEnd: '2026-11-08',
+      totalSets: 0,
+      lastWeekSets: 0,
+      exercises: [],
+    };
+    await gw.fluxWeekNote({ line: 'x', summary, timeoutMs: 1 });
     await gw.parseTask(req);
-    const body = JSON.parse(calls[0]!.init.body as string);
-    expect(body.thinking).toEqual({ type: 'disabled' });
-    expect(body.output_config.effort).toBe('low');
+    const [note, parse] = calls.map((c) => JSON.parse(c.init.body as string));
+    expect(note.thinking).toEqual({ type: 'disabled' });
+    expect(parse.thinking).toEqual({ type: 'between_tools' });
+    expect([note.output_config.effort, parse.output_config.effort]).toEqual(['low', 'low']);
   });
 });
 

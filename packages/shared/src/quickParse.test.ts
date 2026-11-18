@@ -4,6 +4,7 @@ import {
   parseFailText,
   PARSE_TEXT_MAX,
   runQuickParse,
+  spokenFallbackDue,
   validateParsedTask,
   type ModelOutcome,
 } from './quickParse';
@@ -459,6 +460,45 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     });
   });
 
+  it("the model's clock wins where the grammar misread it; the code still places it (F213 class)", () => {
+    // 02:00: the grammar reads "at 5 in the evening" as a bare 5 (it has no "evening"); the model's 17:00 stands,
+    // placed as a stated clock because the line says which half of the day.
+    const night = Date.UTC(2026, 10, 16, 10, 0);
+    const at = (line: string, over: Record<string, unknown>) =>
+      validateParsedTask(fields({ title: 'call mum', ...over }), {
+        ...ctx,
+        today: '2026-11-15',
+        line,
+        now: night,
+        voice: true,
+      })!.input;
+    expect(at('call mum at 5 in the evening', { dueTime: '17:00' })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+    // Agreeing with the grammar's bare hour, the grammar places it — rule 1's wrap holds whatever the model
+    // picked: 02:00 + "at 5" is 5 AM.
+    expect(at('call mum at 5', { dueTime: '17:00' })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '05:00',
+    });
+    // A bare hour the grammar read differently, with no half of the day said: the model's hour, wrapped.
+    expect(at('call mum at 4', { dueTime: '05:00' })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '05:00',
+    });
+    // "tonight" alone: the rule's 8 PM, not a model's other reading.
+    expect(at('call mum tonight', { dueTime: '21:00' })).toMatchObject({ dueTime: '20:00' });
+    // "at 1 tonight" and "friday at 1 tonight" keep the small-hours rule (the grammar places an agreeing clock).
+    expect(at('call mum at 1 tonight', { dueTime: '01:00' })).toMatchObject({
+      dueDay: '2026-11-17',
+      dueTime: '01:00',
+    });
+    expect(
+      at('call mum friday at 1 tonight', { dueDay: '2026-11-20', dueTime: '01:00' }),
+    ).toMatchObject({ dueDay: '2026-11-21', dueTime: '01:00' });
+  });
+
   it('a relative delay is a time, never an estimate', () => {
     const v = voice('call mum in 2 hours', { estimateMin: 120 });
     expect(v.input).toEqual({ title: 'call mum', dueDay: '2026-11-16', dueTime: '08:00' });
@@ -809,5 +849,37 @@ describe('validateParsedTask — a day the typed line names', () => {
       'sat down with the plan 9am', // 11-17 is a Tuesday
     ])
       expect(typed(line, day('2026-11-17', '09:00'), 15, 0), line).toEqual(['2026-11-18', '09:00']);
+  });
+});
+
+describe('spokenFallbackDue (a spoken line saved without the model)', () => {
+  // Monday 2026-11-16, 14:00 in LA.
+  const c = { now: Date.UTC(2026, 10, 16, 22, 0), today: '2026-11-16' };
+  it("places the words' own time by the voice rules", () => {
+    expect(spokenFallbackDue('call mum at 5', c)).toEqual({ dueDay: '2026-11-16', dueTime: '17:00' });
+    expect(spokenFallbackDue('call mum at 9 am', c)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '09:00',
+    });
+    expect(spokenFallbackDue('call mum in 20 minutes', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '14:20',
+    });
+    expect(spokenFallbackDue('call mum tonight', c)).toEqual({ dueDay: '2026-11-16', dueTime: '20:00' });
+    expect(spokenFallbackDue('call mum today at 5', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+  });
+  it('"tomorrow" is the next calendar day; any other day word means no time', () => {
+    expect(spokenFallbackDue('call mum tomorrow at 9', c)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '09:00',
+    });
+    expect(spokenFallbackDue('call mum friday at 5', c)).toBeNull();
+    expect(spokenFallbackDue('call mum the day after tomorrow at 5', c)).toBeNull();
+  });
+  it('no time in the words: none', () => {
+    expect(spokenFallbackDue('call mum', c)).toBeNull();
   });
 });

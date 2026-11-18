@@ -4,13 +4,19 @@ import type { ParseCategory } from '@aperture/shared';
 // Quick add's one prompt — the BFF owns it, for the app and Raycast alike (tools/raycast/aperture-add.sh
 // calls the parse_task MCP tool). Pure, so a snapshot pins the exact wording sent to the model.
 
-export const PARSE_MODEL = 'claude-haiku-5-5';
+// Sonnet, not Haiku (the maintainer, 2026-11-17: the parse is every capture's path, the app's ✨ and Siri alike).
+// Thinking off (`between_tools` — Sonnet 5.5 refuses `disabled`) at low effort: the parse is on Siri's clock.
+export const PARSE_MODEL = 'claude-sonnet-5-5';
+export const PARSE_THINKING = 'between_tools';
+export const PARSE_EFFORT = 'low';
 
-// A spoken line (voice capture, capture.md) adds VOICE_RULES: the server reads the time from the words
-// (spokenTime.ts), so the model only strips them from the title and leaves dueTime null.
+// A spoken line (voice capture, capture.md) adds VOICE_RULES: the model reads the clock as said, and the
+// server places it (a bare hour's morning or evening, a past clock rolled forward, "in 20 minutes" from its
+// own clock — quickParse.ts validateParsedTask).
 const VOICE_RULES = `
 The line was spoken, not typed:
-- Also remove from the title any spoken time ("at 5", "five o'clock", "at 8 tonight", "in 20 minutes", "in an hour", "tonight", "this morning", "tomorrow morning") and a leading "remind me to" or "remind me". The server works out the time itself: dueTime is always null.
+- Also remove from the title any spoken time ("at 5", "five o'clock", "at 8 tonight", "in 20 minutes", "in an hour", "tonight", "this morning", "tomorrow morning") and a leading "remind me to" or "remind me".
+- dueTime, instead of the rule above: the clock the user said, HH:MM 24h, read as said. "at 5" or "five o'clock" with no am/pm is 05:00 — give the hour as said; the server picks morning or evening. "5 pm" is 17:00, "quarter past five pm" 17:15, "half past 6 in the morning" 06:30, "at 8 tonight" 20:00, "at 1 tonight" 01:00, "noon" 12:00. "tonight" with no clock is 20:00; "this morning" or "tomorrow morning" with no clock is 09:00. A delay ("in 20 minutes", "in an hour") is not a clock: null, the server works it out. No time said: null.
 - dueDay: only for a day the user said ("tomorrow", "friday", "next monday"). A spoken time alone, "today", "tonight" or "this morning" is not a day: null.`;
 
 export function parseSystemPrompt(
@@ -25,6 +31,7 @@ export function parseSystemPrompt(
 Categories (id: label) — use the id, or null if none clearly matches:
 ${cats}
 Rules:
+- categoryId: null unless the line names a category's label or is plainly about it. Most lines have none. Never pick a category because it is the only one or the nearest.
 - title: the user's own words, at most ${PARSE_TITLE_MAX} characters. Remove only the parsed meta: a leading category word ("aperture,") only when it names one of the categories above — then set categoryId to it —, due phrases ("due tmw", "by friday", "before 3pm", "until 5pm", "today 4pm") and estimates ("30m", "2h"). Keep every other word, in the user's order and casing — never paraphrase, reword, drop or recapitalize a word, even one that looks like noise, a remark or a code word. A word beside a time is still a title word: "email the plumber done at 9 am" is titled "email the plumber done".
 - notes: if what's left after removing the meta is longer than the title allows, cut the title at a word boundary and put the rest here verbatim (fix obvious typos only). Otherwise null. Every word the user typed ends up in the title, the notes, or a parsed field.
 - dueDay: YYYY-MM-DD, only if the user gave a day ("tmw" = tomorrow, a weekday name = the next such day, "today" = today), or today if they gave only a clock time. Otherwise null.
