@@ -417,8 +417,8 @@ const INACTIVE_TOKEN: PlaceTokenStatus = {
 // come straight from the shared machines (taskTransition/withEstimate/split/heartbeat/…), so lifecycle
 // behavior is identical to the stub by construction. The one thing SK order doesn't give for free is
 // the stub's explicit list sorts, so each list method re-applies them for byte-for-byte parity.
-// Calendar inserts in flight at once for a bulk create (createTasks), and how long — measured from the
-// call's start, so the task writes count — new ones may start for. Worst case: budget (3 s) + one
+// Calendar inserts in flight at once for a bulk create (createTasks) or getDay's series spawns (syncCreated), and
+// how long — measured from the call's start, so the task writes count — new ones may start for. Worst case: budget (3 s) + one
 // sync's two Google fetches at GOOGLE_TIMEOUT_MS each (token refresh + insert, liveGoogle.ts) = 11 s,
 // plus the uncapped-but-fast SSM token read and a few DynamoDB writes — inside the 15 s Lambda timeout.
 const SYNC_CONCURRENCY = 4;
@@ -2755,30 +2755,43 @@ export class BackendClient implements ApiClient {
   // unplanned occurrence isn't respawned (recurring.md D4). Stub parity. Spawns go through the repo's
   // putTask/putPlan like every other task write (their item shapes are the repo's). Planned with a row
   // unless it's a same-day timed one; a timed one makes its calendar event like any timed task, inside
-  // the bulk budget so a getDay with several never nears the Lambda timeout (D8). The task read is
-  // consistent: a spawn now costs a Google event, so one made a moment ago must count.
+  // the bulk budget so a getDay with several never nears the Lambda timeout (D8).
   private async materializeDueSeries(day: string): Promise<void> {
     const active = (await this.repo.listSeries()).filter((s) => s.active);
     if (active.length === 0) return;
     const due = active.filter((s) => seriesDueOn(s, day));
     if (due.length === 0) return;
-    const tasks = await this.repo.listTasks({ consistent: true });
-    const plansOnDay = await this.repo.listPlans(day);
+    const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from here: the spawn writes spend it too
+    // The steady state (everything already spawned) reads eventually; a spawn about to happen re-reads
+    // consistently first, since a duplicate would now also duplicate a Google event.
+    let tasks = await this.repo.listTasks();
+    let plansOnDay = await this.repo.listPlans(day);
+    const missing = (ts: Task[], ps: TaskPlan[]) =>
+      due.filter((s) => !seriesHasOccurrence(s, day, ts, ps));
+    if (missing(tasks, plansOnDay).length === 0) return;
+    [tasks, plansOnDay] = await Promise.all([
+      this.repo.listTasks({ consistent: true }),
+      this.repo.listPlans(day, { consistent: true }),
+    ]);
     const spawned: Task[] = [];
-    for (const series of due) {
-      if (seriesHasOccurrence(series, day, tasks, plansOnDay)) continue;
-      const task = await this.repo.putTask({ ...this.base(), ...occurrenceFields(series, day) });
-      spawned.push(task);
-      if (occurrencePlanned(series))
-        await this.repo.putPlan({
-          ...this.base(),
-          taskId: task.id,
-          day,
-          plannedMinutes: series.defaultEstimateMin ?? 0,
-          order: 1000,
-        });
+    try {
+      for (const series of missing(tasks, plansOnDay)) {
+        const task = await this.repo.putTask({ ...this.base(), ...occurrenceFields(series, day) });
+        spawned.push(task);
+        if (occurrencePlanned(series))
+          await this.repo.putPlan({
+            ...this.base(),
+            taskId: task.id,
+            day,
+            plannedMinutes: series.defaultEstimateMin ?? 0,
+            order: 1000,
+          });
+      }
+    } finally {
+      // Whatever spawned gets its event or its Retry note, even when a later write threw: the next getDay
+      // sees these as spawned and never syncs them again.
+      await this.syncCreated(spawned, deadline, []);
     }
-    await this.syncCreated(spawned, Date.now() + BULK_SYNC_BUDGET_MS, []);
   }
   // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
   // planned. Each move re-reads the task first (consistently): a sweep races the user's own writes (e.g.

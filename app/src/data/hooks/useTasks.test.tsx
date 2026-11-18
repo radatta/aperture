@@ -258,6 +258,29 @@ describe('the tasks list carries what writes returned', () => {
   });
 });
 
+describe('a series deadline occurrence (recurring D8)', () => {
+  it('unplanned, it is waiting in the backlog like an untimed task', async () => {
+    const { api, hook } = setup(undefined, () => Date.now()); // getDay refuses a day after the clock's
+    const today = todayKey(4);
+    await api.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' },
+      anchorDate: today,
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    await api.getDay(today);
+    const [row] = await api.listPlansForDay(today);
+    await api.removePlan(row!.id);
+    await api.getDay(today);
+    await reload(hook);
+    await waitFor(() => expect(byId(hook, row!.taskId)?.status).toBe('backlog'));
+    expect(hook.result.current.backlog.data?.map((x) => x.id)).toContain(row!.taskId);
+  });
+});
+
 describe('the life backlog (D14)', () => {
   it('leaves an Aperture-area task out; no area and a retired category read by their area', async () => {
     const { api, qc, hook } = setup();

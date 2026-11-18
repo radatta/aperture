@@ -168,6 +168,13 @@ deadline occurrence, which is planned like an untimed task (D13's exception, [re
     cancelled as superseded (it has a deadline). Moving its due day onto or before its work day, or a
     Google drag that does, makes it plain D13 on the next `getDay`; clearing the time makes it untimed.
     Behaviour change: an untimed "due next day" occurrence that gains a time now stays planned.
+    - "Its due day" is the deadline's **app day**: an offset-1 02:00 deadline (4am start) falls on the
+      work day's app day, so Unplanned there it stays on Today, By time.
+    - The rule keys on dates, not on how the series was made: a same-day (offset 0) occurrence whose due day
+      moves later (Night's "Tomorrow", an edit, a Google drag) becomes a deadline occurrence — plannable,
+      waiting in the backlog, offering "+ Today". Intended: it now has a work day before its deadline.
+    - On its due day without a row it is By time on Today and also counts in Home's "N waiting" and offers
+      "+ Today" in a search: it can still be put on the plan, and then the row wins.
   - **One write rule, one healer:** `upsertPlan` refuses a timed task; a planned task that gains a time
     (or an MCP `status: planned`) is the next `getDay`'s stale sweep's — any timed `planned` task goes
     back to backlog, whatever its rows (`stalePlannedMoves`, never cancelling a timed occurrence). Its

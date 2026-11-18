@@ -57,6 +57,30 @@ describe('Home "+ Add" to today', () => {
     expect(dialog.getByText('pset 4')).toBeTruthy();
   });
 
+  it('lists an unplanned series deadline occurrence — its time is only a deadline (recurring D8)', async () => {
+    const api = createStubClient({ seed: false, storageKey: `add-today-${Math.random()}` });
+    await api.upsertSeries({
+      title: 'pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' },
+      anchorDate: todayKey(4),
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    await api.getDay(todayKey(4));
+    const [row] = await api.listPlansForDay(todayKey(4));
+    await api.removePlan(row!.id);
+    await api.getDay(todayKey(4));
+    const user = userEvent.setup();
+    renderApp({ api });
+    await user.click(screen.getByRole('button', { name: 'Morning' }));
+    await user.click(await screen.findByRole('button', { name: 'Add to today' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Add to today' }));
+    expect(await dialog.findByText('pre-lab')).toBeTruthy();
+    expect(dialog.queryByText(/Timed tasks land on their day/)).toBeNull();
+  });
+
   it('lists the life backlog — no Aperture-area task — but typing finds one (D14)', async () => {
     const api = createStubClient({ seed: false, storageKey: `add-today-${Math.random()}` });
     const ap = await api.upsertCategory({ label: 'Aperture', isWork: true, area: 'aperture' });

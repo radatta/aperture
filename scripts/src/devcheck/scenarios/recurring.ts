@@ -31,6 +31,7 @@ let viaMcp: DevSeries; // create_series's
 let prelab: DevSeries; // the form's timed series: due next day 2pm (D8)
 let quiz: DevSeries; // the form's same-day timed series
 let timedMcp: DevSeries; // create_series's timed one
+let dueDay: DevSeries; // the API's timed daily series anchored yesterday — its occurrence is due today
 
 const lastCreated = (ctx: Ctx, what: string): string => {
   const id = ctx.createdIds().at(-1);
@@ -231,7 +232,7 @@ export const recurring: Scenario = {
       id: 'time-api-invalid',
       entry: 'api',
       kind: 'edge',
-      what: 'upsertSeries with a time and no due offset, or with 25:00 → refused; no series written',
+      what: 'upsertSeries with a time and no due offset, with 25:00, or due the same day at 02:00 (before the 4am day start) → refused; no series written',
     },
     {
       id: 'time-mcp-create',
@@ -253,25 +254,15 @@ export const recurring: Scenario = {
     },
     {
       id: 'time-due-day',
-      entry: 'api',
+      entry: 'ui',
       kind: 'edge',
-      what: 'On its due day: no row there → backlog and By time; a row there → stays planned, listed once',
-      offDev: {
-        file: 'packages/shared/src/machines.test.ts',
-        test: 'a deadline occurrence (D8) is swept like an untimed task: kept with a row ahead, else backlog',
-        why: 'needs the next app day, and dev can’t move its clock; the contract case “series: a deadline occurrence on its due day” runs it on both impls',
-      },
+      what: 'On its due day with no row there it is By time on Today, offering “+ Today”; “+ Today” puts it on the plan and a reload lists it once, planned',
     },
     {
       id: 'time-sweep',
       entry: 'api',
       kind: 'edge',
-      what: 'A deadline occurrence is never cancelled as superseded by its series’ next copy',
-      offDev: {
-        file: 'packages/shared/src/machines.test.ts',
-        test: "a deadline occurrence is never cancelled as superseded by its series' next copy",
-        why: 'needs two app days of one daily series',
-      },
+      what: 'A deadline occurrence from yesterday goes to backlog on today’s getDay — never cancelled as superseded by today’s copy',
     },
     {
       id: 'time-planned-ping',
@@ -636,6 +627,7 @@ export const recurring: Scenario = {
         for (const [what, input] of [
           ['no offset', { dueTime: '14:00' }],
           ['25:00', { dueOffsetDays: 1, dueTime: '25:00' }],
+          ['same day before the day start', { dueOffsetDays: 0, dueTime: '02:00' }],
         ] as const) {
           const got = await ctx.api.writes.createSeriesExpectingRefusal(
             { title: name(ctx, `bad ${what}`), rule: { kind: 'daily' }, ...input },
@@ -688,6 +680,68 @@ export const recurring: Scenario = {
         }
         if ((await ctx.api.reads.listSeries()).length !== before)
           throw new Error('a refused create_series wrote a series');
+      },
+    },
+    {
+      id: 'time-sweep',
+      entry: 'api',
+      proves: ['time-sweep'],
+      title:
+        'A timed daily series from yesterday: getDay(yesterday) spawns one due today; getDay(today) backlogs it, never cancels it',
+      async run(ctx) {
+        const yesterday = shiftDays(appToday, -1);
+        dueDay = await ctx.api.writes.createSeries(
+          {
+            title: name(ctx, 'dueday'),
+            rule: { kind: 'daily' },
+            defaultEstimateMin: 30,
+            dueOffsetDays: 1,
+            dueTime: '14:00',
+          },
+          yesterday,
+        );
+        await ctx.api.reads.getDay(yesterday); // past days are allowed: it spawns yesterday's copy
+        await ctx.api.reads.getDay(appToday); // today's copy, and the sweep of yesterday's
+        const occ = await occurrencesOf(ctx, dueDay.id);
+        const y = occ.find((t) => t.seriesDay === yesterday);
+        const t = occ.find((t) => t.seriesDay === appToday);
+        if (occ.length !== 2 || !y || !t) throw new Error(`occurrences: ${JSON.stringify(occ)}`);
+        if (y.status !== 'backlog' || y.dueDay !== appToday || y.dueTime !== '14:00')
+          throw new Error(`yesterday's occurrence is ${JSON.stringify(y)}`);
+        if (t.status !== 'planned') throw new Error(`today's occurrence is ${JSON.stringify(t)}`);
+      },
+    },
+    {
+      id: 'time-due-day',
+      entry: 'ui',
+      proves: ['time-due-day'],
+      title:
+        'On its due day: By time with “+ Today”; “+ Today” plans it, and after a reload it is listed once, planned',
+      async run(ctx) {
+        const title = name(ctx, 'dueday');
+        const yesterday = shiftDays(appToday, -1);
+        const y = (await occurrencesOf(ctx, dueDay.id)).find((t) => t.seriesDay === yesterday)!;
+        await todaySearched(ctx, title);
+        await ctx.ui.expectText('due today 2pm');
+        const add = ctx.page.getByRole('button', { name: `Add ${title} to today` });
+        await add.waitFor({ timeout: 15_000 });
+        if ((await add.count()) !== 1) throw new Error(`${await add.count()} “+ Today” buttons`);
+        await ctx.shot('today-due-day-by-time');
+        await add.click();
+        for (let i = 0; (await ctx.api.reads.getTask(y.id))?.status !== 'planned'; i++) {
+          if (i >= 40) throw new Error('“+ Today” never reached the server');
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        await todaySearched(ctx, title); // the reload: getDay again must not sweep it
+        const unplans = ctx.page.getByRole('button', { name: 'Unplan', exact: true });
+        await unplans.first().waitFor({ timeout: 15_000 });
+        const rows = await rowOf(ctx, title).count();
+        if (rows !== 2 || (await unplans.count()) !== 2)
+          throw new Error(
+            `${rows} rows, ${await unplans.count()} Unplan (want both copies once, planned)`,
+          );
+        if ((await ctx.api.reads.getTask(y.id))?.status !== 'planned')
+          throw new Error('the reload swept the planned due-day occurrence');
       },
     },
     {
@@ -765,7 +819,8 @@ export const recurring: Scenario = {
       entry: 'api',
       title: 'Delete this run’s series with their occurrences (by recorded id); clear the search',
       async run(ctx) {
-        const mine = [report, ended, plain, viaMcp, prelab, quiz, timedMcp];
+        // A failed step skips the rest, so a later series may never have been made (the ledger cleans those).
+        const mine = [report, ended, plain, viaMcp, prelab, quiz, timedMcp, dueDay].filter(Boolean);
         for (const s of mine) await ctx.api.writes.deleteSeries(s.id);
         const left = (await ctx.api.reads.listTasks()).filter((t) =>
           mine.some((s) => s.id === t.seriesId),

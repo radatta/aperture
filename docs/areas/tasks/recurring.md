@@ -98,6 +98,12 @@ until}`. The anchor is the user's today (`USER_TIME_ZONE`, the day boundary from
     `getDay`s at the same instant on two devices can still both spawn (a deterministic occurrence id with
     put-if-absent closes it — a follow-up). A `getDay` for a past day can make a past-dated event, as a
     timed create with a past time does. Cleanup: deleting an occurrence deletes its event first.
+  - The small-hours refusal is judged at write time only: a later day-start change (4 → 6 with a same-day
+    05:00 series), or an offset-0 series created after its time today, spawns that occurrence already past
+    due, with a past-dated event. Accepted: rare, visible as overdue, and the user's own setting.
+  - Failure path: the Lambda syncs whatever spawned even when a later spawn write throws (`finally`), so
+    an occurrence never sits timed with no event and no Retry note. The steady-state task read is
+    eventual; only a spawn about to happen re-reads consistently.
   - Replace-all `upsertSeries`: an edit that omits `dueTime` clears it (like the offset, §7).
 - **D7. `deleteSeries(id)` in the contract — API only.** A tombstone of the template (occurrences stay);
   no UI or MCP surface. It exists for the dev check's cleanup by recorded id (§6): `stop_series` would

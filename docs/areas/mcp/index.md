@@ -151,7 +151,8 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   stored row through `peekDay`, on purpose) — so
   `list_tasks status=planned` / `list_backlog` still show yesterday's leftovers as planned until the app is
   opened that day ([TECH §taskPlans](../../arch/TECH.md)). A timed task is never planned (it's on Today on
-  its day, by its time): `update_task status=planned` on one is moved back to backlog by that same sweep.
+  its day, by its time): `update_task status=planned` on one is moved back to backlog by that same sweep — bar a
+  recurring occurrence due after its day, planned like an untimed task ([tasks/recurring](../tasks/recurring.md) D8).
 - **`delete_task`** is a tombstone (no restore tool) that also tombstones the task's plans + attachments
   (deleting their stored bytes, as `delete_attachment` does) and **deletes its linked Google Calendar event**. It checks the id first — the backend's `deleteTask`
   is idempotent, so a typo'd id would otherwise report success. Refused on a recurring occurrence
