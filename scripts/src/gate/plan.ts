@@ -103,14 +103,16 @@ export function plan(changes: Change[], testFiles: string[]): Plan {
         claimed = true;
         out.full.push(`${path}: ${r.why}`);
       }
-    // A `<pkg>/…` pattern is tried once per package; any other names one package's path, and runs that package.
+    // A `<pkg>/…` pattern is tried once per package; any other names one package's path, and runs that package —
+    // or the rule's `pkgs`, when it names them.
     const owning = pkgOf(path);
     for (const r of PACKAGE_FULL)
       for (const p of PACKAGES)
         if (
           r.match.some(
             (m) =>
-              matches(m.replace('<pkg>', p.dir), path) && (m.includes('<pkg>') || p === owning),
+              matches(m.replace('<pkg>', p.dir), path) &&
+              (m.includes('<pkg>') || (r.pkgs ? r.pkgs.includes(p.dir) : p === owning)),
           )
         ) {
           claimed = true;

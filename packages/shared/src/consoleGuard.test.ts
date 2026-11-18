@@ -67,5 +67,6 @@ describe('formatConsoleArgs', () => {
     );
     expect(formatConsoleArgs(['%c styled %d%%', 'color: red', 5])).toBe(' styled 5%');
     expect(formatConsoleArgs([{ a: 1 }, 2])).toBe('{"a":1} 2');
+    expect(formatConsoleArgs(['50%s done, %s'])).toBe('50%s done, %s');
   });
 });

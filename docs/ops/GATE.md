@@ -79,7 +79,10 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 - **Every package** (`REPO_FULL`): the lockfile, the workspace file, the root `package.json`, `.nvmrc`/`.npmrc`, the
   root tsconfigs, the eslint config, `heavy.sh`/`lib.sh`/`limits.json`, `identifiers.json` (cdk and scripts read it
   at import time, behind a cast `tsc` can't check), and the gate itself.
-- **One package** (`PACKAGE_FULL`): its `package.json`, tsconfigs and vitest/vite config, and the app's test setup.
+- **One package** (`PACKAGE_FULL`): its `package.json`, tsconfigs and vitest/vite config, and its `src/test/` (the
+  shared test setup and harness). Also every module a setupFile imports from outside `src/test/` — the console guard
+  (app and lambdas), the modules app's `setup.ts` resets: no test imports a setupFile, so the graph never sees them.
+  `rules.test.ts` checks each setupFile's imports against these rules.
 - **Everything, also:** an empty or unreadable diff, or more than `MAX_CHANGED` (150) changed paths.
 
 **A change that runs named tests:**
@@ -118,6 +121,8 @@ unclaimed, it runs its package.
 
 - A test: name it in an `INPUT_RULES` entry (what it reads), `ALWAYS_RUN`, or `SELF_CONTAINED` (temp dirs or
   same-area only, with why).
+- A setupFile import (a new reset in `app/src/test/setup.ts`, say): add the module to its `PACKAGE_FULL` rule;
+  `rules.test.ts` names it if you don't.
 - Any other module: list it in `MODULE_READERS` with what it reads. A tracked input also needs a rule that runs its
   importers' tests; naming the module in a rule's `tests` does that, since `vitest related` runs a module's importers.
   Runtime-only state (the board dir, git, `gh`) needs none.

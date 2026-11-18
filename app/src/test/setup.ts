@@ -10,25 +10,7 @@ import { resetFluxEngineFactory } from '../modules/flux/engine/engine';
 import { resetFluxOutboxStore } from '../modules/flux/fluxOutbox';
 import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
 import { resetPushSync } from '../modules/push/browserPush';
-import { failOnConsoleNoise, installConsoleGuard } from '@aperture/shared/console-guard';
-
-// A test that reaches console.error/console.warn fails (docs/product/CONVENTIONS.md → the console guard).
-installConsoleGuard();
-// jsdom reports its own errors ("Not implemented: …", uncaught errors) to Node's console, past vitest's capture and
-// the guard; send them through console.error, looked up per call so a test's spy still wins.
-const vc = (globalThis as unknown as { jsdom: { virtualConsole: VirtualConsoleLike } }).jsdom
-  .virtualConsole;
-type JsdomError = Error & { type?: string; cause?: unknown };
-type VirtualConsoleLike = {
-  removeAllListeners(e: string): void;
-  on(e: string, f: (err: JsdomError) => void): void;
-};
-vc.removeAllListeners('jsdomError');
-vc.on('jsdomError', (e) =>
-  console.error(
-    e.type === 'unhandled-exception' && e.cause instanceof Error ? e.cause.stack : e.message,
-  ),
-);
+import { failOnConsoleNoise } from '@aperture/shared/console-guard';
 
 // React's act() checking stays off here (Testing Library turns it on only under vitest globals, which this suite
 // doesn't use); a file that drives act() itself sets IS_REACT_ACT_ENVIRONMENT in its beforeEach. Reset after every
@@ -66,7 +48,7 @@ afterEach(() => {
   resetActEnv();
   // Last, after the unmount and the resets, so their noise counts and a throw skips none of them.
   failOnConsoleNoise(
-    "during this test (or, on the file's first test, left by the previous file — files share one jsdom; rerun with the printed seed)",
+    'by this test — or left by an earlier test or file still running a timer or promise (files share one jsdom; rerun with the printed seed)',
   );
 });
 

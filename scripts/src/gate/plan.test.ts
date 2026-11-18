@@ -161,14 +161,16 @@ describe('plan', () => {
     expect(pkg(v, 'scripts').tests).toContain('scripts/src/devcheck/scenarios/index.test.ts');
   });
 
-  it('the console guard runs every app and lambdas test: their setupFiles load it, and no test imports those', () => {
-    const p = plan(ch('packages/shared/src/consoleGuard.ts'), TESTS);
-    expect(pkg(p, 'app').tests).toEqual(
-      expect.arrayContaining(TESTS.filter((t) => t.startsWith('app/'))),
-    );
-    expect(pkg(p, 'lambdas').tests).toEqual(
-      expect.arrayContaining(TESTS.filter((t) => t.startsWith('lambdas/'))),
-    );
+  it('what a setupFile imports runs its packages whole: no test imports a setupFile, so the graph never sees it', () => {
+    expect(fullPkgs(plan(ch('packages/shared/src/consoleGuard.ts'), TESTS)).sort()).toEqual([
+      'app',
+      'lambdas',
+    ]);
+    expect(fullPkgs(plan(ch('app/src/modules/push/browserPush.ts'), TESTS))).toEqual(['app']);
+    // A rule's `pkgs` replaces the owning package: shared isn't run whole for a guard change.
+    expect(
+      modeOf(plan(ch('packages/shared/src/consoleGuard.ts'), TESTS), 'packages/shared'),
+    ).not.toBe('full');
   });
 
   it('app sources run the raw-glob scanners', () => {

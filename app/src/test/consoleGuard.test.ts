@@ -13,7 +13,9 @@ describe('the app console guard (setup.ts)', () => {
 
   it('fails on a React warning logged during the test', () => {
     console.error('Warning: Each child in a list should have a unique "key" prop.');
-    expect(() => failOnConsoleNoise()).toThrow(/unique "key" prop/);
+    expect(() => failOnConsoleNoise()).toThrow(
+      /^1 unexpected console call\(s\)[\s\S]*unique "key" prop/,
+    );
   });
 
   it('a spy with mockImplementation takes jsdom’s report instead: nothing left to fail on', () => {

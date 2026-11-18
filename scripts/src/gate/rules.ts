@@ -25,6 +25,8 @@ export const PACKAGES: Pkg[] = [
 export interface FullRule {
   match: string[];
   why: string;
+  // PACKAGE_FULL only: the packages a non-`<pkg>` path runs whole, when they aren't (only) the one that owns it.
+  pkgs?: string[];
 }
 
 // Any of these changed → the whole suite, every package: they change how every test is resolved, compiled or run.
@@ -64,6 +66,29 @@ export const PACKAGE_FULL: FullRule[] = [
     why: 'the package’s dependencies, compiler or test config',
   },
   { match: ['<pkg>/src/test/'], why: 'the package’s shared test setup (setupFiles) and harness' },
+  // What a setupFile imports runs around every test of its package, yet no test imports a setupFile, so the graph
+  // can't see it. rules.test.ts checks each setupFile's imports against these.
+  {
+    match: ['packages/shared/src/consoleGuard.ts'],
+    pkgs: ['app', 'lambdas'],
+    why: 'the console guard, which app’s and lambdas’ setupFiles load around every test',
+  },
+  {
+    match: [
+      'app/src/data/queryClient.ts',
+      'app/src/auth/tokenStore.ts',
+      'app/src/data/attachmentTransport.ts',
+      'app/src/lib/useDisclosure.ts',
+      'app/src/modules/finances/usePlaidLink.ts',
+      'app/src/modules/pomodoro/chime.ts',
+      'app/src/modules/flux/engine/engine.ts',
+      'app/src/modules/flux/fluxOutbox.ts',
+      'app/src/modules/flux/useFluxOutbox.ts',
+      'app/src/modules/push/browserPush.ts',
+    ],
+    pkgs: ['app'],
+    why: 'app/src/test/setup.ts resets its state after every app test',
+  },
 ];
 
 export interface InputRule {
@@ -75,11 +100,6 @@ export interface InputRule {
 // Tests whose real inputs the graph can't see (file reads, raw imports, spawned processes). A changed path matching
 // `inputs` adds `tests`. Every graph-blind test file is named in a rule's `tests`, ALWAYS_RUN or SELF_CONTAINED.
 export const INPUT_RULES: InputRule[] = [
-  {
-    inputs: ['packages/shared/src/consoleGuard.ts'],
-    tests: ['app/src/', 'app/pwa/', 'lambdas/src/'],
-    why: 'the console guard runs around every app and lambdas test, from their setupFiles, which no test imports',
-  },
   {
     inputs: ['extension/manifest.json', 'app/pwa/extensionVersion.ts'],
     tests: ['app/src/pages/Settings/Settings.test.tsx', 'scripts/src/devcheck/scenarios/'],

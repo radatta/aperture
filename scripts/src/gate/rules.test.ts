@@ -4,7 +4,7 @@
 // its first commit.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_SUITE } from '../fixture-inputs.ts';
 import { isTest } from './plan.ts';
@@ -54,6 +54,54 @@ describe('gate rules', () => {
       ...Object.keys(MODULE_READERS),
     ].filter(literal);
     expect(named.filter((p) => !exists(p))).toEqual([]);
+  });
+
+  // No test imports a setupFile, so the graph never sees one or what it imports, yet both run around every test of
+  // the package: each setupFile sits under <pkg>/src/test/, and each repo module it imports from outside that dir is
+  // a PACKAGE_FULL path whose rule runs the package whole. One level deep: what those modules import is graph-visible
+  // through their own tests only.
+  it('every setupFile, and every module one imports, runs its package whole', () => {
+    const sharedExports = JSON.parse(read('packages/shared/package.json')).exports as Record<
+      string,
+      string
+    >;
+    const resolve = (from: string, spec: string): string | null => {
+      if (spec === '@aperture/shared' || spec.startsWith('@aperture/shared/')) {
+        const target = sharedExports[`.${spec.slice('@aperture/shared'.length)}`];
+        return target ? join('packages/shared', target) : null;
+      }
+      if (!spec.startsWith('.')) return null; // a dependency
+      const base = join(dirname(from), spec);
+      return (
+        ['', '.ts', '.tsx', '/index.ts']
+          .map((e) => base + e)
+          .find((c) => CODE.test(c) && exists(c)) ?? null
+      );
+    };
+    const runsWhole = (dep: string, pkg: string) =>
+      PACKAGE_FULL.some(
+        (r) => r.match.includes(dep) && (r.pkgs ? r.pkgs.includes(pkg) : dep.startsWith(`${pkg}/`)),
+      );
+    const gaps: string[] = [];
+    let seen = 0;
+    for (const { dir } of PACKAGES) {
+      const config = ['vitest.config.ts', 'vitest.config.mts']
+        .map((f) => `${dir}/${f}`)
+        .find(exists);
+      const list = config && /setupFiles:\s*\[([^\]]*)\]/.exec(read(config));
+      for (const [, rel] of list ? list[1]!.matchAll(/'([^']+)'/g) : []) {
+        const file = join(dir, rel!);
+        seen++;
+        if (!file.startsWith(`${dir}/src/test/`)) gaps.push(`${file}: not under ${dir}/src/test/`);
+        for (const [, spec] of read(file).matchAll(/^import[^'"]*['"]([^'"]+)['"]/gm)) {
+          const dep = resolve(file, spec!);
+          if (dep && !dep.startsWith(`${dir}/src/test/`) && !runsWhole(dep, dir))
+            gaps.push(`${file} imports ${dep}`);
+        }
+      }
+    }
+    expect(seen).toBeGreaterThan(0); // the config scan found the setupFiles at all
+    expect(gaps).toEqual([]);
   });
 
   it('PACKAGES is every workspace package with a vitest suite', () => {

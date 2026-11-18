@@ -24,8 +24,9 @@ const show = (a: unknown): string => {
 export function formatConsoleArgs(args: unknown[]): string {
   const [first, ...rest] = args;
   if (typeof first !== 'string') return args.map(show).join(' ');
+  // A specifier with no argument left stays as written, as console prints it.
   const text = first.replace(/%[sdifoOc%]/g, (m) =>
-    m === '%%' ? '%' : m === '%c' ? (rest.shift(), '') : show(rest.shift()),
+    m === '%%' ? '%' : !rest.length ? m : m === '%c' ? (rest.shift(), '') : show(rest.shift()),
   );
   return [text, ...rest.map(show)].join(' ');
 }
@@ -61,7 +62,7 @@ export function uninstallConsoleGuard(): void {
 export function failOnConsoleNoise(where = 'during this test'): void {
   if (!calls.length) return;
   const drained = calls.splice(0);
-  const shown = drained.slice(0, 5).map((c) => `  console.${c.level}: ${c.text.slice(0, 600)}`);
+  const shown = drained.slice(0, 5).map((c) => `  console.${c.level}: ${c.text.slice(0, 2000)}`);
   if (drained.length > shown.length) shown.push(`  …and ${drained.length - shown.length} more`);
   throw new Error(
     `${drained.length} unexpected console call(s) ${where}. Fix the cause; a test that expects the output spies ` +

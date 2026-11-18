@@ -19,7 +19,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
-    setupFiles: ['./src/test/setup.ts'],
+    setupFiles: ['./src/test/guard.ts', './src/test/setup.ts'],
     // Shuffled every run so an order dependence between files shows up as a red run, not a false pass.
     // The seed is printed; reproduce with --sequence.seed=<n>.
     sequence: { shuffle: { files: true } },
