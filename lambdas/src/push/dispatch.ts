@@ -246,15 +246,17 @@ export async function runPushTick(
   };
   const faults: unknown[] = [];
   const prev = await registry.getPoller();
-  // No tick checked every user for longer than the window — an outage, a stalled schedule, a stage that
-  // couldn't sign, ticks that kept failing: what fell due in between, up to MISS_KEEP_MS back, is caught
-  // up once instead of lost.
+  // No tick the stage could check for longer than the window — an outage, a stalled schedule, a stage
+  // that couldn't sign, a registry it couldn't read: what fell due in between, up to MISS_KEEP_MS back, is
+  // caught up once instead of lost. A user's own tick that throws, or a deadline that stops the loop,
+  // doesn't hold it back: the rotation below still reaches every user, a throwing tick fires the Errors
+  // alarm, and a held cursor would re-run the 12 h pass for every user, every tick, while it lasts.
   const checked = prev?.lastCheckedAt ?? prev?.lastRunAt ?? null;
   const gapFrom =
     checked !== null && started - checked > REMINDER_WINDOW_MS
       ? Math.max(checked, started - MISS_KEEP_MS)
       : null;
-  let checkedAll = false;
+  let stageChecked = false;
 
   // A user's tick: select → dedup → guard → send → retries → catch-up → stamp. Throws only on an infra
   // fault (DynamoDB).
@@ -291,7 +293,15 @@ export async function runPushTick(
     for (const c of found)
       if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now })) fresh.push(c);
     const send = new Deliverer(
-      { repo, push: deps.push, appUrl: deps.appUrl, now, past, log },
+      {
+        repo,
+        push: deps.push,
+        appUrl: deps.appUrl,
+        now,
+        past,
+        log,
+        enabled: (kind) => reminderEnabled(kind, settings),
+      },
       subs,
       own.retries,
     );
@@ -348,7 +358,13 @@ export async function runPushTick(
         await repo.deletePushTest(c.testId);
         handled.add(c.testId);
       }
-    await sweep(repo, now, new Set(send.subIds()), own, handled);
+    await sweep(
+      repo,
+      now,
+      new Set(send.subIds()),
+      { ...own, misses: [...own.misses, ...send.queuedMisses()] },
+      handled,
+    );
   }
 
   let stageError: string | null = null;
@@ -359,15 +375,14 @@ export async function runPushTick(
       if (!coldStart.logged.has(ready)) log(JSON.stringify({ event: STAGE_ERROR[ready].event }));
       coldStart.logged.add(ready);
     } else {
-      checkedAll = true;
       // Rotated a place each minute: a device that keeps timing out can hold the first users' ticks to
       // the deadline, and the rest must not wait behind them every minute.
       const users = await registry.listUsers();
+      stageChecked = true;
       const at = users.length > 0 ? Math.floor(started / 60_000) % users.length : 0;
       for (const user of [...users.slice(at), ...users.slice(0, at)]) {
         if (past()) {
           report.deadline = true;
-          checkedAll = false;
           log(JSON.stringify({ event: 'push_deadline' }));
           break;
         }
@@ -391,7 +406,7 @@ export async function runPushTick(
   // stage's state now; `lastErrorAt` keeps when it last went wrong.
   await registry.putPoller({
     lastRunAt: started,
-    lastCheckedAt: checkedAll && faults.length === 0 ? started : (checked ?? null),
+    lastCheckedAt: stageChecked ? started : (checked ?? null),
     lastError: stageError,
     lastErrorAt: stageError ? started : (prev?.lastErrorAt ?? null),
     updatedAt: started,
@@ -431,7 +446,7 @@ async function sweep(
   repo: Repo,
   now: number,
   alive: ReadonlySet<string>,
-  own: PushRows, // as the tick read it: a row this tick wrote is a live device's, and young
+  own: PushRows, // as the tick read it, plus the misses it queued (a device can 404 after its gap misses)
   handled: ReadonlySet<string>, // Send-test rows this tick already deleted
 ): Promise<void> {
   for (const r of own.sent) if (r.fireAt < now - PSENT_KEEP_MS) await repo.deletePushSent(r);

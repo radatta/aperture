@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PUSH_DAILY_GUARD, userDueEpoch } from '@aperture/shared';
+import { PUSH_DAILY_GUARD, PUSH_TITLE_MAX, userDueEpoch } from '@aperture/shared';
 import type { PushSub, Settings, Task, TaskPlan } from '@aperture/shared';
-import { InMemoryDoc } from '../ddb/DocClient';
+import { InMemoryDoc, SK_END } from '../ddb/DocClient';
 import type { DocClient } from '../ddb/DocClient';
 import { gsi1, pk, sk } from '../ddb/keys';
 import { entityItem, taskItem } from '../ddb/mapping';
@@ -865,7 +865,6 @@ describe('push dispatch — retry and catch-up', () => {
     }
     // A ran out at 14:03 (ready 14:08), but B was retrying until 14:10 (ready 14:15).
     const catchUps = w.notes().filter((n) => n.tag?.startsWith('c'));
-    console.log(JSON.stringify(w.push.sends.map((x) => x.opts.topic)), JSON.stringify(catchUps));
     expect(catchUps).toEqual([]);
     w.set(TWO_PM + 15 * MIN);
     await w.tick();
@@ -922,6 +921,208 @@ describe('push dispatch — retry and catch-up', () => {
     w.set(NINE_AM + MIN);
     await w.tick();
     expect(w.push.sends).toHaveLength(1);
+  });
+
+  it('a quiet tick reads its own rows in one range, no health row, and guard counters every 10 min', async () => {
+    const w = world();
+    await w.device('S1');
+    w.set(TWO_PM + MIN); // not a 10-minute boundary
+    w.mem.queries.length = 0;
+    w.mem.gets.length = 0;
+    await w.tick();
+    const mine = w.mem.queries.filter((q) => q.prefix === 'p');
+    expect(mine).toEqual([{ prefix: 'p', from: 'pq#', to: `ptest#${SK_END}`, consistent: true }]);
+    for (const old of ['psent#', 'ptest#', 'pq#', 'pcount#'])
+      expect(w.mem.queries.some((q) => q.prefix === old)).toBe(false);
+    expect(w.mem.gets.some((g) => g.key.endsWith(` ${sk.pushHealth()}`))).toBe(false);
+    w.set(TWO_PM + 10 * MIN); // a boundary: the counters are swept
+    w.mem.queries.length = 0;
+    await w.tick();
+    expect(w.mem.queries.filter((q) => q.prefix === 'pcount#')).toHaveLength(1);
+  });
+
+  it('a nudge reads no dedup row of its own: the tick’s one read answers whether it went', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device('S1');
+    const MORNING = AT(TODAY, '08:30');
+    w.set(MORNING);
+    await w.tick();
+    w.set(MORNING + MIN);
+    w.mem.gets.length = 0;
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+    expect(w.mem.gets.some((g) => g.key.includes('psent#'))).toBe(false);
+  });
+
+  it('a slow device goes last in a fresh batch, and its retries after the rest', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.repo().putTask(task({ id: 'A', dueDay: TODAY, dueTime: '14:00' }));
+    await w.repo().putTask(task({ id: 'B', dueDay: TODAY, dueTime: '14:01' }));
+    // S1 (first by id) times out at 14:00; at 14:01 the fresh batch for B goes to S2 first.
+    w.push.status = (t) => (t.endpoint.endsWith('S1') ? { status: 0, reason: 'timeout' } : 201);
+    await w.tick();
+    w.push.sends.length = 0;
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends.map((x) => [x.target.endpoint.slice(-2), x.opts.topic])).toEqual([
+      ['S2', 'B'],
+      ['S1', 'B'],
+      ['S1', 'A'],
+    ]);
+  });
+
+  it('the deadline-skipped device is retried before the device that timed out', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = (t) => {
+      if (t.endpoint.endsWith('S1')) {
+        w.set(TWO_PM + 10_000); // the timeout ate the budget
+        return { status: 0, reason: 'timeout' };
+      }
+      return 201;
+    };
+    await w.tick({ deadline: TWO_PM + 5_000 });
+    expect((await w.repo().listPushQueue()).retries.map((r) => [r.subId, r.tries])).toEqual([
+      ['S1', 1],
+      ['S2', 0],
+    ]);
+    w.push.sends.length = 0;
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S2', 'S1']);
+  });
+
+  it('a new failure under a Topic still retrying replaces that retry, and its run-out leaves it be', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    await w.tick();
+    // Re-dated to 14:02 while the 14:00 retry is pending; that fails too, under the same Topic (T1).
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:02', updatedAt: 1 }));
+    w.set(TWO_PM + 2 * MIN);
+    await w.tick();
+    const [row] = (await w.repo().listPushQueue()).retries;
+    expect(row).toMatchObject({ topic: 'T1', firstAt: TWO_PM + 2 * MIN });
+    expect(row!.cands.map((c) => c.fireAt)).toEqual([TWO_PM + 2 * MIN]);
+  });
+
+  it('a row the stall ran out is deleted only as read: a newer one under its Topic stands', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    await w.tick();
+    // The poller stalls 6 min; the task was re-dated to fire again now, under the same Topic.
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:06', updatedAt: 1 }));
+    w.set(TWO_PM + 6 * MIN);
+    await w.tick();
+    expect((await w.repo().listPushQueue()).retries).toMatchObject([
+      { topic: 'T1', firstAt: TWO_PM + 6 * MIN },
+    ]);
+  });
+
+  it('gap misses are queued before any send: a fault later in the tick still leaves them', async () => {
+    const inner = new InMemoryDoc();
+    const w = world(inner);
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ id: 'A', title: 'Gap', dueDay: TODAY, dueTime: '13:15' }));
+    await w.repo().putTask(task({ id: 'B', title: 'Now', dueDay: TODAY, dueTime: '14:00' }));
+    // The fresh send's device stamp throws: the user's tick fails before its catch-up runs.
+    const putIf = inner.putIf.bind(inner);
+    inner.putIf = async (item, expected) => {
+      if (item.SK === sk.pushSub('S1')) throw new Error('ProvisionedThroughputExceededException');
+      return putIf(item, expected);
+    };
+    await expect(w.tick()).rejects.toThrow();
+    expect((await w.repo().listPushQueue()).misses.map((m) => m.cand.key)).toEqual(['A']);
+    // The next tick (no gap now: the stage checked) sends the catch-up.
+    inner.putIf = putIf;
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.notes().at(-1)?.title).toBe('1 reminder didn’t reach you');
+  });
+
+  it('a user whose own tick throws doesn’t hold the gap cursor; a stage that can’t sign does', async () => {
+    const inner = new InMemoryDoc();
+    const w = world(inner);
+    await w.device('S1');
+    const get = inner.get.bind(inner);
+    inner.get = async (p, k, o) => {
+      if (k === sk.settings()) throw new Error('ThrottlingException');
+      return get(p, k, o);
+    };
+    await expect(w.tick()).rejects.toThrow();
+    expect((await w.registry.getPoller())?.lastCheckedAt).toBe(TWO_PM);
+    inner.get = get;
+    w.push.readyAs = 'no-key';
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(await w.registry.getPoller()).toMatchObject({
+      lastRunAt: TWO_PM + MIN,
+      lastCheckedAt: TWO_PM,
+    });
+  });
+
+  it('a device revived mid-send keeps its reminder: the 404 that lost to the revive is retried', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = () => {
+      // Re-subscribed on the phone, mid-send: a newer row, so the poller's delete loses.
+      w.mem.putNow(
+        entityItem(
+          U,
+          sk.pushSub('S1'),
+          sub('S1', { updatedAt: 50, endpoint: 'https://web.push.apple.com/fresh-S1' }),
+        ),
+      );
+      return 410;
+    };
+    await w.tick();
+    expect(await w.repo().getPushSub('S1')).toMatchObject({ updatedAt: 50 });
+    expect((await w.repo().listPushQueue()).retries).toHaveLength(1);
+    w.push.status = 201;
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends.at(-1)!.target.endpoint).toBe('https://web.push.apple.com/fresh-S1');
+  });
+
+  it('stores titles clipped as the notification clips them', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ title: 'x'.repeat(5000), dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    await w.tick();
+    const [row] = (await w.repo().listPushQueue()).retries;
+    expect(Array.from(row!.cands[0]!.title)).toHaveLength(PUSH_TITLE_MAX);
+  });
+
+  it('a catch-up leaves out a kind switched off since', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    for (let m = 0; m <= 3; m++) {
+      w.set(TWO_PM + m * MIN);
+      await w.tick();
+    }
+    await w.repo().putSettings({ remindTimed: false } as Settings);
+    w.push.status = 201;
+    w.set(TWO_PM + 8 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(4);
+    expect(await w.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
   });
 
   it('no gap, no catch-up: a reminder older than the window is still just missed', async () => {

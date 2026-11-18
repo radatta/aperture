@@ -12,7 +12,7 @@ import {
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
-import type { PushSub, ReminderCandidate, TaskPlan } from '@aperture/shared';
+import type { PushSub, ReminderCandidate, ReminderKind, TaskPlan } from '@aperture/shared';
 import type { PushMissRow, PushRetryRow, Repo } from '../ddb/repo';
 import type { PushGateway, PushResult } from './gateway';
 
@@ -89,6 +89,7 @@ export interface DelivererDeps {
   now: number;
   past: () => boolean;
   log: (line: string) => void;
+  enabled: (kind: ReminderKind) => boolean; // the user's toggles as this tick read them
 }
 
 export interface DeliveryTally {
@@ -138,6 +139,7 @@ export class Deliverer {
   }
 
   subIds = (): string[] => [...this.subs.keys()];
+  queuedMisses = (): readonly PushMissRow[] => this.queued;
   fail = (message: string): void => {
     this.attempted = true;
     if (!this.fails.includes(message)) this.fails.push(message);
@@ -163,7 +165,10 @@ export class Deliverer {
         continue;
       }
       const { outcome, why } = await this.post(sub, payload, topic, cands, 'retrying');
-      if (outcome === 'retry') await this.queueRetry(sub, cands, topic, 1, why);
+      // A transient refusal, or a 404/410 that lost to a revive (the device is back, its new subscription
+      // never got this one): tried again next tick.
+      if (outcome === 'retry' || (outcome === 'gone' && this.subs.has(sub.id)))
+        await this.queueRetry(sub, cands, topic, 1, why);
     }
   }
 
@@ -211,7 +216,8 @@ export class Deliverer {
         cands,
         last ? 'last' : 'retrying',
       );
-      if (outcome !== 'retry') await this.dropRetry(row);
+      const revived = outcome === 'gone' && this.subs.has(sub.id);
+      if (outcome !== 'retry' && !revived) await this.dropRetry(row);
       else if (last) await this.runOut(this.subs.get(sub.id) ?? sub, { ...claimed, cands, why });
       else
         await this.d.repo.putPushRetryIf(
@@ -345,7 +351,10 @@ export class Deliverer {
   // Retries ran out (or the poller stalled past RETRY_EXPIRE_MS): the device says so, and its reminders
   // wait as misses for the catch-up.
   private async runOut(sub: PushSub, row: PushRetryRow): Promise<void> {
-    await this.dropRetry(row);
+    // On the version read: a newer failure under the same Topic (this tick's fresh batch) replaced it,
+    // and that one is its own retry.
+    if (!(await this.d.repo.deletePushRetryIf(row))) return;
+    this.pending.delete(`${row.subId}#${row.topic}`);
     const tries = plural(row.tries, 'try', 'tries');
     const message = `Last reminder didn't reach this device (${row.why}) after ${tries}`;
     const updatedAt = Math.max(this.d.now, sub.updatedAt + 1);
@@ -383,11 +392,13 @@ export class Deliverer {
   }
 
   // Re-read before a retry or a catch-up: a task finished, deleted or re-dated since stays quiet, and so
-  // does one taken off that day's plan; its title is the current one. Rituals and tests stand as stored.
+  // does one taken off that day's plan, and any whose kind's toggle went off; its title is the current
+  // one. Rituals and tests otherwise stand as stored.
   private async stillDue(cands: readonly StoredCandidate[]): Promise<StoredCandidate[]> {
     const out: StoredCandidate[] = [];
     const plans = new Map<string, TaskPlan[]>(); // newest copies from a day on, read once per day
     for (const c of cands) {
+      if (!this.d.enabled(c.kind)) continue; // its toggle went off since
       if (!c.taskId) {
         out.push(c);
         continue;
@@ -395,6 +406,7 @@ export class Deliverer {
       const task = await this.d.repo.getTask(c.taskId, { consistent: true });
       if (!task || task.status === 'done' || task.status === 'cancelled') continue;
       if (c.kind === 'planned') {
+        if (task.dueTime) continue; // a timed task is never planned (planSource's check)
         const day = dayKeyInZone(c.fireAt, USER_TIME_ZONE, 0);
         if (!plans.has(day))
           plans.set(day, await this.d.repo.listPlansFrom(day, { consistent: true }));

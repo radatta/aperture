@@ -136,6 +136,15 @@ export const RAN_OUT =
   /^Last reminder didn't reach this device \((network error|timed out)\) after 4 tries$/;
 export const CAUGHT_UP =
   /^Couldn't deliver the catch-up for 1 missed reminder \((network error|timed out)\)$/;
+// The end-to-end tick's health line, both devices on it: A's final answer (no "— retrying") and N's.
+function namesBoth(ctx: Ctx, v: DevPushStatus): boolean {
+  if ((v.poller.lastErrorAt ?? 0) < fireAt - CLOCK_SLACK_MS) return false;
+  const line = errorsOf(v);
+  return (
+    line.some((e) => e.startsWith(label(ctx, 'A'))) &&
+    line.some((e) => e.startsWith(`${label(ctx, 'N')}: `))
+  );
+}
 async function nState(ctx: Ctx): Promise<{ error: string; at: number }> {
   const s = await status(ctx);
   if (stageFault(s)) throw new Error(`the stage can't send: ${s.poller.lastError}`);
@@ -155,7 +164,7 @@ let testAt = 0; // just before Send test was clicked
 let deviceR: DevPushDevice; // "this browser's" device, removed by the API as if from another device
 let deviceN: DevPushDevice; // the retry chain's device: real keys on a host that never resolves
 let ranOutAt = 0; // when N's retries ran out (read off its error)
-let e2eStatus: DevPushStatus | null = null; // the status that showed A's outcome: that tick's health line
+let e2eStatus: DevPushStatus | null = null; // a status whose health line is the end-to-end tick's, both devices on it
 
 // The server (or the page) catches up: the poller's tick, a save the page already showed.
 async function until<T>(
@@ -564,7 +573,7 @@ export const timedReminders: Scenario = {
       id: 'retry-neighbour',
       entry: 'api',
       kind: 'edge',
-      what: 'In the same tick, a neighbour device Apple refuses (404/410) is dropped as before; only the failed device is retried',
+      what: 'In the same tick, a neighbour device Apple refuses is handled as before (404/410 dropped, 400/403 marked, never retrying); only the failed device is retried',
     },
     {
       id: 'catch-up',
@@ -576,7 +585,7 @@ export const timedReminders: Scenario = {
       id: 'retry-statuses',
       entry: 'api',
       kind: 'edge',
-      what: '429, 500, 502, 503 and a timeout are retried under the same Topic, and the retry lands; 400, 403 and 413 stay final',
+      what: '429, 500, 502, 503, 504 and a timeout are retried under the same Topic, and the retry lands; 400, 403 and 413 stay final',
       offDev: {
         file: DISPATCH_TEST,
         test: 'a timeout, a network failure, 429 or a 5xx is retried on the next tick, under the same Topic',
@@ -1108,7 +1117,7 @@ export const timedReminders: Scenario = {
             () => status(ctx),
             (v) => {
               outcome = e2eOutcome(v, deviceA.id, label(ctx, 'A'), fireAt);
-              if (outcome !== null) e2eStatus = v;
+              if (namesBoth(ctx, v)) e2eStatus = v;
               return outcome !== null;
             },
             Math.max(fireAt + TICK_WAIT_MS - Date.now(), 10_000),
@@ -1142,8 +1151,19 @@ export const timedReminders: Scenario = {
         if (!RETRYING.test(v.error))
           throw new Error(`N’s first failure isn’t a retrying network failure: ${v.error}`);
         ctx.log(`N: ${v.error}`);
-        // The neighbour: the tick that showed A's final answer named N as retrying beside it, and A not.
-        const line = errorsOf(e2eStatus!);
+        // The neighbour: the end-to-end tick's health line names A's final answer and N retrying beside it.
+        // The line is written at the end of the user's tick, after A's device stamp, so it may land a
+        // moment after A's outcome showed: poll for it (it stands until the next tick, a minute on).
+        const s =
+          e2eStatus ??
+          (await until(
+            'the end-to-end tick’s health line naming A and N',
+            () => status(ctx),
+            (v) => namesBoth(ctx, v),
+            Math.max(fireAt + TICK_MS - Date.now(), 10_000),
+            2_000,
+          ));
+        const line = errorsOf(s);
         const a = line.filter((e) => e.startsWith(label(ctx, 'A')));
         const n = line.filter((e) => e.startsWith(`${label(ctx, 'N')}: `));
         if (a.length !== 1 || a[0]!.endsWith('— retrying'))

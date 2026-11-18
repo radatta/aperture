@@ -192,8 +192,9 @@ describe('the end-to-end task and keys', () => {
   });
 });
 
-// The retry chain reads N's error by these; push/deliver.ts writes it (scripts can't import lambdas), so a
-// change to that copy fails here first.
+// The retry chain reads N's error by these. The strings below are push/deliver.ts's copy as written, kept
+// by hand (scripts can't import lambdas); lambdas/src/push/dispatch.test.ts pins the same strings on its
+// side, so a change to the copy fails there and is carried here.
 describe('the retry chain’s copy', () => {
   const lead = "Last reminder didn't reach this device";
   it('matches what a network failure or a timeout writes at each step, and nothing else', () => {

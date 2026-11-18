@@ -1330,6 +1330,18 @@ export class Repo {
   async deletePushRetry(subId: string, topic: string): Promise<void> {
     await this.writes.delete(this.p(), sk.pushRetry(subId, topic));
   }
+  // Only the version read: a row a newer failure wrote under the same Topic stands. false = lost.
+  async deletePushRetryIf(
+    row: Pick<PushRetryRow, 'subId' | 'topic' | 'updatedAt'>,
+  ): Promise<boolean> {
+    try {
+      await this.writes.deleteIf(this.p(), sk.pushRetry(row.subId, row.topic), row.updatedAt);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
   async putPushMiss(row: PushMissRow): Promise<void> {
     await this.writes.put(
       entityItem(this.userId, sk.pushMiss(row.subId, row.cand.fireAt, row.cand.key), row),
