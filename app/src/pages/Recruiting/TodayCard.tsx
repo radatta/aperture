@@ -278,16 +278,19 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
 }
 
 // The card's mock state, shared by the 48-hour rows (Log it, Cancel) and the mock block (its line, Log a mock and
-// the form). The form opens in the block either way; closing it hands focus back to Log a mock.
+// the form). The form opens in the block either way; closing it hands focus back to Log a mock, and a row cancelled
+// while a form stays open hands it to the mock section.
 function useMockState() {
   const del = useDeleteMock();
   const [form, setForm] = useState<{ mock: MockBrief | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect).
-  const refocus = useRef(false);
+  // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect). Holds what
+  // had focus when the action began, so the effect can tell focus that was lost from focus the user moved.
+  const refocus = useRef<{ from: Element | null } | null>(null);
+  const pend = () => (refocus.current = { from: document.activeElement });
   const close = () => {
-    refocus.current = true;
+    pend();
     setForm(null);
   };
   return {
@@ -307,9 +310,10 @@ function useMockState() {
     cancel: async (m: MockBrief) => {
       if (del.isPending) return;
       setError(null);
+      const from = document.activeElement;
       try {
         await del.mutateAsync(m.id);
-        refocus.current = true; // the row and its buttons are gone
+        refocus.current = { from }; // the row and its buttons go
         if (form?.mock?.id === m.id) setForm(null);
       } catch (e) {
         setError(
@@ -338,7 +342,7 @@ function PlannedMockRow({
   onCancel: () => void;
 }) {
   const when = m.day < today ? fmtPastDay(m.day, today) : fmtSpokenDay(m.day, today);
-  const named = `mock ${when}${m.partner ? ` with ${m.partner}` : ''}`; // two the same day still differ
+  const named = `mock ${when} ${mockWho(m)}`; // as the row reads, so two the same day still differ
   return (
     <li className="flex flex-col">
       <div className="flex items-baseline justify-between gap-3">
@@ -376,9 +380,14 @@ function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
   // Back to Log a mock; while a form stays open (a row cancelled beside it), the section itself.
   const section = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
+    const pending = state.refocus.current;
     const to = state.trigger.current ?? section.current;
-    if (!state.refocus.current || !to) return;
-    state.refocus.current = false;
+    if (!pending || !to) return;
+    const at = document.activeElement;
+    if (at && at === pending.from && at.isConnected) return; // its row hasn't gone yet: wait for that render
+    state.refocus.current = null;
+    // Only focus that was lost: never pull it out of a form the user went on to while the write ran.
+    if (at && at !== document.body && at.isConnected) return;
     returnFocus(to);
   });
   return (

@@ -461,7 +461,9 @@ describe('the Today card’s mocks', () => {
     expect(within(m).getByTestId('mock-line').textContent).toBe('Mock planned tomorrow');
     // Not yet its day: no Log it.
     expect(within(queue).queryByRole('button', { name: /^Log it — mock / })).toBeNull();
-    await user.click(within(queue).getByRole('button', { name: 'Cancel — mock tomorrow' }));
+    await user.click(
+      within(queue).getByRole('button', { name: 'Cancel — mock tomorrow with a person' }),
+    );
     await waitFor(() => expect(within(queue).queryByText('Mock interview')).toBeNull());
     expect((await api.listMocks()).some((x) => x.status === 'planned')).toBe(false);
   });
@@ -473,7 +475,9 @@ describe('the Today card’s mocks', () => {
     const p = await api.upsertMock({ status: 'planned', day: today, kind: 'claude' });
     renderApp({ api, path: '/recruiting' });
     const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
-    await user.click(await within(queue).findByRole('button', { name: 'Log it — mock today' }));
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Log it — mock today with claude' }),
+    );
     const form = within(await mockSection()).getByRole('form', { name: 'Log the planned mock' });
     await user.click(within(form).getByRole('button', { name: 'Code 4 of 4' }));
     await user.click(within(form).getByRole('button', { name: 'Solve 3 of 4' }));
@@ -495,7 +499,9 @@ describe('the Today card’s mocks', () => {
     const p = await api.upsertMock({ status: 'planned', day: today, notes: 'bring a timer' });
     renderApp({ api, path: '/recruiting' });
     const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
-    await user.click(await within(queue).findByRole('button', { name: 'Log it — mock today' }));
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Log it — mock today with a person' }),
+    );
     const form = within(await mockSection()).getByRole('form', { name: 'Log the planned mock' });
     expect((within(form).getByLabelText('Notes (optional)') as HTMLTextAreaElement).value).toBe(
       'bring a timer',
@@ -520,8 +526,12 @@ describe('the Today card’s mocks', () => {
     const m = await mockSection();
     const list = await within(m).findByRole('list', { name: 'Planned mocks not logged yet' });
     expect(within(list).getByText('yesterday')).toBeTruthy();
-    expect(within(list).getByRole('button', { name: 'Log it — mock yesterday' })).toBeTruthy();
-    await user.click(within(list).getByRole('button', { name: 'Cancel — mock yesterday' }));
+    expect(
+      within(list).getByRole('button', { name: 'Log it — mock yesterday with a person' }),
+    ).toBeTruthy();
+    await user.click(
+      within(list).getByRole('button', { name: 'Cancel — mock yesterday with a person' }),
+    );
     await waitFor(() =>
       expect(within(m).queryByRole('list', { name: 'Planned mocks not logged yet' })).toBeNull(),
     );
@@ -537,7 +547,9 @@ describe('the Today card’s mocks', () => {
     vi.spyOn(api, 'deleteMock').mockRejectedValueOnce(new Error('No such mock'));
     renderApp({ api, path: '/recruiting' });
     const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
-    await user.click(await within(queue).findByRole('button', { name: 'Cancel — mock tomorrow' }));
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Cancel — mock tomorrow with a person' }),
+    );
     expect((await within(await mockSection()).findByRole('alert')).textContent).toBe(
       'No such mock. Nothing changed.',
     );
@@ -594,8 +606,28 @@ describe('the Today card’s mocks', () => {
     );
     const form = within(m).getByRole('form', { name: 'Log the planned mock' });
     expect(document.activeElement).toBe(form); // the form, not its date field
-    await user.click(within(queue).getByRole('button', { name: 'Cancel — mock tomorrow' }));
+    await user.click(
+      within(queue).getByRole('button', { name: 'Cancel — mock tomorrow with a person' }),
+    );
     await waitFor(() => expect(within(queue).queryByText('tomorrow')).toBeNull());
     expect(document.activeElement).toBe(m);
+  });
+
+  it('an unlogged mock from last year says its year, in the row and its buttons', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2027-01-05T17:00:00Z') });
+    try {
+      const api = stub(true);
+      await api.upsertMock({ status: 'planned', day: '2026-12-20', kind: 'claude' });
+      renderApp({ api, path: '/recruiting' });
+      const list = await within(await mockSection()).findByRole('list', {
+        name: 'Planned mocks not logged yet',
+      });
+      expect(within(list).getByText(/, 2026$/)).toBeTruthy();
+      expect(
+        within(list).getByRole('button', { name: /^Cancel — mock .*, 2026 with claude$/ }),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

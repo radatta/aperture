@@ -538,7 +538,8 @@ scores}`. A done mock is dated today or earlier (≤ 365 days back), a planned o
   field). Save without Code and Solve says why and keeps every field; a refused save shows the server's reason, a
   5xx "may have saved". The card's 48-hour list (**Next 48 hours**, re-solves and planned mocks) gives a planned
   mock **Log it** on its day and **Cancel**; `unlogged` ones wait under the line with the same two. Log it saves onto
-  that row, its notes carried over. Closing the form hands focus back to Log a mock.
+  that row, its notes carried over. Closing the form hands focus back to Log a mock; a row cancelled while a form stays open hands it to the mock
+  section, unless focus already moved on.
 - **The Patterns tab** (`PatternsMocks.tsx`, after the ranking): Code and Solve over time (two lines, from two done
   mocks), each done mock with its scores beside its ISO week's first-try rate (`mockRows`; a week of re-solves only
   has none), newest first, ≤ 12, and **Delete** with an inline Yes / No (No returns focus to Delete, Yes to the
