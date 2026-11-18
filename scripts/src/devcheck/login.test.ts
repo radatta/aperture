@@ -235,7 +235,7 @@ describe('cachedState', () => {
     const pw = { chromium: { launch: vi.fn(async () => ({ newContext })) } } as unknown as PwModule;
     return { pw, newContext };
   };
-  const run = (path: string, fetch: FetchLike, log = vi.fn()) =>
+  const run = (path: string, fetch: FetchLike, log: (msg: string) => void = vi.fn()) =>
     cachedState(path, cenv, { fetch, now: () => NOW, log });
 
   it("renews a cached session older than the token's life before the first page load", async () => {
