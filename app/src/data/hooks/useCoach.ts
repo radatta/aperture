@@ -92,6 +92,15 @@ export function useUpsertMock() {
     onSettled: () => qc.invalidateQueries({ queryKey: qk.coach() }),
   });
 }
+// Whether the cached plan still lists a planned mock — after a write's refetch settled, a failed refetch leaves it.
+export function useMockListed() {
+  const qc = useQueryClient();
+  return (id: string) => {
+    const m = qc.getQueryData<CoachToday>(qk.coachToday())?.mock;
+    return !!m && [...m.upcoming, ...(m.unlogged ?? [])].some((x) => x.id === id);
+  };
+}
+
 export function useDeleteMock() {
   const api = useApi();
   const qc = useQueryClient();

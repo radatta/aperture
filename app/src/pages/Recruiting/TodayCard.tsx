@@ -16,6 +16,7 @@ import { Text } from '../../components/Text';
 import {
   useCoachToday,
   useDeleteMock,
+  useMockListed,
   useSetCoachFloor,
   useSetCoachFocus,
   useSetCoachSlot,
@@ -282,11 +283,13 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
 // while a form stays open hands it to the mock section.
 function useMockState() {
   const del = useDeleteMock();
+  const listed = useMockListed();
   const [form, setForm] = useState<{ mock: MockBrief | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect). A cancel
-  // names its mock, so the effect waits for the render where that row has gone.
+  // names its mock, so the effect waits for the render where that row has gone — when the read after the delete
+  // dropped it; a failed read leaves the row, and nothing waits on it.
   const refocus = useRef<{ id?: string } | null>(null);
   const close = () => {
     refocus.current = {};
@@ -311,8 +314,8 @@ function useMockState() {
       setError(null);
       try {
         await del.mutateAsync(m.id);
-        refocus.current = { id: m.id }; // the row and its buttons go
-        if (form?.mock?.id === m.id) setForm(null);
+        refocus.current = listed(m.id) ? null : { id: m.id }; // the row and its buttons go
+        setForm((f) => (f?.mock?.id === m.id ? null : f)); // a Log it opened on it meanwhile closes too
       } catch (e) {
         setError(
           isTransientRead(e)

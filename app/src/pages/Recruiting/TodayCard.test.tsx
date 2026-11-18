@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_COACH_PICK_KEY } from '../../data/stubClient';
@@ -656,6 +656,52 @@ describe('the Today card’s mocks', () => {
     await waitFor(() => expect(within(queue).queryByText('tomorrow')).toBeNull());
     expect(document.activeElement).toBe(notes);
     await user.click(within(m).getByRole('button', { name: 'Cancel' })); // the form's own Cancel
+    expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' }));
+  });
+
+  it('a pointer Cancel that never focused its button (Safari) still lands focus on Log a mock', async () => {
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    await api.upsertMock({ status: 'planned', day: addDays(today, 1) });
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    const cancel = await within(queue).findByRole('button', {
+      name: 'Cancel — mock tomorrow, with a person',
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(cancel); // no focus moves, as Safari's click
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' })),
+    );
+  });
+
+  it('Log it opened on a mock whose cancel then lands closes with it', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    await api.upsertMock({ status: 'planned', day: today });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const real = api.deleteMock.bind(api);
+    vi.spyOn(api, 'deleteMock').mockImplementationOnce(async (id) => {
+      await gate;
+      return real(id);
+    });
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Cancel — mock today, with a person' }),
+    );
+    await user.click(
+      within(queue).getByRole('button', { name: 'Log it — mock today, with a person' }),
+    );
+    expect(within(m).getByRole('form', { name: 'Log the planned mock' })).toBeTruthy();
+    release();
+    await waitFor(() =>
+      expect(within(m).queryByRole('form', { name: 'Log the planned mock' })).toBeNull(),
+    );
     expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' }));
   });
 });
