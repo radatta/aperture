@@ -18,6 +18,7 @@ const HEADS = [
   'MERGE',
   'QUEUED',
   'ASK',
+  'ASKS',
   'NEEDS',
   'USAGE',
   'MAC',
@@ -70,6 +71,12 @@ describe('briefText on the fixture board', () => {
     expect(b).toMatch(/^CTX ≥50 /m);
     expect(b).toMatch(/^ASK ~\d\d:\d\d–\d\d:\d\d echo-branch PR$/m);
     expect(b).toMatch(/^NEEDS 3 · india-branch: admit the branch to dev \(\+2\)$/m);
+    expect(b).toMatch(/^ASKS 2 · 1 needs your go in a pane$/m);
+    expect(b).toMatch(
+      /^ {2}d3 Cache key for the warm cache: .* · a\) per branch b\) per lockfile c\) both · pick b$/m,
+    );
+    expect(b).toMatch(/^ {2}d4 Apply the skills patch to echo-branch · go typed in dispatch$/m);
+    expect(b).not.toMatch(/d2 Start golf/); // answered: not open
     expect(b).toMatch(/^MERGE 0 · 1 on hold$/m);
     expect(b).toMatch(/^ {2}HOLD PR 41 charlie-branch ".*": dev: bravo-branch is testing/m);
   });
@@ -117,6 +124,7 @@ describe('briefText on an empty board', () => {
     })),
     next: { ...fx.next, merge: [], ask: null },
     queued: [],
+    asks: [],
     needs: [],
     usage: null,
     ctx: null,
@@ -134,6 +142,7 @@ describe('briefText on an empty board', () => {
       'SLOTS dev free · devb free',
       'QUEUED none',
       'ASK none',
+      'ASKS none',
       'NEEDS none',
       'USAGE unknown',
       'CTX unknown (no ctx.json)',

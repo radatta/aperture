@@ -4,6 +4,7 @@
 // one more entry in SECTIONS. Pure.
 import { BUDGET_PREFIX } from '../budget.ts';
 import { macLine } from '../machine.ts';
+import { askBriefLines } from './asks.ts';
 import type { LaneRow, View } from './derive.ts';
 import { gib, hhmm as hhmmLocal } from './fmt.ts';
 import type { UsageLine } from './stale.ts';
@@ -106,6 +107,7 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
       ? `ASK ${range(v.next.ask, f)}${v.next.ask.late ? ' late' : ''} ${one(v.next.ask.what)}`
       : 'ASK none',
   ],
+  (v) => askBriefLines(v.asks ?? [], LIST_MAX),
   (v) => [
     v.needs.length
       ? `NEEDS ${v.needs.length} · ${one(v.needs[0]!.what)}${v.needs.length > 1 ? ` (+${v.needs.length - 1})` : ''}`

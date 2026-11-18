@@ -584,3 +584,120 @@ describe('tower-current: autoStart and merge references', () => {
     ).toEqual([]);
   });
 });
+
+describe('asks[] (dispatch asks the maintainer, answered by letter)', () => {
+  const doc = (asks: unknown, extra: Record<string, unknown> = {}) =>
+    parseQueue(JSON.stringify({ v: 1, updatedAt: '2026-11-18T20:00:00Z', asks, ...extra }));
+  const ok = {
+    id: 'd1',
+    asked: '2026-11-18T19:00:00Z',
+    text: 'Cache key?',
+    options: ['branch', 'lockfile'],
+    pick: 'b',
+    status: 'open',
+  };
+
+  it('reads a good ask, its pick and lane, and askSeq', () => {
+    const q = doc([{ ...ok, lane: 'warm-caches' }], { askSeq: 4 });
+    expect(q.problems).toEqual([]);
+    expect(q.data!.askSeq).toBe(4);
+    expect(q.data!.asks![0]).toMatchObject({
+      id: 'd1',
+      pick: 'b',
+      lane: 'warm-caches',
+      needsPane: false,
+      pane: null,
+      status: 'open',
+    });
+  });
+  it('the seed example and the fixture carry asks that parse', () => {
+    expect(parseQueue(example).data!.asks!.length).toBeGreaterThan(0);
+    const fx = readFileSync(join(import.meta.dirname, 'fixtures/board/queue.json'), 'utf8');
+    const q = parseQueue(fx);
+    expect(q.problems).toEqual([]);
+    expect(q.data!.asks!.map((a) => a.status)).toEqual(['open', 'open', 'answered']);
+  });
+  it('drops an entry missing what it must have, and names it', () => {
+    const q = doc([
+      { ...ok, id: undefined },
+      { ...ok, id: 'D2' },
+      { ...ok, id: 'd0' },
+      ok,
+      { ...ok }, // duplicate d1: the later one goes, so an answer is never ambiguous
+      { ...ok, id: 'd3', status: 'maybe' },
+      { ...ok, id: 'd4', options: ['x', 7] },
+      { ...ok, id: 'd5', options: ['only one'], pick: 'a' },
+      { ...ok, id: 'd6', options: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] },
+      { ...ok, id: 'd7', options: 'a,b' },
+      null,
+    ]);
+    expect(q.data!.asks!.map((a) => a.id)).toEqual(['d1']);
+    expect(q.problems).toEqual([
+      'asks[0]: no id or text',
+      'asks[1]: id "D2" is not d<n>',
+      'asks[2]: id "d0" is not d<n>',
+      'asks[4]: duplicate id d1',
+      'asks[5]: status "maybe"',
+      'asks[6]: options is not a list of text',
+      'asks[7]: wants 2 to 6 options (has 1)',
+      'asks[8]: wants 2 to 6 options (has 7)',
+      'asks[9]: options is not a list of text',
+      'asks[10]: no id or text',
+    ]);
+  });
+  it('keeps an entry with a bad optional field, read the safe way', () => {
+    const q = doc([
+      { ...ok, id: 'd1', asked: 'soon' },
+      { ...ok, id: 'd2', pick: 'c' },
+      { ...ok, id: 'd3', lane: 'Bad Lane' },
+      { ...ok, id: 'd4', needsPane: 'yes', pane: 'dispatch' },
+      { ...ok, id: 'd5', needsPane: true, lane: 'warm-caches' },
+      { ...ok, id: 'd6', answer: 'z' },
+    ]);
+    const a = q.data!.asks!;
+    expect(a.map((x) => x.id)).toEqual(['d1', 'd2', 'd3', 'd4', 'd5', 'd6']);
+    expect(a[0]!.asked).toBeNull();
+    expect(a[1]!.pick).toBeNull(); // so `ok` skips it
+    expect(a[2]!.lane).toBeNull();
+    expect(a[3]!.needsPane).toBe(true); // a garbled needsPane fails closed
+    expect(a[4]!.pane).toBe('warm-caches'); // falls back to the lane
+    expect(a[5]!.answer).toBeNull();
+    expect(q.problems).toEqual([
+      'asks[0]: asked is not an ISO time',
+      'asks[1]: pick "c" is not one of its options',
+      'asks[2]: lane is not a branch name',
+      'asks[3]: needsPane is not true or false',
+      'asks[4]: needsPane with no pane',
+      'asks[5]: answer "z" is not one of its options',
+    ]);
+  });
+  it('a pane ask may have no options', () => {
+    const q = doc([
+      {
+        id: 'd9',
+        asked: ok.asked,
+        text: 'Apply the skills patch',
+        needsPane: true,
+        pane: 'dispatch',
+        go: 'go 1a2b3c4d',
+        status: 'open',
+      },
+    ]);
+    expect(q.problems).toEqual([]);
+    expect(q.data!.asks![0]).toMatchObject({
+      needsPane: true,
+      pane: 'dispatch',
+      go: 'go 1a2b3c4d',
+      options: [],
+    });
+  });
+  it('a non-array asks and a bad askSeq are problems; no asks key reads as none', () => {
+    expect(doc({}).problems).toEqual(['asks is not an array']);
+    expect(doc([], { askSeq: -1 }).problems).toEqual(['askSeq is not a whole number']);
+    expect(doc([], { askSeq: 1.5 }).problems).toEqual(['askSeq is not a whole number']);
+    const none = parseQueue(JSON.stringify({ v: 1, updatedAt: '2026-11-18T20:00:00Z' }));
+    expect(none.problems).toEqual([]);
+    expect(none.data!.asks).toEqual([]);
+    expect(none.data!.askSeq).toBeNull();
+  });
+});

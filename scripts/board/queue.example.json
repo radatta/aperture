@@ -162,5 +162,27 @@
       "approvedAt": "2026-11-08T05:45:00Z",
       "note": "starts when the box is calm"
     }
+  ],
+  "askSeq": 4,
+  "asks": [
+    {
+      "id": "d3",
+      "asked": "2026-11-08T05:55:00Z",
+      "text": "Cache key for the warm cache: per branch or per lockfile?",
+      "options": ["per branch", "per lockfile", "both"],
+      "pick": "b",
+      "lane": "charlie-branch",
+      "status": "open"
+    },
+    {
+      "id": "d4",
+      "asked": "2026-11-08T06:00:00Z",
+      "text": "Apply the skills patch to echo-branch",
+      "needsPane": true,
+      "pane": "dispatch",
+      "go": "go 1a2b3c4d",
+      "lane": "echo-branch",
+      "status": "open"
+    }
   ]
 }
