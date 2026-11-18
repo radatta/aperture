@@ -538,7 +538,17 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "note": ""
     }
   ],
-  "autoStart": [{ "branch": "", "note": "<LOW… / HOLD… keep it waiting>", "after": ["<branch>"] }],
+  "autoStart": [
+    {
+      "branch": "",
+      "order": 1,
+      "class": "p0 | p1",
+      "after": ["<branch>"],
+      "kickoff": "<path>",
+      "approvedAt": "<ISO>",
+      "note": "<LOW… / HOLD… keep it waiting>"
+    }
+  ],
   "maintainer": [{ "text": "", "since": "<YYYY-MM-DD>" }],
   "wave": {
     "name": "Wave 2",
@@ -617,7 +627,7 @@ derivation and lane files: `docs/ops/TOWER.md`. This terminal tower stays as its
 
 ## Watchers
 
-Three no-AI loops the hub runs in the background (`docs/ops/HUB.md` → _Watchers_): each writes its board file every
+Four no-AI loops the hub runs in the background (`docs/ops/HUB.md` → _Watchers_): each writes its board file every
 tick and **exits only when the hub should wake**, so the hub spends nothing while they're quiet. They source
 `watch-lib.sh` (on `lib.sh`), read every threshold from `limits.json` → `watchers` at startup (an edit takes effect at
 the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
@@ -633,6 +643,7 @@ the Mac agent is stale), `mac` the Mac's load 1/5/15, `cpus` its cores, `memFree
 | `pace-watch.sh`                | cgroup `cpu.stat`, `memory.stat`, `{cpu,memory}.pressure`, `/proc/loadavg`; `pace-control.json`, `queue.json`, `mac-stats.json` (read-only) | `pace.json` each minute, `idle-fired`, `history/vm-pace-<day>.jsonl`, `history/mac-load-<day>.jsonl`, `pace-watch.log` | 3 trip, 0 recovered, 5 trigger, 4 hot an hour, 6 idle + ready lane |
 | `usage-watch.sh [--hard-only]` | `localNotes/usage/meter-*.jsonl` (the two newest)                                                                                           | `usage-now.json`, `usage-watch.log`                                                                                    | 7 soft stop, 8 hard stop                                           |
 | `context-watch.sh`             | the same meter files                                                                                                                        | `ctx.json`, `ctx-alerted.json`, `history/ctx-<day>.jsonl`, `context-watch.log`                                         | 9 urgent                                                           |
+| `merge-watch.sh`               | `history/events-*.jsonl` (the two newest; `merged` rows), `ran/<id>`                                                                        | `merge-announced`, `ran-announced`, `merge-watch.log`                                                                  | 10 merged, 11 a Mac line ran                                       |
 
 **pace** samples every `intervalSec` (60) and averages the last `windowSamples` (5); nothing trips below the gate's
 `pace.minSamples` (3). Calm → **trip (3)** on anon avg ≥ `tripAnonMiB` (10800) or memory PSI full > `pace.psiMemFullMax`
@@ -664,6 +675,21 @@ pct = tokens / `windowTokens` (1M, the lanes' model's window), sorted into `ctx.
 exits 9 unless `ctx-alerted.json` stamped it within `realertSec` (6 h); only the sessions alerted now are stamped.
 `flagPct` (40) is the tower's warn line; the watcher only checks it sits at or under `urgentPct`.
 `APERTURE_CTX_WINDOW` / `_URGENT` in the env override (not `WINDOW`: GNU screen exports it).
+
+**merge** (`merge-watch.sh`, tests `merge-watch.test.ts`): the one watcher with no `limits.json` keys — its 30 s tick is
+a constant, as nothing about it is a threshold. Each tick it reads the `merged` rows the main sync appends
+(`docs/ops/TOWER.md` → _Main sync_) and the Mac lines' markers (`docs/ops/HUB.md` → _Mac lines_), and exits **10**
+when a PR merged (one `HH:MM MERGED PR <n> <sha7> at HH:MM "<title>"` line each; marker lines ride along) or **11** when
+only a marker landed (`HH:MM RAN <id> exit <n>`); **74** when a state file it keeps can't be written (a restart
+would announce the same again), **78** with no `jq`. Once each: `merge-announced` keeps the announced shas (the last
+200), and a missing one is the first run, which seeds it with every sha already there and says nothing;
+`ran-announced` keeps `<id> <mtime>` for every marker still on disk (the week's prune bounds it, so none drops out
+and is said again). A marker is read only when its name matches `ran.ts`'s `RAN_ID`, it is a plain file (no symlink)
+of at most 8 bytes, and then only its first 4 bytes, under a 1 s `timeout` (the open too: a FIFO never blocks it),
+as a 1–3 digit number; anything else waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its
+content never printed. Markers a week old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is
+dropped; a title or time loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`,
+`lease`), so a `merged` row passes them by.
 
 ## Script-shape rules (COI monitor)
 

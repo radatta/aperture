@@ -22,6 +22,7 @@ import { mergedFromLog, mergedNumbers, REUSE_MS, type MainMerge } from './mergel
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
 import type { Pr } from './prs.ts';
 import { firedFollowups, sinceTime, staleFollowups, type Lane } from './queue.ts';
+import { queuedView, type QueuedItem } from './queued.ts';
 
 export type Slot = 'dev' | 'devb';
 export type State =
@@ -171,6 +172,7 @@ export type View = {
   problems: string[];
   board: Board; // queue.json's age and where it contradicts the derived facts (stale.ts)
   ctx: CtxView | null; // sessions over 40 % and 50 % context (ctx.ts); null with no ctx.json
+  queued: QueuedItem[]; // QUEUED: autoStart lanes not started yet, in start order (queued.ts)
 };
 
 export type Inputs = {
@@ -1056,6 +1058,11 @@ export function derive(i: Inputs): View {
     slots,
     active,
     next,
+    // started: a lane file, or an open PR on the branch
+    queued: queuedView(
+      q,
+      new Set([...files.keys(), ...prs.filter((p) => p.state === 'OPEN').map((p) => p.branch)]),
+    ),
     heads,
     done,
     health: {

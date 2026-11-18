@@ -568,7 +568,26 @@ function next(v) {
   // dispatch's landing order, each lane as it stands; its merge rows aren't repeated in the merge queue
   const order = v.next.order ?? [];
   const merge = v.next.merge.filter((r) => !order.some((o) => o.branch === r.branch));
-  // the glance: a merge waiting on you first, then the next few plan rows with what they cost you; expanded, the
+  // QUEUED: approved autoStart lanes not started, in start order (queued.ts). The glance folds them into one row,
+  // ahead of the merge and plan rows (neither has a limit) so the 8-row cap never hides it; expanded, a group of their
+  // own further down.
+  const queued = v.queued ?? [];
+  if (queued.length && !inFull) {
+    const ready = queued.filter((q) => q.state === 'ready');
+    items.push(
+      item('next:queued', {
+        c: 'c-dim',
+        badge: 'QUEUED',
+        sig: queued.map((q) => `${q.branch}:${q.state}`).join(','),
+        text: [
+          `${queued.length} · ${ready.length} ready`,
+          ready.length ? el('span', 'who', `: ${ready.map((q) => q.branch).join(', ')}`) : '',
+        ],
+        more: queued.map((q) => q.line),
+      }),
+    );
+  }
+  // the glance: a merge waiting on you, then the next few plan rows with what they cost you; expanded, the
   // whole plan table first
   if (inFull) {
     items.push(planTable(v));
@@ -584,6 +603,23 @@ function next(v) {
   if (inFull && v.needs.length) {
     group('Your items (NEEDS YOU)');
     for (const n of v.needs) items.push(needItem(n));
+  }
+  if (queued.length && inFull) {
+    group('Queued to start (autoStart)');
+    for (const q of queued)
+      items.push(
+        item(`queued:${q.branch}`, {
+          c: q.state === 'ready' ? '' : 'c-dim',
+          badge: q.state === 'ready' ? 'READY' : q.state === 'held' ? 'HELD' : 'AFTER',
+          text: [
+            el('b', null, q.branch),
+            `  ·  ${short(q.line.split(' · ').slice(1).join(' · '), 60)}`,
+          ],
+          meta: [q.cls, q.order !== null ? `#${q.order}` : null],
+          // the row says the state; the note adds why, unless it is the row's own text (a held note)
+          more: [q.state === 'held' ? null : q.note],
+        }),
+      );
   }
   if (v.next.queue.length) group('Dev order');
   for (const slot of ['dev', 'devb'])

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Sourced by the hub's watchers (pace-watch.sh, usage-watch.sh, context-watch.sh; docs/ops/SESSION-BOARD.md → Watchers).
+# Sourced by the hub's watchers (pace-, usage-, context- and merge-watch.sh; docs/ops/SESSION-BOARD.md → Watchers).
 # Each watcher loops, writes its board file every tick, and EXITS ONLY when the hub should wake: the hub runs it as
 # `timeout 65m <path>` in the background and restarts it after every exit (docs/ops/HUB.md → Watchers).
 #

@@ -142,5 +142,25 @@
       "branch": "hotel-branch",
       "pr": null
     }
+  ],
+  "autoStart": [
+    {
+      "branch": "november-branch",
+      "order": 1,
+      "class": "p0",
+      "after": ["charlie-branch"],
+      "kickoff": "/workspace/localNotes/kickoffs/november-branch.md",
+      "approvedAt": "2026-11-08T05:40:00Z",
+      "note": "after charlie-branch (same files)"
+    },
+    {
+      "branch": "oscar-branch",
+      "order": 2,
+      "class": "p1",
+      "after": [],
+      "kickoff": "/workspace/localNotes/kickoffs/oscar-branch.md",
+      "approvedAt": "2026-11-08T05:45:00Z",
+      "note": "starts when the box is calm"
+    }
   ]
 }

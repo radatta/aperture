@@ -111,6 +111,7 @@ function inputs(
     followups?: NonNullable<TowerState['queue']['data']>['followups'];
     maintainer?: { text: string; since: string | null }[];
     mergeOrder?: NonNullable<TowerState['queue']['data']>['mergeOrder'];
+    autoQueue?: NonNullable<TowerState['queue']['data']>['autoQueue'];
     plan?: (Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'> & Partial<PlanItem>)[];
     planNotes?: string[];
     mainLog?: Inputs['mainLog'];
@@ -150,6 +151,8 @@ function inputs(
         planAt: null,
         followups: over.followups ?? [],
         mergeOrder: over.mergeOrder ?? [],
+        autoStart: (over.autoQueue ?? []).map((a) => a.branch),
+        autoQueue: over.autoQueue ?? [],
       },
     },
     prs: { list: over.prs ?? [], at: NOW - MIN, error: null },
@@ -1583,5 +1586,36 @@ describe('conflict-tools: merge-tree conflicts on a lane (TOWER.md → Conflicts
     expect(o.map((x) => [x.row.branch, x.row.label, x.row.conflicts?.main])).toEqual([
       ['kilo', 'NOT STARTED', ['k.ts']],
     ]);
+  });
+});
+
+describe('View.queued: what counts as started', () => {
+  it('a lane file or an open PR drops a lane from QUEUED; a merged or closed PR alone does not', () => {
+    const a = (branch: string, order: number) => ({
+      branch,
+      order,
+      cls: 'p1' as const,
+      after: [],
+      note: null,
+      approvedAt: null,
+    });
+    const v = derive(
+      inputs({
+        autoQueue: [
+          a('filed', 1),
+          a('open-pr', 2),
+          a('merged-pr', 3),
+          a('closed-pr', 4),
+          a('fresh', 5),
+        ],
+        lanes: [file({ branch: 'filed' })],
+        prs: [
+          pr({ number: 61, branch: 'open-pr' }),
+          pr({ number: 62, branch: 'merged-pr', state: 'MERGED', mergedAt: NOW - 3600e3 }),
+          pr({ number: 63, branch: 'closed-pr', state: 'CLOSED' }),
+        ],
+      }),
+    );
+    expect(v.queued.map((q) => q.branch)).toEqual(['merged-pr', 'closed-pr', 'fresh']);
   });
 });
