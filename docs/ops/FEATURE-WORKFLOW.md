@@ -118,7 +118,7 @@ hub message (the checkpoints stay).
    - **Round 2 and later** recheck only the fix diff, and run while a round finds something serious or leaves an
      S1/S2 unfixed, or when its fixes bring a lens back (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again
      (unless the review stops and asks, below) → fix, gate, commit, next round on that fix. Minor only → fix, gate,
-     commit, done.
+     commit, done, unless the fixes bring a lens back.
    - **Stop** when a round has no serious finding and its fixes bring no lens back; stop and ask, in either mode, as `docs/ops/REVIEW.md` →
      _Round 2 and later_ says (the round cap, no fewer serious bugs, a twin).
    - A serious finding in round 2 or later that the fixes didn't cause is a **lens gap**: recorded in the report and

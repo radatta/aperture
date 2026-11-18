@@ -17,7 +17,7 @@ commit, it behaves as before (and says what it left to the other lenses).
 | rules       | `code-reviewer`      | session's, high | every diff                                                                                                                                           | security, BFF writes, secrets, public content, conventions, docs, data-model invariants, architecture fit, merged neighbours, approval holes |
 | correctness | `review-correctness` | opus, high      | any code, config or script                                                                                                                           | logic, ordering, reads and writes, failure paths, time, contracts, model output, unsourced outside assumptions                               |
 | tests       | `review-tests`       | sonnet, high    | any code, config or script                                                                                                                           | test gaps, assertions that can't fail, isolation, clocks, CI parity, fakes, the dev-test matrix and its scenario                             |
-| infra       | `review-infra`       | fable, high     | the infra triggers below; a risk class touching `lambdas/` or `packages/shared`                                                                      | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
+| infra       | `review-infra`       | fable, high     | the infra triggers below                                                                                                                             | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
 | shell       | `review-shell`       | opus, high      | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`; the TypeScript CLI dirs only as set below; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
 | UI          | `review-ui`          | sonnet, high    | `app/`; `packages/shared` when it changes what renders                                                                                               | the headless pass, first-open state, focus, input size, probe points                                                                         |
 | extension   | `review-extension`   | opus, high      | `extension/`                                                                                                                                         | research before fixing, the WebKit quirks, the wire contract                                                                                 |
@@ -41,21 +41,26 @@ commit, it behaves as before (and says what it left to the other lenses).
 - an `app/` change adding an `/api` call at load (the BFF's reserved concurrency), and a devcheck scenario that adds
   load against the kill thresholds (`docs/ops/CI-BOT.md` → _What's capped_, _Kill switch_);
 - `docs/arch/INFRA.md`, `docs/ops/CI-BOT.md`, and any deploy, slot, lock or approval rule, the review's lens and round
-  rules included wherever they are stated.
+  rules included wherever they are stated;
+- on a risk-class branch (_A risk class_, below), any `lambdas/` or `packages/shared` code.
 
-**A risk class** brings infra when the diff touches `lambdas/` or `packages/shared`, the code that is wired, stored
-and deployed (stored shapes, prod's TTL stamps, stage branches and the cost caps live in both). On `app/` or
-`scripts/` code alone it brings none: on the two such auth diffs (f226, app-401) infra found 0 serious; no finance,
-migration or external-write diff was measured (the lens measurement, 2026-11-18).
+**A risk class** is decided once for the branch, at the pick, and recorded with it in `localNotes/decisions.md`; on
+such a branch any `lambdas/` or `packages/shared` code is an infra trigger, since that is the code that is wired,
+stored and deployed. A class on `app/`, `scripts/`, `extension/` or `tools/` code alone brings no infra: on the two
+such auth diffs (f226, app-401) infra found 0 serious; no finance, migration or external-write diff was measured
+(the lens measurement, 2026-11-18). Accepted residuals, as on main: a stage-keyed limit or cost cap in shared code
+that belongs to no class, and a stored shape an `extension/` payload carries verbatim (the extension lens owns the
+wire contract).
 
-**Shell on the CLI dirs** — `scripts/src/{lane,board,mailroom,gate}/` brings the shell lens only when a hunk touches
-a child process, directly or through a wrapper (`run`, `git()`, `exec()`, `spawn`, `*Sync`, `kill`, `tmux`, `flock`),
-or the argv or env it is passed; a constant that reaches an argv; a name or quoting validator (`BRANCH_RE`,
-`nameProblem`); a CLI entry point, argv parse or flag guard; a printed Mac line; a job field or validator the Mac
-runner reads; or a write under `.claude/`. Unsure means it does. Other `scripts/src/` TypeScript brings shell as
-before (_Picking lenses_ → _Tooling only_). The same measurement: shell found 0–1 serious a run on TS-only CLI diffs,
-2 on shell, hook and process diffs; gate-parallel's TS-side finds (`HEAVY_NOSLOT`, the wide-gate workers) are env
-passed to a child process.
+**Shell on the CLI dirs** — in `scripts/src/{lane,board,mailroom,gate}/` only these pure modules skip the shell lens:
+`gate/rules.ts`, `board/overlap.ts` and `board/tower/{ansi,bench,braille,ctx,fmt,layout,panels,screen,slowdown,stale,svg}.ts`
+— the test-selection table, the overlap check and the tower's renderers, which run no process, touch no file or
+socket, and whose output no shell script or the Mac parses. A listed file loses its place the moment it imports a
+`node:` built-in other than `node:path` or `node:url`, or takes a `run` or file-system dependency; a new pure module
+joins the list in the PR that adds it. Every other file there, and all other `scripts/src/` TypeScript, brings shell
+as before (_Picking lenses_ → _Tooling only_). A list of risky surfaces leaked a sibling in every round
+(this rule's own review, 2026-11-18); a list of safe files fails closed. The same measurement: shell
+found 0–1 serious a run on TS-only CLI diffs, 2 on shell, hook and process diffs.
 
 What each touched package still brings, as before:
 
@@ -83,19 +88,20 @@ rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_
 
 - **Docs only** — `code-reviewer` alone; plus shell if an operator command changed, infra if a deploy, slot, lock or
   approval rule changed.
-- **Tooling only** (scripts, `.claude/hooks/`, `tools/`) — rules, correctness, tests, shell (in the four CLI dirs
-  only on a shell surface: _Shell on the CLI dirs_); plus infra for any infra trigger.
+- **Tooling only** (scripts, `.claude/hooks/`, `tools/`) — rules, correctness, tests, shell (not for the pure modules
+  _Shell on the CLI dirs_ lists); plus infra for any infra trigger.
 - **Workflow docs or other `.claude/` files** (agents, rules, skills) — rules and shell; plus infra when an approval
   or deploy rule changes.
 - **Risk classes** — auth (JWT, Cognito, tokens, the origin secret), IAM/cdk (`cdk/`, roles, policies), finance
-  (`lambdas/src/finance*`, Plaid, `app/src/modules/finances`), migrations (a stored shape that changes, a backfill),
-  external-service writes (Google Calendar, S3, push, model calls that write). A class adds infra only when the diff
-  touches `lambdas/` or `packages/shared` (_A risk class_, above), and the class is named in the infra prompt; it adds
-  no recheck by itself. It still counts for the dev-fix skip (_After a dev fix or a rebase_) and at the round cap
+  (`lambdas/src/finance*`, `packages/shared/src/finance*`, Plaid, `app/src/modules/finances`), migrations (a stored
+  shape, key, TTL stamp or retention that changes, a backfill),
+  external-service writes (Google Calendar, S3, push, model calls that write). A class adds infra through its
+  `lambdas/` and `packages/shared` code (_A risk class_, above), and is named in the infra prompt; it adds no recheck
+  by itself. It still counts for the dev-fix skip (_After a dev fix or a rebase_) and at the round cap
   (_Round 2 and later_ → _The pick_).
 - **A small diff** — 3 files or fewer, no infra, shell, UI or extension trigger: round 1 is `code-reviewer`,
   `review-tests` and `review-correctness` only, with no lens added on judgment. Doubt whether a trigger applies means
-  it applies; docs only and workflow docs keep their own bullets; kickoff or relay additions still add.
+  it applies; docs only, tooling only and workflow docs keep their own bullets; kickoff or relay additions still add.
 - **A model call, prompt or model-output validator** in the diff — tell the correctness lens, so it runs its model
   output section.
 
@@ -130,7 +136,7 @@ Then `Not checked:`, `Other lenses:`, and the last line `lens=<name> S1=<n> S2=<
 
 ## Merge
 
-1. Check every picked lens returned its `lens=` line and ran its pass. A missing one is relaunched, and so is an infra lens
+1. Check every picked lens (a lens a fix range brought back counts) returned its `lens=` line and ran its pass. A missing one is relaunched, and so is an infra lens
    that put its synth under `Not checked:` because the board was busy (once the UI lens returns); one that can't
    run (no browser, a blocked synth) goes to the hub as `[blocked]` or `[ask-maintainer]` and holds the lane until it has run, or the user's explicit
    yes, relayed, lets the round finish without it (then it is an open finding shipped: _The round record_). Then
@@ -164,16 +170,17 @@ commit for the round.
 ## Round 2 and later
 
 - **Only after a serious finding**, an S1/S2 left unfixed (_Merge_ 6), or a fix range that brings a lens back: it
-  touches an infra trigger or fixes an infra-lens S1/S2 (infra reruns), or touches the trigger of a lens no round on
-  this branch ran (that lens runs). A round run only to bring a lens back runs just that lens, not `review-fixes`; its
-  findings are that round's list. Otherwise the review has stopped, risk class or not; go to phase 7. Every serious
-  `review-fixes` find so far followed a round with serious fixes (the lens measurement).
+  fixes an S1/S2 of an infra kind (`iam`, `cdk`, `deploy`, `cost`, `workflow`, `slots`), whoever raised it, wherever
+  the fix lies (infra reruns), or touches the trigger of a lens no round on this branch ran (that lens runs). A round
+  run only to bring a lens back runs just that lens on the fix range, not `review-fixes`; its findings are that
+  round's list, and the lane tags their `cause=` at the merge. Otherwise the review has stopped, risk class or not;
+  go to phase 7. Every serious `review-fixes` find so far followed a round with serious fixes (the lens measurement).
 - **What runs** — `review-fixes`, on `<the commit before the fixes>..HEAD`, with the previous round's
   `round-<n>.md`. If the fix range changes what renders (`app/` components or styles, or a UI-lens finding), `review-ui` also
   re-shoots just those screens; if the fix
-  range itself touches an infra trigger (a risk-class diff's `lambdas/` or `packages/shared` code counts), or fixes an
-  infra-lens S1/S2 wherever the fix lies, `review-infra` reruns on it (with the synth pass for `cdk/`) — not because
-  the branch ran infra in round 1.
+  range itself touches an infra trigger, or fixes an S1/S2 of an infra kind wherever the fix lies, `review-infra`
+  reruns on it (with the synth pass for `cdk/`) — not because the branch ran infra in round 1; a lens the fix range
+  brings back runs on it too.
 - **What it reports** — each fixed finding closed or not, regressions in the touched functions and their callers,
   sibling call sites with the same pattern, S1/S2 left unfixed whose reason the code doesn't bear out; each
   line tagged `cause=fix|sibling|not-closed|pre-existing`.
@@ -181,13 +188,14 @@ commit for the round.
   **Minor only** → fix, gate, commit, done, unless the fix range brings a lens back (_Only after_). **Nothing** →
   done, no extra gate.
 - **Stop and ask**, in both modes: after four rounds; from round 3 on, when a round finds no fewer serious bugs
-  than the one before; or, from round 2 on, at a **twin** — a serious `cause=fix` or `cause=sibling` finding in
+  than the one before (a round run only to bring a lens back is left out of that comparison); or, from round 2 on, at a **twin** — a serious `cause=fix` or `cause=sibling` finding in
   the mechanism an earlier round's fix already patched (one regex family, one parser, one state machine): the
   design is wrong, not the code. Round 2 counts; a serious regression elsewhere (a caller, another module) does
   not. The round file names, for each serious `cause=fix` or `cause=sibling` finding, the earlier finding whose
   fix patched that mechanism, or why it lies elsewhere. At any stop the round's findings stay unpatched:
   `[ask-maintainer]` with the open list and three options — patch it and recheck, re-plan that piece, or ship with
-  the open list unpatched, logged as a follow-up and each S1/S2 under _Open findings shipped_ — and the lane's pick; the lane holds until the relay.
+  the open list unpatched, logged as a follow-up and each S1/S2 under _Open findings shipped_ — and the lane's pick; the lane holds until the relay. A committed fix range that a lens it brought back hasn't read
+  yet is named in the ask; shipping it records that lens as not run (_Open findings shipped_).
 - **The pick.** At a twin, cap or not: re-plan that piece — move the judgment to where it is made once (the
   model, one parser) or narrow the scope. A relayed re-plan, with the open list's other fixes, is built, gated and
   committed, then reviewed afresh: a round 1 over its own diff with every lens _Picking lenses_ picks for it (risk
@@ -201,7 +209,7 @@ commit for the round.
 ## After a dev fix or a rebase
 
 A fix from dev testing (phases 8–9, a red `Branch` run included), or a rebase that resolved conflicts, is committed and gated, then gets
-`review-fixes`, plus `review-ui` or `review-infra` when the fix or rebase range itself touches their triggers, as in round 2 (a risk-class diff's `lambdas/` or `packages/shared` code counts) —
+`review-fixes`, plus `review-ui` or `review-infra` when the fix or rebase range itself touches their triggers, and any lens the range brings back (_Only after_), as in round 2 —
 whatever its size. Only a fix that touches no infra, shell, UI or extension trigger and no risk class, and is
 covered by a test it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
 recheck is the chain's round 1, the rest runs as round 2 and later (serious again → recheck that fix), the cap and the
