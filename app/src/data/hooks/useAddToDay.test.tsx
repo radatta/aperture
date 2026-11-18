@@ -340,6 +340,32 @@ describe('useAddToDay', () => {
     expect((await api.getTask(t.id))?.status).toBe('backlog');
   });
 
+  it('an unplanned series deadline occurrence is added like an untimed task (recurring D8)', async () => {
+    const { api, hook } = setup();
+    await ready(hook);
+    const today = todayKey(4);
+    await api.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' },
+      anchorDate: today,
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    await api.getDay(today);
+    const [row] = await plansFor(api, today);
+    await api.removePlan(row!.id);
+    await api.getDay(today);
+    const occ = (await api.getTask(row!.taskId))!;
+    expect(occ).toMatchObject({ status: 'backlog', dueTime: '14:00' });
+    let res: string | undefined;
+    await act(async () => void (res = await hook.result.current.addToDay(occ)));
+    expect(res).not.toBe('timed');
+    expect((await plansFor(api, today)).map((p) => p.taskId)).toEqual([occ.id]);
+    expect((await api.getTask(occ.id))?.status).toBe('planned');
+  });
+
   it('createToday with a timed input: created, not planned, and says it’s timed', async () => {
     const { api, hook } = setup();
     await ready(hook);

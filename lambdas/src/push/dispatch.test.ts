@@ -230,6 +230,27 @@ describe('push dispatch — what fires', () => {
     expect(w.notes().map((n) => n.body)).toEqual(['Planned for today', 'Due today']);
   });
 
+  it('a timed series occurrence due later (recurring D8) pings on its planned day, then at its deadline', async () => {
+    const w = world();
+    await w.device();
+    const tomorrow = '2026-11-05';
+    await w.repo().putTask(
+      task({
+        seriesId: 'S',
+        seriesDay: TODAY,
+        status: 'planned',
+        dueDay: tomorrow,
+        dueTime: '14:00',
+      }),
+    );
+    await w.repo().putPlan(plan());
+    w.set(NINE_AM);
+    await w.tick();
+    w.set(AT(tomorrow, '14:00'));
+    await w.tick();
+    expect(w.notes().map((n) => n.body)).toEqual(['Planned for today', 'Due now · 2pm']);
+  });
+
   it('never a done, cancelled or deleted task — the stale index row is re-read', async () => {
     const w = world();
     await w.device();

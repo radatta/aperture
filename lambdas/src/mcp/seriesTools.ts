@@ -1,4 +1,10 @@
-import { USER_TIME_ZONE, dayKeyInZone, isDayKey } from '@aperture/shared';
+import {
+  USER_TIME_ZONE,
+  beforeDayStart,
+  dayKeyInZone,
+  isDayKey,
+  isTimeKey,
+} from '@aperture/shared';
 import type { RecurrenceRule, Settings, TaskSeries, UpsertSeriesInput } from '@aperture/shared';
 import { RpcParamError } from './types';
 import type { Tool } from './types';
@@ -47,11 +53,22 @@ function offsetArg(args: Record<string, unknown>): number | null {
   return v;
 }
 
+// Optional "HH:MM", null/omitted → null; only with a due offset (recurring.md D8).
+function timeArg(args: Record<string, unknown>, dueOffsetDays: number | null): string | null {
+  const v = args.dueTime;
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string' || !isTimeKey(v))
+    throw new RpcParamError('"dueTime" must be a 24h clock time HH:MM (e.g. "14:00")');
+  if (dueOffsetDays === null)
+    throw new RpcParamError('"dueTime" needs "dueOffsetDays" — a time is on a due day');
+  return v;
+}
+
 export const SERIES_TOOLS: Tool[] = [
   {
     name: 'list_series',
     description:
-      "The user's recurring series (id, title, rule, categoryId, defaultEstimateMin, dueOffsetDays, until, active, anchorDate) — the templates, not the tasks they spawn (those are list_tasks rows with seriesId). Active ones unless includeStopped. An until in the past means it has run out but wasn't stopped.",
+      "The user's recurring series (id, title, rule, categoryId, defaultEstimateMin, dueOffsetDays, dueTime, until, active, anchorDate) — the templates, not the tasks they spawn (those are list_tasks rows with seriesId). Active ones unless includeStopped. An until in the past means it has run out but wasn't stopped.",
     inputSchema: {
       type: 'object',
       properties: { includeStopped: { type: 'boolean' } },
@@ -65,7 +82,7 @@ export const SERIES_TOOLS: Tool[] = [
   {
     name: 'create_series',
     description:
-      "Create a recurring series. Each time the rule hits, the app spawns a planned task for that day (its own estimate and actual, so its own calibration point). dueOffsetDays is the cadence: the spawned task's due date is that many days after its day (0 = the same day, 1 = the next day; omit for no due date). until is the last day it recurs (ISO date YYYY-MM-DD, inclusive; omit for open-ended) — a course series ends with the term. A course is its category: categoryId from list_categories. defaultEstimateMin is minutes. Counts from the user's today. Never spawns a timed task. The spawned task appears when the user next opens the app on that day — not at create time: list_tasks right after create_series shows none, and that is normal; never create the occurrence by hand.",
+      'Create a recurring series. Each time the rule hits, the app spawns a planned task for that day (its own estimate and actual, so its own calibration point). dueOffsetDays is the cadence: the spawned task\'s due date is that many days after its day (0 = the same day, 1 = the next day; omit for no due date). dueTime (HH:MM, 24h) makes the deadline timed and needs dueOffsetDays: with an offset of 1 or more the task is still planned on its day and the time is its deadline ("pre-lab every Tuesday, due Wednesday 2pm" = weekly Tue, dueOffsetDays 1, dueTime "14:00"); with 0 it is a plain timed task, on that day by its time and never planned (a time before the user\'s day start is refused there). Each timed occurrence gets a calendar event like any timed task, when calendar sync is on. until is the last day it recurs (ISO date YYYY-MM-DD, inclusive; omit for open-ended) — a course series ends with the term. A course is its category: categoryId from list_categories. defaultEstimateMin is minutes. Counts from the user\'s today. The spawned task appears when the user next opens the app on that day — not at create time: list_tasks right after create_series shows none, and that is normal; never create the occurrence by hand.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -87,6 +104,11 @@ export const SERIES_TOOLS: Tool[] = [
           minimum: 0,
           description: 'days after each occurrence’s day it is due; omit for none',
         },
+        dueTime: {
+          type: 'string',
+          description:
+            'deadline clock HH:MM (24h) on the due day; needs dueOffsetDays; omit for untimed',
+        },
         until: {
           type: 'string',
           description: 'last day it recurs, YYYY-MM-DD; omit for open-ended',
@@ -100,6 +122,7 @@ export const SERIES_TOOLS: Tool[] = [
       if (!title) throw new RpcParamError('"title" is required');
       const rule = ruleArg(args);
       const dueOffsetDays = offsetArg(args);
+      const dueTime = timeArg(args, dueOffsetDays);
       const categoryId = args.categoryId ?? null;
       if (categoryId !== null && typeof categoryId !== 'string')
         throw new RpcParamError('"categoryId" must be a string or omitted');
@@ -117,6 +140,10 @@ export const SERIES_TOOLS: Tool[] = [
         throw new RpcParamError(
           `"until" ${until} is before today (${today}) — nothing would recur`,
         );
+      if (dueOffsetDays === 0 && dueTime !== null && beforeDayStart(dueTime, settings.dayStartHour))
+        throw new RpcParamError(
+          `"dueTime" ${dueTime} the same day is before the day start (${settings.dayStartHour}:00) — it would spawn past due; use dueOffsetDays 1`,
+        );
       const input: UpsertSeriesInput = {
         title,
         categoryId,
@@ -124,6 +151,7 @@ export const SERIES_TOOLS: Tool[] = [
         rule,
         anchorDate: today,
         dueOffsetDays,
+        dueTime,
         until,
       };
       return ctx.dispatch('upsertSeries', [input]);

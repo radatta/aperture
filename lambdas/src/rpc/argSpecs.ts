@@ -304,6 +304,7 @@ export const RPC_ARGS = {
       active: opt(bool),
       dueOffsetDays: opt(nullable(num)),
       until: opt(nullable(str(KEY_MAX))),
+      dueTime: opt(nullable(str(KEY_MAX))),
     }),
   ],
   deactivateSeries: [id],

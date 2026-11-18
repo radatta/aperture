@@ -126,8 +126,11 @@ export interface TaskSeries extends BaseEntity {
   active: boolean;
   anchorDate: string; // YYYY-MM-DD the rule counts from
   // The cadence: an occurrence spawns planned on its day, due `dueOffsetDays` later (0 = the same day, 1 = the
-  // next day …), untimed. null = no due date. Rows from before read back undefined → `?? null`.
+  // next day …). null = no due date. Rows from before read back undefined → `?? null`.
   dueOffsetDays?: number | null;
+  // The deadline's clock ("HH:MM"), only with a due offset; null = untimed. Offset ≥ 1: the occurrence stays
+  // planned on its day with this as its deadline; offset 0: a plain timed task (recurring.md D8). `?? null`.
+  dueTime?: string | null;
   // The last day the series spawns (inclusive, YYYY-MM-DD); null = open-ended. Past it the series stays
   // `active` and its row reads "ended …" until stopped. Rows from before read back undefined → `?? null`.
   until?: string | null;

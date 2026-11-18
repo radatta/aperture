@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { isTimed } from '@aperture/shared';
+import { timeDecidesDay } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
@@ -165,7 +165,7 @@ export function TodayLens({ tasks, onOpenWeek }: { tasks: Task[]; onOpenWeek: ()
               task={task}
               actions={
                 // A timed task's day is its time: nothing to add (lenses.md D13).
-                !isTimed(task) && (
+                !timeDecidesDay(task) && (
                   <Button
                     variant="ghost"
                     size="sm"

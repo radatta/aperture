@@ -9,12 +9,12 @@ import {
   hasKeptPart,
   hasUnsent,
   isPullFresh,
-  isTimed,
   localEpochFromDayTime,
   parentOf,
   partIndex,
   partsOf,
   partsSummary,
+  timeDecidesDay,
   todayKey,
 } from '@aperture/shared';
 import type { Task } from '@aperture/shared';
@@ -177,7 +177,7 @@ export function TaskEditor({
 
   const series = task.seriesId ? seriesList.find((s) => s.id === task.seriesId) : undefined;
   // A timed task's row is history (its day is its time, lenses.md D13): nothing planned to show.
-  const plannedToday = isTimed(task)
+  const plannedToday = timeDecidesDay(task)
     ? null
     : (plans.find((p) => p.taskId === task.id)?.plannedMinutes ?? null);
   const hasEstimate = task.estimateMin != null;

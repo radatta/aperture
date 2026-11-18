@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isTimed } from '@aperture/shared';
+import { timeDecidesDay } from '@aperture/shared';
 import type { Task, TaskPlan } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { EmptyState } from '../../components/EmptyState';
@@ -174,7 +174,7 @@ export function TaskListSection({
           Mark done
         </Button>
       ) : undefined
-    ) : isTimed(task) ? undefined : plan && open ? (
+    ) : timeDecidesDay(task) ? undefined : plan && open ? (
       <Button
         variant="quiet"
         size="sm"

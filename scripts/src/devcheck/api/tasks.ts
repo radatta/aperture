@@ -36,7 +36,8 @@ export function tasksReads(c: Core) {
     listHabits: () => call<DevHabit[]>('listHabits', []),
     listHabitChecks: (range: { from: string; to: string }) =>
       call<DevHabitCheck[]>('listHabitChecks', [range]),
-    // The app's own day read (it materializes due series and sweeps the day) — today only, as the app.
+    // The app's own day read (it materializes due series and sweeps the day) — today, as the app; or
+    // yesterday, which the BFF allows (Night at 2am), for the recurring scenario's due-day rows.
     getDay: (day: string) => call<DevDay>('getDay', [day]),
     // The day boundary the app files a set under (a Flux set's `day` is the app's day, not the calendar's).
     getSettings: () => call<DevSettings>('getSettings', []),
@@ -250,6 +251,22 @@ export function tasksWrites(c: Core, reads: Reads) {
       ]);
       ledger.append({ run, op: 'created', id: s.id, via: SERIES_VIA, title: input.title });
       return s;
+    },
+    // An upsertSeries the BFF must refuse (a bad due time, recurring.md D8), ledgered like a create: a 4xx
+    // resolves the intent as `refused`; one a regression let through is recorded by its id and cleaned.
+    async createSeriesExpectingRefusal(
+      input: CreateSeriesInput,
+      anchorDate: string,
+    ): Promise<{ status: number; body: unknown }> {
+      ledger.append({ run, op: 'intent', via: SERIES_VIA, title: input.title });
+      const args = [{ categoryId: null, defaultEstimateMin: null, ...input, anchorDate }];
+      const got = await writes.rpcRaw('upsertSeries', JSON.stringify({ args }), 'jwt');
+      const id = (got.body as { id?: unknown } | null)?.id;
+      if (got.status === 200 && typeof id === 'string')
+        ledger.append({ run, op: 'created', id, via: SERIES_VIA, title: input.title });
+      else if (got.status >= 400 && got.status < 500)
+        ledger.append({ run, op: 'refused', via: SERIES_VIA, title: input.title });
+      return got;
     },
     // A recorded series goes with every occurrence it spawned: those tasks were made server-side by getDay
     // (no create response named them), so the series id is their record. deleteTask is the BFF's — the app's

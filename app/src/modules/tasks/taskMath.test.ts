@@ -190,6 +190,15 @@ describe('seriesSummary', () => {
       'Tue · due in 3 days · ended Nov 3',
     );
     expect(seriesSummary(series({ until: '2026-11-04' }), '2026-11-04')).toBe('Tue · until Nov 4');
+    expect(
+      seriesSummary(
+        series({ dueOffsetDays: 1, dueTime: '14:00', until: '2026-12-05' }),
+        '2026-11-04',
+      ),
+    ).toBe('Tue · due next day 2pm · until Dec 5');
+    expect(seriesSummary(series({ dueOffsetDays: 0, dueTime: '09:30' }), '2026-11-04')).toBe(
+      'Tue · due same day 9:30am',
+    );
     expect(seriesSummary(series({ until: '2027-03-20' }), '2026-11-04')).toBe(
       'Tue · until Mar 20, 2027',
     );

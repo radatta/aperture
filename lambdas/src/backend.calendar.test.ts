@@ -9,6 +9,8 @@ import {
   DEFAULT_EVENT_MIN,
   MARKER_MIN,
   PARENT_NO_EVENT_ERROR,
+  addDays,
+  dayKeyInZone,
   USER_TIME_ZONE,
   zonedEpoch,
 } from '@aperture/shared';
@@ -921,6 +923,112 @@ describe('calendar auto-sync (timed tasks)', () => {
       await b.deleteTask(q.id);
       expect(g.events.size).toBe(0);
     });
+  });
+
+  // recurring.md D8: getDay's series spawns sync like any timed create (5.1), inside the bulk budget.
+  describe('series occurrences', () => {
+    const today = dayKeyInZone(1_700_000_000_000, USER_TIME_ZONE, 4);
+    const series = (title: string, over: Record<string, unknown> = {}) => ({
+      title,
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' as const },
+      anchorDate: today,
+      ...over,
+    });
+
+    it('a timed occurrence makes one event ending at its deadline; a second getDay adds none', async () => {
+      const { g, b } = await connected();
+      await b.upsertSeries(series('Pre-lab', { dueOffsetDays: 1, dueTime: '14:00' }));
+      await b.upsertSeries(series('Reading', { dueOffsetDays: 1 }));
+      const insert = vi.spyOn(g, 'insertEvent');
+      await b.getDay(today);
+      expect(insert).toHaveBeenCalledTimes(1);
+      const [id, evt] = only(g);
+      const due = addDays(today, 1);
+      expect(evt).toMatchObject({
+        title: 'Pre-lab',
+        startMs: at(due, '13:15'),
+        endMs: at(due, '14:00'),
+      });
+      const occ = (await b.listTasks()).filter((t) => t.seriesId);
+      expect(occ.find((t) => t.title === 'Pre-lab')).toMatchObject({
+        gcalEventId: id,
+        gcalSyncError: null,
+        status: 'planned',
+      });
+      expect(occ.find((t) => t.title === 'Reading')?.gcalEventId).toBeNull();
+      await b.getDay(today);
+      expect(insert).toHaveBeenCalledTimes(1);
+      expect(g.events.size).toBe(1);
+    });
+
+    it('a same-day timed occurrence gets its event too, unplanned', async () => {
+      const { g, b } = await connected();
+      await b.upsertSeries(series('Quiz', { dueOffsetDays: 0, dueTime: '23:00' }));
+      await b.getDay(today);
+      expect(only(g)[1]).toMatchObject({ title: 'Quiz', endMs: at(today, '23:00') });
+      expect((await b.listPlansForDay(today)).length).toBe(0);
+    });
+
+    it('Google down: getDay still returns, the first sync fails and the rest wait for Retry', async () => {
+      const { g, b } = await connected();
+      for (let i = 0; i < 6; i++)
+        await b.upsertSeries(series(`s${i}`, { dueOffsetDays: 1, dueTime: '14:00' }));
+      g.markDead('A');
+      const insert = vi.spyOn(g, 'insertEvent');
+      await expect(b.getDay(today)).resolves.toMatchObject({ date: today });
+      const occ = (await b.listTasks()).filter((t) => t.seriesId);
+      expect(occ).toHaveLength(6);
+      expect(occ.every((t) => t.gcalSyncError && !t.gcalEventId)).toBe(true);
+      expect(insert.mock.calls.length).toBeLessThanOrEqual(4); // the first wave only
+      expect(occ.some((t) => /not attempted/.test(t.gcalSyncError ?? ''))).toBe(true);
+      expect((await b.listPlansForDay(today)).length).toBe(6); // the spawns stand
+    });
+
+    it('a spawn write that throws still syncs what spawned before it, then fails getDay', async () => {
+      const { g, b, repo } = await connectedWithRepo();
+      await b.upsertSeries(series('First', { dueOffsetDays: 1, dueTime: '14:00' }));
+      await b.upsertSeries(series('Second', { dueOffsetDays: 1, dueTime: '15:00' }));
+      const putPlan = repo.putPlan.bind(repo);
+      let n = 0;
+      vi.spyOn(repo, 'putPlan').mockImplementation(async (p) => {
+        if (++n === 2) throw new Error('throttled');
+        return putPlan(p);
+      });
+      await expect(b.getDay(today)).rejects.toThrow('throttled');
+      const occ = (await b.listTasks()).filter((t) => t.seriesId);
+      expect(occ).toHaveLength(2); // the second's task landed before its row failed
+      expect(occ.every((t) => !!t.gcalEventId || !!t.gcalSyncError)).toBe(true);
+      expect(g.events.size).toBe(2);
+    });
+
+    it('auto-sync off: occurrences spawn with no event and no error', async () => {
+      const { g, b } = await connected();
+      await b.updateSettings({ autoCalendar: false });
+      await b.upsertSeries(series('Pre-lab', { dueOffsetDays: 1, dueTime: '14:00' }));
+      await b.getDay(today);
+      expect(g.events.size).toBe(0);
+      expect((await b.listTasks()).find((t) => t.seriesId)).toMatchObject({
+        gcalEventId: null,
+        gcalSyncError: null,
+      });
+    });
+  });
+
+  it('bulk create: a parent write that throws after the save still syncs the saved timed tasks', async () => {
+    const { g, b, repo } = await connectedWithRepo();
+    const p = await b.createTask({ title: 'P2' });
+    vi.spyOn(
+      b as unknown as { adoptAsParent: () => Promise<void> },
+      'adoptAsParent',
+    ).mockRejectedValue(new Error('throttled'));
+    await expect(
+      b.createTasks([{ title: 'a', parentId: p.id, dueDay: '2026-10-09', dueTime: '10:00' }]),
+    ).rejects.toThrow('throttled');
+    const [part] = (await repo.listTasks({ consistent: true })).filter((t) => t.parentId === p.id);
+    expect(part!.gcalEventId ?? part!.gcalSyncError).toBeTruthy();
+    expect(g.events.size).toBe(1);
   });
 
   it('bulk create: once Google fails, the rest are marked for Retry without being attempted', async () => {

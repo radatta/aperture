@@ -70,6 +70,7 @@ import {
   seriesDueOn,
   seriesHasOccurrence,
   occurrenceFields,
+  occurrencePlanned,
   setNotesArg,
   setReflectionArg,
   followUpPlanDay,
@@ -86,7 +87,7 @@ import {
   PARENT_NO_ESTIMATE_ERROR,
   PARENT_NO_EVENT_ERROR,
   PARENT_NO_PLAN_ERROR,
-  isTimed,
+  timeDecidesDay,
   TIMED_NO_PLAN_ERROR,
   FUTURE_DAY_ERROR,
   isDayKey,
@@ -1035,7 +1036,7 @@ class StubClient implements ApiClient {
       if (!rep.notes) rep = this.writes.patch(this.store.tasks, rep.id, { notes: url });
       const dayPlans = this.alive(this.store.plans).filter((p) => p.day === s.day);
       const repId = rep.id;
-      if (!isTimed(rep) && !dayPlans.some((p) => p.taskId === repId))
+      if (!timeDecidesDay(rep) && !dayPlans.some((p) => p.taskId === repId))
         this.writes.insert(this.store.plans, {
           ...this.base(),
           id: s.id,
@@ -2128,7 +2129,7 @@ class StubClient implements ApiClient {
   async upsertPlan(input: UpsertPlanInput): Promise<TaskPlan> {
     if (hasParts(this.alive(this.store.tasks), input.taskId)) throw new Error(PARENT_NO_PLAN_ERROR);
     const task = this.find(this.store.tasks, input.taskId);
-    if (task && isTimed(task)) throw new Error(TIMED_NO_PLAN_ERROR);
+    if (task && timeDecidesDay(task)) throw new Error(TIMED_NO_PLAN_ERROR);
     if (input.id) {
       return this.writes.patch(this.store.plans, input.id, {
         taskId: input.taskId,
@@ -2166,7 +2167,7 @@ class StubClient implements ApiClient {
       rule: input.rule,
       anchorDate: input.anchorDate,
       active: input.active ?? true,
-      ...seriesCadence(input), // throws before any write
+      ...seriesCadence(input, this.dayStartHour()), // throws before any write
     };
     if (input.id) return this.writes.patch(this.store.series, input.id, fields);
     return this.writes.insert(this.store.series, { ...this.base(), ...fields });
@@ -2330,7 +2331,7 @@ class StubClient implements ApiClient {
   async pickRollToday(rollId: string, day: string): Promise<{ task: Task; plan: TaskPlan }> {
     const roll = this.mustFind(this.store.rolls, rollId);
     const existing = findOpenRollTask(this.alive(this.store.tasks), rollId);
-    if (existing && isTimed(existing)) throw new Error(TIMED_NO_PLAN_ERROR); // rolls.md D6
+    if (existing && timeDecidesDay(existing)) throw new Error(TIMED_NO_PLAN_ERROR); // rolls.md D6
     const task = existing
       ? existing.status === 'backlog'
         ? this.writes.put(this.store.tasks, taskTransition(existing, 'planned', this.now()))
@@ -2387,7 +2388,8 @@ class StubClient implements ApiClient {
     });
   }
   // An occurrence is spawned once per (series, day) — identity by seriesDay (seriesHasOccurrence), so an
-  // unplanned occurrence isn't respawned (recurring.md D4).
+  // unplanned occurrence isn't respawned (recurring.md D4). Planned with a row unless it's a same-day timed
+  // one, and a timed one makes its calendar event like any timed task (D8).
   private materializeDueSeries(day: string): void {
     const active = this.alive(this.store.series).filter((s) => s.active);
     if (active.length === 0) return;
@@ -2400,13 +2402,15 @@ class StubClient implements ApiClient {
         ...this.base(),
         ...occurrenceFields(series, day),
       });
-      this.writes.insert(this.store.plans, {
-        ...this.base(),
-        taskId: task.id,
-        day,
-        plannedMinutes: series.defaultEstimateMin ?? 0,
-        order: 1000,
-      });
+      if (occurrencePlanned(series))
+        this.writes.insert(this.store.plans, {
+          ...this.base(),
+          taskId: task.id,
+          day,
+          plannedMinutes: series.defaultEstimateMin ?? 0,
+          order: 1000,
+        });
+      if (task.dueTime) this.syncCalendar(null, task);
     }
   }
   // Rule lives in the shared stalePlannedMoves (backend parity).

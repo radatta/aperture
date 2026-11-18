@@ -98,6 +98,14 @@ describe('create_series / list_series', () => {
       [{ ...report, rule: 'daily' }, /"rule" is required/],
       [{ ...report, title: '  ' }, /"title" is required/],
       [{ ...report, defaultEstimateMin: -5 }, /defaultEstimateMin/],
+      [{ ...report, dueTime: '2pm' }, /"dueTime" must be a 24h clock time/],
+      [{ ...report, dueTime: '25:00' }, /"dueTime" must be a 24h clock time/],
+      [{ ...report, dueTime: 1400 }, /"dueTime" must be a 24h clock time/],
+      [
+        { ...report, dueOffsetDays: undefined, dueTime: '14:00' },
+        /"dueTime" needs "dueOffsetDays"/,
+      ],
+      [{ ...report, dueOffsetDays: 0, dueTime: '02:00' }, /before the day start/],
     ];
     for (const [args, re] of bad) {
       await expect(call('create_series', args)).rejects.toThrow(re);
@@ -105,6 +113,41 @@ describe('create_series / list_series', () => {
     }
     expect(await setup.listSeries()).toHaveLength(0);
     expect(await setup.listTasks()).toHaveLength(0);
+  });
+
+  it('a due time (D8): offset 1 spawns planned on its day with the deadline; offset 0 spawns unplanned', async () => {
+    const pre = (await call('create_series', {
+      ...report,
+      title: 'Pre-lab',
+      dueTime: '14:00',
+    })) as TaskSeries;
+    expect(pre).toMatchObject({ dueOffsetDays: 1, dueTime: '14:00' });
+    const quiz = (await call('create_series', {
+      title: 'Quiz',
+      rule: { kind: 'daily' },
+      dueOffsetDays: 0,
+      dueTime: '16:00',
+    })) as TaskSeries;
+    expect(
+      ((await call('list_series')) as TaskSeries[]).map((x) => [x.title, x.dueTime]).sort(),
+    ).toEqual([
+      ['Pre-lab', '14:00'],
+      ['Quiz', '16:00'],
+    ]);
+    await setup.getDay(TODAY);
+    const tasks = await setup.listTasks();
+    expect(tasks.find((t) => t.seriesId === pre.id)).toMatchObject({
+      status: 'planned',
+      dueDay: '2023-11-15',
+      dueTime: '14:00',
+    });
+    expect(tasks.find((t) => t.seriesId === quiz.id)).toMatchObject({
+      status: 'backlog',
+      dueDay: TODAY,
+      dueTime: '16:00',
+    });
+    const plans = await setup.listPlansForDay(TODAY);
+    expect(plans.map((p) => p.taskId)).toEqual([tasks.find((t) => t.seriesId === pre.id)!.id]);
   });
 
   it('until today itself is allowed (it recurs once more)', async () => {

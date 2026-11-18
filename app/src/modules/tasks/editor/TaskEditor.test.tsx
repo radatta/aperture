@@ -75,6 +75,23 @@ const mkTask = (over: Partial<Task>): Task => ({
 });
 
 describe('TaskEditor', () => {
+  it('a series deadline occurrence shows its “Planned today” — its time is only a deadline (recurring D8)', async () => {
+    const client = api();
+    await client.upsertSeries({
+      title: 'Pre-lab',
+      categoryId: null,
+      defaultEstimateMin: 45,
+      rule: { kind: 'daily' },
+      anchorDate: todayKey(4),
+      dueOffsetDays: 1,
+      dueTime: '14:00',
+    });
+    await client.getDay(todayKey(4));
+    const [row] = await client.listPlansForDay(todayKey(4));
+    renderEditor(client, (await client.getTask(row!.taskId))!);
+    expect(await screen.findByText('Planned today')).toBeTruthy();
+  });
+
   it('a timed task with an old row today shows no “Planned today” — its day is its time', async () => {
     const client = api();
     const t = await client.createTask({ title: 'pset', estimateMin: 40 });

@@ -200,6 +200,19 @@ describe('placeOf', () => {
     expect(place(at('2026-09-30', '00:30'), 0)).toBe('backlog');
   });
 
+  it('recurring D8: a deadline occurrence is placed by its plan row, and on its due day by its time', () => {
+    const occ = (seriesDay: string, dueDay: string, status: Task['status'] = 'planned') =>
+      task({ id: 'o', status, seriesId: 's', seriesDay, dueDay, dueTime: '14:00' });
+    const row = new Map([['o', 0]]);
+    expect(placeOf(occ(TODAY, '2026-09-24'), pctx(row))).toBe('today'); // its work day's plan
+    expect(placeOf(occ(TODAY, '2026-09-24', 'backlog'), pctx())).toBe('week'); // unplanned
+    expect(placeOf(occ('2026-09-22', TODAY, 'backlog'), pctx())).toBe('today'); // due day, by time
+    expect(placeOf(occ('2026-09-22', TODAY), pctx(row))).toBe('today'); // due day, its row
+    expect(placeOf(occ('2026-09-21', '2026-09-22', 'backlog'), pctx())).toBe('week'); // overdue
+    // Offset 0 is plain D13: a row on it places nothing.
+    expect(placeOf(occ('2026-09-24', '2026-09-24'), pctx(row))).toBe('week');
+  });
+
   it('option 3: a timed parent due today is not on Today — its deadline is its marker', () => {
     const parent = task({ id: 'p', dueDay: TODAY, dueTime: '23:59' });
     const part = task({ id: 'a', parentId: 'p' });
@@ -368,6 +381,34 @@ describe('applyQuery', () => {
     const r = applyQuery(list, 'backlog', q({ text: 'pset' }), ctx([['plan', 0]]));
     expect(r.groups.map((g) => [g.label, g.tasks.map((t) => t.id)])).toEqual([
       ['Today', ['older', 'newer', 'night', 'plan']],
+    ]);
+  });
+
+  it('a11 a deadline occurrence with a row on its due day sorts with the plan, not by time (D8)', () => {
+    const list = [
+      task({ id: 'plan', title: 'pset plan', status: 'planned' }),
+      task({ id: 'timed', title: 'pset timed', dueDay: TODAY, dueTime: '15:00' }),
+      task({
+        id: 'occ',
+        title: 'pset occ',
+        status: 'planned',
+        seriesId: 's',
+        seriesDay: '2026-09-22',
+        dueDay: TODAY,
+        dueTime: '09:00',
+      }),
+    ];
+    const r = applyQuery(
+      list,
+      'backlog',
+      q({ text: 'pset' }),
+      ctx([
+        ['occ', 0],
+        ['plan', 1],
+      ]),
+    );
+    expect(r.groups.map((g) => [g.label, g.tasks.map((t) => t.id)])).toEqual([
+      ['Today', ['timed', 'occ', 'plan']],
     ]);
   });
 

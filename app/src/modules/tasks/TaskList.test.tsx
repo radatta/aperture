@@ -419,6 +419,44 @@ describe('Today: a time decides the day (option 3)', () => {
   });
 });
 
+// recurring.md D8: a series occurrence due after its work day is planned like an untimed task.
+async function deadlineOccurrence(title: string) {
+  const api = createStubClient({ seed: false, storageKey: `tasklist-occ-${Math.random()}` });
+  await api.upsertSeries({
+    title,
+    categoryId: null,
+    defaultEstimateMin: 45,
+    rule: { kind: 'daily' },
+    anchorDate: todayKey(4),
+    dueOffsetDays: 1,
+    dueTime: '14:00',
+  });
+  await api.getDay(todayKey(4));
+  const [row] = await api.listPlansForDay(todayKey(4));
+  return { api, row: row! };
+}
+
+describe('a series deadline occurrence (recurring D8)', () => {
+  it('sits in the plan with Unplan on its work day, not under By time', async () => {
+    const { api } = await deadlineOccurrence('Pre-lab');
+    renderApp({ api, path: '/tasks' });
+    const card = (await screen.findByRole('button', { name: 'Pre-lab' })).closest(
+      '.rounded-2xl',
+    ) as HTMLElement;
+    expect(within(card).getByRole('button', { name: 'Unplan' })).toBeTruthy();
+    expect(within(card).getByText(/due tomorrow 2pm/)).toBeTruthy();
+    expect(screen.queryByText('By time')).toBeNull();
+  });
+
+  it('unplanned, it offers “+ Today” on Week — unlike a plain timed task', async () => {
+    const { api, row } = await deadlineOccurrence('Pre-lab');
+    await api.removePlan(row.id);
+    await api.getDay(todayKey(4));
+    renderApp({ api, path: '/tasks?lens=week' });
+    expect(await screen.findByRole('button', { name: 'Add Pre-lab to today' })).toBeTruthy();
+  });
+});
+
 describe('focus after a row leaves', () => {
   it('"+ Today" moves the row out of Week and focus lands on the list, not <body>', async () => {
     const api = createStubClient({ seed: false, storageKey: `tasklist-focus-${Math.random()}` });

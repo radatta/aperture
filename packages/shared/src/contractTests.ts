@@ -9,8 +9,14 @@ import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, dayKeyInZone, USER_TIME_ZONE } from './dates';
 import { fluxWeekStart } from './flux/history';
 import { REP_NO_SPLIT_ERROR } from './split';
-import { FUTURE_DAY_ERROR } from './machines';
-import { SERIES_OFFSET_ERROR, SERIES_UNTIL_ERROR } from './recurrence';
+import { FUTURE_DAY_ERROR, TIMED_NO_PLAN_ERROR } from './machines';
+import {
+  SERIES_OFFSET_ERROR,
+  SERIES_TIME_ERROR,
+  SERIES_TIME_NEEDS_DUE_ERROR,
+  SERIES_TIME_SMALL_HOURS_ERROR,
+  SERIES_UNTIL_ERROR,
+} from './recurrence';
 import {
   PLACE_FINISHED_ERROR,
   PLACE_PART_ERROR,
@@ -1630,6 +1636,137 @@ export function runApiContract(
         SERIES_OFFSET_ERROR,
       );
       expect((await api.listSeries())[0]).toMatchObject({ dueOffsetDays: null });
+    });
+
+    it('series: a due time — offset ≥ 1 spawns planned on its day with the deadline, and plans like untimed (D8)', async () => {
+      const s = await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 1,
+        dueTime: '14:00',
+      });
+      expect(s).toMatchObject({ dueOffsetDays: 1, dueTime: '14:00' });
+      at('2026-08-04');
+      await api.getDay('2026-08-04');
+      const [plan] = await api.listPlansForDay('2026-08-04');
+      expect(await api.getTask(plan!.taskId)).toMatchObject({
+        seriesId: s.id,
+        seriesDay: '2026-08-04',
+        dueDay: '2026-08-05',
+        dueTime: '14:00',
+        status: 'planned',
+      });
+      // A second getDay neither sweeps it (a timed task would be) nor spawns a copy.
+      await api.getDay('2026-08-04');
+      expect((await api.getTask(plan!.taskId))?.status).toBe('planned');
+      expect((await api.listTasks()).filter((t) => t.seriesId === s.id)).toHaveLength(1);
+      // Unplan → backlog; "+ Today" plans the same task again — no timed refusal.
+      await api.removePlan(plan!.id);
+      await api.getDay('2026-08-04');
+      expect((await api.getTask(plan!.taskId))?.status).toBe('backlog');
+      await api.upsertPlan({
+        taskId: plan!.taskId,
+        day: '2026-08-04',
+        plannedMinutes: 60,
+        order: 1,
+      });
+      await api.transitionTask(plan!.taskId, 'planned');
+      await api.getDay('2026-08-04');
+      expect((await api.listPlansForDay('2026-08-04')).map((p) => p.taskId)).toEqual([
+        plan!.taskId,
+      ]);
+      expect((await api.getTask(plan!.taskId))?.status).toBe('planned');
+    });
+
+    it('series: a deadline occurrence on its due day — no row there sends it to backlog, a row keeps it planned', async () => {
+      await api.upsertSeries({
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'weekly', daysOfWeek: [2] }, // 2026-08-04 is a Tuesday
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 1,
+        dueTime: '14:00',
+      });
+      const other = await api.upsertSeries({
+        title: 'Lab report',
+        categoryId: null,
+        defaultEstimateMin: 30,
+        rule: { kind: 'weekly', daysOfWeek: [2] },
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 1,
+        dueTime: '16:00',
+      });
+      at('2026-08-04');
+      await api.getDay('2026-08-04');
+      const byTitle = Object.fromEntries((await api.listTasks()).map((t) => [t.title, t]));
+      // Night: "Tomorrow" on the report adds a Wednesday row.
+      await api.upsertPlan({
+        taskId: byTitle['Lab report']!.id,
+        day: '2026-08-05',
+        plannedMinutes: 30,
+        order: 1,
+      });
+      at('2026-08-05');
+      await api.getDay('2026-08-05');
+      expect((await api.getTask(byTitle['Pre-lab']!.id))?.status).toBe('backlog');
+      expect((await api.getTask(byTitle['Lab report']!.id))?.status).toBe('planned');
+      expect((await api.listTasks()).filter((t) => t.seriesId === other.id)).toHaveLength(1);
+    });
+
+    it('series: due the same day at a time spawns unplanned — the time decides its day (D8, lenses D13)', async () => {
+      const s = await api.upsertSeries({
+        title: 'Quiz',
+        categoryId: null,
+        defaultEstimateMin: 20,
+        rule: { kind: 'daily' },
+        anchorDate: '2026-08-01',
+        dueOffsetDays: 0,
+        dueTime: '15:00',
+      });
+      at('2026-08-04');
+      await api.getDay('2026-08-04');
+      await api.getDay('2026-08-04');
+      const occ = (await api.listTasks()).filter((t) => t.seriesId === s.id);
+      expect(occ.map((t) => [t.status, t.dueDay, t.dueTime])).toEqual([
+        ['backlog', '2026-08-04', '15:00'],
+      ]);
+      expect(await api.listPlansForDay('2026-08-04')).toHaveLength(0);
+      await expect(
+        api.upsertPlan({ taskId: occ[0]!.id, day: '2026-08-04', plannedMinutes: 20, order: 1 }),
+      ).rejects.toThrow(TIMED_NO_PLAN_ERROR);
+    });
+
+    it('series: a bad due time is refused before any write, on create and on edit (D8)', async () => {
+      const input = {
+        title: 'Pre-lab',
+        categoryId: null,
+        defaultEstimateMin: 60,
+        rule: { kind: 'daily' } as const,
+        anchorDate: '2026-08-01',
+      };
+      await expect(
+        api.upsertSeries({ ...input, dueOffsetDays: 1, dueTime: '25:00' }),
+      ).rejects.toThrow(SERIES_TIME_ERROR);
+      await expect(api.upsertSeries({ ...input, dueTime: '14:00' })).rejects.toThrow(
+        SERIES_TIME_NEEDS_DUE_ERROR,
+      );
+      // The default day start is 4am: due the same day at 2am would spawn already past.
+      await expect(
+        api.upsertSeries({ ...input, dueOffsetDays: 0, dueTime: '02:00' }),
+      ).rejects.toThrow(SERIES_TIME_SMALL_HOURS_ERROR);
+      expect(await api.listSeries()).toHaveLength(0);
+      const s = await api.upsertSeries({ ...input, dueOffsetDays: 1, dueTime: '14:00' });
+      await expect(
+        api.upsertSeries({ ...input, id: s.id, dueOffsetDays: null, dueTime: '14:00' }),
+      ).rejects.toThrow(SERIES_TIME_NEEDS_DUE_ERROR);
+      expect((await api.listSeries())[0]).toMatchObject({ dueOffsetDays: 1, dueTime: '14:00' });
+      // Replace-all: an edit that omits the time clears it.
+      await api.upsertSeries({ ...input, id: s.id, dueOffsetDays: 1 });
+      expect((await api.listSeries())[0]).toMatchObject({ dueOffsetDays: 1, dueTime: null });
     });
 
     it('series: deleteSeries tombstones the template; its occurrences stay; idempotent', async () => {

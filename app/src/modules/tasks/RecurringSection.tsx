@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { todayKey } from '@aperture/shared';
+import { timeKeyOfInput, todayKey } from '@aperture/shared';
 import type { RecurrenceRule, TaskSeries } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { LoadError } from '../../components/LoadError';
@@ -98,6 +98,7 @@ function SeriesForm() {
   const [estimate, setEstimate] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [dueOffset, setDueOffset] = useState('');
+  const [dueTime, setDueTime] = useState('');
   const [until, setUntil] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -120,6 +121,7 @@ function SeriesForm() {
         rule: buildRule(),
         anchorDate: todayKey(settings?.dayStartHour ?? 4),
         dueOffsetDays: dueOffset === '' ? null : Number(dueOffset),
+        dueTime: dueOffset === '' ? null : dueTime || null,
         until: until || null,
       });
     } catch (err) {
@@ -132,7 +134,7 @@ function SeriesForm() {
     onClose();
   }
 
-  // Cancel discards the draft; the rule/day selection, due offset and until stay, since that's the shape
+  // Cancel discards the draft; the rule/day selection, due offset and time, and until stay, since that's the shape
   // of series you tend to make repeatedly (a term's courses share an end).
   function cancel() {
     setTitle('');
@@ -212,14 +214,28 @@ function SeriesForm() {
               Couldn’t load categories.
             </LoadError>
           )}
-          {/* The cadence: when each occurrence is due, counted from its day; the last day it recurs. */}
+          {/* The cadence: when each occurrence is due, counted from its day, and by what time (D8); the
+              last day it recurs. A time needs a due day, so "No due date" hides and clears it. */}
           <Select
             label="Due"
             value={dueOffset}
-            onChange={(e) => setDueOffset(e.target.value)}
+            onChange={(e) => {
+              setDueOffset(e.target.value);
+              if (e.target.value === '') setDueTime('');
+            }}
             options={DUE_OPTIONS}
             className="w-36"
           />
+          {dueOffset !== '' && (
+            <Field
+              label="Due time"
+              type="time"
+              step={60}
+              value={dueTime}
+              onChange={(e) => setDueTime(timeKeyOfInput(e.target.value))}
+              className="w-32"
+            />
+          )}
           <Field
             label="Until"
             type="date"

@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { CancelledError, useQueryClient } from '@tanstack/react-query';
-import { isTimed, todayKey } from '@aperture/shared';
+import { timeDecidesDay, todayKey } from '@aperture/shared';
 import type { CreateTaskInput, Task, TaskPlan, TaskStatus } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
@@ -45,7 +45,7 @@ export function useAddToDay(day?: string) {
   }
 
   async function addToDay(task: Task): Promise<AddResult> {
-    if (isTimed(task)) return 'timed';
+    if (timeDecidesDay(task)) return 'timed';
     const target = await resolveDay();
     const key = `${target}:${task.id}`;
     if (inFlight.current.has(key)) return 'already';
