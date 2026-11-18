@@ -8,8 +8,8 @@
 # probe iterates by pushing this file. Writes ios-probe-out/: steps.tsv (step, pass|fail|soft|skip, ms, note), shots/,
 # trees/, log.txt, summary.md, cpu.log (process names and CPU), procs.txt (process table and memory, never after sign-in);
 # after sign-in only rows.tsv (op, status, ms), landmark.tsv (per sign-in Home read: seconds, class already|false|blank|
-# hung|other, probes used, the owning process's name, WebContent count/CPU) plus step lines and CPU samples: no shots,
-# reads or notes from the app.
+# hung|other, probes used, the owning process's name, WebContent count/CPU), stall.tsv (derived counts at a stuck
+# sign-in: ci_stall) plus step lines and CPU samples: no shots, reads or notes from the app.
 # bash 3.2-safe (macOS /bin/bash).
 set -uo pipefail
 
@@ -18,9 +18,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore rows nohub,axe2,hostlog,nospot" ;;
-    2) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
-    *) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
+    1) echo "restore rows macmatch" ;; # round 1, H1/H7: Device Hub on (no pgrep shim), AXe 1.8.0, host daemons as the Mac
+    2) echo "seed rows nohub,axe2mix,hostlog,nospot" ;; # H3: a device made on this runner, only the web clip planted
+    *) echo "restore rows nohub,axe2mix,hostlog,nospot" ;; # control: rows run 5's config
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -850,41 +850,113 @@ run_sim_ci() (
       done
     fi
     [ -z "${CI_SIGNIN_T0:-}" ] || ci_landmark_trace "$r"
-    [ "${SIM_SENSITIVE:-false}" != true ] || [ -n "$r" ] || ci_reenter
+    [ "${SIM_SENSITIVE:-false}" != true ] || [ -n "$r" ] || ci_stall
     [ "$r" = already ] || sleep 3
     printf '%s\n' "$r"
   }
-  # Rows run 5 (run 4: stuck, not slow; no AX element anywhere for 8-9 min): after the 3rd blank Home read in the
-  # submit window (~2 min), once per sign-in, count the full tree (elements, and the owning pids' process names: no
-  # labels or values), then leave and re-enter the app (WebKit 249967: a white screen after a login redirect into a
-  # PWA came back on re-entry). Home, home press, icon tap; the reads that follow are sim.sh's own. Runs inside the
-  # landmark's $(...) subshell, so sim.sh's state (SIM_ICON, a sim_err) can't leak into the op.
-  ci_reenter() {
-    local n t els form pids own="" p rc=0
-    [ ! -e "$SIM_P.cireenter" ] || return 0
+  # Round 1 (11-18, localNotes/ci-signin-round1.md): rows run 5's re-entry didn't help, so the stall is measured
+  # instead, at the 3rd and 8th blank Home reads in the submit window (~2 and ~6 min). One line per look in
+  # stall.tsv, each field derived on the runner: no label, value, URL, log line or image leaves it.
+  #   els, roles: the full tree's element count and its role names with counts (values dropped in the first jq pass)
+  #   web: a web-area role anywhere; title: an element labelled exactly "Aperture" (the card's heading)
+  #   pw: a Password field still up; own: the owning pids' process names
+  #   px: a downscaled screenshot's mean RGB, its spread, and the share near white / the app's surface / black
+  #   wc: WebContent pids now, born since the sign-in began, gone since then; gpu, net: those processes' counts
+  #   log: the sim's WebKit log lines in the last 4 min, counted per pattern; load: the host's 1-min load
+  #   origin: dev's "/" from the host, status and ms
+  # Runs inside the landmark's $(...) subshell, so nothing here can leak into sim.sh's state.
+  ci_stall() {
+    local n t els roles web title form pids own="" p r2 px wc lg load org png="$WORK/stall.png" small="$WORK/stall.bmp" lf="$WORK/stall.log"
     n=$(($(cat "$SIM_P.ciblank" 2>/dev/null || echo 0) + 1))
     echo "$n" >"$SIM_P.ciblank"
-    [ "$n" -ge 3 ] || return 0
-    : >"$SIM_P.cireenter"
-    # values are dropped in the first jq pass, before anything else sees the tree (a still-filled Password field's
-    # value would carry the password's length: sim.sh never reads it); only counts and a yes/no for a Password field
-    t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null | jq -c '[.. | objects | {r: (has("role") or has("AXLabel")), pid: (.pid? | numbers), pw: ((.AXLabel? // "") | tostring | test("^Password"; "i"))}]' 2>/dev/null)" || t=""
-    els="$(jq '[.[] | select(.r)] | length' <<<"$t" 2>/dev/null | tr -cd '0-9')"
+    [ "$n" = 3 ] || [ "$n" = 8 ] || return 0
+    [ ! -e "$SIM_P.late" ] && [ ! -e "$SIM_P.over" ] || { printf '%s\t%s\tskipped\tdeadline or probe budget\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" >>"$OUT/stall.tsv"; return 0; }
+    t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null | jq -c '[.. | objects | {r: ((.role? // .type? // "") | tostring), l: ((((.AXLabel? // "") | tostring) == "Aperture") and (((.role? // .type? // "") | tostring) | test("Heading|StaticText"; "i"))), pid: (.pid? | numbers), pw: ((.AXLabel? // "") | tostring | test("^Password"; "i"))}]' 2>/dev/null)" || t=""
+    els="$(jq '[.[] | select(.r != "")] | length' <<<"$t" 2>/dev/null | tr -cd '0-9')"
+    roles="$(jq -r '[.[] | .r | select(. != "")] | group_by(.) | map("\(.[0])=\(length)") | join(",")' <<<"$t" 2>/dev/null | tr -cd 'A-Za-z0-9=,_' | cut -c1-300)"
+    web="$(jq -r 'if any(.[]; .r | test("web"; "i")) then "yes" else "no" end' <<<"$t" 2>/dev/null | tr -cd 'a-z')"
+    title="$(jq -r 'if any(.[]; .l) then "yes" else "no" end' <<<"$t" 2>/dev/null | tr -cd 'a-z')"
     form="$(jq -r 'if any(.[]; .pw) then "form" else "noform" end' <<<"$t" 2>/dev/null | tr -cd 'a-z')"
     pids="$(jq -r '[.[] | .pid | numbers] | unique | .[]' <<<"$t" 2>/dev/null | tr -cd '0-9\n' | head -6)"
+    t=""
     for p in $pids; do own="$own,$(ps -o comm= -p "$p" 2>/dev/null | sed 's#.*/##' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"; done
-    printf '%s\tstall\t%s\t%s\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${els:-x}" "${own#,}" "${form:-x}" >>"$OUT/landmark.tsv"
-    ax button home >/dev/null 2>&1 || rc=1
-    sleep 3
-    # bounded (review S2): one tree read and the icon on it, never sim_find_icon's up-to-8 rounds of 8 retries
-    if [ "$rc" = 0 ]; then
+    px=-
+    if cap 30 xcrun simctl io "$U" screenshot "$png" >/dev/null 2>&1 && cap 30 sips -Z 160 -s format bmp "$png" --out "$small" >/dev/null 2>&1; then
+      px="$(python3 - "$small" <<'BMP' 2>/dev/null
+import struct, sys
+d = open(sys.argv[1], 'rb').read()
+off, w, h, bpp = struct.unpack_from('<I', d, 10)[0], struct.unpack_from('<i', d, 18)[0], abs(struct.unpack_from('<i', d, 22)[0]), struct.unpack_from('<H', d, 28)[0] // 8
+row = (w * bpp + 3) & ~3
+px = [(d[off + y * row + x * bpp + 2], d[off + y * row + x * bpp + 1], d[off + y * row + x * bpp]) for y in range(h) for x in range(w)]
+n = len(px); m = [sum(p[i] for p in px) / n for i in range(3)]
+sd = (sum(sum((p[i] - m[i]) ** 2 for i in range(3)) for p in px) / (3 * n)) ** 0.5
+near = lambda c, t: sum(1 for p in px if all(abs(p[i] - c[i]) <= t for i in range(3))) * 100 // n
+print('%d/%d/%d sd %.0f white %d surface %d black %d bpp %d comp %d' % (m[0], m[1], m[2], sd, near((255, 255, 255), 12), near((47, 66, 60), 12), near((0, 0, 0), 12), bpp * 8, struct.unpack_from('<I', d, 30)[0]))
+BMP
+)" || px=-
+      px="$(tr -cd 'A-Za-z0-9./ ' <<<"$px")"
+    fi
+    rm -f "$png" "$small"
+    wc="$(ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort)"
+    wc="$(printf '%s now, %s born, %s gone' "$(grep -c . <<<"$wc")" "$(comm -13 "$WORK/wc0" - <<<"$wc" | grep -c .)" "$(comm -23 "$WORK/wc0" - <<<"$wc" | grep -c .)")"
+    wc="$wc; gpu $(ps -Ao comm= 2>/dev/null | grep -c 'WebKit.GPU'), net $(ps -Ao comm= 2>/dev/null | grep -c 'WebKit.Networking')"
+    lg=-
+    if cap 60 xcrun simctl spawn "$U" log show --last 4m --info --debug --style compact --predicate 'subsystem BEGINSWITH "com.apple.WebKit" OR process CONTAINS "WebContent"' >"$lf" 2>/dev/null; then
+      lg="lines $(grep -c . "$lf")"
+      for p in 'processDidTerminateOrFailedToLaunch' 'didClose' 'failed to launch|Error launching process|libxpc connection' 'didBecomeUnresponsive' 'GPUProcessConnection' 'XPC_ERROR_CONNECTION_INVALID' 'didCompletePageTransition' 'freez' 'didCommitLoad|commitLoad' 'didFailProvisional' 'ProcessSuspended|suspend' 'jetsam'; do
+        lg="$lg, ${p%%|*} $(grep -ciE "$p" "$lf")"
+      done
+    fi
+    rm -f "$lf"
+    load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -cd '0-9.')"
+    org="$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --max-time 15 "$ORIGIN/" 2>/dev/null | tr -cd '0-9. ')" || org=000
+    printf '%s\t%s\tels %s\troles %s\tweb %s\ttitle %s\t%s\town %s\tpx %s\twc %s\tlog %s\tload %s\torigin %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" "${roles:--}" "${web:-x}" "${title:-x}" "${form:-x}" "${own#,}" "${px:--}" "$wc" "$lg" "${load:--}" "${org:-000}" >>"$OUT/stall.tsv"
+    if [ "$n" = 3 ]; then
+      # nudge (panel, H1/H2): a 40 pt drag on the page makes WebKit commit a layer tree. More elements after it: the
+      # document was there but frozen; the same count: nothing to show. A drag, not a tap, so nothing activates.
+      ax swipe --start-x "$SIM_X" --start-y 600 --end-x "$SIM_X" --end-y 560 --duration 0.3 >/dev/null 2>&1 || true
+      sleep 3
+      els="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null | jq '[.. | objects | select(((.role? // .type? // "") | tostring) != "")] | length' 2>/dev/null | tr -cd '0-9')"
+      printf '%s\t%s\tnudge\tels %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" >>"$OUT/stall.tsv"
+    else
+      # cold relaunch (panel, H2): a home press only resumes, so the web app's own process is killed, then its icon
+      # tapped. Signed-in Home after it: the callback ran and only the view stuck. The card: the callback never ran,
+      # but a fresh view recovers. Blank again: the device or the runner. Any pass of the job after this line is a
+      # pass after a relaunch, and the report says so.
+      if [ $((${SIM_DEADLINE:-0} - $(date +%s))) -lt 120 ]; then
+        printf '%s\t%s\trelaunch\tskipped: under 120 s left\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" >>"$OUT/stall.tsv"
+        return 0
+      fi
+      pids="$(for p in $pids; do [ "$(ps -o comm= -p "$p" 2>/dev/null | sed 's#.*/##')" != Web ] || echo "$p"; done)"
+      [ -n "$pids" ] || pids="$(pgrep -f 'RuntimeRoot/Applications/Web.app/Web' 2>/dev/null | head -2)"
+      for p in $pids; do kill -9 "$p" 2>/dev/null || true; done
+      sleep 4 # the Home Screen comes back on the icon's page; a home press would jump to page 1
       t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null)" || t=""
       SIM_ICON="$(sim_icon_in "$t")" || SIM_ICON=""
-      if [ -n "$SIM_ICON" ]; then sim_icon_tap >/dev/null 2>&1 || rc=3; else rc=2; fi
+      if [ -z "$SIM_ICON" ] && jq -e 'any(.. | objects | .AXValue? | select(type == "string"); test("^Page 1 of [2-9]$"))' <<<"$t" >/dev/null 2>&1; then
+        ax swipe --start-x 400 --start-y 480 --end-x 60 --end-y 480 --duration 0.4 >/dev/null 2>&1 || true
+        sleep 2
+        t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null)" || t=""
+        SIM_ICON="$(sim_icon_in "$t")" || SIM_ICON=""
+      fi
+      t=""
+      p=noicon
+      if [ -n "$SIM_ICON" ] && sim_icon_tap >/dev/null 2>&1; then
+        sleep 30
+        local had=""
+        [ ! -e "$SIM_P.unread" ] || had=1
+        rm -f "$SIM_P.unread"
+        if r2="$(ci_orig_landmark 2>/dev/null)"; then
+          case "$r2" in already) p=signedin ;; false) p=card ;; "") p=blank ;; *) p=other ;; esac
+          [ ! -e "$SIM_P.unread" ] || [ "$p" != blank ] || p=hung
+        else
+          p=noread
+        fi
+        rm -f "$SIM_P.unread"
+        [ -z "$had" ] || : >"$SIM_P.unread" # sim.sh's clean flag follows its own last read, not this one
+      fi
+      printf '%s\t%s\trelaunch\tkilled %s\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$(grep -c . <<<"$pids")" "$p" >>"$OUT/stall.tsv"
     fi
-    t=""
-    sleep 3
-    printf '%s\treenter\trc=%s\t-\t-\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "$rc" >>"$OUT/landmark.tsv"
     return 0
   }
   # Rows run 4 tells slow from stuck from wrong-context (search, 11-17): which process owns the element at the Home
@@ -902,7 +974,7 @@ run_sim_ci() (
     printf '%s\t%s\t%s\t%s\t%s\n' "$((SECONDS - CI_SIGNIN_T0))" "$c" "$(cat "$SIM_P.probes" 2>/dev/null || echo 0)" "${own:--}" "$wc" >>"$OUT/landmark.tsv"
   }
   eval "ci_orig_sign_in() $(declare -f sim_sign_in | sed 1d)"
-  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; rm -f "$SIM_P.ciblank" "$SIM_P.cireenter"; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
+  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; rm -f "$SIM_P.ciblank"; ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort >"$WORK/wc0"; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
@@ -984,7 +1056,7 @@ s_rows() {
     # IOS-CHECK.md → Failures: these are dropped input ("rerun the step"), so a job that ends on one runs once more
     for try in 1 2; do
     left=$((DEADLINE - SECONDS - 60)) # per try, so a rerun can't run past the deadline (review S2)
-    [ "$left" -le 900 ] || left=900 # rows run 4: the launch job carries up to ~7.5 min of Home reads after submit
+    [ "$left" -le 1200 ] || left=1200 # the launch job: ~6 min to submit, ~9 min of Home reads, ci_stall's two looks
     [ "$left" -ge 60 ] || { st=error rs=BUDGET js="{}"; break; }
     jq -e --arg n "$j" --arg sha "$sha" --argjson to "$([ "$left" -le 600 ] && echo "$left" || echo 600)" --argjson last "$([ "$j" = "$last" ] && echo true || echo false)" \
       '. as $p | ($p.jobs[] | select(.name == $n)) as $j
