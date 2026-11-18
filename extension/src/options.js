@@ -12,7 +12,25 @@
     $(id).className = `status ${kind || ''}`;
   };
   const tell = (type) => api.runtime.sendMessage({ type }).catch(() => {});
-  const { coach } = globalThis.ApertureLC;
+  const { coach, selectors: selLib } = globalThis.ApertureLC;
+  // An override with a retired key (lib/selectors.js RETIRED) → {kept, dropped, off}: the rest, the retired keys it
+  // had, and whether `submit: null` (the note off, before 2.2.1) was among them.
+  function stripRetired(o) {
+    const kept = { ...o };
+    const dropped = selLib.RETIRED.filter((k) => Object.prototype.hasOwnProperty.call(o, k));
+    for (const k of dropped) delete kept[k];
+    return { kept, dropped, off: dropped.includes('submit') && o.submit === null };
+  }
+  // Saves an override without its retired keys (removed when nothing's left), a `submit: null` carried over to the
+  // note's switch. → what's left (null for none) and whether the note went off.
+  async function saveStripped(o) {
+    const { kept, dropped, off } = stripRetired(o);
+    const left = Object.keys(kept).length ? kept : null;
+    if (off) await local.set({ [coach.KEYS.nudge]: false });
+    if (left) await local.set({ selectors: left });
+    else await local.remove('selectors');
+    return { left, dropped, off };
+  }
   // The build Safari runs (manifest.json); the app's Settings compares it with the one it was built from.
   let version = null;
   try {
@@ -32,8 +50,14 @@
       'outbox',
       ...Object.values(coach.KEYS),
     ]);
-    showCoach(coach.settingsOf(got));
     local.remove(coach.RETIRED_KEYS).catch(() => {}); // the retired trace card's switches
+    const o = got.selectors;
+    if (o && typeof o === 'object' && !Array.isArray(o) && stripRetired(o).dropped.length) {
+      const r = await saveStripped(o).catch(() => null);
+      if (r) got.selectors = r.left;
+      if (r && r.off) got[coach.KEYS.nudge] = false;
+    }
+    showCoach(coach.settingsOf(got));
     if (typeof got.apiOrigin === 'string') $('apiOrigin').value = got.apiOrigin;
     if (typeof got.deviceToken === 'string') $('deviceToken').value = got.deviceToken;
     $('debug').checked = !!got.debug;
@@ -170,11 +194,16 @@
     }
     if (!o || typeof o !== 'object' || Array.isArray(o))
       return say('selectorStatus', 'Selectors must be a JSON object.', 'err');
-    const unknown = Object.keys(o).filter((k) => !globalThis.ApertureLC.selectors.KEYS.includes(k));
+    const unknown = Object.keys(stripRetired(o).kept).filter((k) => !selLib.KEYS.includes(k));
     if (unknown.length)
       return say('selectorStatus', `Unknown keys: ${unknown.join(', ')} — nothing saved.`, 'err');
-    await local.set({ selectors: o });
-    say('selectorStatus', 'Saved. Open LeetCode tabs pick it up at once.', 'ok');
+    const { left, dropped, off } = await saveStripped(o);
+    if (off) showCoach(coach.settingsOf(await local.get(Object.values(coach.KEYS))));
+    if (dropped.length) $('selectors').value = left ? JSON.stringify(left, null, 2) : '';
+    const note = dropped.length
+      ? ` ${dropped.join(', ')} is retired (the note reads the submit itself) — dropped${off ? '; the note is now off' : ''}.`
+      : '';
+    say('selectorStatus', `Saved. Open LeetCode tabs pick it up at once.${note}`, 'ok');
   });
   $('resetSelectors').addEventListener('click', async () => {
     await local.remove('selectors');

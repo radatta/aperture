@@ -11,7 +11,7 @@ import { CODE, QID, SLUG, T } from './fixtures/traffic';
 
 const wire = lib('wire');
 const ulid = lib('ulid');
-type Pair = { url: string; reqText: string | null; resText: string };
+type Pair = { url: string; reqText: string | null; resText: string | null };
 const seen = (capture: { observe(x: object): unknown[] }, p: Pair, at = 1000) =>
   capture.observe({
     url: p.url,
@@ -63,9 +63,12 @@ describe('wire: what LeetCode traffic means', () => {
     expect(seen(c, { ...T.updateSyncedCode, reqText: '{not json' })).toEqual([]);
   });
 
-  it('pairs a submit with its /v2/check/ SUCCESS once, at the submit’s time', () => {
+  it('pairs a submit with its /v2/check/ SUCCESS once, at the submit’s time; the /submit/ itself says a submit was made', () => {
     const c = wire.createCapture();
-    expect(seen(c, T.submit, 1000)).toEqual([]);
+    // Local only (the resubmit note): no payload, the request's time, the page it came from.
+    expect(seen(c, T.submit, 1000)).toEqual([
+      { kind: 'submitted', slug: SLUG, questionId: null, at: 1000, payload: null, page: null },
+    ]);
     expect(seen(c, T.submitPending, 2000)).toEqual([]);
     const out = seen(c, T.submitCheck, 3000);
     expect(out).toMatchObject([
@@ -81,6 +84,29 @@ describe('wire: what LeetCode traffic means', () => {
       },
     ]);
     expect(seen(c, T.submitCheck, 4000)).toEqual([]); // LeetCode polls again: still once
+  });
+
+  it('says nothing for a /submit/ with no id or an unreadable body, or for a Run', () => {
+    const c = wire.createCapture();
+    expect(seen(c, { ...T.submit, resText: '{}' })).toEqual([]);
+    expect(seen(c, { ...T.submit, resText: '{not json' })).toEqual([]);
+    expect(seen(c, { ...T.submit, resText: null })).toEqual([]);
+    expect(seen(c, T.run)).toEqual([]);
+  });
+
+  it('a repeated /submit/ response for an id still pending, or already judged, says nothing twice', () => {
+    const c = wire.createCapture();
+    expect(seen(c, T.submit, 1000)).toHaveLength(1);
+    expect(seen(c, T.submit, 1100)).toEqual([]); // pending
+    expect(seen(c, T.submitCheck, 3000)).toMatchObject([{ kind: 'submit', at: 1100 }]);
+    expect(seen(c, T.submit, 4000)).toEqual([]); // judged
+  });
+
+  it('a submitted item makes no event', () => {
+    const [item] = seen(wire.createCapture(), T.submit);
+    expect(wire.toEventInputs(item, ulid.ulid)).toEqual([]);
+    expect(wire.SENDABLE).not.toContain('submitted');
+    expect(wire.LOCAL).toEqual(['submitted']);
   });
 
   it('pairs a Run with its /check/ that has no /v2/', () => {

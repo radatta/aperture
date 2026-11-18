@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Aperture LeetCode",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Opens a sitting in Aperture when you Start a LeetCode problem, and sends what LeetCode itself sends \u2014 your code, runs, submits and timer \u2014 with a personal device token.",
   "icons": {
     "48": "icons/icon-48.png",

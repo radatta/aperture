@@ -24,6 +24,7 @@ import {
   shadowRoots,
   src,
   trustedClick,
+  trustedKey,
 } from './load';
 
 // Fake timers: every wait the scripts pay (retry ladders, intervals, Start's step timeouts, the debug flush) runs
@@ -266,8 +267,13 @@ function open(
     w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
   };
   const lc = createServer();
+  let submitDelay = 0; // LeetCode answers a /submit/ this late (fake ms), set by delaySubmit
   const fetchFake = async (input: string | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.url, w.location.href);
+    if (submitDelay && /\/submit\/$/.test(url.pathname)) {
+      const ms = submitDelay;
+      await new Promise((r) => setTimeout(r, ms));
+    }
     const body = init?.body != null ? String(init.body) : null;
     const r = lc.respond(url.pathname, init?.method ?? 'GET', body) ?? { status: 404, body: '{}' };
     return new FetchedResponse(r.body, {
@@ -312,6 +318,7 @@ function open(
       syncs: number;
       resetCloses: boolean;
       resetInert: boolean;
+      submitInert: boolean;
       stickyPopup: boolean;
       timerResetClicks: number;
       toolbar2: boolean;
@@ -325,8 +332,10 @@ function open(
   const style = () => root()?.querySelector('style')?.textContent ?? '';
   const submitBtn = () =>
     w.document.querySelector('button[data-e2e-locator=console-submit-button]') as HTMLElement;
+  const delaySubmit = (ms: number) => (submitDelay = ms);
   return {
     w,
+    delaySubmit,
     phase,
     text,
     button,
@@ -508,6 +517,7 @@ describe('the overlay on a LeetCode problem', () => {
     );
     expect(late).toMatchObject({ slug: 'two-sum', sittingId: sitting });
     expect(messages(ext, 'enqueue').every((m) => m.slug === 'two-sum')).toBe(true); // nothing to the next one
+    expect(sentEvents(ext).some((e) => (e.type as string) === 'submitted')).toBe(false); // local only
   }, 20_000);
 
   it('sends a submit judged after leaving for the problem list to its problem’s sitting', async () => {
@@ -1707,6 +1717,93 @@ describe('the scrim', () => {
   });
 });
 
+describe('the debug log’s submit probe', () => {
+  type How = DebugEntry & Record<string, unknown>;
+  const hows = (ext: ReturnType<typeof fakeExtension>) =>
+    ((ext.local.data.debugLog as How[] | undefined) ?? []).filter((e) => e.type === 'submit.how');
+
+  it('Debug mode logs how a submit was made — a click or ⌘↵, trusted or not, and how long before — and nothing with it off', async () => {
+    const bg = fakeBackground();
+    const ext = fakeExtension({ onMessage: (m) => bg.handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.tap('start');
+    await until(() => p.phase() === 'active', 8000);
+    const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += '# wrong\n';
+    const judged = (n: number) =>
+      until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === n, 6000);
+    trustedClick(p.submitBtn());
+    await judged(1);
+    await settle(5000);
+    p.submitBtn().click(); // a page script's
+    await judged(2);
+    await settle(5000);
+    trustedKey(code, { key: 'a' }); // typing: heard, not the shortcut
+    trustedKey(code, { key: 'Enter', metaKey: true });
+    await judged(3);
+    await settle(5000);
+    trustedKey(code, { key: 'Enter', ctrlKey: true, repeat: true });
+    await judged(4);
+    await until(() => hows(ext).length === 4, 6000);
+    const [a, b, c, d] = hows(ext);
+    expect(a).toMatchObject({ click: 'trusted', key: null, open: true, note: 'no-verdict' });
+    expect(b).toMatchObject({ click: 'untrusted', key: null, keys: 0, enters: 0, note: 'shown' });
+    // Each submit starts fresh: c's ⌘↵ carries no click from b, 5 s before it.
+    expect(c).toMatchObject({
+      click: null,
+      clickMs: null,
+      key: 'trusted',
+      mod: 'meta',
+      repeat: false,
+      inEditor: true,
+      keys: 2,
+      enters: 1,
+      note: 'shown',
+    });
+    expect(d).toMatchObject({
+      click: null,
+      key: 'trusted',
+      mod: 'ctrl',
+      repeat: true,
+      keys: 1,
+      enters: 1,
+    });
+    for (const e of [a, b]) expect(e!.clickMs).toEqual(expect.any(Number));
+    expect(c!.keyMs).toEqual(expect.any(Number));
+    expect(c!.keyMs as number).toBeLessThan(1000);
+    // Flags, fixed words, counts and ms only.
+    for (const e of [a, b, c, d])
+      expect(Object.keys(e!).sort()).toEqual(
+        [
+          'click',
+          'clickMs',
+          'enters',
+          'inEditor',
+          'key',
+          'keyMs',
+          'keys',
+          'mod',
+          'note',
+          'open',
+          'repeat',
+          't',
+          'type',
+        ].sort(),
+      );
+
+    const off = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    const q = open('/problems/two-sum/', off);
+    await until(() => q.phase() === 'prompt');
+    await settle(500);
+    trustedKey(q.w.document.querySelector('[data-fake=code]')!, { key: 'Enter', metaKey: true });
+    await until(() => q.fake().submits === 1, 6000);
+    await settle(4000);
+    expect(hows(off)).toEqual([]);
+  }, 40_000);
+});
+
 describe('the debug log’s wire probe', () => {
   // Counts the isolated world's calls to wire.opNames (the parse only the probe needs).
   const counting = (p: ReturnType<typeof open>) => {
@@ -1750,7 +1847,8 @@ describe('the debug log’s wire probe', () => {
   }, 20_000);
 });
 
-// The coach (lib/coach.js): a real Submit within a minute of a failed one gets a note; nothing is ever held.
+// The coach (lib/coach.js): a submit — its request, clicked or ⌘↵ — within a minute of a failed one gets a note;
+// nothing is ever held.
 // The trace card is retired (2.2.0). And the binding two tabs share (F181).
 describe('the resubmit note, and no trace card', () => {
   async function sitting(
@@ -1795,7 +1893,7 @@ describe('the resubmit note, and no trace card', () => {
     const { p, ext } = await sitting();
     trustedClick(p.submitBtn()); // a real click
     await until(() => p.fake().submits === 1, 6000);
-    p.submitBtn().click(); // a page script's, as a keyboard Submit reaches LeetCode without us
+    p.submitBtn().click(); // a page script's
     await until(() => p.fake().submits === 2, 6000);
     await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 6000);
     const r = open('/problems/two-sum/', ext); // a reload, mid-sitting
@@ -1830,41 +1928,45 @@ describe('the resubmit note, and no trace card', () => {
     expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config']);
   }, 30_000);
 
-  it('a Submit within a minute of a failed one gets the note; none after a minute, none after Accepted', async () => {
+  it('a submit within a minute of a failed one gets the note, however it was made; none after a minute, none after Accepted', async () => {
     const { p, ext } = await sitting();
     const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    const nudges = () => coachEvents(ext).filter((k) => k.kind === 'nudge-shown');
+    const judged = (n: number) =>
+      until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === n, 6000);
     code.value += '# wrong\n';
     trustedClick(p.submitBtn());
-    await until(() => sentEvents(ext).some((e) => e.type === 'submit'), 6000);
+    await judged(1);
     expect(p.badge()).not.toContain('trace the failing input'); // no failed verdict before the first
     await settle(30_000);
     trustedClick(p.submitBtn()); // 30 s after a Wrong Answer
     await until(() => p.badge()?.includes('trace the failing input'));
     const shownAt = Date.now();
-    await until(() => coachEvents(ext).some((k) => k.kind === 'nudge-shown'), 6000);
-    expect(coachEvents(ext).find((k) => k.kind === 'nudge-shown')!.gapMs).toBeGreaterThanOrEqual(
-      30_000,
-    );
+    await until(() => nudges().length === 1, 6000);
+    expect(nudges()[0]!.gapMs).toBeGreaterThanOrEqual(30_000);
     expect(p.fake().submits).toBe(2); // the note never blocks
     await settle(7700 - (Date.now() - shownAt)); // still up at about 7.7 s
     expect(p.badge()).toContain('trace the failing input');
     await settle(1000); // gone by 8.7 s
     expect(p.badge()).not.toContain('trace the failing input');
     // 90 s after the second Wrong Answer: no note.
-    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 6000);
+    await judged(2);
     await settle(90_000);
     trustedClick(p.submitBtn());
-    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 3, 6000);
-    // Accepted inside a failed verdict's minute, then a real Submit: no note — Accepted is the last verdict.
-    await settle(10_000); // the third Wrong Answer is 10 s old
+    await judged(3);
+    // The fix, 10 s after the third Wrong Answer, by a page script's click(): a resubmit like any other — the note.
+    await settle(10_000);
     code.value = code.value.replace('# wrong\n', '');
-    p.submitBtn().click(); // the fixed code, by a page click (no note of its own)
-    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 4, 6000);
-    trustedClick(p.submitBtn()); // well within a minute of the last Wrong Answer
-    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 5, 6000);
+    p.submitBtn().click();
+    await until(() => nudges().length === 2, 6000);
+    await judged(4); // Accepted
+    // 10 s after Accepted: no note — Accepted is the last verdict.
+    await settle(10_000);
+    trustedClick(p.submitBtn());
+    await judged(5);
     await settle(4000);
-    expect(coachEvents(ext).filter((k) => k.kind === 'nudge-shown')).toHaveLength(1);
-    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'nudge-shown']);
+    expect(nudges()).toHaveLength(2);
+    expect(coachEvents(ext).map((k) => k.kind)).toEqual(['config', 'nudge-shown', 'nudge-shown']);
   }, 60_000);
 
   // After a Wrong Answer, the note's resubmit within the minute — the shared setup of the cases below.
@@ -1872,7 +1974,7 @@ describe('the resubmit note, and no trace card', () => {
     const s = await sitting(opts);
     const code = s.p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
     code.value += '# wrong\n';
-    s.p.submitBtn().click(); // the submit itself (a page click: it counts for the verdict, not the note)
+    s.p.submitBtn().click(); // the submit itself (a page script's click(): a submit like any other)
     await until(() => sentEvents(s.ext).some((e) => e.type === 'submit'), 6000);
     await settle(10_000);
     return s;
@@ -1883,29 +1985,72 @@ describe('the resubmit note, and no trace card', () => {
     expect(coachEvents(ext).some((k) => k.kind === 'nudge-shown')).toBe(false);
   };
 
-  it('a page script’s click() on Submit gets no note; nor does a page marking <html>, or our badge, with the selector', async () => {
+  const cmdEnter = (p: ReturnType<typeof open>) =>
+    trustedKey(p.w.document.querySelector('[data-fake=code]')!, { key: 'Enter', metaKey: true });
+
+  it('a ⌘↵ submit, with no click at all, within a minute of a failed one gets the note', async () => {
     const { p, ext } = await failedOnce();
-    p.submitBtn().click();
-    await until(() => p.fake().submits === 2, 6000);
-    p.w.document.documentElement.setAttribute('data-e2e-locator', 'console-submit-button');
-    trustedClick(p.w.document.querySelector('[data-fake=code]')!); // anywhere on the page
-    // Our own badge host dressed as LeetCode's Submit: a click on it is never one (view.owns).
-    const host = p.badgeHost()!;
-    host.setAttribute('data-e2e-locator', 'console-submit-button');
-    host.setAttribute('role', 'button');
-    trustedClick(host);
+    cmdEnter(p);
+    await until(() => p.badge()?.includes('trace the failing input'), 6000);
+    expect(p.fake().submits).toBe(2);
+    const shown = await until(() => coachEvents(ext).find((k) => k.kind === 'nudge-shown'), 6000);
+    expect(shown!.gapMs).toBeGreaterThanOrEqual(10_000);
+  }, 30_000);
+
+  it('a real click on Submit that sends no submit gets no note', async () => {
+    const { p, ext } = await failedOnce();
+    p.fake().submitInert = true;
+    trustedClick(p.submitBtn());
+    await noNote(p, ext);
+    expect(p.fake().submits).toBe(1);
+  }, 30_000);
+
+  it('a submit requested before the last failed verdict landed gets no note, though LeetCode answers it after', async () => {
+    const { p, ext } = await sitting({ local: { debug: true } });
+    const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += '# wrong\n';
+    trustedClick(p.submitBtn()); // judged within a few hundred ms
+    p.delaySubmit(3000);
+    trustedClick(p.submitBtn()); // requested now, answered 3 s on: after the first's Wrong Answer
+    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 10_000);
+    await noNote(p, ext);
+    const hows = () =>
+      ((ext.local.data.debugLog as DebugEntry[] | undefined) ?? []).filter(
+        (e) => e.type === 'submit.how',
+      );
+    await until(() => hows().length === 2, 6000);
+    expect(hows().map((e) => e.note)).toEqual(['no-verdict', 'early']);
+  }, 30_000);
+
+  it('two submits inside the minute get one note', async () => {
+    const { p, ext } = await failedOnce();
+    trustedClick(p.submitBtn());
+    cmdEnter(p); // both requested before either verdict
+    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 3, 6000);
+    await settle(4000);
+    expect(coachEvents(ext).filter((k) => k.kind === 'nudge-shown')).toHaveLength(1);
+  }, 30_000);
+
+  it('a submit made here but answered after Next gets no note, here or back, and is never sent', async () => {
+    const { p, ext } = await failedOnce();
+    trustedClick(p.submitBtn()); // its /submit/ answers after the nav below
+    (p.w.document.querySelector('[data-fake=next]') as HTMLElement).click();
+    await until(() => p.phase() === 'prompt', 3000);
+    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 6000);
+    p.w.history.back();
+    await until(() => p.phase() === 'active', 6000);
     await noNote(p, ext);
   }, 30_000);
 
-  it('with the Submit selector null or matching nothing: no note, and no word on the badge', async () => {
-    for (const submit of [null, '#nowhere']) {
-      const { p, ext } = await failedOnce({ local: { selectors: { submit } } });
-      trustedClick(p.submitBtn());
-      await until(() => p.fake().submits === 2, 6000);
-      await noNote(p, ext);
-      expect(p.badge()).not.toContain('Submit');
-    }
-  }, 60_000);
+  it('a reload forgets the last verdict: the next submit gets no note', async () => {
+    const { ext } = await failedOnce();
+    const r = open('/problems/two-sum/', ext);
+    await until(() => r.phase() === 'active', 6000);
+    cmdEnter(r);
+    await until(() => r.fake().submits === 1, 6000);
+    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 6000);
+    await noNote(r, ext);
+  }, 30_000);
 
   it('no sitting open: no note, nothing sent', async () => {
     const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
@@ -1922,6 +2067,16 @@ describe('the resubmit note, and no trace card', () => {
     await settle(4000);
     expect(messages(ext, 'enqueue')).toEqual([]);
     noCard(p);
+  }, 30_000);
+
+  it('a sitting that ended after a failed verdict: the next submit gets no note', async () => {
+    const { p, ext } = await failedOnce(); // the Wrong Answer is the open sitting's
+    const { sittingId } = bound(ext);
+    await ext.local.set({ 'sync:two-sum': { sittingId, status: 'ended', at: Date.now() } });
+    await until(() => p.phase() !== 'active', 8000);
+    trustedClick(p.submitBtn());
+    await until(() => p.fake().submits === 2, 6000);
+    await noNote(p, ext);
   }, 30_000);
 
   it('a note clears on leaving the problem, and the nudge switch off shows none', async () => {

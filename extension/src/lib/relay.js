@@ -3,7 +3,9 @@
 // can only add events to the sitting the extension itself opened, for the problem on screen. accept() checks
 // the envelope: this load's tag, a fresh sequence number, raw text of the right shape. The isolated world
 // then parses that text itself (lib/wire.js), and admit() rules on each item it finds — but a problem doc,
-// which names its own problem and is only ever used for that one, goes to keepsDoc() instead.
+// which names its own problem and is only ever used for that one, goes to keepsDoc() instead. One kind is local
+// only (`submitted`: a submit LeetCode took): admitted under the same rules as an event, but never sent — it
+// only tells the open sitting's page that a submit was made, for the resubmit note.
 (function (root, factory) {
   const api = factory(root.ApertureLC && root.ApertureLC.tag);
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -13,6 +15,7 @@
   const tag = tagLib || (typeof require === 'function' ? require('./tag.js') : null);
   const SENDABLE = ['snapshot', 'run', 'submit', 'submitDetails', 'note', 'replay'];
   const CACHE_ONLY = ['hint'];
+  const LOCAL = ['submitted']; // never sent: content.js reads it for the resubmit note (lib/coach.js)
   // LeetCode's judging can finish after you've moved on: these, when made from their own problem's page, go
   // to that problem's open sitting (content.js asks admit() again with that problem as ctx), never to the one
   // on screen (the maintainer, 2026-11-08).
@@ -89,8 +92,8 @@
   // One item the isolated world parsed out of raw traffic (lib/wire.js) → whether it may be used.
   // ctx: { screenSlug, binding: {questionId, status} | null } → {ok: true} | {ok: false, reason}
   function admit(item, ctx) {
-    if (!item || (!SENDABLE.includes(item.kind) && !CACHE_ONLY.includes(item.kind)))
-      return { ok: false, reason: 'kind' };
+    const known = [SENDABLE, CACHE_ONLY, LOCAL].some((k) => item && k.includes(item.kind));
+    if (!item || !known) return { ok: false, reason: 'kind' };
     if (!ctx.screenSlug) return { ok: false, reason: 'off-problem' };
     if (item.slug != null && item.slug !== ctx.screenSlug)
       return { ok: false, reason: 'off-screen-slug' };
@@ -116,5 +119,5 @@
       ? { ok: true }
       : { ok: false, reason: 'slug' };
 
-  return { createRelay, admit, keepsDoc, isSlug, slugOf, SENDABLE, LATE, RAW_MAX };
+  return { createRelay, admit, keepsDoc, isSlug, slugOf, SENDABLE, LOCAL, LATE, RAW_MAX };
 });

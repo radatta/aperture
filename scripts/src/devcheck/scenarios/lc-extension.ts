@@ -392,7 +392,7 @@ export const lcExtension: Scenario = {
       what: 'Every shipped selector is valid CSS; an override (null turns a step off) merges; a bad paste or the retired timerClicks falls back to the defaults',
       offDev: {
         file: 'extension/test/libs.test.ts',
-        test: 'ships LeetCode’s controls from the debug log; null turns a step off; a bad paste and the retired timerClicks fall back',
+        test: 'ships LeetCode’s controls from the debug log; null turns a step off; a bad paste and the retired timerClicks and submit fall back',
         why: `${noStep}; merge() is a pure function`,
       },
     },
@@ -885,7 +885,8 @@ export const lcExtension: Scenario = {
       needsYou:
         'real Safari sittings on leetcode.com — from a running countdown, an idle one, one paused before a reload, a never-opened problem and a narrow pane, with the debug log exported (extension/README.md → LeetCode’s controls): only LeetCode’s real page has them',
     },
-    // The coach (lib/coach.js): the resubmit note; the trace card is retired (2.2.0). The binding two tabs share.
+    // The coach (lib/coach.js): the resubmit note, read from the submit request since 2.2.1 (⌘↵ counts); the trace
+    // card is retired (2.2.0). The binding two tabs share.
     {
       id: 'ext-no-card',
       entry: 'extension',
@@ -901,7 +902,7 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-config',
       entry: 'extension',
       kind: 'nominal',
-      what: '`config` goes once a sitting (`{kind, nudge}` only), not again on a reload; a real or page-script Submit sends no trace, trace-skip or untraced-submit',
+      what: '`config` goes once a sitting (`{kind, nudge}` only), not again on a reload; a submit sends no trace, trace-skip or untraced-submit',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'sends config once a sitting (the note’s switch alone), never again on a reload, and nothing for a submit',
@@ -912,11 +913,22 @@ export const lcExtension: Scenario = {
       id: 'ext-coach-nudge',
       entry: 'extension',
       kind: 'nominal',
-      what: 'A Submit 30 s after a failed verdict shows the note for 8 s and logs it, never blocking; none at 90 s, none after Accepted',
+      what: 'A submit 30 s after a failed verdict — a click or a page script’s — shows the note for 8 s and logs it, never blocking; none at 90 s, none after Accepted',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'a Submit within a minute of a failed one gets the note; none after a minute, none after Accepted',
+        test: 'a submit within a minute of a failed one gets the note, however it was made; none after a minute, none after Accepted',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom, on a fake clock`,
+      },
+    },
+    {
+      id: 'ext-note-keyboard',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'A ⌘↵ submit, with no click at all, within a minute of a failed verdict shows the note (F284; fails on 2.2.0)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a ⌘↵ submit, with no click at all, within a minute of a failed one gets the note',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
     {
@@ -931,25 +943,157 @@ export const lcExtension: Scenario = {
       },
     },
     {
-      id: 'ext-note-untrusted',
+      id: 'ext-note-click-no-request',
       entry: 'extension',
       kind: 'edge',
-      what: 'A page script’s click() on Submit gets no note, nor does a page marking <html> or our own badge host with the Submit’s selector',
+      what: 'A real click on Submit that sends no submit gets no note: the note reads the request, never the button',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'a page script’s click() on Submit gets no note; nor does a page marking <html>, or our badge, with the selector',
+        test: 'a real click on Submit that sends no submit gets no note',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
     {
-      id: 'ext-note-submit-null',
+      id: 'ext-note-repeat',
       entry: 'extension',
       kind: 'edge',
-      what: '`submit: null`, or a selector LeetCode’s page doesn’t match: no note and no word on the badge',
+      what: 'Two submits inside the minute get one note',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'with the Submit selector null or matching nothing: no note, and no word on the badge',
-        why: `${noStep}; dev can’t move LeetCode’s button; both worlds’ real scripts run over the fake page in jsdom`,
+        test: 'two submits inside the minute get one note',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-note-repeat-response',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A repeated /submit/ response for one submission says nothing twice',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'a repeated /submit/ response for an id still pending, or already judged, says nothing twice',
+        why: `${noStep}; the parse is a pure function`,
+      },
+    },
+    {
+      id: 'ext-note-invalid',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A /submit/ with no submission id or an unreadable body, or a Run, says nothing',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'says nothing for a /submit/ with no id or an unreadable body, or for a Run',
+        why: `${noStep}; the parse is a pure function`,
+      },
+    },
+    {
+      id: 'ext-note-early',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submit requested before the last failed verdict landed gets no note, though LeetCode answers it after (logged `early`)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a submit requested before the last failed verdict landed gets no note, though LeetCode answers it after',
+        why: `${noStep}, and dev can’t make LeetCode answer late; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-note-ended',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A sitting that ended after a failed verdict: the next submit gets no note',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a sitting that ended after a failed verdict: the next submit gets no note',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-note-off-page',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submit made on the problem but answered after Next gets no note there or back, and is never sent',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a submit made here but answered after Next gets no note, here or back, and is never sent',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-note-admit',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submitted item is admitted like an event (the screen’s problem, an open sitting) and is neither sendable nor late',
+      offDev: {
+        file: 'extension/test/relay.test.ts',
+        test: 'admits a submitted item like an event — the screen’s problem, an open sitting — and it is neither sendable nor late',
+        why: `${noStep}; the relay's acceptance rules are pure functions`,
+      },
+    },
+    {
+      id: 'ext-note-never-sent',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submitted item makes no event',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'a submitted item makes no event',
+        why: `${noStep}; the parse is a pure function`,
+      },
+    },
+    {
+      id: 'ext-note-reload',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A reload forgets the last verdict: the next submit gets no note',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a reload forgets the last verdict: the next submit gets no note',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-selectors-submit-retired',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Opening Options drops a saved `submit` selector; a `null` one (the note off, before 2.2.1) turns the Coach switch off — and tabs read it as off before Options is opened',
+      offDev: {
+        file: 'extension/test/options.test.ts',
+        test: 'opening Options drops the retired submit selector from a saved override; a null one turns the note’s switch off',
+        why: `${noStep}; the real Options page runs in jsdom`,
+      },
+    },
+    {
+      id: 'ext-selectors-submit-paste',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A paste of only the retired `submit` saves nothing and leaves the note as it was',
+      offDev: {
+        file: 'extension/test/options.test.ts',
+        test: 'a paste of only the retired submit saves nothing and leaves the defaults; the note stays as it was',
+        why: `${noStep}; the real Options page runs in jsdom`,
+      },
+    },
+    {
+      id: 'ext-submit-null-before-options',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A stored `selectors.submit: null` reads as the note off in a tab before Options carries it over',
+      offDev: {
+        file: 'extension/test/coach.test.ts',
+        test: 'reads the note’s switch as on unless stored false, or a saved submit: null; the retired card’s switches change nothing',
+        why: `${noStep}; the switch is a pure function the tabs and Options both read`,
+      },
+    },
+    {
+      id: 'ext-submit-how-probe',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'Debug mode logs how each submit was made (click or ⌘↵, trusted or not, ms before, keydowns heard), fresh per submit, and what the note did, flags only; nothing with it off',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'Debug mode logs how a submit was made — a click or ⌘↵, trusted or not, and how long before — and nothing with it off',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
     {
@@ -1102,7 +1246,7 @@ export const lcExtension: Scenario = {
       what: 'Selector overrides save as JSON; bad JSON, a non-object and an unknown key save nothing',
       offDev: {
         file: 'extension/test/options.test.ts',
-        test: 'saves selector overrides as JSON over the defaults; bad JSON and unknown keys save nothing',
+        test: 'saves selector overrides as JSON over the defaults; bad JSON and unknown keys save nothing; a pasted submit is dropped',
         why: `${noStep}; options.html and the scripts it lists run in jsdom over the fake extension API`,
       },
     },
@@ -1187,15 +1331,23 @@ export const lcExtension: Scenario = {
       id: 'ext-note-safari',
       entry: 'extension',
       kind: 'nominal',
-      what: 'In Safari on leetcode.com: no card and nothing held at the first Submit; a resubmit within a minute of a failed one shows the note',
+      what: 'In Safari on leetcode.com: no card and nothing held at the first Submit; a clicked resubmit within a minute of a failed one shows the note',
       needsYou:
         'only Safari and LeetCode’s real Submit show it — the post-merge Safari pass (PR body, Needs you after merge)',
+    },
+    {
+      id: 'ext-note-safari-keyboard',
+      entry: 'extension',
+      kind: 'nominal',
+      what: 'In Safari on leetcode.com: ⌘↵ within a minute of a failed submit shows the note; with Debug mode on, the exported log’s `submit.how` says what ⌘↵ did',
+      needsYou:
+        'only Safari and LeetCode’s real shortcut show it — the post-merge Safari pass (PR body, Needs you after merge)',
     },
     {
       id: 'ext-version-safari',
       entry: 'extension',
       kind: 'nominal',
-      what: 'In Safari: Options shows 2.2.0 after the rebuild, and Settings → LeetCode reads it up to date after one real Start',
+      what: 'In Safari: Options shows 2.2.1 after the rebuild, and Settings → LeetCode reads it up to date after one real Start',
       needsYou: 'the rebuilt Safari extension is the maintainer’s — the post-merge Safari pass',
     },
     {

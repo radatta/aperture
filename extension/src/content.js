@@ -142,6 +142,7 @@
       if (!k.ok) return debug.log('relay.reject', { reason: k.reason, kind: m.kind });
       return onProblem(m.slug, m.payload, m.questionId);
     }
+    if (m.kind === 'submitted') return onSubmitted(m); // local only: the resubmit note, never sent
     // Made from another page (the last problem, before a nav): never this one's. A run or submit made on its
     // own problem's page and judged after you left goes to that problem's sitting.
     const from = relayLib.slugOf(m.page);
@@ -831,33 +832,114 @@
     sendCoach(coachLib.configPayload(coachOn));
     patchBinding({ coach: { config: true } });
   }
-  // A real click on LeetCode's Submit, in the capture phase at the window: within a minute of a failed verdict,
-  // the note. It never blocks or delays the click. A page script's click() gets no note, nor does a click in
-  // one of our own hosts, and the hit must be a button — the page could mark a wrapper (or <html>) with the
-  // Submit's selector to have every click count.
+  // A submit LeetCode took (lib/wire.js `submitted`, from its /submit/ response — a click, ⌘↵, however it was
+  // made): within a minute of a failed verdict, the note. It reads the request, never the button, so it never
+  // blocks or delays anything. Same rules as an event: made on this page, for the sitting open here. The gap runs
+  // from the verdict's arrival to the submit's request time, so a submit made before the last verdict landed
+  // reads negative and gets none.
+  function onSubmitted(m) {
+    submitHow(m, submittedNote(m));
+  }
+  function submittedNote(m) {
+    if (relayLib.slugOf(m.page) !== screenSlug) {
+      debug.log('relay.reject', { reason: 'off-page', kind: m.kind });
+      return 'off-page';
+    }
+    const a = relayLib.admit(m, { screenSlug, binding: liveBinding() });
+    if (!a.ok) {
+      if (a.reason !== 'no-sitting') debug.log('relay.reject', { reason: a.reason, kind: m.kind });
+      return a.reason === 'no-sitting' ? 'closed' : a.reason;
+    }
+    if (!sittingOpen()) return 'closed';
+    if (!coachOn.nudge) return 'off';
+    const now = Math.min(m.at, Date.now());
+    const gap = coachLib.nudgeGap({ settings: coachOn, last: lastVerdict, now });
+    if (gap == null) {
+      if (!lastVerdict || lastVerdict.verdict !== 'failed') return 'no-verdict';
+      return now < lastVerdict.at ? 'early' : 'late';
+    }
+    lastVerdict = null; // one note per failed verdict
+    sendCoach({ kind: 'nudge-shown', gapMs: gap });
+    flash('trace the failing input before you resubmit');
+    return 'shown';
+  }
+  // A probe for the next Safari pass (Debug mode only): what preceded a submit — a click on LeetCode's Submit or a
+  // ⌘/Ctrl+Enter, trusted or not, and how long before its request — and what the note did. Flags, fixed words,
+  // counts and ms only. The counts say whether this world hears keydowns at all (`keys`) and the shortcut in
+  // particular (`enters`) since the last submit, so a `key: null` reads as heard nothing, or no keydown at all.
+  // Each submit's record starts fresh. Both listeners are passive and never stop or change the event.
+  const SUBMIT_PROBE = '[data-e2e-locator="console-submit-button"]'; // the probe's only; nothing clicks it
+  const PROBE_MS = 30_000;
+  let submitClick = null; // {trusted, t}
+  let submitKey = null; // {trusted, mod, repeat, inEditor, t}
+  let keysHeard = 0;
+  let entersHeard = 0;
+  const probeOpts = { capture: true, passive: true };
   window.addEventListener(
     'click',
     (e) => {
-      if (!e.isTrusted || view.owns(e.target)) return;
-      let hit = null;
+      if (!debug.wants()) return;
       try {
-        hit = sel.submit && e.target && e.target.closest ? e.target.closest(sel.submit) : null;
+        const t = e.target;
+        if (!t || !t.closest || view.owns(t) || !t.closest(SUBMIT_PROBE)) return;
+        submitClick = { trusted: e.isTrusted, t: Date.now() };
       } catch {}
-      if (!hit || !hit.matches('button,[role=button]')) return;
-      if (!sittingOpen()) return;
-      const gap = coachLib.nudgeGap({ settings: coachOn, last: lastVerdict, now: Date.now() });
-      if (gap == null) return;
-      lastVerdict = null; // one note per failed verdict
-      sendCoach({ kind: 'nudge-shown', gapMs: gap });
-      flash('trace the failing input before you resubmit');
     },
-    true,
+    probeOpts,
   );
-  // A submit LeetCode judged, for the open sitting: the verdict the next Submit's note reads.
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!debug.wants()) return;
+      try {
+        keysHeard++;
+        if (e.key !== 'Enter' || !(e.metaKey || e.ctrlKey)) return;
+        const t = e.target;
+        if (t && view.owns(t)) return;
+        entersHeard++;
+        submitKey = {
+          trusted: e.isTrusted,
+          mod: e.metaKey ? 'meta' : 'ctrl',
+          repeat: !!e.repeat,
+          inEditor: !!(t && t.closest && t.closest('#editor')),
+          t: Date.now(),
+        };
+      } catch {}
+    },
+    probeOpts,
+  );
+  function submitHow(m, note) {
+    if (!debug.wants()) return;
+    const before = (x) => {
+      const ms = x ? m.at - x.t : null;
+      return ms != null && ms >= 0 && ms <= PROBE_MS ? ms : null;
+    };
+    const clickMs = before(submitClick);
+    const keyMs = before(submitKey);
+    const word = (x, ms) => (ms == null ? null : x.trusted ? 'trusted' : 'untrusted');
+    debug.log('submit.how', {
+      click: word(submitClick, clickMs),
+      clickMs,
+      key: word(submitKey, keyMs),
+      keyMs,
+      mod: keyMs == null ? null : submitKey.mod,
+      repeat: keyMs == null ? null : submitKey.repeat,
+      inEditor: keyMs == null ? null : submitKey.inEditor,
+      keys: keysHeard,
+      enters: entersHeard,
+      open: sittingOpen(),
+      note,
+    });
+    submitClick = submitKey = null;
+    keysHeard = entersHeard = 0;
+  }
+  // A submit LeetCode judged, for the open sitting: the verdict the next submit's note reads.
   function onSubmitItem(m) {
     if (!sittingOpen()) return;
     const verdict = coachLib.verdictOf(m.payload);
-    lastVerdict = verdict ? { at: Date.now(), verdict } : null;
+    // When the verdict came, on the page's clock like a submit's request time (the check's response, clamped).
+    const at = Number.isFinite(m.judgedAt) ? Math.min(m.judgedAt, Date.now()) : Date.now();
+    lastVerdict = verdict ? { at, verdict } : null;
   }
 
   // ---- the overlay ----
@@ -1069,8 +1151,8 @@
   api.storage.onChanged.addListener((changes, area) => {
     if (area && area !== 'local') return; // Safari has passed no area name (WebKit bug 281644)
     if (changes.selectors) sel = selLib.merge(changes.selectors.newValue);
-    if (Object.values(coachLib.KEYS).some((k) => changes[k]))
-      local.get(Object.values(coachLib.KEYS)).then(
+    if (changes.selectors || Object.values(coachLib.KEYS).some((k) => changes[k]))
+      local.get(['selectors', ...Object.values(coachLib.KEYS)]).then(
         (got) => (coachOn = coachLib.settingsOf(got)),
         () => {},
       );
@@ -1092,10 +1174,13 @@
     const slug = screenSlug;
     const k = `sync:${slug}`;
     const got = await Promise.resolve()
-      .then(() => local.get([k, 'status', `sitting:${slug}`]))
+      .then(() =>
+        local.get([k, 'status', `sitting:${slug}`, 'selectors', ...Object.values(coachLib.KEYS)]),
+      )
       .catch(() => null);
     if (!got || screenSlug !== slug || !rereading()) return;
     status = got.status || null;
+    coachOn = coachLib.settingsOf(got); // the note's switch too: a change event may never come
     adoptBinding(got[`sitting:${slug}`]);
     const next = got[k] || null;
     if (JSON.stringify(next) === JSON.stringify(sync)) return;

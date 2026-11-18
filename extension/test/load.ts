@@ -156,6 +156,16 @@ export function trustedClick(el: Element) {
   ev.isTrusted = true;
   idl.implForWrapper(el)._dispatch(ev);
 }
+// A user's ⌘↵ (or another key), trusted the same way.
+export function trustedKey(el: Element, init: KeyboardEventInit) {
+  const idl = require('jsdom/lib/generated/idl/utils.js');
+  const win = el.ownerDocument.defaultView as unknown as typeof globalThis;
+  const ev = idl.implForWrapper(
+    new win.KeyboardEvent('keydown', { bubbles: true, cancelable: true, composed: true, ...init }),
+  );
+  ev.isTrusted = true;
+  idl.implForWrapper(el)._dispatch(ev);
+}
 // A vm context for the background page, with `extra` as its globals.
 export function background(extra: Record<string, unknown>) {
   const ctx = vm.createContext({

@@ -123,10 +123,20 @@ describe('inject-main in a page', () => {
       body: T.updateSyncedCode.reqText,
     });
 
-    const kinds = await until(() => (admitted.length >= 9 ? admitted.map((m) => m.kind) : null));
+    const kinds = await until(() => (admitted.length >= 10 ? admitted.map((m) => m.kind) : null));
     expect(rejected).toEqual([]);
     expect(new Set(kinds)).toEqual(
-      new Set(['hint', 'snapshot', 'note', 'replay', 'problem', 'submit', 'submitDetails', 'run']),
+      new Set([
+        'hint',
+        'snapshot',
+        'note',
+        'replay',
+        'problem',
+        'submitted', // the /submit/ itself, local only (the resubmit note)
+        'submit',
+        'submitDetails',
+        'run',
+      ]),
     );
     expect(admitted.find((m) => m.kind === 'run')).toMatchObject({
       slug: 'two-sum',
@@ -155,7 +165,8 @@ describe('inject-main in a page', () => {
       await m.post(T.updateSyncedCode);
       await m.post(T.submit);
       m.xhr(T.submitCheck);
-      return until(() => (m.admitted.length >= 2 ? shape(m.admitted) : null));
+      // The snapshot, the /submit/'s local `submitted`, and the judged submit.
+      return until(() => (m.admitted.length >= 3 ? shape(m.admitted) : null));
     };
     const pairs = [T.updateSyncedCode, T.submit, T.submitCheck] as Pair[];
     const clean = await replayAll(loadMain(pairs));
