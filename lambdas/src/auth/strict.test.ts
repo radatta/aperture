@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  AUTH_ENV,
   DEV_STATE_SECRET,
   logMissingAuthEnv,
   missingAuthEnv,
@@ -53,6 +54,20 @@ describe('logMissingAuthEnv', () => {
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     logMissingAuthEnv('mcp', ['STRICT_TEST_UNSET']);
     expect(err).not.toHaveBeenCalled();
+  });
+});
+
+describe('AUTH_ENV', () => {
+  it('names DEVICE_USER_ID optional on both edges, so devb’s cold start isn’t an error', () => {
+    for (const fn of ['bff', 'mcp'] as const) {
+      expect(AUTH_ENV[fn].optional).toEqual(['DEVICE_USER_ID']);
+      expect(AUTH_ENV[fn].required).not.toContain('DEVICE_USER_ID');
+      expect(AUTH_ENV[fn].required).toEqual(
+        expect.arrayContaining(['USER_POOL_ID', 'MCP_CLIENT_ID', 'ORIGIN_SECRET']),
+      );
+    }
+    expect(AUTH_ENV.bff.required).toContain('DEVICE_TOKEN');
+    expect(AUTH_ENV.mcp.required).toContain('AGENT_TOKEN');
   });
 });
 

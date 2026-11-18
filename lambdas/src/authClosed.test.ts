@@ -130,11 +130,50 @@ describe('fail closed on a stage — BFF', () => {
 
   it('no origin secret: Google connect can’t sign a state on a stage', async () => {
     const userId = 'someone';
-    const client = new BackendClient(new Repo(deps.doc, liveWrites(deps.doc), userId), {
-      userId,
-      google: deps.bff.google,
-    });
-    await expect(client.googleConnectUrl()).rejects.toThrow(/not configured on this stage/);
+    // As the edge builds it (index.ts: stateSecret from ORIGIN_SECRET).
+    const client = () =>
+      new BackendClient(new Repo(deps.doc, liveWrites(deps.doc), userId), {
+        userId,
+        google: deps.bff.google,
+        stateSecret: process.env.ORIGIN_SECRET,
+      });
+    await expect(client().googleConnectUrl()).rejects.toThrow(/not configured on this stage/);
+    process.env.ORIGIN_SECRET = ORIGIN; // control: with the secret, connect signs a state
+    expect((await client().googleConnectUrl()).url).toEqual(expect.any(String));
+  });
+
+  it('no claude client id on a stage: the deployed BFF refuses every call (D14 can’t vanish)', async () => {
+    // The module's own wiring, with a verifier that accepts 'good' and an in-memory table: without the guard a
+    // valid token would be served with the D14 deny gone.
+    const call = async () => {
+      vi.resetModules();
+      vi.doMock('./auth/verify', async (orig) => ({
+        ...(await orig<typeof import('./auth/verify')>()),
+        createCognitoVerifier: () => ({
+          verify: async (t: string) => ({ sub: t === 'good' ? 'u-1' : '' }),
+        }),
+      }));
+      vi.doMock('./ddb/LiveDoc', async () => {
+        const { InMemoryDoc } = await import('./ddb/DocClient');
+        return { createLiveDoc: () => new InMemoryDoc() };
+      });
+      const { handler } = await import('./index');
+      const h = { [ORIGIN_SECRET_HEADER]: ORIGIN, [AUTH_HEADER]: 'Bearer good' };
+      return ((await handler(http('POST', '/api/listTasks', h, '{"args":[]}'))) as Res).statusCode;
+    };
+    process.env.USER_POOL_ID = 'us-west-1_AuthClosed';
+    process.env.ORIGIN_SECRET = ORIGIN;
+    try {
+      expect(await call()).toBe(401);
+      process.env.MCP_CLIENT_ID = 'claude'; // control: with the id, the same token is served
+      expect(await call()).toBe(200);
+    } finally {
+      delete process.env.USER_POOL_ID;
+      delete process.env.MCP_CLIENT_ID;
+      vi.doUnmock('./auth/verify');
+      vi.doUnmock('./ddb/LiveDoc');
+      vi.resetModules();
+    }
   });
 });
 

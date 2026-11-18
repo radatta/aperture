@@ -26,7 +26,7 @@ import {
   resolveDeviceUserId,
   resolveUserId,
 } from './auth/verify';
-import { logMissingAuthEnv, originPasses, stateKey } from './auth/strict';
+import { AUTH_ENV, logMissingAuthEnv, originPasses, stateKey } from './auth/strict';
 import type { Verifier } from './auth/verify';
 import type { DocClient } from './ddb/DocClient';
 import type { GoogleGateway } from './google/gateway';
@@ -72,11 +72,7 @@ const objects = createS3ObjectStore(process.env.FILES_BUCKET ?? ''); // deletes 
 
 // Built once at cold start (bffVerifier: when it's null and why).
 const verifier = bffVerifier(process.env, createCognitoVerifier); // passed in: the module's export, which tests mock
-logMissingAuthEnv(
-  'bff',
-  ['USER_POOL_ID', 'MCP_CLIENT_ID', 'ORIGIN_SECRET', 'DEVICE_TOKEN'],
-  ['DEVICE_USER_ID'],
-);
+logMissingAuthEnv('bff', [...AUTH_ENV.bff.required], [...AUTH_ENV.bff.optional]);
 
 // The live calendar gateway (real fetch + SSM). Constructed once; makes no call until a method runs, so
 // this is inert in local/test where APP_URL/SSM aren't set. testMode requests never reach it (handleRpc

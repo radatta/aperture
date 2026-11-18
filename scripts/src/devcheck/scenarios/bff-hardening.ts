@@ -206,6 +206,13 @@ export const bffHardening: Scenario = {
       'mcp',
     ),
     offDev(
+      'bff-no-claude-client',
+      'A stage whose BFF has no claude client id refuses every call (the D14 deny can’t vanish)',
+      CLOSED,
+      'no claude client id on a stage: the deployed BFF refuses every call (D14 can’t vanish)',
+      UNSET,
+    ),
+    offDev(
       'oauth-connect-no-secret',
       'Google connect can’t sign a state on a stage with no origin secret',
       CLOSED,

@@ -7,7 +7,7 @@ import { AGENT_TOKEN_HEADER, APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from 
 import type { ApiMethod } from '@aperture/shared';
 import { createLiveDoc } from '../ddb/LiveDoc';
 import { createCognitoVerifier, resolveAgentUserId, resolveUserId } from '../auth/verify';
-import { logMissingAuthEnv, originPasses } from '../auth/strict';
+import { AUTH_ENV, logMissingAuthEnv, originPasses } from '../auth/strict';
 import type { Verifier } from '../auth/verify';
 import type { DocClient } from '../ddb/DocClient';
 import type { GoogleGateway } from '../google/gateway';
@@ -139,11 +139,7 @@ export const createMcpHandler =
   (event: HttpEvent): Promise<HttpResult> =>
     handle(event, d);
 export const handler = createMcpHandler(live);
-logMissingAuthEnv(
-  'mcp',
-  ['USER_POOL_ID', 'MCP_CLIENT_ID', 'ORIGIN_SECRET', 'AGENT_TOKEN'],
-  ['DEVICE_USER_ID'],
-);
+logMissingAuthEnv('mcp', [...AUTH_ENV.mcp.required], [...AUTH_ENV.mcp.optional]);
 
 async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
   const httpMethod = event.requestContext?.http?.method;

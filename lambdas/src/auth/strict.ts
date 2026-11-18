@@ -42,6 +42,18 @@ export const resetOriginLogForTest = (): void => {
   originUnsetLogged = false;
 };
 
+// What each edge's cold start checks (logMissingAuthEnv). DEVICE_USER_ID is optional: devb binds none by design.
+export const AUTH_ENV = {
+  bff: {
+    required: ['USER_POOL_ID', 'MCP_CLIENT_ID', 'ORIGIN_SECRET', 'DEVICE_TOKEN'],
+    optional: ['DEVICE_USER_ID'],
+  },
+  mcp: {
+    required: ['USER_POOL_ID', 'MCP_CLIENT_ID', 'ORIGIN_SECRET', 'AGENT_TOKEN'],
+    optional: ['DEVICE_USER_ID'],
+  },
+} as const satisfies Record<string, { required: string[]; optional: string[] }>;
+
 // The OAuth state HMAC key: ORIGIN_SECRET, or the fixed dev key off a stage only.
 export const DEV_STATE_SECRET = 'dev-state-secret';
 export function stateKey(secret: string | undefined, strict: boolean = strictAuth()): string {
