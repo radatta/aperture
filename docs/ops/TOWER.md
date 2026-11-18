@@ -23,15 +23,17 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 
 ## Run it
 
-| Command                                                | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `board.sh tower start\|restart\|stop\|status\|version` | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts` without `--fixtures` / `--once`, is the server, and its pid is written back; any other listener (a proof server included) is never claimed, and `start` names it. `APERTURE_TOWER_PORT` moves the port (6183), `APERTURE_TOWER_PID` the pidfile. Log: `localNotes/board/tower.log`. `version` prints the commit the running server started from, which it writes beside its pidfile (`<pidfile>.sha`, `<pid> <sha>`; printed only when that pid is the running server, else empty: unknown); `stop` removes it. `restart` exits with `start`'s status. |
-| `pnpm board sync-main`                                 | The main checkout to `origin/main` (fetch, then `git switch --detach`; refuses tracked changes or a checkout on a branch, untracked files are fine), then `board.sh tower restart` only when the tower is running and its served commit differs from the new HEAD in a file the tower runs (`behind.ts` `TOWER_PATHS`: `scripts/src/board`, `scripts/board` and the files they import or read outside them, tests and fixtures excluded; a test holds the list to the import graph) or is unknown. Never starts a stopped tower. Prints what moved and why it restarted or didn't; a rerun is a no-op. Runs from any worktree.                                                                                                                                                                                                                                                                             |
-| `scripts/board/tower-web.sh --once`                    | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Command                                                    | Does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `board.sh tower start\|restart\|stop\|status\|version`     | The server, detached (`setsid nohup`). Only the server `start` launches writes `/tmp/aperture-tower.pid`, once the port is bound; "running" means that pid is alive as the tower's node, and the port is the one-server lock. With the pidfile gone (`/tmp` cleaned), the port's listener (`ss -ltnp`), if it is a node running `tower/web/main.ts` without `--fixtures` / `--once`, is the server, and its pid is written back; any other listener (a proof server included) is never claimed, and `start` names it. `APERTURE_TOWER_PORT` moves the port (6183), `APERTURE_TOWER_PID` the pidfile. Log: `localNotes/board/tower.log`. `version` prints the commit the running server started from, which it writes beside its pidfile (`<pidfile>.sha`, `<pid> <sha>`; printed only when that pid is the running server, else empty: unknown); `stop` removes it. `restart` exits with `start`'s status. |
+| `pnpm board sync-main`                                     | The main checkout to `origin/main` (fetch, then `git switch --detach`; refuses tracked changes or a checkout on a branch, untracked files are fine), then `board.sh tower restart` only when the tower is running and its served commit differs from the new HEAD in a file the tower runs (`behind.ts` `TOWER_PATHS`: `scripts/src/board`, `scripts/board` and the files they import or read outside them, tests and fixtures excluded; a test holds the list to the import graph) or is unknown. Never starts a stopped tower. Prints what moved and why it restarted or didn't; a rerun is a no-op. Runs from any worktree. The tower check and restart run under their own lock (`/tmp/aperture-tower-restart.lock`, 30 s wait), so two callers at once (the main sync and a `lanes end`) restart it once and the second says not needed.                                                              |
+| `board.sh sync start\|restart\|stop\|status\|once\|ensure` | The main sync loop (_Board freshness_ → _Main sync_). `ensure` starts it only for the real board, which `tower start` and the tower's minute tick do.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `pnpm board stale [--json]`                                | The tower's last `stale.json`: queue.json's age and each fact it contradicts, with the fix (_Board freshness_).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `scripts/board/tower-web.sh --once`                        | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
-and never from a worktree. `pnpm lanes start` and `pnpm lanes end` finish with sync-main, so a merge followed by
-either needs nothing by hand; after a merge that no lane command follows, run `pnpm board sync-main`. A stopped
+and never from a worktree. `pnpm lanes start` and `pnpm lanes end` finish with sync-main, and the main sync loop runs
+it every 2 min (_Board freshness_), so a merge needs nothing by hand. A stopped
 tower needs `board.sh tower start`. The page's header shows the commit it serves; when the checkout's HEAD has moved past it in a tower
 file (a checkout moved by hand or by a rolled-back `lanes start`, or a sync-main whose restart failed), the sources chip reads "behind main" and
 SOURCES says what to run. The server compares on each page poll (HEAD read from the file, `git diff` once per HEAD
@@ -129,7 +131,10 @@ From the top:
      such date, a year either way). Exact
      shapes only: free text (`wave 4`, `1-2 days after …`) never fires (`firedFollowups()` in `queue.ts`);
    - parked lanes;
-   - lanes whose file hasn't moved in a day.
+   - lanes whose file hasn't moved in a day;
+   - **BOARD** rows first: each queue.json fact the tower contradicts, with its fix in the details (_Board
+     freshness_; the STALE follow-ups above are among its items, listed once). A "board: can't tell all" line says
+     which source was too old to check. The title's count includes them, and so does the strip's SLIPPING chip.
 
 ### Expand
 
@@ -239,9 +244,91 @@ Freshness limits (`derive.ts` `STALE`):
 | gh            | 3 min                            |
 | a PR's checks | 5 min                            |
 | queue.json    | 2 h                              |
+| main sync     | 5 min                            |
 | a lane file   | amber at 2 h, SLIPPING at 24 h   |
 | Mac stats     | 60 s, then silent (red) at 5 min |
 | AWS costs     | 3 days                           |
+
+## Board freshness
+
+Dispatch hand-writes `queue.json`; the tower works facts out for itself, and where the two disagree the derived fact
+shows and the hand-written one becomes a **stale item** for dispatch to fix. Nothing here writes `queue.json`: dispatch
+stays its only writer. Merged truth comes from gh's newest 40 plus main's own log (`mergelog.ts`: squash subjects end
+`(#N)`, `git log origin/main --first-parent -n 400`, read at most once a minute), so a PR any board record names reads
+merged past gh's window and while gh fails.
+
+What the tower derives over the hand-written fields:
+
+- A merged PR beats a `PARKED` word (the queue's or a lane file's).
+- A `merge` plan row is struck once its lane's PR merged, or every `PR <n>` its text names has (at least one; text
+  like "Merge G" is never struck by a guess).
+- The dev order (`devQueue` `next` / `waiting`) drops a lane holding a slot or merged, whatever its state says.
+- A reused branch name: a lane file that began its phase after the branch's last merge, without naming that PR, is the
+  new lane, not DONE (`prFor`).
+- A lane's session: its lane file's, then the live registry's, then the queue's.
+
+**Stale items** (`stale.ts`), one per contradiction, each with `since` (when the derived fact became true, when known):
+
+| Kind           | When                                                                                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `queue-merged` | a `devQueue` lane whose PR merged (nothing else is said about it)                                                                                       |
+| `queue-state`  | `on-dev` with no slot holding it, or holding one while not `on-dev`; `waiting`/`next`/`building` with an open non-draft PR; `pr-open`/`ready` with none |
+| `queue-pr`     | its `pr` isn't its open PR                                                                                                                              |
+| `waiting-on`   | a `waitingOn` naming a merge that has happened (`<branch> merges`, `PR <n>`: the follow-ups' exact shapes; never a date)                                |
+| `plan-done`    | a plan row the tower struck that dispatch hasn't marked                                                                                                 |
+| `plan-age`     | `planAt` over 6 h old, or missing, with a row not done                                                                                                  |
+| `merge-order`  | a `mergeOrder` entry that landed                                                                                                                        |
+| `wave`         | a wave item not `merged` whose PR merged                                                                                                                |
+| `auto-start`   | an `autoStart` lane that has a lane file (or an open PR)                                                                                                |
+| `orphan-lane`  | a lane file over a day past its merge: `pnpm lanes end <branch>`                                                                                        |
+| `followup`     | a STALE follow-up (as SLIPPING's)                                                                                                                       |
+| `queue-bad`    | the file has problems: the first, and how many more                                                                                                     |
+
+A lock fact counts only from a fresh lock read and an open-PR fact only from a fresh PR list; a merge is final and
+always counts. When either is stale the count reads `n?` and says which.
+
+**Tone**, one for the age and the count: red when the main sync failed or went silent (5 min), at 5 items, or when
+one has sat 30 min; amber with any item or an unsure count; else dim. A STALE follow-up is a judgment backlog, not a
+wrong fact: it never makes it red. "Board updated" is `queue.json`'s own `updatedAt`.
+
+**Where it shows.** The desktop header's chip, `board 12m · 3 stale` (a click opens SLIPPING), with `pnpm usage line`
+beside it (the tower runs `usage line --no-scan` every 5 min: `docs/ops/USAGE-METER.md`). The phone has no room for a
+third header button at 390 px, so its sources chip carries the first two of `behind`, `n stale`, `n off`, in the
+worse tone. SLIPPING's BOARD rows; SOURCES' `main sync` row.
+
+**Derived files.** The board's own tower (started by `board.sh`, never a fixtures or `--once` server) writes two files
+beside `queue.json` every 30 s, tmp + rename:
+
+- `stale.json`: `{v, t, updatedAt, items, unsure, tone, why}`, which `pnpm board stale` prints;
+- `board.line`, one fact per line, for the status line:
+
+  ```
+  <writtenEpoch> <boardEpoch|-> <count>[?] <tone>
+  merge <atEpoch> <HH:MM> <what>    the next merge row not done (derived), due no more than 2 h ago
+  usage <atEpoch> <text>            pnpm usage line's last good answer
+  ```
+
+**Status line.** `scripts/board/statusline-board.sh` (builtins only, sourced by `statusline-snippet.sh`) prints
+`· usage … · board 12m · 3 stale · next ~19:40 <what>`, the next merge last with `?` once its time has passed, the
+usage part only while under 15 min old; a `board.line` over 3 min old prints red `tower down` and nothing else. It
+replaces dispatch's `localNotes/board/next-merge.sh`, which read `plan[]` raw.
+
+### Main sync
+
+`scripts/board/sync.sh`, a plain bash loop with no tokens: every 2 min `cli.ts sync-main` (fetch, move the main
+checkout when clean, restart the tower only when its code changed), then `board.sh tower start` if the tower is
+down. It writes `localNotes/board/main-sync.json` (`{v, t, pid, ok, head, msg}`) every round and appends to
+`main-sync.log` only what moved, restarted, started or failed.
+
+- **One per container:** `flock` on `/tmp/aperture-main-sync.lock` (waited 5 s, as the sampler's), pid in
+  `/tmp/aperture-main-sync.pid`; no child keeps the lock fd. `board.sh sync stop` kills that pid only, and only when
+  it is bash running `sync.sh` and the lock is held.
+- **Always main's code:** `board.sh sync start` runs the main checkout's `sync.sh` from any worktree, and the loop
+  re-execs itself (same pid, same lock, a `re-exec` log line) when `sync.sh` or `lib.sh` changes on disk.
+- **Kept alive:** `board.sh tower start` (so the SessionStart hook, after a container restart) and the tower's minute
+  tick, on a heartbeat over 5 min old or missing, run `board.sh sync ensure`, which starts it only for the real board
+  (`BOARD_DIR` the default; a test's temp board never does; `APERTURE_SYNC=on|off` overrides).
+- It pins `INIT_CWD` to its own checkout: sync-main finds the checkout from it.
 
 ## Lane states
 

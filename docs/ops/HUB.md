@@ -164,7 +164,9 @@ no script writes it: the Mac never runs anything from the shared folder.
   schema: `docs/ops/SESSION-BOARD.md` → _Control tower_), written with a tmp file + rename on every checkpoint
   that changes them — the `plan` at every event. A lane state or `plan` `kind` the tower's parser doesn't know yet
   (`/workspace`'s main) is a bad write that drops that entry (new keys are ignored): write new ones only once
-  their change is on main.
+  their change is on main. The tower never writes it: what it derives (merges, slots, lane phases) shows over the
+  hand-written fields, and each fact it contradicts is a stale item for the hub to fix — `pnpm board stale`, the
+  header chip, SLIPPING (`docs/ops/TOWER.md` → _Board freshness_).
 - **Collisions.** On each `[kickoff]`, compare its areas with _In flight_ and with `localNotes/board/overlap.json`
   (the board's file-level overlaps, every 2.5 min). Warn **both** sessions: `collision: <a> and <b> both
 touch <area>; whichever merges second rebases — agree an order.`
