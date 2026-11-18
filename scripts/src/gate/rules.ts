@@ -252,6 +252,11 @@ export const INPUT_RULES: InputRule[] = [
     tests: [`scripts/src/${a}/`],
     why: `the ${a} tests spawn its CLIs and read its files`,
   })),
+  {
+    inputs: ['scripts/usage/'],
+    tests: ['scripts/src/usage/statusline-log.test.ts'],
+    why: 'spawns bash on scripts/usage/statusline-log.sh, which nothing imports',
+  },
 ];
 
 // Run on every fast gate: repo-wide scanners any path can break.
@@ -285,6 +290,8 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/mailroom/clip.test.ts': 'temp dir',
   'scripts/src/vapid-keys.test.ts': 'spawns its sibling vapid-keys.ts',
   'scripts/src/root-scripts.test.ts': 'reads the root package.json, a REPO_FULL trigger',
+  'scripts/src/usage/cli.test.ts': 'temp dirs',
+  'scripts/src/usage/scan.test.ts': 'temp dirs',
   'scripts/src/identifiers.test.ts': 'reads identifiers.json, a REPO_FULL trigger',
   'extension/test/load.ts':
     'helper: its importers are the extension tests, all run by the extension/ rule',
@@ -328,6 +335,10 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/board/tower/source.ts': `${RUNTIME}: board and localNotes files`,
   'scripts/src/board/tower/web/main.ts': `${RUNTIME}: lane files, /proc, --fixtures; limits.json is REPO_FULL`,
   'scripts/src/board/tower/web/server.ts': 'its own web/ dir (the board same-area rule)',
+  'scripts/src/usage/cli.ts': `${RUNTIME}: the usage dir, settings, the lane archive, board history; hub.json only names the hub`,
+  'scripts/src/usage/gh.ts': `${RUNTIME}: gh`,
+  'scripts/src/usage/scan.ts': `${RUNTIME}: transcript files, the cgroup`,
+  'scripts/src/usage/store.ts': `${RUNTIME}: the usage cache`,
   'scripts/src/bot/cli.ts': 'scripts/board/hub.json (its rule runs the bot tests)',
   'scripts/src/bot/config.ts': 'the gitignored bot env file and key',
   'scripts/src/bot/lock-cache.ts': `${RUNTIME}: localNotes/board`,
