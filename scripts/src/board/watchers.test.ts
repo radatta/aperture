@@ -544,7 +544,7 @@ describe('context-watch.sh', () => {
 });
 
 // ---- all three ----
-function limitsWithout(path: string[]) {
+function limitsWithout(path: readonly string[]) {
   const l = structuredClone(LIMITS);
   let o = l;
   for (const k of path.slice(0, -1)) o = o[k];
