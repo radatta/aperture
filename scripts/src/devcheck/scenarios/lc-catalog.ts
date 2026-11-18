@@ -35,7 +35,10 @@ async function settled<
   for (;;) {
     const s = await read();
     if (s.state !== 'running' && s.lastError) fail(`the import failed: ${s.lastError}`);
-    if ((s.state === 'ready' || s.state === 'partial') && at(s.importedAt) > at(since)) return s;
+    // `staged` too: the job writes meta before it empties the upload it used.
+    const held = (s as { staged?: unknown }).staged;
+    if ((s.state === 'ready' || s.state === 'partial') && at(s.importedAt) > at(since) && !held)
+      return s;
     if (Date.now() > until) fail(`the import never settled: ${JSON.stringify(s)}`);
     await new Promise((r) => setTimeout(r, 2_000));
   }
@@ -175,7 +178,7 @@ export const lcCatalog: Scenario = {
       id: 'api-cost-stop',
       entry: 'api',
       kind: 'edge',
-      what: 'Past the $0.25 stop no model call is made and late problems keep their tags’ guess; a call with no usage is charged at its ceiling',
+      what: 'Past the $0.25 stop no model call is made and late problems keep their tags’ guess; a call that timed out is charged its ceiling, an HTTP error nothing',
       offDev: {
         file: 'lambdas/src/catalog/import.test.ts',
         test: 'makes no model call once spend reaches the stop; rows stay on their tags',
@@ -251,11 +254,9 @@ export const lcCatalog: Scenario = {
       async run(ctx) {
         const before = await ctx.api.reads.getCatalogStatus();
         // Whichever flip pattern the problem doesn't hold now (none before the first import): the upload must change it.
+        // A read error fails the step (never a guess that could make the flip a no-op).
         const now = before.count
-          ? await ctx.mcp.reads.getProblem({ slug: OFF }).then(
-              (r) => r.problem.patternId,
-              () => null,
-            )
+          ? (await ctx.mcp.reads.getProblem({ slug: OFF })).problem.patternId
           : null;
         apiPick = now === 'two-pointers' ? 'sliding-window' : 'two-pointers';
         mcpPick = other(apiPick);
@@ -456,6 +457,8 @@ export const lcCatalog: Scenario = {
         const [a] = await ctx.api.writes.logCoachAttempts([{ slug: OFF, outcome: 'solved' }]);
         try {
           await ctx.ui.goto('/recruiting/progress');
+          // It sits in the collapsed Off the list section (it's outside the 150): open it, as the user does.
+          await ctx.page.locator('details > summary').click();
           await ctx.ui.expectText('Palindrome Number', 20_000);
           await ctx.page.getByText('Palindrome Number').first().scrollIntoViewIfNeeded();
           await ctx.shot('progress');

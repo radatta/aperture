@@ -295,8 +295,9 @@ export function unpackCatalog(raw: unknown): LcCatalogRow[] | null {
 // running: a job holds the claim. ready: a live catalog, every algorithm problem's pattern from NeetCode or a model.
 // partial: a live catalog with some still on their tags' guess (rows the dataset added since the last
 // classification; each kick classifies a few). staging: no live catalog yet, an upload under way. failed: no live
-// catalog, the newest job failed. absent: none of these. An upload in progress shows in `staged` whatever the
-// state; a failure after a catalog was built keeps it and sets lastError.
+// catalog, the newest job failed. absent: none of these. An upload still held shows in `staged` whatever the state —
+// under way, or complete and waiting for a kick (its last part came while another import ran); a failure after a
+// catalog was built keeps it and sets lastError.
 export type CatalogImportState = 'absent' | 'staging' | 'running' | 'ready' | 'partial' | 'failed';
 export interface CatalogStatus {
   state: CatalogImportState;
@@ -307,7 +308,8 @@ export interface CatalogStatus {
   importedAt: number | null;
   staged: { have: number; of: number } | null; // the classification upload's parts so far
   // The server-side model path's spend, cumulative: no new call once it reaches LC_CATALOG_COST_STOP_USD (the last
-  // call may overshoot by one call's ceiling; a call with no usage reported is charged at that ceiling).
+  // call may overshoot by one call's ceiling; a call that timed out, or got a 2xx it couldn't read, is charged that
+  // ceiling).
   costUsd: number;
   lastError: string | null; // the newest import's failure, cleared by the next success
   modelError: string | null; // the newest import's model call failure (its rows kept their tags), else null

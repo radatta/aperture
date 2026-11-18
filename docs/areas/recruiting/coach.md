@@ -271,7 +271,9 @@ each (`packages/shared/src/lcCatalog.ts`).
   later is classified on the server: each import sends at most 50 still on their tags to Sonnet 5.5
   (`anthropic/catalogClassifyPrompt.ts`), and none once the stage's cumulative spend reaches $0.25
   (`LC_CATALOG_COST_STOP_USD`). The stop is checked before a call, so the last one can overshoot by its ceiling
-  (~$0.12); a call that timed out is charged that ceiling (it may still be billed), any other failure nothing. The
+  (~$0.12); a call that timed out, or got a 2xx it couldn't read, is charged that ceiling (it may be billed); an HTTP
+  error or a missing key nothing; a connection dropped after the send goes uncounted (the API workspace's spend
+  limit is the backstop). The
   spend is recorded as soon as the call returns and never resets on its own. Every class given is stored,
   whatever an import's `limit` builds; the store is cumulative, so a bad class is undone only by uploading its line
   again. Related problems are kept only when they're on the catalog, never the problem
@@ -286,11 +288,12 @@ each (`packages/shared/src/lcCatalog.ts`).
   the event's queue and the worker's timeout together) and invokes the worker, which fetches the pinned file (10 s,
   8 MB cap, no redirect), builds, packs and publishes. A failure keeps the live catalog and records `lastError`; a
   failed model step keeps those rows on their tags and records `modelError`. `limit` keeps only the first n
-  problems besides NeetCode's (dev's import: dev imports capped only). No new function, grant or recurring cost: the
+  problems besides NeetCode's (dev's import: the worker caps every import on a dev slot at 300, whatever was sent). No new function, grant or recurring cost: the
   worker's GetItem / PutItem / Query cover it (an emptied upload is a put, not a delete).
 - **Reads.** A Lambda loads the live catalog into `catalogs.ts` (`loadCatalog`) before any read that names problems
   (`Backend.coachInput`, the worker's pick): every read reads `meta` (one consistent GetItem), the chunks only when
-  its rev moves (`catalog/loader.ts`), so a new import shows in any container on the next read; a failed load logs
+  its rev moves (`catalog/loader.ts`), so a new import shows in any container on the next read; a rev that fails to load logs and isn't
+  retried for a minute (a newer rev still loads at once), and a failed load
   and reads as before. Records are derived on the server, so a problem off NeetCode 150 now takes the catalog's
   title, pattern and difficulty and lists `leetcode`; that can move the focus once at import, as a Premium flip
   does. The app loads nothing: Progress and the plan stay NeetCode 150's, and the Problem page names the list from

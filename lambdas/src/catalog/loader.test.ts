@@ -91,4 +91,15 @@ describe('ensureCatalog', () => {
     await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS + 1);
     expect(catalogLoaded()?.rev).toBe(m2.rev);
   });
+
+  it('backs off a rev whose chunks throw while loading, as one that doesn’t parse', async () => {
+    const { store, doc } = setup();
+    await publish(store, 'run-1', 1000);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const load = vi.spyOn(store, 'loadLive').mockRejectedValue(new Error('incorrect header check'));
+    await ensureCatalog(store, 10_000);
+    await ensureCatalog(store, 10_000 + FAILED_REV_RETRY_MS - 1);
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(doc.queries.length).toBeGreaterThanOrEqual(0);
+  });
 });

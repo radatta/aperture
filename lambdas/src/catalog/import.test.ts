@@ -42,7 +42,7 @@ function setup() {
   };
   const rows = async () =>
     unpackCatalog(await store.loadLive((await store.meta(true))!)) as LcCatalogRow[];
-  return { store, source, anthropic, run, rows, logs, deps };
+  return { store, source, anthropic, run, rows, logs, deps, doc };
 }
 
 describe('runCatalogImport', () => {
@@ -235,5 +235,57 @@ describe('runCatalogImport', () => {
     await store.claim('mine', 1);
     await expect(runCatalogImport(deps, { runId: 'theirs' })).rejects.toThrow(/lost its claim/);
     expect(logs.at(-1)).toContain('lost its claim');
+  });
+
+  it('records the model call’s spend under the claim before publishing, so a run that dies after the call keeps it', async () => {
+    const { store, anthropic, run } = setup();
+    anthropic.nextClassify = answer;
+    store.finish = async () => {
+      throw new Error('ThrottlingException'); // every finish fails: only the early record can count the spend
+    };
+    await expect(run('run-1')).rejects.toThrow('ThrottlingException');
+    const meta = (await store.meta(true))!;
+    expect(meta.costUsd).toBeCloseTo(1000 * 2e-6 + 500 * 10e-6);
+    expect(meta.job?.runId).toBe('run-1');
+  });
+
+  it('a failed spend record (not a lost claim) never throws away the paid answer', async () => {
+    const { store, anthropic, run, logs } = setup();
+    anthropic.nextClassify = answer;
+    store.recordSpend = async () => {
+      throw new Error('ThrottlingException');
+    };
+    expect(await run('run-1')).toMatchObject({ by: { model: 12 }, lastError: null });
+    expect(logs.some((l) => l.includes('catalog_spend_record_failed'))).toBe(true);
+  });
+
+  it('charges the ceiling for a 2xx it couldn’t read, as for a timeout', async () => {
+    const { anthropic, run } = setup();
+    anthropic.nextClassify = {
+      ok: false,
+      reason: 'api',
+      detail: 'HTTP 200',
+      model: 'fake',
+      usage: null,
+      ms: 1,
+    };
+    expect((await run('run-1')).costUsd).toBeCloseTo(CALL_CEILING_USD);
+  });
+
+  it('fails visibly, and empties, a complete upload whose parts don’t belong together', async () => {
+    const { store, run, doc } = setup();
+    await store.stagePart(1, 2, '9001\theap', 1);
+    await store.stagePart(2, 2, '\t-\t-', 2);
+    doc.putNow({
+      PK: 'catalog#leetcode',
+      SK: 'stagepart#01',
+      upload: 'u-other',
+      text: 'x',
+      updatedAt: 3,
+    });
+    expect(await run('run-1')).toMatchObject({
+      lastError: "The upload's parts don't belong together: send it again from part 1",
+    });
+    expect(await store.stage()).toMatchObject({ of: 0 });
   });
 });

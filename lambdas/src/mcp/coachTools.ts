@@ -1043,7 +1043,7 @@ export const COACH_TOOLS: Tool[] = [
         limit: {
           type: 'integer',
           description:
-            'Keep only the first n problems besides NeetCode 150\u2019s (a capped test import)',
+            'Keep only the first n problems besides NeetCode 150\u2019s (a capped test import; a dev stage caps every import at 300)',
         },
       },
       additionalProperties: false,

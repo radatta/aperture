@@ -1840,11 +1840,13 @@ export class BackendClient implements ApiClient {
       try {
         await this.catalogInvoker.invoke({ kind: 'catalog-import', runId, limit: i.limit });
       } catch (err) {
-        await this.catalog.finish(runId, this.now(), {
-          ok: false,
-          error: (err as Error).message,
-          costUsd: (await this.catalog.meta(true))?.costUsd ?? 0,
-        });
+        const meta = await this.catalog.meta(true);
+        if (meta?.job?.runId === runId)
+          await this.catalog.finish(runId, this.now(), {
+            ok: false,
+            error: (err as Error).message,
+            costUsd: meta.costUsd,
+          });
         throw err;
       }
     return this.getCatalogStatus();

@@ -156,4 +156,28 @@ describe('catalogImportLimit', () => {
     expect(catalogImportLimit(undefined, false)).toBeUndefined();
     expect(catalogImportLimit(5000, false)).toBe(5000);
   });
+
+  it('builds a dev slot’s import capped whatever limit was sent', async () => {
+    const doc = new InMemoryDoc();
+    await new CatalogStore(doc, liveWrites(doc)).claim('run-1', 1);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const many = Array.from({ length: 310 }, (_, i) => ({
+      questionFrontendId: String(20_000 + i),
+      title: `Synthetic ${i}`,
+      difficulty: 'Easy',
+      isPaidOnly: false,
+      categoryTitle: 'Algorithms',
+      topicTags: [],
+      stats: '{}',
+      url: `https://leetcode.com/problems/synthetic-capped-${i}/`,
+    }));
+    const meta = await handleCatalogImport(
+      doc,
+      new FakeAnthropic(),
+      new FakeCatalogSource({ ok: true, data: many }),
+      { kind: 'catalog-import', runId: 'run-1', limit: 5000 },
+      { now: () => 2, devSlot: true },
+    );
+    expect(meta.count).toBe(300);
+  });
 });

@@ -34,9 +34,11 @@ export interface CatalogImportDeps {
   log?: (line: string) => void;
 }
 
-// A call that timed out reported no usage but may still be billed: charge its ceiling — a generous input estimate plus
-// every output token it could have used. Any other failure without usage never reached the model (no key, a
-// refused or overloaded request, a connection that failed) and costs nothing. The spend never resets on its own.
+// A call that timed out, or got a 2xx whose body didn't read, reported no usage but was (or may be) billed: charge
+// its ceiling — a generous input estimate plus every output token it could have used. Any other failure without usage
+// (no key, a refused or overloaded request) never reached the model and costs nothing; a connection dropped after the
+// send is uncounted too (rare; the API workspace's own spend limit is the backstop). The spend never resets on its
+// own.
 export const CALL_CEILING_USD =
   20_000 * CATALOG_CLASSIFY_USD.input + CATALOG_CLASSIFY_MAX_TOKENS * CATALOG_CLASSIFY_USD.output;
 
@@ -69,6 +71,11 @@ export async function runCatalogImport(
     const classes = parseClasses(await store.classesText()).classes;
     const stage = await store.stage();
     const text = stage ? await store.stageText(stage) : null;
+    // A complete upload whose parts don't assemble (another upload's row in among them) is never used silently.
+    if (stage && stage.of > 0 && stage.have === stage.of && text === null) {
+      await store.clearStage(stage, now());
+      throw new Error("The upload's parts don't belong together: send it again from part 1");
+    }
     const staged = text === null ? null : parseClasses(text);
     if (staged) used = stage;
     for (const [id, c] of staged?.classes ?? []) classes.set(id, c);
@@ -86,12 +93,21 @@ export async function runCatalogImport(
       costUsd += call.usage
         ? call.usage.input * CATALOG_CLASSIFY_USD.input +
           call.usage.output * CATALOG_CLASSIFY_USD.output
-        : !call.ok && call.reason === 'timeout'
+        : !call.ok && (call.reason === 'timeout' || /^HTTP 2\d\d\b/.test(call.detail ?? ''))
           ? CALL_CEILING_USD
           : 0;
-      // Counted against the stop now, so a run that dies before `finish` can't lose it.
-      if (!(await store.recordSpend(job.runId, costUsd, now())))
-        throw new Error('The catalog import lost its claim');
+      // Counted against the stop now, so a run that dies before `finish` can't lose it. A lost claim ends the job; a
+      // failed write (a throttle) is logged and left to `finish`, which records the spend anyway — never a reason to
+      // throw away a paid answer.
+      try {
+        if (!(await store.recordSpend(job.runId, costUsd, now())))
+          throw new Error('The catalog import lost its claim');
+      } catch (err) {
+        if (/lost its claim/.test((err as Error).message)) throw err;
+        log(
+          JSON.stringify({ event: 'catalog_spend_record_failed', error: (err as Error).message }),
+        );
+      }
       if (call.ok) {
         const answered = validateCatalogClasses(call.fields, [...ids]);
         for (const [id, c] of answered) classes.set(id, c);
@@ -132,10 +148,21 @@ export async function runCatalogImport(
   } catch (err) {
     const error = (err as Error).message || String(err);
     log(JSON.stringify({ event: 'catalog_import', ok: false, error }));
-    if (built.ok && !/lost its claim/.test(error))
-      await store
-        .finish(job.runId, now(), { ok: false, error: `publishing failed: ${error}`, costUsd })
-        .catch(() => {}); // the claim gone too: nothing left to record
+    // Recorded as the import's failure, once more after a throttle; a lost claim leaves nothing to record.
+    if (!/lost its claim/.test(error)) {
+      const failure = {
+        ok: false as const,
+        error: built.ok ? `publishing failed: ${error}` : error,
+        costUsd,
+      };
+      for (let tries = 0; tries < 2; tries++)
+        try {
+          await store.finish(job.runId, now(), failure);
+          break;
+        } catch (again) {
+          if (/lost its claim/.test((again as Error).message)) break;
+        }
+    }
     throw err;
   }
   // The upload is in the stored classes now; empty it unless a new one began meanwhile.

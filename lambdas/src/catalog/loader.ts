@@ -13,8 +13,10 @@ export const FAILED_REV_RETRY_MS = 60_000;
 let failed: { rev: string; at: number } | null = null;
 
 export async function ensureCatalog(store: CatalogStore, now = Date.now()): Promise<void> {
+  let rev: string | null = null;
   try {
     const meta = await store.meta(true);
+    rev = meta?.rev ?? null;
     if (!meta?.live || !meta.rev || catalogLoaded()?.rev === meta.rev) return;
     if (failed?.rev === meta.rev && now - failed.at < FAILED_REV_RETRY_MS) return;
     const rows = unpackCatalog(await store.loadLive(meta));
@@ -25,6 +27,7 @@ export async function ensureCatalog(store: CatalogStore, now = Date.now()): Prom
     loadCatalog(rows, meta.rev);
     failed = null;
   } catch (err) {
+    if (rev && catalogLoaded()?.rev !== rev && failed?.rev !== rev) failed = { rev, at: now };
     console.error(JSON.stringify({ msg: 'catalog load failed', error: String(err) }));
   }
 }

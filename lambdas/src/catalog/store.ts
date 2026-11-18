@@ -21,8 +21,9 @@ import type { Writes } from '../ddb/writes';
 // `writes`, and the worker's role may put but never delete (cdk coach-worker): an emptied row is a put.
 
 type Slot = 'a' | 'b';
-// ~40 KB a write, each under dev's 50-unit write ceiling (docs/arch/INFRA.md §11) — per write, not per second: dev's
-// imports stay capped (the worker clamps `limit` on a dev slot), so they're one chunk. A test passes a smaller one.
+// ~40 KB a chunk write, under dev's 50-unit write ceiling (docs/arch/INFRA.md §11) — a bound per write, not per
+// second. Dev's imports stay capped (the worker clamps `limit` on a dev slot), so a dev catalog is a chunk or two; an
+// upload part (≤ 64 k characters) and the class map are one write each. A test passes a smaller one.
 const CHUNK_CHARS = 40_000;
 // A job's claim lapses after this: the worker's async event may queue 60 s (maxEventAge) and run 90 s (its timeout),
 // so a claim always outlives the job it starts.
