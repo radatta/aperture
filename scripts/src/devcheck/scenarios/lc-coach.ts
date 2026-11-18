@@ -795,9 +795,9 @@ export const lcCoach: Scenario = {
     },
     {
       id: 'mock-slots-unchanged',
-      entry: 'api',
+      entry: 'ui',
       kind: 'edge',
-      what: 'A mock is not a slot: logging and planning one leave the day’s slots as they were',
+      what: 'A mock is not a slot: logging and planning one on the card leave the day’s slots as they were',
     },
     {
       id: 'mock-patterns',

@@ -99,6 +99,7 @@ describe('createMcpClient', () => {
       'listBacklog',
       'listCategories',
       'listLog',
+      'listMocks',
       'listPlaceTasks',
       'listPlaces',
       'listProblems',
@@ -124,6 +125,7 @@ describe('createMcpClient', () => {
       'deleteTask',
       'importCatalog',
       'logAttempt',
+      'logMock',
       'markPeeked',
       'markPeekedUnknown',
       'setCauseTag',
@@ -240,6 +242,41 @@ describe('createMcpClient', () => {
       ]),
     ).rejects.toThrow(/never recorded/);
     expect(sentTools(has)).toEqual(['get_sitting']);
+  });
+
+  it('log_mock records a new mock from its answer, resolves a refusal, and an id must be recorded', async () => {
+    const ledger = memLedger();
+    const ok = server({
+      log_mock: json({
+        mock: { id: 'M1', status: 'done' },
+        week: 'Mock this week: Code 2 · Solve 2',
+      }),
+    });
+    await client(ok, ledger).writes.logMock({ scores: { code: 2, solve: 2 } });
+    expect(ledger.entries.map((x) => [x.op, x.id ?? null])).toEqual([
+      ['intent', null],
+      ['created', 'M1'],
+    ]);
+    const refused = vi.fn<FetchLike>(async () =>
+      http(200, {
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          content: [{ type: 'text', text: 'scores.code is required, a whole number from 1 to 4' }],
+          isError: true,
+        },
+      }),
+    );
+    await expect(
+      client(refused, ledger).writes.logMock({ scores: { solve: 2 } }),
+    ).rejects.toThrow();
+    expect(ledger.entries.at(-1)?.op).toBe('refused');
+    // An edit names a mock this run recorded, or nothing is sent.
+    const none = server({});
+    await expect(
+      client(none, ledger).writes.logMock({ id: 'NOT-MINE', scores: { code: 2, solve: 2 } }),
+    ).rejects.toThrow(/never recorded/);
+    expect(sentTools(none)).toEqual([]);
   });
 
   it('set_focus_pattern refused at the param check resolves the record it made', async () => {

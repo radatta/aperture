@@ -46,6 +46,10 @@ describe('recorder', () => {
       false,
     );
     expect(isCreateRequest('upsertCategory', null)).toBe(false);
+    // A mock logged or planned on the Today card too; "Log it" on a planned one names its id, an edit.
+    expect(idsFromCreateResponse('upsertMock', { id: 'm1', status: 'done' })).toEqual(['m1']);
+    expect(isCreateRequest('upsertMock', body({ scores: { code: 3, solve: 2 } }))).toBe(true);
+    expect(isCreateRequest('upsertMock', body({ id: 'm1', status: 'done' }))).toBe(false);
   });
 
   it('records a push device Settings’ Enable subscribed, by the id the server answered with', () => {
