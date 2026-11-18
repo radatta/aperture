@@ -3520,9 +3520,9 @@ export function runApiContract(
         expect((await api.getSitting(sitting.id)).sitting.summary.headEvents).toBe(3);
       });
 
-      // A 2.1 extension (the retired trace card) until it's rebuilt: its card events are stored as unknown kinds,
+      // The card's build (manifest 2.0.0, the retired trace card) until it's rebuilt: its card events are stored as unknown kinds,
       // never refused, so a batch carrying a submit still lands; they fold nothing.
-      it('a 2.1 batch with the card’s events is taken whole and folds no trace', async () => {
+      it('a pre-2.2 batch with the card’s events is taken whole and folds no trace', async () => {
         const { sitting } = await startSitting(api);
         const coachEv = (at: number, payload: unknown): SittingEventInput => ({
           id: ulid(),

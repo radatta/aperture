@@ -67,7 +67,7 @@ export const SITTING_PAYLOAD_MAX: Record<SittingEventType | 'replay', number> = 
   submitDetails: 96 * 1024,
   note: 16 * 1024,
   timer: 1024,
-  coach: 4 * 1024, // ours are tiny; this still takes a 2.1 extension's card event (three ≤ 300-char inputs) as an unknown kind
+  coach: 4 * 1024, // ours are tiny; this still takes a pre-2.2 extension's card event (three ≤ 300-char inputs) as an unknown kind
   replay: 64 * 1024,
 };
 export const SITTING_PROBLEM_MAX = 64 * 1024;
@@ -460,7 +460,9 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     }
   } else if (r.type === 'note') next.notes = s.notes + 1;
   else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
-  else if (r.type === 'coach' && r.coach?.kind) next.coach = foldCoach(s.coach, r.coach);
+  // A known kind only: a head row stored before 2.2 can still hold a card kind as a plain string.
+  else if (r.type === 'coach' && COACH_KINDS.some((k) => k === r.coach?.kind))
+    next.coach = foldCoach(s.coach, r.coach!);
   else if (r.type === 'trace-comment' && s.runs + s.submits === 0) next.commentTrace = 'traced';
   return next;
 }

@@ -76,7 +76,7 @@ export interface InputRule {
 // `inputs` adds `tests`. Every graph-blind test file is named in a rule's `tests`, ALWAYS_RUN or SELF_CONTAINED.
 export const INPUT_RULES: InputRule[] = [
   {
-    inputs: ['extension/manifest.json'],
+    inputs: ['extension/manifest.json', 'app/pwa/extensionVersion.ts'],
     tests: ['app/src/pages/Settings/Settings.test.tsx', 'scripts/src/devcheck/scenarios/'],
     why: 'the extension’s version is the app’s "latest" (vitest.config.ts sets it from app/pwa/extensionVersion.ts) and lc-sittings.ts reads it from disk',
   },

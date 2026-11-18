@@ -1741,7 +1741,7 @@ describe('the resubmit note, and no trace card', () => {
     await until(() => first.phase() === 'active', 8000);
     await settle(3500);
     const b = bound(ext);
-    // What 2.1's card left on it: a trace, the hold fired, when.
+    // What the card's build (2.0.0) left on it: a trace, the hold fired, when.
     await ext.local.set({
       'sitting:two-sum': {
         ...b,

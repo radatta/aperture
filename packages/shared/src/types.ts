@@ -427,7 +427,7 @@ export interface SittingHeadRow {
 
 // The extension's coaching, as events of type 'coach' (docs/areas/recruiting/index.md → _Coach events_).
 // The payload is the extension's; the server reads it defensively (coachMarkOf) and keeps it verbatim. Any other
-// kind (2.1's retired trace card among them) is stored with `kind: null` and folds nothing.
+// kind (a pre-2.2 build's trace card events among them) is stored with `kind: null` and folds nothing.
 export type CoachEventKind = 'config' | 'nudge-shown';
 export type CoachEventPayload =
   | { kind: 'config'; nudge: boolean } // once per sitting: whether the resubmit note is on

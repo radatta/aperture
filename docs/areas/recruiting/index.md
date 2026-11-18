@@ -119,7 +119,7 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 
 - **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), the extension
   build that started it (`extensionVersion`: its manifest's x.y.z, anything else null and never a refusal, set at
-  creation only, absent before 2.2.0; Settings → LeetCode compares the newest with the app's own —
+  creation only — a resume or a same-day reopen keeps it — absent before 2.2.0; Settings → LeetCode compares the newest with the app's own —
   `extension/README.md` → Versions), the user's review
   (`review`, _Review and the Claude draft_ below) and the `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
   runs before the first submit, LeetCode's timer state, and `headEvents`, how many rows it folds.
@@ -163,11 +163,11 @@ event folds — on every sitting before them, and with an extension that sends n
 
 **The trace card is gone (extension 2.2.0, extension-tidy).** Its kinds (`trace`, `trace-skip`, `untraced-submit`)
 and the config's `trace`/`hold` switches were removed end to end, with no compatibility path (the maintainer,
-2026-11-17). A 2.1 extension still sending them until it's rebuilt is answered 200: its card events land on the
+2026-11-17). The card's build (manifest 2.0.0, from before builds were stamped) still sending them until it's rebuilt is answered 200: its card events land on the
 unknown-kind path above (stored, folding nothing), and its config folds `nudge` alone. A head row or summary stored
 before (a card kind, a config's `trace`/`hold`, a summary's `trace`) folds only its `nudge`; the next coach fold drops
-the rest. The card's rows on prod are removed by a one-off `aws` CLI cleanup after the merge (the PR's _Needs you_), with
-no code left behind. Whether a sitting was traced is decided server-side, from the code:
+the rest. The card's rows on prod are tombstoned (compact tombstones, as `tombstoneSitting` writes them) and the summaries
+trimmed by a one-off `aws` CLI cleanup after the merge (the PR's _Needs you_), with no code left behind. Whether a sitting was traced is decided server-side, from the code:
 
 **The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
 the code itself is the only traced/untraced source. At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in

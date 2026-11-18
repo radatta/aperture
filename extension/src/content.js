@@ -119,7 +119,7 @@
     const r = await relay.accept(detail);
     if (!r.ok) return debug.log('relay.reject', { reason: r.reason });
     // A doc fetched at an SPA nav can land before the 500 ms poll sees the new path: catch up first.
-    if (relayLib.slugOf(location.pathname) !== screenSlug) await onNav();
+    if (relayLib.slugOf(location.pathname) !== screenSlug) await onNav('message');
     const raw = r.raw;
     const near = (at) => (Math.abs(at - Date.now()) < 3600_000 ? at : Date.now());
     const items = capture.observe({ ...raw, reqAt: near(raw.reqAt), resAt: near(raw.resAt) });
@@ -722,7 +722,7 @@
         );
         if (stale()) {
           // Back on this problem already (A → B → A mid-send), read before this landed: read it again.
-          if (screenSlug === slug && !binding) navTo(slug);
+          if (screenSlug === slug && !binding) navTo(slug, 'reread');
           return;
         }
         binding = b;
@@ -882,7 +882,7 @@
     if (b && !over) {
       // Forgotten here too: once that sitting ends, the next visit prompts rather than showing the pill.
       send({ type: 'undismiss', slug }).catch(() => {});
-      return navTo(slug);
+      return navTo(slug, 'pill');
     }
     act({ type: 'reopen' });
   }
@@ -988,14 +988,15 @@
   let navDone = Promise.resolve();
   let lastPath = null; // the path the last nav was for, whoever noticed it: the poll compares against it
   let lastTitle = null;
-  function onNav() {
+  // `by`: what noticed it (poll, popstate, message, init; reread, pill), for the debug log only.
+  function onNav(by) {
     lastPath = location.pathname;
     const slug = relayLib.slugOf(location.pathname);
     if (navigated && slug === screenSlug) return navDone;
-    navDone = navTo(slug);
+    navDone = navTo(slug, by);
     return navDone;
   }
-  async function navTo(slug) {
+  async function navTo(slug, by) {
     navigated = true;
     flushNow(); // the old problem's events go first
     screenSlug = slug;
@@ -1020,12 +1021,12 @@
       ? false
       : !!((await send({ type: 'dismissed?', slug }).catch(() => null)) || {}).dismissed;
     if (screenSlug !== slug) return;
-    debug.log('nav', { slug, bound: !!binding, dismissed });
+    debug.log('nav', { slug, by, bound: !!binding, dismissed });
     act({ type: 'nav', slug, binding: binding && { status: 'active' }, dismissed });
   }
   setInterval(() => {
     view.ensureAttached();
-    if (location.pathname !== lastPath) onNav();
+    if (location.pathname !== lastPath) onNav('poll');
     if (document.title !== lastTitle) {
       lastTitle = document.title;
       if (state.phase !== 'hidden') paint();
@@ -1033,7 +1034,7 @@
   }, 500);
   window.addEventListener('popstate', (e) => {
     if (!e.isTrusted) return; // a page's synthetic popstate waits for the poll
-    onNav();
+    onNav('popstate');
   });
 
   // ---- what the background and Options change ----
@@ -1107,8 +1108,8 @@
       sel = selLib.merge(got.selectors);
       coachOn = coachLib.settingsOf(got);
       status = got.status || null;
-      onNav();
+      onNav('init');
     },
-    () => onNav(),
+    () => onNav('init'),
   );
 })();

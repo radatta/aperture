@@ -218,7 +218,7 @@ describe('folds', () => {
       headRowOf('s', { id, type: 'coach', at, payload });
     const submit = (id: string, at: number) =>
       headRowOf('s', { id, type: 'submit', at, payload: { result: { status_code: 11 } } });
-    // What a 2.1 extension (the trace card's last build) still sends until it's rebuilt.
+    // What the trace card's build (manifest 2.0.0) still sends until it's rebuilt.
     const card = {
       config: { kind: 'config', trace: true, hold: true, nudge: true },
       trace: {
@@ -257,7 +257,7 @@ describe('folds', () => {
       expect(unknown.coach).toBeUndefined();
       expect(unknown.headEvents).toBe(1);
     });
-    it('a 2.1 batch with the card’s events folds its submit and its note switch, and no trace', () => {
+    it('a pre-2.2 batch with the card’s events folds its submit and its note switch, and no trace', () => {
       const s = summarizeHeadRows([
         coach('a', 1, card.config),
         coach('b', 2, card.trace),
@@ -291,6 +291,14 @@ describe('folds', () => {
         config: { nudge: true },
         nudges: 2,
       });
+      // A sitting whose only coach rows are old card rows has no coaching at all.
+      const cardOnly = summarizeHeadRows([
+        submit('a', 1),
+        old('b', 2, { kind: 'trace', inputs: 3, config: null }),
+        old('c', 3, { kind: 'trace-skip', inputs: null, config: null }),
+      ]);
+      expect(cardOnly.coach).toBeUndefined();
+      expect(cardOnly.headEvents).toBe(3);
     });
     it('a sitting with no coach events has no coach on its summary', () => {
       expect(summarizeHeadRows([submit('a', 1)]).coach).toBeUndefined();

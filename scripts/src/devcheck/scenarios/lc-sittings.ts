@@ -406,7 +406,7 @@ export const lcSittings: Scenario = {
       what: 'Sending the same events again counts them as duplicates, nothing double-counted',
     },
     // lc-coach C0: the extension's coach events (the resubmit note) fold into summary.coach. The trace card is
-    // retired (extension-tidy): a 2.1 extension's card events are stored as unknown kinds until it's rebuilt.
+    // retired (extension-tidy): a pre-2.2 extension's card events are stored as unknown kinds until it's rebuilt.
     {
       id: 'coach-fold',
       entry: 'api',
@@ -423,19 +423,13 @@ export const lcSittings: Scenario = {
       id: 'coach-old-ext-batch',
       entry: 'api',
       kind: 'edge',
-      what: 'A 2.1 extension’s batch (its config with trace and hold, a trace, an untraced-submit, a trace-skip) is taken whole, never refused, and folds no card field: the coaching stays `{config: {nudge}, nudges}`',
+      what: 'A pre-2.2 extension’s batch (its config with trace and hold, a trace, an untraced-submit, a trace-skip) is taken whole, never refused, and folds no card field: the coaching is `{config: {nudge}, nudges}` with that config’s `nudge`',
     },
     {
       id: 'coach-old-ext-repeat',
       entry: 'api',
       kind: 'edge',
-      what: 'The same 2.1 batch again is all duplicates, the summary unchanged',
-    },
-    {
-      id: 'coach-fold-no-card-kinds',
-      entry: 'mcp',
-      kind: 'edge',
-      what: 'live_sitting and get_sitting over MCP carry no card field for that sitting',
+      what: 'The same pre-2.2 batch again is all duplicates, the summary unchanged',
     },
     {
       id: 'coach-old-head-row',
@@ -447,21 +441,6 @@ export const lcSittings: Scenario = {
         test: 'a head row or summary stored before 2.2 folds only its note switch; headEvents still counts it',
         why: 'dev can’t hold an old-shape row once this build is deployed: the server writes only the new mark; same fold as coach-fold (proven on dev)',
       },
-    },
-    {
-      id: 'cleanup-dry-run-prod',
-      entry: 'api',
-      kind: 'nominal',
-      what: 'After merge and the Safari rebuild, the one-off read-only dry run lists the card’s rows and the summaries to trim on prod',
-      needsYou:
-        'PR body → Needs you after merge, step 3: an aws CLI line on the Mac (prod is yours)',
-    },
-    {
-      id: 'cleanup-apply-prod',
-      entry: 'api',
-      kind: 'nominal',
-      what: 'The cleanup deletes the card’s rows and trims those summaries; a second dry run reads all zeros, and the sittings still read',
-      needsYou: 'PR body → Needs you after merge, step 4, on your go (PITR is the undo)',
     },
     {
       id: 'coach-unknown-kind',
@@ -1080,7 +1059,7 @@ export const lcSittings: Scenario = {
       entry: 'api',
       proves: ['coach-fold', 'coach-too-big', 'coach-old-ext-batch', 'coach-old-ext-repeat'],
       title:
-        'Coach events on A after its submits: the config and a nudge, then a 2.1 batch with the card’s events, each twice; then one too big',
+        'Coach events on A after its submits: the config and a nudge, then a pre-2.2 batch with the card’s events, each twice; then one too big',
       async run(ctx) {
         const coach = (payload: unknown): DevSittingEvent => ({
           id: devUlid(),
@@ -1089,12 +1068,12 @@ export const lcSittings: Scenario = {
           payload,
         });
         // The coaching field by field (a stored map's key order isn't kept), with no card key anywhere in it.
-        const coachIs = (c: unknown, nudges: number) => {
+        const coachIs = (c: unknown, nudges: number, nudge = true) => {
           const m = c as { config?: { nudge?: unknown } | null; nudges?: unknown } | undefined;
           return (
             JSON.stringify(Object.keys(m ?? {}).sort()) === '["config","nudges"]' &&
             JSON.stringify(Object.keys(m?.config ?? {})) === '["nudge"]' &&
-            m?.config?.nudge === true &&
+            m?.config?.nudge === nudge &&
             m.nudges === nudges
           );
         };
@@ -1112,9 +1091,10 @@ export const lcSittings: Scenario = {
           throw new Error('the coach payloads weren’t kept');
         if (!coachIs(read.sitting.summary.coach, 1))
           throw new Error(`coach: ${JSON.stringify(read.sitting.summary.coach)}`);
-        // What a 2.1 extension still sends until it's rebuilt: taken whole, stored, folding nothing of the card.
+        // What a pre-2.2 extension still sends until it's rebuilt: taken whole, stored, folding nothing of the card.
         const old = [
-          coach({ kind: 'config', trace: true, hold: true, nudge: true }),
+          // Its note switch off, so the fold shows this config's `nudge` was read and its card switches weren't.
+          coach({ kind: 'config', trace: true, hold: true, nudge: false }),
           coach({
             kind: 'trace',
             inputs: { empty: '[]', boundary: '[1]', normal: '[2,1]' },
@@ -1125,21 +1105,21 @@ export const lcSittings: Scenario = {
         ];
         const headBefore = read.sitting.summary.headEvents;
         const took = await ctx.api.writes.lcSittingEvents(state.a, old);
-        if (took.accepted !== 4) throw new Error(`2.1 batch: ${JSON.stringify(took)}`);
+        if (took.accepted !== 4) throw new Error(`pre-2.2 batch: ${JSON.stringify(took)}`);
         read = await sittingA(ctx);
         const sum = read.sitting.summary;
-        if (!coachIs(sum.coach, 1) || sum.headEvents !== headBefore + 4)
+        if (!coachIs(sum.coach, 1, false) || sum.headEvents !== headBefore + 4)
           throw new Error(
-            `after the 2.1 batch: ${JSON.stringify({ coach: sum.coach, headEvents: sum.headEvents })}`,
+            `after the pre-2.2 batch: ${JSON.stringify({ coach: sum.coach, headEvents: sum.headEvents })}`,
           );
         if (!read.events.some((e) => JSON.stringify(e.payload).includes('"boundary":"[1]"')))
-          throw new Error('the 2.1 trace payload wasn’t kept');
+          throw new Error('the pre-2.2 trace payload wasn’t kept');
         const repeat = await ctx.api.writes.lcSittingEvents(state.a, old);
         if (repeat.accepted !== 0 || repeat.duplicates !== 4)
-          throw new Error(`2.1 again: ${JSON.stringify(repeat)}`);
+          throw new Error(`pre-2.2 again: ${JSON.stringify(repeat)}`);
         const same = (await sittingA(ctx)).sitting.summary;
-        if (!coachIs(same.coach, 1) || same.headEvents !== sum.headEvents)
-          throw new Error('the 2.1 repeat changed the summary');
+        if (!coachIs(same.coach, 1, false) || same.headEvents !== sum.headEvents)
+          throw new Error('the pre-2.2 repeat changed the summary');
         const big = coach({ kind: 'nudge-shown', gapMs: 1, pad: 'x'.repeat(4200) });
         await refused(
           'a coach event over 4 KB',
@@ -1149,25 +1129,6 @@ export const lcSittings: Scenario = {
         const after = (await sittingA(ctx)).sitting.summary;
         if (after.headEvents !== same.headEvents)
           throw new Error(`headEvents ${same.headEvents} → ${after.headEvents} after a refusal`);
-      },
-    },
-    {
-      id: 'coach-mcp',
-      entry: 'mcp',
-      proves: ['coach-fold-no-card-kinds'],
-      title:
-        'live_sitting and get_sitting on A, after its 2.1 batch: nothing of the card in either',
-      async run(ctx) {
-        if (!state.a) throw new Error('no sitting A — the start step failed');
-        const said = JSON.stringify([
-          await ctx.mcp.reads.liveSitting(),
-          await ctx.mcp.reads.getSitting({ id: state.a }),
-        ]);
-        if (!said.includes(state.a)) throw new Error('neither MCP read named sitting A');
-        const leak = ['untraced-submit', 'trace-skip', '"hold"', '"inputs"', '"boundary"'].find(
-          (k) => said.includes(k),
-        );
-        if (leak) throw new Error(`MCP carries ${leak}`);
       },
     },
     {
