@@ -154,8 +154,12 @@ cmd_status() {
     "heavy: \(.heavy | length) slot(s)\(if .testCap then " · test \([.heavy[] | select(.class == "test")] | length)/\(.testCap)" else "" end)\(if (.heavy | length) > 0 then " — " + (.heavy | map("\(.name // .pid): \(.label // .class)") | join(", ")) else "" end)",
     (.barriers // empty),
     (.machine.lines // [] | .[]),
+    (if ((.overlap.conflicts // []) | length) > 0  # git merge-tree at the heads (SESSION-BOARD.md → Overlaps)
+     then "conflicts:", (.overlap.conflicts[] | "  \(.a) ✗ \(.b): \(.files | join(", "))") else empty end),
     (if .overlap and ((.overlap.pairs // []) | length) > 0
-     then "overlaps:", (.overlap.pairs[] | "  \(.a) ↔ \(.b): \(.files | join(", "))") else empty end),
+     then "overlaps:", (.overlap.pairs[] | "  \(.a) ↔ \(.b): \(.files | join(", "))\(if .git == "clean" then " — merges clean" else "" end)") else empty end),
+    (if ((.overlap.landed // []) | length) > 0 then "landed, worktree not cleaned up: \(.overlap.landed | join(", "))" else empty end),
+    (if ((.overlap.stale // []) | length) > 0 then "stale (no commit in 7 days): \(.overlap.stale | join(", "))" else empty end),
     "sampler: \(.sampler)\(if .sampler != "running" then " — board.sh sampler start" else "" end)",
     "(* = state inferred from CPU; no hook registration)"'
 }

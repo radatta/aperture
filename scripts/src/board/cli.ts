@@ -1,9 +1,10 @@
 // Board CLI for the decisions that deserve tests (docs/ops/SESSION-BOARD.md), called by scripts/board/*.sh and
 // `pnpm board lane`; the commands are in USAGE below.
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
-import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { check, parseCache, type GitRun, type Head } from './conflicts.ts';
 import { decideHeavy } from './lease.ts';
 import { parseLimits, staleness } from './limits.ts';
 import { branchFiles, overlaps, type Tree } from './overlap.ts';
@@ -104,26 +105,79 @@ const git = (cwd: string, ...a: string[]) => {
   }
 };
 
-// Every worktree on a branch (the detached main checkout is skipped) with the files its branch touches.
-function worktrees(repo: string): Tree[] {
+// Every worktree on a branch (the detached main checkout is skipped) with the files its branch touches, and its
+// committed head for the merge-tree check (a branch with no commit of its own has none).
+function worktrees(repo: string): { trees: Tree[]; heads: Head[] } {
   const trees: Tree[] = [];
+  const heads: Head[] = [];
   let path = '';
+  let sha = '';
   for (const line of git(repo, 'worktree', 'list', '--porcelain').split('\n')) {
     if (line.startsWith('worktree ')) path = line.slice(9);
+    if (line.startsWith('HEAD ')) sha = line.slice(5).trim();
     if (!line.startsWith('branch refs/heads/') || !path) continue;
     const base = git(path, 'merge-base', 'origin/main', 'HEAD').trim();
     if (!base) continue;
+    const branch = line.slice('branch refs/heads/'.length);
+    const committed = git(path, 'diff', '--name-only', base, 'HEAD');
+    const dirty = git(path, 'diff', '--name-only', 'HEAD');
+    const untracked = git(path, 'ls-files', '--others', '--exclude-standard');
     trees.push({
-      branch: line.slice('branch refs/heads/'.length),
-      files: branchFiles(
-        git(path, 'diff', '--name-only', base, 'HEAD'),
-        git(path, 'diff', '--name-only', 'HEAD'),
-        git(path, 'ls-files', '--others', '--exclude-standard'),
-      ),
+      branch,
+      files: branchFiles(committed, dirty, untracked),
+      uncommitted: branchFiles('', dirty, untracked),
     });
+    const at = Number(git(path, 'log', '-1', '--format=%ct', 'HEAD').trim()) * 1000;
+    if (sha && sha !== base && at)
+      heads.push({ branch, sha, base, files: branchFiles(committed, '', ''), at });
   }
-  return trees;
+  return { trees, heads };
 }
+
+// The merge-tree check's git: read-only, and the objects each merge writes go to a scratch store that is emptied
+// after the run (the shared object store stays as it was: docs/ops/SESSION-BOARD.md → Overlaps).
+function conflictCheck(repo: string, boardDir: string, heads: Head[], now: Date) {
+  const mainSha = git(repo, 'rev-parse', '--verify', '--quiet', 'origin/main').trim();
+  const mainTree = git(repo, 'rev-parse', '--verify', '--quiet', 'origin/main^{tree}').trim();
+  const common = git(repo, 'rev-parse', '--git-common-dir').trim();
+  if (!mainSha || !mainTree || !common) return undefined;
+  const cacheFile = join(boardDir, 'conflicts-cache.json');
+  const objects = mkdtempSync(join(boardDir, 'conflicts-objects.'));
+  const run: GitRun = (args, timeoutMs) => {
+    const r = spawnSync('git', ['-C', repo, ...args], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: timeoutMs,
+      env: {
+        ...process.env,
+        GIT_OPTIONAL_LOCKS: '0',
+        GIT_OBJECT_DIRECTORY: objects,
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: join(resolve(repo, common), 'objects'),
+      },
+    });
+    return { code: r.status, stdout: r.stdout ?? '' };
+  };
+  try {
+    const c = check(
+      { heads, main: { sha: mainSha, tree: mainTree }, now: now.getTime() },
+      run,
+      parseCache(readOr(cacheFile)),
+    );
+    writeFileSync(`${cacheFile}.tmp.${process.pid}`, JSON.stringify(c.cache) + '\n');
+    renameSync(`${cacheFile}.tmp.${process.pid}`, cacheFile);
+    return c;
+  } finally {
+    rmSync(objects, { recursive: true, force: true });
+  }
+}
+
+const readOr = (p: string) => {
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+};
 
 export function main(argv: string[], stdin: () => string): string {
   const [cmd, ...rest] = argv;
@@ -149,15 +203,16 @@ export function main(argv: string[], stdin: () => string): string {
     case 'overlap': {
       const [repo, boardDir] = args;
       if (!repo || !boardDir) throw new Error('usage: overlap <repo> <boardDir>');
+      const { trees, heads } = worktrees(repo);
       const result = {
         v: 1,
         t: now.toISOString(),
-        ...overlaps(worktrees(repo), sessionNames(boardDir)),
+        ...overlaps(trees, sessionNames(boardDir), conflictCheck(repo, boardDir, heads, now)),
       };
       const file = join(boardDir, 'overlap.json');
       writeFileSync(`${file}.tmp.${process.pid}`, JSON.stringify(result) + '\n');
       renameSync(`${file}.tmp.${process.pid}`, file);
-      return `${result.pairs.length} overlapping pair(s)`;
+      return `${result.pairs.length} overlapping pair(s), ${result.conflicts?.length ?? 0} conflict(s)${result.pending ? `, ${result.pending} merge(s) pending` : ''}`;
     }
     case 'report': {
       const [historyDir, days = '7'] = args;

@@ -174,7 +174,8 @@ no script writes it: the Mac never runs anything from the shared folder.
   `localNotes/board/history/nudges-<day>.jsonl` (`{t, check, match, session}`, never the prompt's text) so its help
   can be weighed against its cost; its CHECKS table holds the patterns.
 - **Collisions.** On each `[kickoff]`, compare its areas with _In flight_ and with `localNotes/board/overlap.json`
-  (the board's file-level overlaps, every 2.5 min). Warn **both** sessions: `collision: <a> and <b> both
+  (the board's file overlaps and `git merge-tree` conflicts, every 2.5 min: SESSION-BOARD.md → _Overlaps_; a pair
+  marked `clean` merges as is). Warn **both** sessions: `collision: <a> and <b> both
 touch <area>; whichever merges second rebases — agree an order.`
 - **After every merge to main,** send each in-flight branch a `[rebase]`: read the merged PR and rebase
   (CLAUDE.md → _Claude behavior_). A merge that changes `CLAUDE.md` says so: a running session keeps the rules it

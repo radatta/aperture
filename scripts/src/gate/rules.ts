@@ -307,6 +307,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/bot/cli.test.ts': 'spawns bot/cli.ts (same area)',
   'scripts/src/bot/lock-cache.test.ts': 'temp dir',
   'scripts/src/board/cli-help.test.ts': 'temp dir',
+  'scripts/src/board/conflicts.test.ts': 'temp repo',
   'scripts/src/board/main-lock.test.ts': 'temp lock files',
   'scripts/src/board/sync-main.test.ts': 'spawns board/cli.ts (same area) on a temp repo and lock',
   'scripts/src/board/tower/lanes.test.ts': 'temp dir',

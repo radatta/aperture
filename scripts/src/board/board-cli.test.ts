@@ -1311,3 +1311,44 @@ describe('heavy.sh test cap', () => {
     expect(leases()).toEqual([expect.objectContaining({ action: 'wouldWait', reason: 'cap' })]);
   });
 });
+
+describe('board.sh status: conflicts and overlaps', () => {
+  it('prints merge-tree conflicts above the overlaps, then the landed and stale lanes', () => {
+    mkdirSync(join(tmp, 'board'), { recursive: true });
+    writeFileSync(
+      join(tmp, 'board/overlap.json'),
+      JSON.stringify({
+        v: 1,
+        pairs: [
+          { a: 'a', b: 'b', files: ['x.ts'], git: 'conflict' },
+          { a: 'a', b: 'c', files: ['y.ts'], git: 'clean' },
+        ],
+        conflicts: [
+          { a: 'a', b: 'main', files: ['z.ts'] },
+          { a: 'a', b: 'b', files: ['x.ts', 'w.ts'] },
+        ],
+        landed: ['done'],
+        stale: ['old'],
+        messages: {},
+      }),
+    );
+    const r = spawnSync('bash', [join(boardDir, 'board.sh'), 'status'], {
+      env,
+      cwd: tmp,
+      encoding: 'utf8',
+    });
+    const lines = r.stdout.split('\n');
+    const from = lines.indexOf('conflicts:');
+    expect(lines.slice(from, from + 9)).toEqual([
+      'conflicts:',
+      '  a ✗ main: z.ts',
+      '  a ✗ b: x.ts, w.ts',
+      'overlaps:',
+      '  a ↔ b: x.ts',
+      '  a ↔ c: y.ts — merges clean',
+      'landed, worktree not cleaned up: done',
+      'stale (no commit in 7 days): old',
+      expect.stringMatching(/^sampler: /),
+    ]);
+  });
+});

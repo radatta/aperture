@@ -270,10 +270,33 @@ Every 5th sampler tick `cli.ts overlap` lists each worktree on a branch (the det
 skipped) with its files — committed since the merge-base with `origin/main` ∪ uncommitted ∪ untracked, minus
 `localNotes/` — and intersects them pairwise into `board/overlap.json`. Files nearly every branch touches
 (`CLAUDE.md`, `docs/index.md`, `package.json`, `pnpm-lock.yaml`, `.claude/settings.json`, the hooks README,
-`run-fixtures.py`) go on a separate "small appends" line so real overlaps stand out. SessionStart injects this
-branch's lines, e.g. "flux also touches 2 of your files: app/src/data/seed.ts, app/src/data/stubClient.ts —
-SendMessage session `flux`; expect a rebase conflict whichever merges second." `origin/main` is whatever was
+`run-fixtures.py`) go on a separate "small appends" line so real overlaps stand out. `origin/main` is whatever was
 last fetched; the merge-base keeps that safe.
+
+**Real conflicts** (`conflicts.ts`): the same run merges each lane's committed head with `git merge-tree
+--write-tree` against `origin/main` and against every other lane — read-only, no checkout or index — and names
+the files git can't merge. A lane pair lists only files neither lane already conflicts on with main (a lane behind
+main would otherwise repeat its main conflicts against every rebased neighbour). Each overlap pair carries `git`:
+`conflict`, `clean` (git merges both heads; the line says so and sorts last), or `unchecked` (a shared file is
+uncommitted — merge-tree sees commits only — or the merge is pending). Two lanes drop out of every list:
+
+- **landed** — squash-merged, worktree not cleaned up: merging its head into main changes nothing, or into the
+  first-parent main commit that squashed it gives that commit's tree (it would otherwise read as conflicting with
+  its own squash once main moves over the same lines);
+- **stale** — no commit in 7 days (`STALE_DAYS`).
+
+Cost: one merge is 26–112 ms here (2026-11-17), so every merge is cached by its two shas in
+`board/conflicts-cache.json` — a run merges only what moved (a lane's commit: N merges; main moving: one per lane);
+entries whose shas are no longer a head or main drop out. A run stops new merges at 10 s (5 s per merge) and
+counts the rest as `pending`, picked up next run. Merges write objects, so they go to a scratch object dir (the
+shared store as an alternate) that is deleted after the run; a failed merge is never cached.
+
+SessionStart injects this branch's lines, conflicts first: "merge conflict with main on 1 file: … — rebase onto
+origin/main now.", "flux will conflict with you on 2 files: … (git merge-tree) — SendMessage session `flux`; whichever
+merges second rebases.", then unchecked overlaps ("flux also touches 2 of your files: …; expect a rebase conflict
+whichever merges second."), then clean ones ("… git merges both heads cleanly today; recheck after either
+commits."). `board.sh status` prints `conflicts:` above `overlaps:` (a clean pair ends `— merges clean`), then the
+landed and stale lines.
 
 ## Measurement protocol
 
