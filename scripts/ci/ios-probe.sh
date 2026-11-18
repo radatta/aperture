@@ -187,6 +187,8 @@ s_env() {
   {
     sw_vers
     xcodebuild -version
+    ls -d /Applications/Xcode*
+    xcode-select -p
     xcrun simctl list runtimes
     xcrun simctl runtime list
     xcrun simctl list devicetypes | grep -i iphone
@@ -216,8 +218,8 @@ boot_start() {
 }
 # runner-images 15334: select Xcode 27.2 before any simctl call (the image's default is 27.1)
 select_xcode() {
-  [ -d /Applications/Xcode_27.2.app ] || return 0
-  sudo xcode-select -s /Applications/Xcode_27.2.app && note "Xcode 27.2 selected"
+  [ -d /Applications/Xcode_27.2.app ] || { note "no /Applications/Xcode_27.2.app: default Xcode $(xcode-select -p)"; return 0; }
+  if sudo xcode-select -s /Applications/Xcode_27.2.app; then note "Xcode 27.2 selected"; else note "xcode-select failed: $(xcode-select -p)"; fi
 }
 s_create() {
   select_xcode
@@ -416,7 +418,7 @@ s_a2hs() {
     tap_label '^(Page Menu|More)$' AXButton 3 || return 1
     sleep 1
     evidence a2hs-menu tree
-    tap_label '^Share' '' 4 || return 1
+    tap_label '^Share$' '' 4 || return 1
   fi
   for i in $(seq 1 30); do
     late && return 1
