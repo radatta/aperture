@@ -309,11 +309,14 @@ describe('lock wait and lock acquire hold back for main', () => {
 
 describe('the lock subcommands log to the board (lock-events.ts)', () => {
   const R = '/repos/radatta/aperture';
-  // One slot's lock, held by `h` until deleted; slot B free. DELETE answers per `gone`.
-  const oneLock = (h: object | null, gone = false) => {
+  // One slot's lock, held by `h` until deleted; slot B free. `goneAfter`: the ref reads gone after that many reads
+  // (a take-over deleted it between heldLock's read and release's).
+  const oneLock = (h: object | null, goneAfter = Infinity) => {
     let ref: object | null = h;
+    let reads = 0;
     return fakeApi({
       [`GET ${R}/git/ref/locks/dev`]: () => {
+        if (++reads > goneAfter) ref = null;
         if (!ref) throw ghError(404);
         return { object: { sha: 't1', type: 'tag' } };
       },
@@ -322,7 +325,6 @@ describe('the lock subcommands log to the board (lock-events.ts)', () => {
       },
       [`GET ${R}/git/tags/t1`]: () => ({ message: JSON.stringify(ref) }),
       [`DELETE ${R}/git/refs/locks/dev`]: () => {
-        if (gone) ref = null; // someone else's take-over got there first: release reads it gone
         ref = null;
         return undefined;
       },
@@ -360,10 +362,12 @@ describe('the lock subcommands log to the board (lock-events.ts)', () => {
     await lockRelease(oneLock(mine).api, 'ci-bot', dir, clock, (l) => void said.push(l));
     await lockRelease(oneLock(null).api, 'ci-bot', dir, clock, (l) => void said.push(l));
     await lockRelease(oneLock(holder).api, 'ci-bot', dir, clock, (l) => void said.push(l)); // flux's, not ours
+    await lockRelease(oneLock(mine, 1).api, 'ci-bot', dir, clock, (l) => void said.push(l)); // gone before the delete
     expect(said).toEqual([
       'dev lock released',
       'ci-bot holds no dev lock — already free',
       'ci-bot holds no dev lock — already free',
+      'dev lock released', // the cache is cleared, but this call freed nothing: no released row
     ]);
     expect(devlockRows(dir)).toEqual([
       expect.objectContaining({
@@ -391,7 +395,10 @@ describe('the lock subcommands log to the board (lock-events.ts)', () => {
     await lockStatus(oneLock(mine).api, dir, clock, (l) => void said.push(l));
     expect(said).toEqual([
       expect.stringMatching(/^dev lock: ci-bot @ ccccccc until /),
-      expect.stringMatching(/^ {2}last take of dev: ci-bot at \d\d:\d\d — no wait$/),
+      // the date only when the take falls on another local day, which some zones make it
+      expect.stringMatching(
+        /^ {2}last take of dev: ci-bot at (\d{4}-\d\d-\d\d )?\d\d:\d\d — no wait$/,
+      ),
       'devb lock: free',
     ]);
   });

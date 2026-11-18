@@ -134,11 +134,11 @@ describe('devlock events', () => {
     log.refused('mine', new LockHeld(other, 'dev'), []);
     clock.at(T0 + MIN);
     const reads = [{ slot: 'dev' as const, cur: { holder: other, tagSha: 't' } }];
-    log.blocked('mine', reads, [], ['dev']); // still open: no second start
+    log.blocked('mine', reads, [], ['dev'], T0 + MIN); // still open: no second start
     clock.at(T0 + 56 * MIN);
     log.waitEnd('mine', { outcome: 'gave-up', slot: 'dev' }, ['dev'], T0 + MIN);
     clock.at(T0 + 57 * MIN);
-    log.blocked('mine', reads, [], ['dev']);
+    log.blocked('mine', reads, [], ['dev'], T0 + 57 * MIN);
     clock.at(T0 + 100 * MIN); // 44 min after the last wait-end: still the same wait
     log.waitEnd('mine', { outcome: 'free', slot: 'dev' }, ['dev'], T0 + 57 * MIN);
     clock.at(T0 + 101 * MIN);
@@ -157,17 +157,27 @@ describe('devlock events', () => {
     log.refused('mine', new LockHeld(other, 'dev'), []);
     const reads = [{ slot: 'dev' as const, cur: { holder: other, tagSha: 't' } }];
     clock.at(T0 + 10 * MIN); // the lane told the hub, then started the wait
-    log.blocked('mine', reads, [], ['dev']);
+    log.blocked('mine', reads, [], ['dev'], T0 + 10 * MIN);
     clock.at(T0 + 65 * MIN); // 65 min after the last written row, but the wait began inside the window
     log.waitEnd('mine', { outcome: 'gave-up', slot: 'dev' }, ['dev'], T0 + 10 * MIN);
     clock.at(T0 + 70 * MIN);
-    log.blocked('mine', reads, [], ['dev']);
+    log.blocked('mine', reads, [], ['dev'], T0 + 70 * MIN);
     clock.at(T0 + 100 * MIN);
     log.waitEnd('mine', { outcome: 'free', slot: 'dev' }, ['dev'], T0 + 70 * MIN);
     clock.at(T0 + 101 * MIN);
     log.changed(held('mine', T0 + 101 * MIN), 'dev');
     expect(rows().map((r) => r.action)).toEqual(['wait-start', 'wait-end', 'wait-end', 'acquired']);
     expect(rows().at(-1)).toMatchObject({ waitSec: 101 * 60, waitFrom: '2026-11-18T19:00:00Z' });
+  });
+
+  it('a slow first good read (failed reads first) still joins the wait open at the lock wait’s start', () => {
+    const { clock, rows, log } = board();
+    log.refused('mine', new LockHeld(other, 'dev'), []);
+    const reads = [{ slot: 'dev' as const, cur: { holder: other, tagSha: 't' } }];
+    const startedMs = T0 + OPEN_WAIT_MS - 30_000; // the wait's last row is 59.5 min old here
+    clock.at(startedMs + 60_000); // two failed reads later: 60.5 min old
+    log.blocked('mine', reads, [], ['dev'], startedMs);
+    expect(rows().map((r) => r.action)).toEqual(['wait-start']);
   });
 
   it('a wait silent past OPEN_WAIT_MS is abandoned: the take reports none, the next refusal starts afresh', () => {
@@ -244,6 +254,7 @@ describe('devlock events', () => {
       ],
       ['devb'],
       ['dev', 'devb'],
+      T0,
     );
     clock.at(T0 + MIN);
     log.waitEnd('mine', { outcome: 'ours', slot: 'dev' }, ['dev', 'devb'], T0);

@@ -137,7 +137,7 @@ export async function lockWait(
     slots,
     // A slot main's Deploy run is still to land on isn't free yet: deploy-dev would be refused it (main-pending.ts).
     busy: async (slot) => (await pendingMainDeploy(api, slot)) !== null,
-    onBlocked: (reads, main) => events.blocked(branch, reads, main, slots),
+    onBlocked: (reads, main) => events.blocked(branch, reads, main, slots, startedMs),
   });
   events.waitEnd(branch, r, slots, startedMs);
   if (r.outcome === 'free') console.log(`${r.slot} lock: free — \`pnpm bot deploy-dev\` takes it`);

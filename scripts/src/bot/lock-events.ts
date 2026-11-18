@@ -122,6 +122,7 @@ export interface LockLog {
     reads: { slot: Slot; cur: LockState | null }[],
     main: Slot[],
     slots: readonly Slot[],
+    startedMs: number,
   ): void;
   waitEnd(
     branch: string,
@@ -159,8 +160,9 @@ export function lockLog(dir: string | null, now: () => number): LockLog {
     mkdirSync(join(dir, 'history'), { recursive: true });
     appendFileSync(file(dir, ms), JSON.stringify(row) + '\n');
   };
-  const start = (branch: string, rest: Omit<WaitStart, keyof Base | 'action'>) => {
-    if (openWait(readLockEvents(dir, now()), branch, now())) return; // still the same wait
+  // asOf: when this wait began (a lock wait's own start), so a slow first read never splits it
+  const start = (branch: string, rest: Omit<WaitStart, keyof Base | 'action'>, asOf = now()) => {
+    if (openWait(readLockEvents(dir, now()), branch, asOf)) return; // still the same wait
     append({ action: 'wait-start', branch, ...rest });
   };
   const released = (h: Holder | null, slot: Slot, by: Released['by']) => {
@@ -191,18 +193,22 @@ export function lockLog(dir: string | null, now: () => number): LockLog {
         via: 'refused',
       }),
     ),
-    blocked: safe((branch, reads, main, slots) => {
+    blocked: safe((branch, reads, main, slots, startedMs) => {
       const ms = now();
-      start(branch, {
-        slots: [...slots],
-        behind: reads.flatMap(({ slot, cur }) =>
-          cur?.holder && cur.holder.branch !== branch && !isExpired(cur.holder, ms)
-            ? [{ slot, branch: cur.holder.branch }]
-            : [],
-        ),
-        main: [...main],
-        via: 'wait',
-      });
+      start(
+        branch,
+        {
+          slots: [...slots],
+          behind: reads.flatMap(({ slot, cur }) =>
+            cur?.holder && cur.holder.branch !== branch && !isExpired(cur.holder, ms)
+              ? [{ slot, branch: cur.holder.branch }]
+              : [],
+          ),
+          main: [...main],
+          via: 'wait',
+        },
+        startedMs,
+      );
     }),
     waitEnd: safe((branch, r, slots, startedMs) => {
       if (r.outcome === 'ours') return; // its acquired closed the wait already
