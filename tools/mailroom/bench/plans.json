@@ -495,12 +495,12 @@
           "op": "tap",
           "label": "Review before saving",
           "scan": {
-            "x": 355,
+            "x": 395,
             "from": 390,
             "to": 650
           },
           "hint": {
-            "x": 353,
+            "x": 395,
             "y": 505
           },
           "role": "AXButton"
