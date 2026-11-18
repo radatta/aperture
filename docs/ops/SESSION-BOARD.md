@@ -246,7 +246,8 @@ over its cost.
 counts as active: `docs/ops/LANES.md` → _Start_. It was set when every lane ran the full suite 4–6 times; since
 `gate:fast` (2026-11-17) a lane runs affected tests locally and the full suite on GitHub, so re-measure it from a day
 of `cli.ts report` and `barriers` data before raising it. `lanes.autoCompactWindow` is the lanes' `claude --autocompact` window and the top-level `pace` block the
-`lanes start` pace gate's limits (`docs/ops/LANES.md` → _Start_ step 8, _The pace gate_).
+`lanes start` pace gate's limits (`docs/ops/LANES.md` → _Start_ step 8, _The pace gate_). `watchers` holds the hub's
+watchers' thresholds (_Watchers_ below).
 
 ## Hooks
 
@@ -478,6 +479,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "note": ""
     }
   ],
+  "autoStart": [{ "branch": "", "note": "<LOW… / HOLD… keep it waiting>", "after": ["<branch>"] }],
   "maintainer": [{ "text": "", "since": "<YYYY-MM-DD>" }],
   "wave": {
     "name": "Wave 2",
@@ -553,6 +555,52 @@ the real board instead. `tower.sh --once <cols>x<rows>` prints one frame without
 
 **The web tower.** http://localhost:6183 reuses the data half (`source.ts` → `TowerState`) with its own
 derivation and lane files: `docs/ops/TOWER.md`. This terminal tower stays as its fallback.
+
+## Watchers
+
+Three no-AI loops the hub runs in the background (`docs/ops/HUB.md` → _Watchers_): each writes its board file every
+tick and **exits only when the hub should wake**, so the hub spends nothing while they're quiet. They source
+`watch-lib.sh` (on `lib.sh`), read every threshold from `limits.json` → `watchers` at startup (an edit takes effect at
+the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
+has one home. A bad argument or env override is exit 2. History files are named by local day with local-offset `t`. Tests: `scripts/src/board/watchers.test.ts`
+(PATH shims for `sleep` and `date` drive a file clock over a fake cgroup, loadavg and meter dir).
+
+| Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                     | Exits                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `pace-watch.sh`                | cgroup `cpu.stat`, `memory.stat`, `{cpu,memory}.pressure`, `/proc/loadavg`; `pace-control.json`, `queue.json`, `mac-stats.json` (read-only) | `pace.json` each minute, `idle-fired`, `history/vm-pace-<day>.jsonl`, `history/mac-load-<day>.jsonl`, `pace-watch.log` | 3 trip, 0 recovered, 5 trigger, 4 hot an hour, 6 idle + ready lane |
+| `usage-watch.sh [--hard-only]` | `localNotes/usage/meter-*.jsonl` (the two newest)                                                                                           | `usage-now.json`, `usage-watch.log`                                                                                    | 7 soft stop, 8 hard stop                                           |
+| `context-watch.sh`             | the same meter files                                                                                                                        | `ctx.json`, `ctx-alerted.json`, `history/ctx-<day>.jsonl`, `context-watch.log`                                         | 9 urgent                                                           |
+
+**pace** samples every `intervalSec` (60) and averages the last `windowSamples` (5); nothing trips below the gate's
+`pace.minSamples` (3). Calm → **trip (3)** on anon avg ≥ `tripAnonMiB` (10800) or memory PSI full > `pace.psiMemFullMax`
+(1) at once, or on cores avg ≥ `tripCores` (8.5) or CPU PSI avg ≥ `pace.psiCpuBelow` (40) held `tripCpuHoldSec` (300).
+Hot (the hub's `pace-control.json` says so, with `since`) → **trigger (5)** when load5 is under a held lane's
+`load5Below`; **recovered (0)** once `recoverMinSec` (600) past `since` with load5 < `recoverLoad5Below` (12) and anon
+avg < `pace.anonMiBBelow` (9000); **hot an hour (4)** at `hotExitSec` (3600). **Idle (6)**: calm, load5 <
+`idleLoad5Below` (8) and anon avg < `idleAnonMiBBelow` (8000) held `idleHoldSec` (600), from `idleFromHour` (07) to
+midnight, at most once per `idleEverySec` (1800), and an `autoStart` lane is ready (its note doesn't start `LOW` or
+`HOLD`, and none of its `after` lanes is still in `devQueue` or `autoStart`). The four `pace.*` keys are the start
+gate's own, so the gate and the trip move together; the gate's `coresBelow` (7.5) sits under the trip on purpose — a
+start needs headroom, a trip needs a real overload. Every hold restarts with the watcher (the earliest CPU trip after a
+restart is ~8 min). An unreadable cgroup, PSI or loadavg reading skips the tick — no `pace.json`, no history — so the
+start gate fails closed on the stale file rather than reading a stand-in 0 as an idle box. `pace-control.json` is read
+once a tick: missing is calm; empty or unparseable (a write caught mid-way) keeps the last tick's view; a `since` that
+isn't a whole epoch at or before now (a fraction floors; milliseconds, a string) counts as 0 — hot since 1970, so the
+first judged tick exits 5 if a trigger matches, else 0 (readings under the recovery lines) or 4. A file without a string
+`state` counts as unreadable (the start gate refuses it too), and a trigger without a numeric `load5Below` never matches.
+
+**usage**: the account % is the max weekly `used_percentage` among meter rows from the last `freshSec` (600): a stale
+session reports an old value, a fresh row the live one. ≥ `hardPct` (60) → 8, else ≥ `softPct` (58) → 7, checked every
+`intervalSec` (60). After a soft stop the hub restarts it with `--hard-only` (the soft line would re-fire at once);
+`APERTURE_USAGE_SOFT` / `_HARD` in the env override the lines. No fresh row at all is quiet, not an exit: overnight, with
+no session active, that is the normal state, and an exit would wake the hub every restart; `usage-now.json`'s `at` shows
+the last reading's age. A row of the wrong shape (a torn line, a non-string `ts`) is dropped alone.
+
+**context**: every `intervalSec` (300), each session's latest fresh row: tokens = input + cache creation + cache read,
+pct = tokens / `windowTokens` (1M, the lanes' model's window), sorted into `ctx.json`. A session at ≥ `urgentPct` (50)
+exits 9 unless `ctx-alerted.json` stamped it within `realertSec` (6 h); only the sessions alerted now are stamped.
+`flagPct` (40) is the tower's warn line; the watcher only checks it sits at or under `urgentPct`.
+`APERTURE_CTX_WINDOW` / `_URGENT` in the env override (not `WINDOW`: GNU screen exports it).
 
 ## Script-shape rules (COI monitor)
 

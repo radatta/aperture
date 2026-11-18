@@ -685,7 +685,7 @@ describe('lane start: the pace gate', () => {
     rmSync(join(w.board, 'pace.json'));
     expect(await start(t.d, args())).toBe(75);
     expect(t.out()).toMatch(
-      /no pace.json in .*board: the watcher is not running, restart .*board\/pace-watch.sh/,
+      /no pace.json in .*board: the watcher is not running, restart scripts\/board\/pace-watch.sh/,
     );
     expect(mutated(t.calls)).toEqual([]);
   });

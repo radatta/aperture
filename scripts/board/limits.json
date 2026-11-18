@@ -12,6 +12,32 @@
     "spacingSec": 120,
     "staleSec": 180
   },
+  "watchers": {
+    "pace": {
+      "intervalSec": 60,
+      "windowSamples": 5,
+      "tripAnonMiB": 10800,
+      "tripCores": 8.5,
+      "tripCpuHoldSec": 300,
+      "recoverLoad5Below": 12,
+      "recoverMinSec": 600,
+      "hotExitSec": 3600,
+      "idleLoad5Below": 8,
+      "idleAnonMiBBelow": 8000,
+      "idleHoldSec": 600,
+      "idleFromHour": 7,
+      "idleEverySec": 1800
+    },
+    "usage": { "softPct": 58, "hardPct": 60, "intervalSec": 60, "freshSec": 600 },
+    "context": {
+      "flagPct": 40,
+      "urgentPct": 50,
+      "windowTokens": 1000000,
+      "intervalSec": 300,
+      "realertSec": 21600,
+      "freshSec": 600
+    }
+  },
   "measuredAt": "2026-10-14T02:52:03Z",
   "measuredLimits": { "pidsMax": 4096, "highMiB": 18432 },
   "container": {
