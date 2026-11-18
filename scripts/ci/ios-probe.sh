@@ -16,8 +16,8 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,axe2,hostlogafter,simlog,taplanded" ;;
-    2) echo "restore card nohub,light,taplanded" ;;
+    1) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
+    2) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
     *) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
   esac
 }
