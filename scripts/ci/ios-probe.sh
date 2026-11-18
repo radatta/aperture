@@ -16,9 +16,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
-    2) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
-    *) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
+    1) echo "restore rows nohub,axe2,hostlog,nospot" ;;
+    2) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
+    *) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -393,8 +393,17 @@ procs() {
 # the host's diagnosticd can be booted out for good before the boot, not just killed and relaunched.
 s_hostlog() {
   case ",$OPTS," in *,hostlog,*) ;; *) note "hostlog off"; return 0 ;; esac
+  [ -n "${GITHUB_ACTIONS:-}" ] || { note "hostlog: not CI, skipped"; return 0; }
   if cap 20 sudo -n launchctl bootout system/com.apple.diagnosticd >/dev/null 2>&1; then note "host diagnosticd booted out"; else note "host diagnosticd bootout refused"; fi
   note "diagnosticd now: $(pgrep -lf diagnosticd | cut -c1-200 | tr '\n' ';')"
+  return 0
+}
+# nospot (run 27): Spotlight indexing off on the host before the restore (mds_stores, storagekitd and
+# diskarbitrationd spiked right before run 26's AX hang; an anecdotal macOS-CI fix). Ephemeral runner, CI only.
+s_nospot() {
+  case ",$OPTS," in *,nospot,*) ;; *) note "nospot off"; return 0 ;; esac
+  [ -n "${GITHUB_ACTIONS:-}" ] || { note "nospot: not CI, skipped"; return 0; }
+  if cap 30 sudo -n mdutil -a -i off >"$OUT/mdutil.log" 2>&1; then note "Spotlight indexing off: $(tr '\n\t' '  ' <"$OUT/mdutil.log" | cut -c1-160)"; else note "mdutil refused (rc $?)"; fi
   return 0
 }
 # simlog (run 19): the sim's own diagnosticd (run 18: sim:diagnosticd ~15% at the card), disabled and booted out
@@ -962,6 +971,7 @@ trap finish EXIT
 trap 'exit 143' TERM
 log "shard $SHARD: $SRC → $AFTER"
 step hostlog s_hostlog # before the boot
+step nospot s_nospot
 case "$SRC" in
   restore) step restore s_restore ;;
   *) step create s_create ;; # cold, seed (seeding happens before the boot starts)
