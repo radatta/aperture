@@ -245,6 +245,7 @@ Freshness limits (`derive.ts` `STALE`):
 | a PR's checks | 5 min                            |
 | queue.json    | 2 h                              |
 | main sync     | 5 min                            |
+| ctx.json      | 5 min (then it counts nothing)   |
 | a lane file   | amber at 2 h, SLIPPING at 24 h   |
 | Mac stats     | 60 s, then silent (red) at 5 min |
 | AWS costs     | 3 days                           |
@@ -294,7 +295,7 @@ wrong fact: it never makes it red. "Board updated" is `queue.json`'s own `update
 **Where it shows.** The desktop header's chip, `board 12m · 3 stale` (a click opens SLIPPING), with `pnpm usage line`
 beside it (the tower runs `usage line --no-scan` every 5 min: `docs/ops/USAGE-METER.md`). The phone has no room for a
 third header button at 390 px, so its sources chip carries the first two of `behind`, `n stale`, `n off`, in the
-worse tone. SLIPPING's BOARD rows; SOURCES' `main sync` row.
+worse tone. SLIPPING's BOARD rows; SOURCES' `main sync` row. Context per session shares the header and the status line (below).
 
 **Derived files.** The board's own tower (started by `board.sh`, never a fixtures or `--once` server) writes two files
 beside `queue.json` every 30 s, tmp + rename:
@@ -312,6 +313,16 @@ beside `queue.json` every 30 s, tmp + rename:
 `· usage … · board 12m · 3 stale · next ~19:40 <what>`, the next merge last with `?` once its time has passed, the
 usage part only while under 15 min old; a `board.line` over 3 min old prints red `tower down` and nothing else. It
 replaces dispatch's `localNotes/board/next-merge.sh`, which read `plan[]` raw.
+
+### Context per session
+
+Dispatch's `context-watch.sh` writes `localNotes/board/ctx.json` every minute (`[{name, ts, tokens, pct}]`, `pct` of
+1M tokens); `ctx.ts` reads it, its mtime as its time. Each NOW row and slot card shows its session's `ctx N%`, amber at
+40 and red at 50. The desktop header counts them (`ctx ≥50 lc-catalog 78% · 3 ≥40`; more than one over 50 is `×n`,
+every name in the tooltip); on the phone a session over 50 leads the sources chip (`1 ctx≥50`) and one over 40 follows
+the board's count. `board.line`'s `ctx <n≥40> <n≥50> <names≥50>` line gives the status line the same, red with the
+names at 50. A `ctx.json` over 5 min old counts nothing and SOURCES says so. The phone alert stays dispatch's: the
+tower never pings.
 
 ### Main sync
 
