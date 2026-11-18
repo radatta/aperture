@@ -9,10 +9,10 @@
 
 # Optional parameters:
 # @raycast.icon ✅
-# @raycast.description Add a backlog task to Aperture (prod by default); Haiku picks out category, due date and estimate.
+# @raycast.description Add a backlog task to Aperture (prod by default); the model picks out category, due date and estimate.
 
 # Quick-add: one line → POST /api/capture with a capture token (docs/areas/tasks/capture.md). The server
-# parses it (Claude Haiku, the same parse as the app's quick add — docs/areas/tasks/quick-add.md), creates
+# parses it (Claude Sonnet, the same parse as the app's quick add — docs/areas/tasks/quick-add.md), creates
 # the task and answers a receipt. A failed parse still saves the line, with a loud toast. The token can
 # only capture — nothing else in Aperture. Needs only curl, jq and security (macOS 15+). Setup:
 # tools/raycast/README.md.
@@ -72,6 +72,7 @@ case "$status" in
   200) ;;
   401) fail "token rejected (HTTP 401) — revoked, or not a capture token? Make one in Settings › Capture" ;;
   429) fail "${say:-daily capture limit reached} (HTTP 429)" ;;
+  409) fail "${say:-Aperture was busy and nothing was added — run it again} (HTTP 409)" ;;
   5*) fail "HTTP $status — ${say:-no details}; $MAYBE_ADDED" ;;
   *) fail "HTTP $status — ${say:-$(head -c 200 "$out")}" ;;
 esac

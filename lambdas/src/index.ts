@@ -44,7 +44,7 @@ import { liveWrites } from './ddb/writes';
 import { PlaceTokenStore } from './ddb/placeTokens';
 import { PlaceReadCapError, resolvePlaceRead } from './auth/placeToken';
 import { ScopedTokenStore } from './ddb/scopedTokens';
-import { CaptureCapError, resolveScopedToken } from './auth/scopedToken';
+import { CaptureBusyError, CaptureCapError, resolveScopedToken } from './auth/scopedToken';
 import { createLiveGoogle } from './google/liveGoogle';
 import { verifyState } from './google/state';
 import { createS3Presigner } from './s3/presigner';
@@ -417,7 +417,7 @@ async function capture(event: HttpEvent, path: string, d: BffDeps): Promise<Http
     statusCode: number,
     reason: string,
     body: CaptureResult | CaptureError,
-    extra: Record<string, string | boolean> = {},
+    extra: Record<string, string | number | boolean> = {},
   ): HttpResult => {
     const ms = Date.now() - started;
     console.log(JSON.stringify({ event: 'capture', ok: statusCode === 200, reason, ms, ...extra }));
@@ -450,12 +450,21 @@ async function capture(event: HttpEvent, path: string, d: BffDeps): Promise<Http
       anthropic: d.anthropic,
       scopedTokens: store,
     });
-    const result = await backend.captureForToken(text, body.voice, auth);
-    return reply(200, 'ok', result, { raw: result.raw, duplicate: result.duplicate });
+    const { timing, ...result } = await backend.captureForToken(text, body.voice, auth);
+    return reply(200, 'ok', result, {
+      raw: result.raw,
+      duplicate: result.duplicate,
+      voice: body.voice,
+      ...(timing && { parseMs: timing.parseMs }),
+      ...(timing?.fallback && { fallback: timing.fallback }),
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : '';
     if (err instanceof CaptureCapError)
       return refuse(429, 'cap', 'Daily capture cap reached', CAPTURE_SAY.cap);
+    // Several captures at once through one token, and this one lost every retry: nothing was added (F224).
+    if (err instanceof CaptureBusyError)
+      return refuse(409, 'busy', 'Capture token busy', CAPTURE_SAY.busy);
     if (message.startsWith('Unauthorized'))
       return refuse(401, unauthorizedReason(message), 'Unauthorized', CAPTURE_SAY.unauthorized);
     const name = err instanceof Error ? err.name : 'unknown';

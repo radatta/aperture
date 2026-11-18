@@ -3,7 +3,8 @@ import type { ParseTaskResult } from '@aperture/shared';
 import { PARSE_CLIENT_TIMEOUT_MS, withTimeout } from './useQuickParse';
 
 // The client's ceiling on a parse (the capture bar's tests can't drive fake timers through RTL's waitFor,
-// so the race is pinned here; CaptureBar.test covers what a timeout outcome does — a raw save).
+// so the race is pinned here; CaptureBar.test covers what a timeout outcome does — a failed preview, the text
+// kept, nothing saved).
 describe('withTimeout', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());

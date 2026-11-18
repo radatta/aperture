@@ -17,7 +17,18 @@ import { bearerOf } from './placeToken';
 // server keeps only its SHA-256, as the key of a lookup row that names the user and the token's row. No
 // 'local' fallback: a missing, malformed, unknown or revoked token is 401 on every stage.
 
-const CAS_ATTEMPTS = 4;
+// A lost race re-reads and tries again after a full-jitter backoff (25 ms doubling, at most 200 ms a wait —
+// under a second in all): several captures at once through one token all land (F224). Past the last, busy.
+const CAS_ATTEMPTS = 8;
+// After the task is saved, the row's bookkeeping gets a short try: its miss is logged, never the user's, and
+// the Lambda's tail stays well inside its 15 s.
+const CAS_TAIL_ATTEMPTS = 3;
+const CAS_BACKOFF_MS = 25;
+const CAS_BACKOFF_MAX_MS = 200;
+const backoff = (attempt: number) =>
+  new Promise<void>((r) =>
+    setTimeout(r, Math.random() * Math.min(CAS_BACKOFF_MAX_MS, CAS_BACKOFF_MS * 2 ** attempt)),
+  );
 const tokenRe = (scope: TokenScope) =>
   new RegExp(`^${SCOPED_TOKEN_PREFIX[scope]}[A-Za-z0-9_-]{43}$`);
 
@@ -70,15 +81,27 @@ export class CaptureCapError extends Error {
   }
 }
 
-// One conditional write on the token's row; on a lost race, re-read it (consistent) and try again. Gone, or
-// another token's now → Unauthorized: a revoke mid-request is never written back to life.
+// Every retry of the token row's write lost: nothing this step wrote landed. The route answers 409 with a
+// spoken "say it again" (CAPTURE_SAY.busy), never a generic 500.
+export class CaptureBusyError extends Error {
+  readonly code = 'CAPTURE_BUSY';
+  constructor(options?: { cause?: unknown }) {
+    super('Capture token busy — try again', options);
+    this.name = 'CaptureBusyError';
+  }
+}
+
+// One conditional write on the token's row; on a lost race, back off, re-read it (consistent) and try again.
+// Gone, or another token's now → Unauthorized: a revoke mid-request is never written back to life.
 async function casRow<T>(
   store: ScopedTokenStore,
   auth: ScopedAuth,
   step: (row: ScopedTokenRow) => { next: ScopedTokenRow | null; out: T },
+  attempts = CAS_ATTEMPTS,
 ): Promise<T> {
   let row = auth.row;
-  for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+  let lost: unknown;
+  for (let attempt = 0; attempt < attempts; attempt++) {
     const { next, out } = step(row);
     if (!next) return out;
     try {
@@ -87,13 +110,15 @@ async function casRow<T>(
       return out;
     } catch (err) {
       if (!(err instanceof ConditionFailedError)) throw err;
+      lost = err;
+      if (attempt < attempts - 1) await backoff(attempt);
       const fresh = await store.row(auth.userId, row.id);
       if (!fresh || fresh.hash !== auth.hash)
         throw new Error('Unauthorized: revoked token', { cause: err });
       row = fresh;
     }
   }
-  throw new Error('Conflict — try again');
+  throw new CaptureBusyError({ cause: lost });
 }
 const bump = (row: ScopedTokenRow, now: number): ScopedTokenRow => ({
   ...row,
@@ -136,17 +161,22 @@ export function reserveCapture(
   });
 }
 
-// Claim one model call: true and counted, or false at CAPTURE_PARSE_DAILY_CAP (nothing written — the
-// capture then saves the line as typed). Called only when the model is about to run, so a grammar line
-// or an empty one never spends a claim.
-export function claimParse(
+// Claim one model call: true and counted on this token's row, or false once the user's capture tokens together
+// made CAPTURE_PARSE_DAILY_CAP today (nothing written — the capture then saves without the model). Per user, so
+// a leak of any number of tokens spends no more than one (the maintainer, 2026-11-17). The other rows are read
+// once, so claims racing through two tokens can overshoot by the race's width — a cost guard, not an exact
+// count. Called only when the model is about to run: a grammar line or an empty one never spends a claim.
+export async function claimParse(
   store: ScopedTokenStore,
   auth: ScopedAuth,
   now: number,
   cap: number = CAPTURE_PARSE_DAILY_CAP,
 ): Promise<boolean> {
+  const others = (await store.list(auth.userId))
+    .filter((r) => r.id !== auth.row.id && r.scope === auth.row.scope)
+    .reduce((n, r) => n + parsesToday(r, now), 0);
   return casRow(store, auth, (row) => {
-    if (parsesToday(row, now) >= cap) return { next: null, out: false };
+    if (others + parsesToday(row, now) >= cap) return { next: null, out: false };
     return { next: { ...bump(row, now), parses: parsesToday(row, now) + 1 }, out: true };
   });
 }
@@ -160,14 +190,19 @@ export function recordCaptureTask(
   taskId: string,
   now: number,
 ): Promise<void> {
-  return casRow(store, auth, (row) => {
-    if (row.lastTextHash !== textHash || row.lastTaskId !== null)
-      return { next: null, out: undefined };
-    return {
-      next: { ...row, lastTaskId: taskId, updatedAt: Math.max(now, row.updatedAt + 1) },
-      out: undefined,
-    };
-  });
+  return casRow(
+    store,
+    auth,
+    (row) => {
+      if (row.lastTextHash !== textHash || row.lastTaskId !== null)
+        return { next: null, out: undefined };
+      return {
+        next: { ...row, lastTaskId: taskId, updatedAt: Math.max(now, row.updatedAt + 1) },
+        out: undefined,
+      };
+    },
+    CAS_TAIL_ATTEMPTS,
+  );
 }
 
 // A capture that failed after it was counted: drop its line from the duplicate guard (only while the row

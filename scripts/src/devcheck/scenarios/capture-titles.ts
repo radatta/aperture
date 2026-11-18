@@ -30,6 +30,11 @@ const verbatim = (m: string): Sample[] => [
   { line: 'book the vet note at 11 am', title: 'book the vet note' },
   { line: 'ping the plumber asap at 4 pm', title: 'ping the plumber asap' },
   { line: 'renew passport online at 9 am', title: 'renew passport online' },
+  // F232 (dev, 2026-11-17): the model put the marker and "typed" in notes; they go back.
+  {
+    line: `devcheck ${m} call the dentist typed tomorrow at 5 pm`,
+    title: `devcheck ${m} call the dentist typed`,
+  },
 ];
 const dueOut: Sample[] = [
   {
@@ -67,6 +72,13 @@ const dueOut: Sample[] = [
 // Through the capture route — spoken (the Shortcut's body: the lead-in, the said time and the day go) and typed
 // (Raycast's) — every other word stays. Real tasks, so each carries the run's marker.
 const captured = (m: string): Sample[] => [
+  // F232 (dev, 2026-11-17): a marker prefix and a trailing word beside "tomorrow at <clock>", typed — the model put
+  // both in notes and titled it "call the dentist".
+  {
+    line: `devcheck ${m} call the dentist typed tomorrow at 5 pm`,
+    title: `devcheck ${m} call the dentist typed`,
+    typed: true,
+  },
   {
     line: `remind me to devcheck ${m} call the bank typed at 5 PM`,
     title: `devcheck ${m} call the bank typed`,
@@ -128,6 +140,29 @@ const leads = (label: string, live: Set<string>): Sample[] => [
   ].filter((s) => !live.has(s.line.split(/[\s,:]/)[0]!)),
 ];
 
+// One real word no sample line is about, and not a live category (an earlier run's leftover included). A made-up
+// label ("quincerstu") read as noise, so a lead-in naming it missed twice on model nondeterminism (F249); a word
+// that reads like a category is filed like one. Never the marker every sample line carries.
+const BAIT_WORDS = [
+  'quince',
+  'damson',
+  'medlar',
+  'loquat',
+  'kumquat',
+  'tamarind',
+  'mulberry',
+  'sorrel',
+];
+const baitLabel = (nonce: string, live: Set<string>, skip = 0): string => {
+  const start = [...nonce].reduce((n, c) => n + c.charCodeAt(0), 0);
+  const free = BAIT_WORDS.map((_, i) => BAIT_WORDS[(start + i) % BAIT_WORDS.length]!).filter(
+    (w) => !live.has(w),
+  );
+  const word = free[skip];
+  if (!word) throw new Error(`every bait word is a live category: ${BAIT_WORDS.join(', ')}`);
+  return word;
+};
+
 const parsed =
   (parse: (line: string) => Promise<DevParseResult>, categoryId: string | null = null) =>
   async (s: Sample) =>
@@ -138,6 +173,9 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   if (!r.ok) return `the parse failed (${r.reason})`;
   const { title, dueTime } = r.input;
   if (s.category && r.input.categoryId !== categoryId) return `no category, “${title}”`;
+  // The run's category is bait no other line is about: a line filed there was forced into it (F229).
+  if (!s.category && categoryId && r.input.categoryId === categoryId)
+    return `filed under the run's category, “${title}”`;
   // A line naming no category may still be filed by topic (the prompt's "clearly matches" is the model's call,
   // category suggestion's concern): what this scenario holds is that its leading word stays in the title.
   if (!dueTime && s.untimed === undefined && CLOCK.test(s.line)) return `no time, “${title}”`;
@@ -145,10 +183,10 @@ function miss(s: Sample, r: DevParseResult, categoryId: string | null): string |
   return want.includes(title) ? null : `“${title}”, want “${want.join('” or “')}”`;
 }
 
-// Four at a time by default (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the
-// model is nondeterministic, the server's guard isn't — and the first-try tally logged. Captures go one at a time
-// (`batch` 1): each is up to three conditional writes on its token's one row, and four at once lost that race on
-// dev (2026-11-17, a 500) — a race no Shortcut or hotkey makes.
+// Four at a time (dev's parse route is the shared Lambda); a miss is asked once more (`attempt` 1) — the model is
+// nondeterministic, the server's guard isn't — and the first-try tally logged. Captures too, since a lost race on the
+// token's row retries with jitter (F224, 2026-11-17; four at once had answered a 500): a 409 "busy" left after that is a
+// miss, re-asked once like any other.
 async function sample(
   ctx: Ctx,
   what: string,
@@ -217,6 +255,18 @@ export const captureTitles: Scenario = {
       what: 'A leading word naming no category stays in the title',
     },
     {
+      id: 'no-force',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A line about no category is never filed under one just because it is there: the run’s own category, which no line is about, stays empty (F229)',
+    },
+    {
+      id: 'no-force-ui',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'The capture bar’s Review, with a category no line is about live: the preview’s parse never files the line under it (F229)',
+    },
+    {
       id: 'mcp-parse',
       entry: 'mcp',
       kind: 'nominal',
@@ -271,21 +321,20 @@ export const captureTitles: Scenario = {
       id: 'api-sample',
       entry: 'api',
       cost: 'slow',
-      proves: ['verbatim', 'due-out', 'due-kept', 'lead-category', 'lead-other'],
+      proves: ['verbatim', 'due-out', 'due-kept', 'lead-category', 'lead-other', 'no-force'],
       title: 'The sample through parseTask: every class’s titles exact, tallies logged',
       async run(ctx) {
         const m = marker(ctx.nonce);
         const live = new Set(
           (await ctx.api.reads.listCategories()).map((c) => c.label.toLowerCase()),
         );
-        // One word, this run's own: no live category or earlier run's can match it.
-        const label = `quince${m}`;
+        const label = baitLabel(ctx.nonce, live);
         const cat = await ctx.api.writes.upsertCategory({ label, isWork: false });
         const parse = (line: string) => ctx.api.reads.parseTask(line);
         try {
           const fails = [
-            ...(await sample(ctx, 'verbatim', verbatim(m), parsed(parse))),
-            ...(await sample(ctx, 'due phrase', dueOut, parsed(parse))),
+            ...(await sample(ctx, 'verbatim', verbatim(m), parsed(parse, cat.id))),
+            ...(await sample(ctx, 'due phrase', dueOut, parsed(parse, cat.id))),
             ...(await sample(ctx, 'leading word', leads(label, live), parsed(parse, cat.id))),
           ];
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
@@ -320,28 +369,42 @@ export const captureTitles: Scenario = {
       id: 'ui-review',
       entry: 'ui',
       cost: 'slow',
-      proves: ['review'],
-      title: 'Capture bar › Review: “…typed at 1 am” previews with “typed” kept; nothing saved',
+      proves: ['review', 'no-force-ui'],
+      title:
+        'Capture bar › Review: “…typed at 1 am” previews with “typed” kept, not filed under the one bait category; nothing saved',
       async run(ctx) {
         const s = verbatim(marker(ctx.nonce))[0]!;
-        await ctx.ui.goto('/tasks');
-        await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
-        const field = ctx.page.locator('textarea[aria-label="Capture task"]');
-        const created = ctx.createdIds().length;
-        await field.fill(s.line);
-        const parsed = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
-          timeout: 15_000,
+        // A category no line is about, live while the app parses (F229: a line is never forced into it).
+        const live = new Set(
+          (await ctx.api.reads.listCategories()).map((c) => c.label.toLowerCase()),
+        );
+        // Not api-sample's word (skip 1): its category may still be live when the two overlap.
+        const cat = await ctx.api.writes.upsertCategory({
+          label: baitLabel(ctx.nonce, live, 1),
+          isWork: false,
         });
-        await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
-        const res = await parsed;
-        if (res.status() !== 200) throw new Error(`parseTask answered ${res.status()}`);
-        const why = miss(s, (await res.json()) as DevParseResult, null);
-        if (why) throw new Error(`the preview: ${why}`);
-        await ctx.ui.expectText(s.title, 10_000);
-        await ctx.shot('review');
-        await field.fill(''); // unsaved
-        await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
-        if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
+        try {
+          await ctx.ui.goto('/tasks');
+          await ctx.page.getByRole('button', { name: 'Task', exact: true }).click();
+          const field = ctx.page.locator('textarea[aria-label="Capture task"]');
+          const created = ctx.createdIds().length;
+          await field.fill(s.line);
+          const parsed = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
+            timeout: 15_000,
+          });
+          await ctx.page.getByRole('button', { name: 'Review before saving' }).click();
+          const res = await parsed;
+          if (res.status() !== 200) throw new Error(`parseTask answered ${res.status()}`);
+          const why = miss(s, (await res.json()) as DevParseResult, cat.id);
+          if (why) throw new Error(`the preview: ${why}`);
+          await ctx.ui.expectText(s.title, 10_000);
+          await ctx.shot('review');
+          await field.fill(''); // unsaved
+          await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
+          if (ctx.createdIds().length !== created) throw new Error('the Review saved a task');
+        } finally {
+          await ctx.api.writes.deleteCategory(cat.id, null);
+        }
       },
     },
     {
@@ -372,7 +435,6 @@ export const captureTitles: Scenario = {
               const title = (await ctx.api.reads.getTask(r.id))?.title;
               return title === s.title ? null : `“${title}”, want “${s.title}”`;
             },
-            1,
           );
           if (fails.length) throw new Error(`${fails.length} missed twice: ${fails.join('; ')}`);
         } finally {

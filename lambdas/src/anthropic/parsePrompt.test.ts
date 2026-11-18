@@ -19,6 +19,20 @@ describe('parseSystemPrompt', () => {
     expect(p).toContain('(none — categoryId must be null)');
   });
 
+  it('never files a line under a category just because it is the only one (F229)', () => {
+    const p = parseSystemPrompt('2026-11-17', [{ id: 'c1', label: 'Garden' }]);
+    expect(p).toContain('Never pick a category because it is the only one or the nearest.');
+  });
+
+  it('a spoken line asks for the clock as said — the server places it', () => {
+    const voice = parseSystemPrompt('2026-11-17', [], { voice: true });
+    expect(voice).toContain(
+      '"at 5" or "five o\'clock" with nothing in the line saying its half of the day is 05:00',
+    );
+    expect(voice).toContain('"remind me this afternoon to call mum at 4" 16:00');
+    expect(voice).not.toContain('dueTime is always null');
+  });
+
   it('a spoken line adds the voice rules after the typed ones, which stay word for word', () => {
     const cats = [{ id: 'c1', label: 'Aperture' }];
     const typed = parseSystemPrompt('2026-11-16', cats);
@@ -48,6 +62,22 @@ describe('parseOutputSchema', () => {
     expect(s.properties.categoryId).toEqual({
       anyOf: [{ type: 'string', enum: ['c1', 'c2'] }, { type: 'null' }],
     });
+  });
+
+  it('a spoken line also asks whether the words gave the half of the day; a typed one does not', () => {
+    const voice = parseOutputSchema(['c1'], { voice: true }) as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(voice.required.at(-1)).toBe('dueTimeHalf');
+    expect(voice.properties.dueTimeHalf).toMatchObject({
+      anyOf: [{ type: 'string', enum: ['stated', 'night', 'none'] }, { type: 'null' }],
+    });
+    const typed = parseOutputSchema(['c1']) as { properties: Record<string, unknown> };
+    expect(typed.properties.dueTimeHalf).toBeUndefined();
+    const prompt = parseSystemPrompt('2026-11-17', [], { voice: true });
+    expect(prompt).toContain('"at 5 send this morning\'s notes"');
+    expect(prompt).toContain('"at 1 friday night" is friday, 01:00');
   });
 
   it('with no categories, categoryId can only be null', () => {

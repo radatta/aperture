@@ -1,5 +1,5 @@
 // Voice capture — "Hey Siri, Aperture" / the Action Button → a task. An iPhone Shortcut (or Raycast) POSTs the
-// spoken line to /api/capture with a scoped token; the server parses it (Haiku, with a deadline), creates the
+// spoken line to /api/capture with a scoped token; the server parses it (the model, with a deadline), creates the
 // task and answers a sentence to speak. Pure rules shared by the stub, the Lambda and the dev check: the
 // scoped-token shapes, the caps, the wire shapes and the spoken texts. Design record:
 // docs/areas/tasks/capture.md.
@@ -47,11 +47,12 @@ export function scopedTokenNameError(
 }
 
 // --- The capture route -----------------------------------------------------
-// Hidden guards, per token per UTC day (capture.md → Caps): past CAPTURE_DAILY_CAP the route answers 429
-// and writes nothing; past CAPTURE_PARSE_DAILY_CAP it still captures but saves the line as typed, so a
-// leaked token's model spend stays near $0.45 a month.
+// Hidden guards per UTC day (capture.md → Caps): past CAPTURE_DAILY_CAP (per token) the route answers 429 and
+// writes nothing; past CAPTURE_PARSE_DAILY_CAP (per user, across all their capture tokens — the maintainer,
+// 2026-11-17) it still captures but saves without the model, so however many tokens leak, the model spend stays
+// flat (~40 × $0.003–0.006 a day, inside the API credit). The app's own parse (Cognito) isn't counted.
 export const CAPTURE_DAILY_CAP = 200;
-export const CAPTURE_PARSE_DAILY_CAP = 50;
+export const CAPTURE_PARSE_DAILY_CAP = 40;
 // The same line again within this window is the first capture answered again, not a second task.
 export const CAPTURE_DUPLICATE_MS = 60_000;
 // A first capture still unsaved after this long died (the Lambda's 15 s timeout, plus margin): the same line
@@ -59,6 +60,10 @@ export const CAPTURE_DUPLICATE_MS = 60_000;
 export const CAPTURE_IN_FLIGHT_MS = 20_000;
 // The parse's deadline inside the route: Siri waits on it, so past this the line is saved as typed.
 export const CAPTURE_PARSE_DEADLINE_MS = 5_000;
+// The route's bound on one model call's spend (Sonnet, 2026-11-17): a longer line never reaches the model —
+// it saves as typed, like a failed parse — and the answer is capped. A spoken line is a sentence or two.
+export const CAPTURE_PARSE_TEXT_MAX = 600;
+export const CAPTURE_PARSE_MAX_TOKENS = 512;
 export const CAPTURE_TEXT_MAX = 2_500;
 export const CAPTURE_BODY_MAX = 16_384;
 
@@ -93,6 +98,9 @@ export const CAPTURE_SAY = {
   tooLong: 'That was too long for Aperture. Nothing was added.',
   cap: 'Daily capture limit reached. Nothing was added.',
   inFlight: "Got that a moment ago. If it isn't in the app in a minute, say it again.",
+  // Several captures through one token at once, and this one lost every retry of the token row's write
+  // (F224): nothing was added, so saying it again is safe.
+  busy: 'Aperture was busy and nothing was added. Say it again.',
   error: 'Aperture hit an error. Check the app before retrying.',
   // The Shortcut's own fallback when the answer has no `say` (a CloudFront error has no body).
   noAnswer: "Aperture didn't confirm. Check the app.",
@@ -135,12 +143,16 @@ export interface CaptureSayInput {
 }
 
 // "Added: call mum, today 5 PM." · "Added to Grocer: milk." · "Already added: call mum, today 5 PM." ·
-// "Added as typed, with no date or time: call mum at five." Category and estimate aren't spoken — the
+// "Added without AI, as typed: call mum at 5, today 5 PM." (the model failed; the words' own time, a spoken
+// line) · "Added as typed, with no date or time: call mum at five." Category and estimate aren't spoken — the
 // receipt (`detail`) has them.
 export function captureSay(x: CaptureSayInput): string {
   const title = spokenTitle(x.title);
-  if (x.raw && !x.duplicate) return `Added as typed, with no date or time: ${title}.`;
   const when = captureWhen(x.due, x.calendarToday, x.appToday);
+  if (x.raw && !x.duplicate)
+    return when
+      ? `Added without AI, as typed: ${title}, ${when}.`
+      : `Added as typed, with no date or time: ${title}.`;
   const lead = x.duplicate ? 'Already added' : x.placeName ? `Added to ${x.placeName}` : 'Added';
   return `${lead}: ${title}${when ? `, ${when}` : ''}.`;
 }

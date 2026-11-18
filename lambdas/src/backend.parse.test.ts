@@ -61,7 +61,7 @@ describe('backend parseTask', () => {
         text: 'aperture, fix login 4pm 30m',
         today: '2026-10-12',
         categories: [{ id: ap.id, label: 'Aperture' }],
-        timeoutMs: 4_000,
+        timeoutMs: 6_000,
       },
     ]);
   });
@@ -134,9 +134,9 @@ describe('backend parseTask', () => {
   it('the model budget grows with the line, capped', async () => {
     const { b, anthropic } = makeBackend();
     anthropic.next = { ok: false, reason: 'timeout' };
-    await b.parseTask('y'.repeat(1_000));
-    await b.parseTask('y'.repeat(2_000)); // 4s + 5s, capped at 8s
-    expect(anthropic.calls.map((c) => c.timeoutMs)).toEqual([6_000, 8_000]);
+    await b.parseTask('y'.repeat(400));
+    await b.parseTask('y'.repeat(2_000)); // 6s + 5s, capped at 8s
+    expect(anthropic.calls.map((c) => c.timeoutMs)).toEqual([7_000, 8_000]);
   });
 
   it('after midnight, “tonight 2:30am” is its next occurrence — the next date, still today’s', async () => {

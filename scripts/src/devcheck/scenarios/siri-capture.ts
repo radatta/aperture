@@ -19,11 +19,20 @@ import { hidingSecret, laDay, noConsoleErrors, type Ctx, type Scenario } from '.
 // The slice of @aperture/shared the scenario reads. scripts doesn't depend on shared, so its source is loaded at
 // run time (tsx transpiles it) — the same rules and texts the Lambda runs, never a copy that could drift.
 // siri-capture.test.ts checks every name below is really there.
-export const SAY_KEYS = ['unauthorized', 'method', 'path', 'empty', 'tooLong', 'cap'] as const;
+export const SAY_KEYS = [
+  'unauthorized',
+  'method',
+  'path',
+  'empty',
+  'tooLong',
+  'cap',
+  'busy',
+] as const;
 export interface Shared {
   CAPTURE_SAY: Record<(typeof SAY_KEYS)[number], string>;
   CAPTURE_DAILY_CAP: number;
   CAPTURE_PARSE_DAILY_CAP: number;
+  CAPTURE_PARSE_TEXT_MAX: number;
   CAPTURE_DUPLICATE_MS: number;
   CAPTURE_TEXT_MAX: number;
   CAPTURE_BODY_MAX: number;
@@ -43,12 +52,14 @@ export interface Shared {
   ): { day: string; time: string };
   zonedEpoch(day: string, hhmm: string, timeZone: string): number;
   addDays(day: string, n: number): string;
+  fmtWeekday(day: string): string;
   dayKeyInZone(epochMs: number, timeZone: string, dayStartHour: number): string;
   nightDueDay(dueDay: string, dueTime: string, today: string, dayStartHour: number): string;
 }
 export const SHARED_NUMBERS = [
   'CAPTURE_DAILY_CAP',
   'CAPTURE_PARSE_DAILY_CAP',
+  'CAPTURE_PARSE_TEXT_MAX',
   'CAPTURE_DUPLICATE_MS',
   'CAPTURE_TEXT_MAX',
   'CAPTURE_BODY_MAX',
@@ -61,6 +72,7 @@ export const SHARED_FUNCTIONS = [
   'resolveSpoken',
   'zonedEpoch',
   'addDays',
+  'fmtWeekday',
   'dayKeyInZone',
   'nightDueDay',
 ] as const;
@@ -96,6 +108,7 @@ const fillName = (ctx: Ctx, i: number) => `devcheck ${ctx.nonce} fill ${i}`;
 // Steps share what earlier ones made; a failed step skips the rest, so these are set when read.
 let tokenA: string; // plaintexts — never logged
 let tokenB: string;
+const parsedB: string[] = [];
 let infoA: DevScopedToken;
 let infoB: DevScopedToken;
 let taskIds: string[] = []; // every task the route made this run, torn down by the last step
@@ -196,9 +209,13 @@ async function capture(
   opts: { voice?: boolean; tag?: string } = {},
 ) {
   const body = opts.voice === false ? { text } : { text, voice: true };
+  const day = new Date().toISOString().slice(0, 10); // the claim's UTC day: before the call, not after
   const got = await ctx.api.writes.captureRaw(token, body, opts.tag ? { tag: opts.tag } : {});
   const r = ok(got, what);
   if (r.id && !r.duplicate && !taskIds.includes(r.id)) taskIds.push(r.id);
+  // A parsed, non-grammar line through tokenB spent one of the user's model calls (its UTC day kept): the
+  // parse-cap row needs the refusal to come that much sooner, or the cap is per token, not per user.
+  if (token === tokenB && !r.raw && !r.duplicate && !text.includes('|')) parsedB.push(day);
   return r;
 }
 const tokenById = async (ctx: Ctx, id: string) =>
@@ -498,6 +515,24 @@ export const siriCapture: Scenario = {
       what: 'A bare hour already past today is the next N o’clock, ~11 h on',
     },
     {
+      id: 'half-stated',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A clock with its half of the day said (“at 5 in the morning”) lands as said — not the bare hour’s nearer reading (the model’s dueTimeHalf, 2026-11-17)',
+    },
+    {
+      id: 'half-noun',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A day-part word that belongs to the task (“…send the morning report”) says nothing: the bare hour wraps, and the words stay in the title',
+    },
+    {
+      id: 'half-night',
+      entry: 'api',
+      kind: 'edge',
+      what: '“at 1 <weekday> night” is the small hours after that day, as “at 1 tonight” is',
+    },
+    {
       id: 'roll',
       entry: 'api',
       kind: 'edge',
@@ -543,7 +578,36 @@ export const siriCapture: Scenario = {
       id: 'parse-cap',
       entry: 'api',
       kind: 'edge',
-      what: 'Past 50 model parses in a UTC day a spoken line saves as typed, and says why',
+      what: 'Past 40 model parses in a UTC day, across all the user’s capture tokens, a spoken line saves without AI — keeping its own words’ time — and says so',
+    },
+    {
+      id: 'long-line',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A spoken line past 600 characters never reaches the model: saved as typed with its words’ time, said “without AI”',
+    },
+    {
+      id: 'busy',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Eight captures at once through one token (four model lines): each answers 200 with its task, or 409 with the spoken “say it again” — never a 5xx (F224)',
+    },
+    {
+      id: 'busy-exhausted',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Every retry of the token row lost its race: 409 with the spoken “say it again”, and nothing written (F224)',
+      offDev: {
+        file: 'lambdas/src/index.test.ts',
+        test: '409s with a spoken "say it again" when every retry of the token row lost a race (F224)',
+        why: 'eight lost races in a row can’t be forced on dev — the concurrent burst proves the retry lands; scopedToken.test.ts proves the give-up writes nothing',
+      },
+    },
+    {
+      id: 'latency',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Spoken lines through the Sonnet parse, one at a time: each answers under 8 s and parsed (Siri’s wait); p50, p95 and max logged',
     },
     {
       id: 'grammar-table',
@@ -574,7 +638,7 @@ export const siriCapture: Scenario = {
       what: 'A failed or timed-out parse saves the line as typed and says so',
       offDev: {
         file: 'lambdas/src/backend.capture.test.ts',
-        test: 'a failed or timed-out parse saves the line as typed and says so',
+        test: "a failed or timed-out parse saves the line as typed, with its own words' time, and says so",
         why: 'dev’s model can’t be made to fail or time out on demand',
       },
     },
@@ -612,6 +676,7 @@ export const siriCapture: Scenario = {
       title: 'Settings › Capture: name it, Make token → shown once, then listed “ends …<last 4>”',
       async run(ctx) {
         taskIds = [];
+        parsedB.length = 0;
         const S = await loadShared();
         // A token a crashed run minted is swept first; one nothing recorded (the pipeline reports those) can
         // still crowd the run out of the room it needs: this one and the neighbour at once, then one more.
@@ -1084,6 +1149,71 @@ export const siriCapture: Scenario = {
       },
     },
     {
+      id: 'api-half',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['half-stated', 'half-noun', 'half-night'],
+      title:
+        'The model’s half of the day, four real parses: a stated half, a day-part noun, a weekday night (bare and 1 am)',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight', 3 * MIN);
+        const parsed = async (text: string, what: string) => {
+          const r = await capture(ctx, tokenB, text, what);
+          if (r.raw) throw new Error(`${what}: saved without the model — ${r.detail}`);
+          return r;
+        };
+        const lands = (r: DevCaptureResult, want: { day: string; time: string }, what: string) => {
+          if (r.due?.day !== want.day || r.due?.time !== want.time)
+            throw new Error(`${what}: due ${JSON.stringify(r.due)}, want ${JSON.stringify(want)}`);
+        };
+        // 1. The half said for the hour 15 h on: its bare reading (3 h on) would come first.
+        {
+          const t0 = Date.now();
+          const { hour } = laClock(t0);
+          const h = h12((hour + 15) % 24) === 12 ? (hour + 16) % 24 : (hour + 15) % 24;
+          const half = h < 12 ? 'in the morning' : h < 17 ? 'in the afternoon' : 'in the evening';
+          // "o'clock": the prompt's "the hour as said" must not win over a half said in words.
+          const text = `${line(ctx, 'feed the cat')} at ${h12(h)} o'clock ${half}`;
+          const r = await parsed(text, 'the stated half');
+          const want = S.resolveSpoken(
+            { said: '', kind: 'clock', hhmm: `${String(h).padStart(2, '0')}:00` },
+            null,
+            { now: t0, today: laDay(new Date(t0)) },
+          );
+          lands(r, want, 'the stated half');
+        }
+        // 2. "<weekday three days on> at 1 … the morning report": a bare hour on a named day is the daytime one,
+        // 13:00 — "morning" belongs to the task. Read as a stated half it would be 01:00. A weekday, not "tomorrow":
+        // before the 4am rollover "tomorrow" is the calendar's today, not a named day.
+        {
+          const day = S.addDays(laDay(new Date()), 3);
+          const weekday = S.fmtWeekday(day).toLowerCase();
+          const r = await parsed(
+            `remind me ${weekday} at 1 to ${marker(ctx.nonce)} send the morning report`,
+            'the day-part noun',
+          );
+          lands(r, { day, time: '13:00' }, 'the day-part noun');
+          const title = (await getTask(ctx, r.id!)).title;
+          if (!/morning report/.test(title))
+            throw new Error(`the title lost its words: “${title}”`);
+        }
+        // 3. "at 1 <weekday three days on> night": that night's small hours, the day after.
+        {
+          const day = S.addDays(laDay(new Date()), 3);
+          const weekday = S.fmtWeekday(day).toLowerCase();
+          // Both the bare and the stated "1 am" are that night's (a `stated` reading would land the night before).
+          for (const [said, what] of [
+            ['at 1', 'the weekday night'],
+            ['at 1 am', 'the weekday night, 1 am'],
+          ] as const) {
+            const r = await parsed(`${line(ctx, 'call the vet')} ${said} ${weekday} night`, what);
+            lands(r, { day: S.addDays(day, 1), time: '01:00' }, what);
+          }
+        }
+      },
+    },
+    {
       id: 'api-roll',
       entry: 'api',
       proves: ['roll'],
@@ -1255,6 +1385,79 @@ export const siriCapture: Scenario = {
       },
     },
     {
+      id: 'api-busy',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['busy'],
+      title: 'Eight captures at once through one token: 200 or a spoken 409, never a 5xx',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        await withToken(ctx, `devcheck ${ctx.nonce} busy`, async (token) => {
+          const at = aheadClock(laClock(Date.now()).hour);
+          const texts = Array.from({ length: 8 }, (_, i) =>
+            i % 2
+              ? `${line(ctx, `busy ${i}`)} | ~5`
+              : `${line(ctx, `busy ${i} call the vet`)} at ${at}`,
+          );
+          const answers = await Promise.all(
+            texts.map((text, i) =>
+              ctx.api.writes.captureRaw(token, { text, voice: true }, { tag: `busy #${i}` }),
+            ),
+          );
+          let busy = 0;
+          for (const [i, got] of answers.entries()) {
+            if (got.status === 409) {
+              refused(got, 409, `busy #${i}`, S.CAPTURE_SAY.busy);
+              busy++;
+              continue;
+            }
+            const r = ok(got, `busy #${i}`);
+            if (!r.id) throw new Error(`busy #${i}: answered with no task`);
+            if (!taskIds.includes(r.id)) taskIds.push(r.id);
+            await getTask(ctx, r.id);
+          }
+          ctx.log(`8 at once: ${8 - busy} added, ${busy} answered busy`);
+          // Eight tries with backoff each: more than one of eight giving up means the retry isn't working.
+          // Provisional until a dev run measures the spread (logged above) — then set from it.
+          if (busy > 1)
+            throw new Error(`${busy} of 8 answered busy — the lost-race retry isn't landing`);
+        });
+      },
+    },
+    {
+      id: 'api-latency',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['latency'],
+      title: 'Six spoken lines through the real parse, one at a time: each under 8 s and parsed',
+      async run(ctx) {
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const at = aheadClock(laClock(Date.now()).hour);
+        const ms: number[] = [];
+        for (let i = 1; i <= 6; i++) {
+          const t0 = Date.now();
+          const r = await capture(
+            ctx,
+            tokenB,
+            `${line(ctx, `quick ${i} call the vet`)} at ${at}`,
+            `latency ${i}`,
+          );
+          ms.push(Date.now() - t0);
+          if (r.raw)
+            throw new Error(`latency ${i}: saved as typed after ${ms.at(-1)} ms — ${r.detail}`);
+        }
+        const sorted = [...ms].sort((a, b) => a - b);
+        const pct = (p: number) =>
+          sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]!;
+        ctx.log(
+          `capture latency (ms, from the container): n ${ms.length}, p50 ${pct(0.5)}, p95 ${pct(0.95)}, max ${sorted.at(-1)} — ${ms.join(', ')}`,
+        );
+        if (sorted.at(-1)! > 8_000)
+          throw new Error(`a capture took ${sorted.at(-1)} ms (Siri's budget is 8 s)`);
+      },
+    },
+    {
       id: 'api-cap',
       entry: 'api',
       proves: ['cap'],
@@ -1316,43 +1519,75 @@ export const siriCapture: Scenario = {
       proves: ['parse-cap'],
       cost: 'slow',
       title:
-        'A fresh token: 50 distinct spoken lines (real parses), then the 51st saves as typed, “daily parse limit reached”',
+        'A fresh token: distinct spoken lines (real parses) until the user’s 40 a day are spent, then one saves without AI, keeping its time',
       async run(ctx) {
         const S = await loadShared();
         await clearOfMidnight(ctx, untilUtcMidnight, 'UTC midnight', 7 * MIN); // the parse cap's day is UTC too
         await withToken(ctx, nameD(ctx), async (token) => {
           const day = new Date().toISOString().slice(0, 10);
           const at = aheadClock(laClock(Date.now()).hour);
-          // One at a time: each is a real model call. A raw save on the way (a missed deadline) still spent its
-          // claim, so it counts like a parse — only the 51st must be refused one.
+          // One at a time: each is a real model call. The cap is the user's, across every live capture token, so
+          // the run's earlier rows spent some of it already: the refusal comes within the cap's count, never
+          // later. A raw save on the way (a missed deadline) still spent its claim, so it counts like a parse.
           let raws = 0;
-          for (let i = 1; i <= S.CAPTURE_PARSE_DAILY_CAP; i++) {
-            const r = await capture(
-              ctx,
-              token,
-              `${line(ctx, `parse ${i} call the vet`)} at ${at}`,
-              `parse ${i}`,
-            );
-            if (r.raw) raws++;
-          }
-          if (raws)
-            ctx.log(`parse cap: ${raws} of ${S.CAPTURE_PARSE_DAILY_CAP} saved as typed on the way`);
-          const n = S.CAPTURE_PARSE_DAILY_CAP + 1;
-          const r = await capture(
-            ctx,
-            token,
-            `${line(ctx, `parse ${n} call the vet`)} at ${at}`,
-            `parse ${n}`,
-          );
-          if (
-            !r.raw ||
-            !r.detail.includes('daily parse limit reached') ||
-            !r.say.startsWith('Added as typed')
-          )
+          const spentB = parsedB.filter((d) => d === day).length;
+          // With none spent, a per-token cap would refuse at the same count: the row proves nothing.
+          if (spentB === 0)
             throw new Error(
-              `parse ${n}: ${JSON.stringify(r)}${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
+              'no token-B parse today: run the earlier api rows first, or the cap stays unproven',
             );
+          const latest = S.CAPTURE_PARSE_DAILY_CAP - spentB + 1;
+          for (let i = 1; i <= latest; i++) {
+            const text = `${line(ctx, `parse ${i} call the vet`)} at ${at}`;
+            const t0 = Date.now();
+            const r = await capture(ctx, token, text, `parse ${i}`);
+            if (!r.raw) continue;
+            if (!r.detail.includes('daily parse limit reached')) {
+              raws++;
+              continue;
+            }
+            // Past the cap: no model, but the words' own time, placed by the voice rules, and said so.
+            const want = spokenWant(S, text, t0, Date.now());
+            if (!r.due || !want.some((w) => w.day === r.due!.day && w.time === r.due!.time))
+              throw new Error(
+                `parse ${i}: due ${JSON.stringify(r.due)}, expected ${JSON.stringify(want[0])}`,
+              );
+            if (!r.say.startsWith('Added without AI, as typed: '))
+              throw new Error(`parse ${i}: say is “${r.say}”`);
+            ctx.log(
+              `parse cap: refused at capture ${i} of this token, ${spentB} spent through another this run (${raws} saved as typed on the way)`,
+            );
+            return;
+          }
+          throw new Error(
+            `no refusal by capture ${latest} of this token, though another spent ${spentB} of the user's ${S.CAPTURE_PARSE_DAILY_CAP} today — a per-token cap?${new Date().toISOString().slice(0, 10) !== day ? ' (the UTC day rolled)' : ''}`,
+          );
         });
+      },
+    },
+    {
+      id: 'api-long-line',
+      entry: 'api',
+      proves: ['long-line'],
+      title: 'A spoken line past 600 characters: saved as typed, its time kept, “without AI”',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight');
+        const head = line(ctx, 'long call the vet');
+        const pad = ' and then the rest of a very long thought'.repeat(
+          Math.ceil(S.CAPTURE_PARSE_TEXT_MAX / 40),
+        );
+        const text = `${head}${pad} at ${aheadClock(laClock(Date.now()).hour)}`;
+        const t0 = Date.now();
+        const r = await capture(ctx, tokenB, text, 'the long line');
+        const want = spokenWant(S, text, t0, Date.now());
+        if (!r.raw || !r.detail.includes('too long for the model'))
+          throw new Error(`not saved as typed: ${r.detail}`);
+        if (!r.due || !want.some((w) => w.day === r.due!.day && w.time === r.due!.time))
+          throw new Error(`due ${JSON.stringify(r.due)}, expected ${JSON.stringify(want[0])}`);
+        if (!r.say.startsWith('Added without AI, as typed: ')) throw new Error(`say is “${r.say}”`);
+        if ((await getTask(ctx, r.id!)).title !== text)
+          throw new Error('the title isn’t the line as typed');
       },
     },
     {

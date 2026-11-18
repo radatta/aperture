@@ -72,6 +72,9 @@ const R_REAL_CHIP = 'torque the flux gasket';
 const R_SIM_CHIP = 'shim the flux gasket';
 const R_REAL_NAMED = 'kitchen, polish the flux gasket';
 const R_REAL_AUTO = 'grease the flux gasket';
+const R_AI_OFF = 'loam the flux gasket';
+const R_AS_TYPED = 'weed the flux gasket';
+const R_RELOAD = 'mulch the flux gasket';
 const R_LONG =
   'hoe the flux gasket and then walk the long way back past the shed to fetch the other tool';
 
@@ -254,7 +257,8 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'wait', s: 4 },
   { op: 'tap', label: 'Task', scan: DOCK(110, MODE_ROW), role: 'AXCheckBox' },
   { op: 'keys', text: R_SIM_CHIP },
-  { op: 'tap', label: 'Review before saving', scan: DOCK(355) },
+  // Send, since review-first (2026-11-17): the first press parses; ✨ beside it is the read-with-AI toggle now.
+  { op: 'tap', label: 'Review before saving', scan: DOCK(395) },
   { op: 'wait', s: 6 },
   { op: 'shot', name: 'review-chip' },
   {
@@ -432,7 +436,25 @@ export const categorySuggest: Scenario = {
       id: 'review-auto',
       entry: 'ui',
       kind: 'edge',
-      what: `Enter with no Review saves uncategorised: it never takes a suggestion. ${NO_CATEGORY}`,
+      what: `A review nobody taps: Enter shows the parse, Enter again saves it uncategorised — never taking a suggestion. ${NO_CATEGORY}`,
+    },
+    {
+      id: 'ai-off',
+      entry: 'ui',
+      kind: 'edge',
+      what: '✨ off: Send saves the line as typed with no parse, and ✨ is on again for the next task',
+    },
+    {
+      id: 'failed-as-typed',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A failed parse keeps the text and says why: Send tries again, and "Save as typed" saves the line raw. Canned parse: a failure the model won’t produce on demand.',
+    },
+    {
+      id: 'review-reload',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A reload with a preview showing saves nothing: the bar comes back empty and the task is on no list. Canned parse.',
     },
     {
       id: 'review-grammar',
@@ -462,7 +484,7 @@ export const categorySuggest: Scenario = {
       id: 'real-auto',
       entry: 'ui',
       kind: 'nominal',
-      what: 'Real parse behind Enter with no Review: the task lands with a title, and no chip ever shows',
+      what: 'Real parse, review first through the Send button: outlined "Review before saving", then filled "Save reviewed task" when the parse lands, and the second press saves exactly the preview with one parse',
     },
     {
       id: 'review-rollover',
@@ -785,22 +807,119 @@ export const categorySuggest: Scenario = {
       id: 'review-auto',
       entry: 'ui',
       proves: ['review-auto'],
-      title: 'Enter with no Review: saved with no category',
+      title: 'Enter, Enter, no tap: one parse, saved with no category',
       async run(ctx) {
         const title = name(ctx, R_AUTO);
+        await openTaskBar(ctx);
+        const parse = await ctx.intercept('parseTask', {
+          status: 200,
+          times: 2, // a second parse would be a bug: it counts, rather than reaching the real model
+          body: await parsed(ctx, title),
+        });
+        await captureField(ctx).fill(title);
+        await captureField(ctx).press('Enter');
+        await ctx.page
+          .getByRole('button', { name: 'Save reviewed task' })
+          .waitFor({ timeout: 10_000 });
+        if ((await captureField(ctx).inputValue()) !== title)
+          throw new Error('the first Enter cleared the field');
+        await captureField(ctx).press('Enter');
+        await ctx.ui.expectText(/Task added/, 15_000);
+        await parse.release();
+        if (parse.hits() !== 1)
+          throw new Error(`parseTask answered ${parse.hits()} times, not once`);
+        const t = await mine(ctx, R_AUTO);
+        if (t.categoryId != null) throw new Error(`saved under ${t.categoryId}`);
+      },
+    },
+    {
+      id: 'ai-off',
+      entry: 'ui',
+      proves: ['ai-off'],
+      title: '✨ off, Enter: saved as typed with no parse; ✨ on again after',
+      async run(ctx) {
+        const title = name(ctx, R_AI_OFF);
         await openTaskBar(ctx);
         const parse = await ctx.intercept('parseTask', {
           status: 200,
           times: 1,
           body: await parsed(ctx, title),
         });
+        const ai = ctx.page.getByRole('button', { name: 'Read with AI' });
         await captureField(ctx).fill(title);
+        await ai.click();
+        if ((await ai.getAttribute('aria-pressed')) !== 'false')
+          throw new Error('✨ did not turn off');
+        await ctx.page.getByRole('button', { name: 'Save task' }).waitFor({ timeout: 5_000 });
         await captureField(ctx).press('Enter');
         await ctx.ui.expectText(/Task added/, 15_000);
         await parse.release();
-        if (parse.hits() !== 1) throw new Error('the Auto save never asked for its parse');
-        const t = await mine(ctx, R_AUTO);
-        if (t.categoryId != null) throw new Error(`saved under ${t.categoryId}`);
+        if (parse.hits() !== 0) throw new Error('✨ off still asked for a parse');
+        await mine(ctx, R_AI_OFF); // the line exactly as typed
+        if ((await ai.getAttribute('aria-pressed')) !== 'true')
+          throw new Error('✨ stayed off after the save');
+      },
+    },
+    {
+      id: 'failed-as-typed',
+      entry: 'ui',
+      proves: ['failed-as-typed'],
+      title: 'A failed parse: the text stays, Send tries again, "Save as typed" saves it raw',
+      async run(ctx) {
+        const title = name(ctx, R_AS_TYPED);
+        await openTaskBar(ctx);
+        const parse = await ctx.intercept('parseTask', {
+          status: 200,
+          times: 2,
+          body: { ok: false, reason: 'unavailable' } satisfies ParseReply,
+        });
+        await captureField(ctx).fill(title);
+        await captureField(ctx).press('Enter');
+        await ctx.page.getByText(/Couldn’t parse \(unavailable\)/).waitFor({ timeout: 10_000 });
+        const retry = ctx.page.getByRole('button', { name: 'Retry parse' });
+        await retry.waitFor({ timeout: 5_000 });
+        if ((await captureField(ctx).inputValue()) !== title)
+          throw new Error('the text left the field');
+        await ctx.shot('parse-failed');
+        await retry.click();
+        for (let i = 0; parse.hits() < 2; i++) {
+          if (i >= 40) throw new Error('Retry parse never asked again');
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        await ctx.page.getByRole('button', { name: 'Save as typed' }).click({ timeout: 10_000 });
+        await ctx.ui.expectText(/Task added/, 15_000);
+        await parse.release();
+        await mine(ctx, R_AS_TYPED);
+      },
+    },
+    {
+      id: 'review-reload',
+      entry: 'ui',
+      proves: ['review-reload'],
+      title: 'A preview showing, then a reload: nothing saved, the bar empty',
+      async run(ctx) {
+        const title = name(ctx, R_RELOAD);
+        await openTaskBar(ctx);
+        const parse = await ctx.intercept('parseTask', {
+          status: 200,
+          times: 1,
+          body: await parsed(ctx, title),
+        });
+        const created = ctx.createdIds().length;
+        await captureField(ctx).fill(title);
+        await captureField(ctx).press('Enter');
+        await ctx.page
+          .getByRole('button', { name: 'Save reviewed task' })
+          .waitFor({ timeout: 10_000 });
+        await parse.release();
+        await ctx.page.reload({ waitUntil: 'load' });
+        await openTaskBar(ctx);
+        if ((await captureField(ctx).inputValue()) !== '')
+          throw new Error('the bar came back with text after the reload');
+        await new Promise((r) => setTimeout(r, 2_000)); // a create in flight reaches the ledger with its response
+        if (ctx.createdIds().length !== created) throw new Error('the reload saved a task');
+        if ((await ctx.api.reads.listTasks()).some((t) => t.title === title))
+          throw new Error('the previewed line is on the server');
       },
     },
     {
@@ -843,7 +962,8 @@ export const categorySuggest: Scenario = {
       id: 'review-rollover',
       entry: 'ui',
       proves: ['review-rollover'],
-      title: 'A reply from yesterday: no preview; Enter parses again and saves that reply',
+      title:
+        'A reply from yesterday: no preview; Enter parses again, and the next saves that reply',
       async run(ctx) {
         const title = name(ctx, R_ROLLOVER);
         await openTaskBar(ctx);
@@ -864,6 +984,10 @@ export const categorySuggest: Scenario = {
         if ((await ctx.page.getByRole('button', { name: 'Save reviewed task' }).count()) !== 0)
           throw new Error('yesterday’s parse shows as a preview');
         const fresh = await ctx.intercept('parseTask', { status: 200, times: 1, body: reply });
+        await captureField(ctx).press('Enter');
+        await ctx.page
+          .getByRole('button', { name: 'Save reviewed task' })
+          .waitFor({ timeout: 10_000 });
         await captureField(ctx).press('Enter');
         await ctx.ui.expectText(/Task added/, 15_000);
         await fresh.release();
@@ -943,16 +1067,44 @@ export const categorySuggest: Scenario = {
       id: 'real-auto',
       entry: 'ui',
       proves: ['real-auto'],
-      title: 'The real parse behind Enter: a task lands, no chip',
+      title:
+        'The real parse through Send: outlined, filled when it lands, the second press saves the preview',
       async run(ctx) {
         await openTaskBar(ctx);
         const before = ctx.createdIds().at(-1);
-        await captureField(ctx).fill(name(ctx, R_REAL_AUTO));
-        await captureField(ctx).press('Enter');
-        await ctx.ui.expectText(/Task added/, 20_000);
-        const t = await newestTask(ctx, before);
-        if (!t.title) throw new Error('the task landed with no title');
-        if ((await anyChip(ctx).count()) !== 0) throw new Error('a chip shows after an Auto save');
+        let parses = 0;
+        const count = (req: { url(): string }) => {
+          if (req.url().endsWith('/api/parseTask')) parses++;
+        };
+        ctx.page.on('request', count);
+        try {
+          await captureField(ctx).fill(name(ctx, R_REAL_AUTO));
+          const send = ctx.page.getByRole('button', { name: 'Review before saving' });
+          // Outlined until the parse lands (the filled one carries bg-teal).
+          if (/(?:^|\s)bg-teal(?:\s|$)/.test((await send.getAttribute('class')) ?? ''))
+            throw new Error('Send is filled before any parse');
+          const t0 = Date.now();
+          const answer = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
+            timeout: 15_000,
+          });
+          await send.click();
+          const save = ctx.page.getByRole('button', { name: 'Save reviewed task' });
+          await save.waitFor({ timeout: 15_000 });
+          ctx.log(`real parse into the preview: ${Date.now() - t0} ms`);
+          if (!/(?:^|\s)bg-teal(?:\s|$)/.test((await save.getAttribute('class')) ?? ''))
+            throw new Error('Send did not fill when the parse landed');
+          const shown = ((await (await answer).json()) as { input?: { title?: string } }).input
+            ?.title;
+          await ctx.shot('real-send');
+          await save.click();
+          await ctx.ui.expectText(/Task added/, 20_000);
+          const t = await newestTask(ctx, before);
+          if (!t.title || t.title !== shown)
+            throw new Error(`saved “${t.title}”, the preview showed “${shown}”`);
+          if (parses !== 1) throw new Error(`${parses} parses for one capture`);
+        } finally {
+          ctx.page.off('request', count);
+        }
       },
     },
     // Last: a Simulator miss fails only its own row, never the browser steps after it.

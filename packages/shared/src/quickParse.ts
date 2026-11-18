@@ -1,7 +1,7 @@
 // Quick add: one natural-language capture line ("aperture, fix login bug due fri 30m") → create_task
-// fields. Claude Haiku does the parsing server-side (the BFF owns the one prompt — lambdas/src/anthropic);
+// fields. Claude (Sonnet) does the parsing server-side (the BFF owns the one prompt — lambdas/src/anthropic);
 // this module is everything around it that both the Lambda and the app's stub share: the result
-// contract, the validator for Haiku's untrusted JSON, and the flow (grammar bypass → model → validate).
+// contract, the validator for the model's untrusted JSON, and the flow (grammar bypass → model → validate).
 // Design record: docs/areas/tasks/quick-add.md.
 
 import {
@@ -20,6 +20,7 @@ import { keepTitleWords, type Range, type TitleMeta } from './titleWords';
 import type { CreateTaskInput } from './api';
 import type { Category } from './types';
 import {
+  DAY_PART_TIME,
   DAY_WORD,
   dueClock,
   resolveSpoken,
@@ -47,7 +48,7 @@ export type ParseFailReason =
 export type ParseTaskResult =
   | {
       ok: true;
-      source: 'haiku' | 'grammar';
+      source: 'haiku' | 'grammar'; // 'haiku' means the model, whichever it is (kept on the wire for old clients)
       input: CreateTaskInput;
       categoryLabel: string | null;
       placeName: string | null; // the list a known `@slug` put it on (places.ts)
@@ -64,6 +65,7 @@ export interface ParsedTaskFields {
   dueDay: string | null;
   dueTime: string | null;
   estimateMin: number | null;
+  dueTimeHalf?: DueTimeHalf | null; // voice only: whether the words say dueTime's half of the day
 }
 
 export type ParseCategory = Pick<Category, 'id' | 'label'>;
@@ -75,8 +77,9 @@ export interface ParseContext {
   dayStartHour: number; // the day start `today` was resolved with — a small-hours clock on it is its night's
   now: number; // a clock with no day of its own lands on its next occurrence after this (spokenTime.ts)
   line?: string; // the typed line, when known — the guards check it for a clock / a duration
-  // A spoken line (voice capture, capture.md): its time comes from the words — the model's dueTime is
-  // ignored. Absent: the typed rules (the model's clock, or one stated outright).
+  // A spoken line (voice capture, capture.md → Time rules): the model's clock placed by its dueTimeHalf and
+  // the voice rules, the grammar filling one it missed. Absent: the typed rules (the model's clock, or one
+  // stated outright).
   voice?: boolean;
 }
 
@@ -99,15 +102,55 @@ const rangesOf = (line: string, re: RegExp): Range[] =>
 const SPOKEN_CLOCK_HINT =
   /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
 
+// Whether the words say which half of the day the model's clock is in — the model's reading of the line
+// (`dueTimeHalf`, voice only; the maintainer 2026-11-17: the model is the parser, after phrase rules kept
+// finding twins). "night" is a night phrase about that time ("at 8 tonight", "at 1 friday night"); "stated" any
+// other half (am/pm, 24h, noon, "in the evening"); "none" a bare hour. Missing or unknown: none — with no day
+// named a wrong bare hour rings early, never late; with a day named it takes the daytime reading (07:00–18:59),
+// so "tomorrow morning at 6" read as none is 18:00.
+export const DUE_TIME_HALVES = ['stated', 'night', 'none'] as const;
+export type DueTimeHalf = (typeof DUE_TIME_HALVES)[number];
+export const isDueTimeHalf = (v: unknown): v is DueTimeHalf =>
+  (DUE_TIME_HALVES as readonly unknown[]).includes(v);
+const dueTimeHalf = (v: unknown): DueTimeHalf => (isDueTimeHalf(v) ? v : 'none');
+
+// Where the model's spoken clock lands, placed by the voice rules (spokenTime.ts resolveSpoken):
+//   1. a lone day-part the grammar read ("tonight", "tomorrow morning") at its rule time: the grammar's reading;
+//   2. a night: a bare hour of the night — 4–11 the evening, 12 and 1–3 the small hours after the day — unless
+//      the grammar read the same clock stated and the night would move it ("tonight … at 6 am" stays 06:00), or
+//      it's an afternoon 13:00–15:59 (no night hour: as stated);
+//   3. a stated clock the grammar read the same ("at 9 am"): the grammar's reading (the due-phrase title fix);
+//   4. any other stated half: the clock as said, rolled forward if past;
+//   5. none: a bare hour, wrapping (rule 1), the daytime hour with a named day.
+// The grammar's bare-hour reading (and its `part`) is never consulted here.
+function placeModelClock(hhmm: string, half: DueTimeHalf, spoken: SpokenTime | null): SpokenTime {
+  const [h, m] = hhmm.split(':').map(Number) as [number, number];
+  if (spoken?.kind === 'part' && DAY_PART_TIME[spoken.part] === hhmm) return spoken;
+  const said = spoken?.said ?? '';
+  const grammarSame = spoken?.kind === 'clock' && spoken.hhmm === hhmm;
+  if (half === 'night') {
+    const hour = h % 12 || 12;
+    const nightH = hour === 12 ? 0 : hour <= 3 ? hour : hour + 12; // resolveSpoken's tonight hour
+    if (grammarSame && nightH !== h) return spoken;
+    if (!(h >= 13 && h <= 15)) return { said, kind: 'bare', hour, minute: m, part: 'tonight' };
+    return { said, kind: 'clock', hhmm };
+  }
+  if (grammarSame) return spoken;
+  if (half === 'stated') return { said, kind: 'clock', hhmm };
+  return { said, kind: 'bare', hour: h % 12 || 12, minute: m, part: null };
+}
+
 // The model's outcome, as the flow sees it. A failure never throws — every one is a raw save.
 export type ModelOutcome =
   | { ok: true; fields: unknown }
   | { ok: false; reason: Exclude<ParseFailReason, 'empty-title' | 'grammar'>; detail?: string };
 
-// The model's time budget: 4s, +1s per 400 characters (long lines come back as long notes), capped at 8s
-// — well inside the Lambda's 15s with the SSM + DynamoDB reads in front of it.
+// The model's time budget: 6s, +1s per 400 characters (long lines come back as long notes), capped at 8s
+// — well inside the Lambda's 15s with the SSM + DynamoDB reads in front of it. 6s, not Haiku's 4s: Sonnet's
+// parses ran p95 3.1s, max 3.6s, and 1 in 52 passed 4s (dev, 2026-11-18). The capture route caps it at
+// CAPTURE_PARSE_DEADLINE_MS.
 export const parseBudgetMs = (text: string): number =>
-  Math.min(4_000 + Math.floor(text.length / 400) * 1_000, 8_000);
+  Math.min(6_000 + Math.floor(text.length / 400) * 1_000, 8_000);
 
 const str = (v: unknown): v is string => typeof v === 'string';
 
@@ -227,23 +270,42 @@ export function validateParsedTask(
     input.dueDay = r.day;
     input.dueTime = r.time;
   };
-  // Spoken: the time is the words', never the model's (spokenTime.ts) — and with it the day, when the words
-  // were relative or the time had already passed. A day the model gave stays only as "the day named".
+  // Spoken: the model reads the clock as said, the code places it (spokenTime.ts) — a bare hour's morning or
+  // evening, a past time rolled forward, "in 20 minutes" from the server's clock — and with it the day, when the
+  // words were relative or the time had already passed. A day the model gave stays only as "the day named". The
+  // grammar's own reading is the fallback (the maintainer, 2026-11-17: the model is the parser): it places only a
+  // lone day-part or a stated clock equal to the model's (placeModelClock), and fills a clock the model missed.
+  let metaSpoken = spoken;
+  let dayPartsTime = true; // the line's day-part words count as the due's (titleMeta)
   if (ctx.voice) {
+    // A day-part the model kept in its title is a noun ("send the morning report by nine"): the grammar read
+    // nothing, so it neither blocks the model's clock nor places it.
+    const grammar = spoken?.kind === 'part' && keptWords(spoken) ? null : spoken;
+    metaSpoken = grammar;
     // The model kept the words in its title: it read them as part of the task, not a time ("look at one
     // of the leases", "email the team about the 3pm meeting") — unless they were an at/by clock. A delay
     // ("in 20 minutes") is a time whatever the model did with its title.
-    const kept = !!spoken && spoken.kind !== 'relative' && keptWords(spoken);
-    if (spoken && (!kept || due)) {
-      resolve(spoken);
-      if (due) input.title = due.title;
-    }
-    // Words the grammar can't read ("quarter past five"): the model was given the typed prompt, which
-    // sets a clock only when one was said — taken, and rolled forward like any stated time.
+    const kept = !!grammar && grammar.kind !== 'relative' && keptWords(grammar);
+    const half = dueTimeHalf(p.dueTimeHalf);
     // A line with no number or hour word in it had no clock to read: a time there is one the model made up.
-    else if (!spoken && str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(line ?? ''))
-      resolve({ said: '', kind: 'clock', hhmm: clock });
-    else if (p.dueTime != null) dropped.push('dropped due time');
+    const modelClock =
+      str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(line ?? '') ? clock : null;
+    // Day-part words are the due's only when a half of the day placed it: a bare hour's "the morning report"
+    // keeps its words.
+    // On the model path that's its half (or a lone day-part the grammar read); the grammar's own bare-hour part
+    // reads "morning" anywhere, so it counts only where the grammar placed the time.
+    // A day with no clock ("tomorrow evening") keeps the default: its day-part words are the due's.
+    dayPartsTime = !(grammar?.kind === 'bare' && grammar.part === null);
+    if (grammar?.kind === 'relative') resolve(grammar);
+    else if (modelClock && (!grammar || !kept || due)) {
+      dayPartsTime = grammar?.kind === 'part' || half !== 'none';
+      resolve(placeModelClock(modelClock, half, grammar));
+      // The due phrase ("at 1 am") leaves the title when the grammar read the model's clock in it.
+      if (due && grammar?.kind === 'clock' && grammar.hhmm === modelClock) input.title = due.title;
+    } else if (grammar && (!kept || due)) {
+      resolve(grammar);
+      if (due) input.title = due.title;
+    } else if (p.dueTime != null) dropped.push('dropped due time');
   }
   // Typed: the model's clock when the line states one; a time whose day was dropped is dropped too. A clock
   // the line states outright that the model missed ("call the bank at 6 pm" back with no time, dev 2026-11-16)
@@ -288,10 +350,36 @@ export function validateParsedTask(
 
   // The title keeps every word the parse didn't use, and loses a due phrase it did (titleWords.ts).
   if (line !== undefined) {
-    const meta = titleMeta(line, input, p.dueDay, ctx, categoryLabel, spoken);
+    const meta = titleMeta(line, input, p.dueDay, ctx, categoryLabel, metaSpoken, dayPartsTime);
     if (meta) input.title = keepTitleWords(line, input.title, meta);
+    else if (input.notes)
+      titleBackFromNotes(line, input, (i) =>
+        titleMeta(line, i, p.dueDay, ctx, categoryLabel, metaSpoken, dayPartsTime),
+      );
   }
   return { input, categoryLabel, dropped };
+}
+
+const wordsOf = (t: string) => t.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+// Notes are for a line too long for its title. On a short one the model sometimes moves words it read as noise
+// there instead ("devcheck <nonce> call the dentist typed tomorrow at 5 pm" → "call the dentist", notes
+// "devcheck <nonce> typed" — dev, 2026-11-18, F232): when every notes word is the line's own and the title with them
+// put back still fits, they go back, in place, and the notes go. Otherwise the notes stand, words and all.
+function titleBackFromNotes(
+  line: string,
+  input: CreateTaskInput,
+  metaFor: (input: CreateTaskInput) => TitleMeta | null,
+): void {
+  const lineWords = new Set(wordsOf(line));
+  const noteWords = wordsOf(input.notes!);
+  if (!noteWords.length || !noteWords.every((w) => lineWords.has(w))) return;
+  const meta = metaFor({ ...input, notes: undefined });
+  if (!meta) return;
+  const title = keepTitleWords(line, input.title, meta);
+  const titleWords = new Set(wordsOf(title));
+  if (title.length > PARSE_TITLE_MAX || !noteWords.every((w) => titleWords.has(w))) return;
+  input.title = title;
+  delete input.notes;
 }
 
 // A word the parse used is often led by one that goes with it: "before 3pm", "due by fri", "the 20th", "~30m",
@@ -349,6 +437,7 @@ function titleMeta(
   ctx: ParseContext,
   categoryLabel: string | null,
   spoken: SpokenTime | null,
+  dayPartsTime = true,
 ): TitleMeta | null {
   if (input.notes) return null;
   const clocks: Range[] = [];
@@ -357,8 +446,17 @@ function titleMeta(
       clocks.push([s0, e0 + (MORE_CLOCK.exec(line.slice(e0))?.[0].length ?? 0)]);
     const said =
       spoken && (ctx.voice || spoken.kind === 'clock') ? saidAt(line, spoken.said) : null;
+    // A due time with no clock words of its own — the grammar couldn't read the clock ("at half past eight"), or
+    // read only a day-part whose rule time it isn't, or one beside clock words it can't read ("tonight around
+    // eight") — has none to show: the model's title stands. Day-part words alone never vouch for another clock's.
+    const partOnly =
+      spoken?.kind === 'part' &&
+      !!said &&
+      (DAY_PART_TIME[spoken.part] !== input.dueTime ||
+        SPOKEN_CLOCK_HINT.test(`${line.slice(0, said[0])} ${line.slice(said[1])}`));
+    if (!clocks.length && (!said || partOnly)) return null;
     if (said) clocks.push(said);
-    clocks.push(...rangesOf(line, DAY_PARTS));
+    if (dayPartsTime) clocks.push(...rangesOf(line, DAY_PARTS));
   }
   if (input.dueTime && !clocks.length) return null;
   // A clock the task is about isn't the due's: "move standup to 5pm" keeps "to 5pm".
@@ -396,7 +494,7 @@ function titleMeta(
         zonedEpoch(calToday, dueTime, USER_TIME_ZONE) <= ctx.now));
   if (input.dueDay && !days.length && !clockDay) return null;
   const meta: Range[] = [...due, ...days];
-  if (input.dueDay) meta.push(...rangesOf(line, DAY_PARTS)); // "tomorrow morning", typed with no clock
+  if (input.dueDay && dayPartsTime) meta.push(...rangesOf(line, DAY_PARTS)); // "tomorrow morning", typed with no clock
   if (input.estimateMin)
     for (const r of rangesOf(line, DURATIONS)) {
       const more = MORE_DURATION.exec(line.slice(r[1]));
@@ -511,6 +609,29 @@ export async function runQuickParse(
   if (!v) return { ok: false, reason: 'empty-title' };
   if (place) v.input.place = place.slug;
   return { ok: true, source: 'haiku', ...v, placeName: place?.name ?? null, today: ctx.today };
+}
+
+// A spoken line saved without the model (it failed, timed out, or was past a cap): the time its own words say,
+// placed by the voice rules, so a reminder still rings (the maintainer, 2026-11-17: the grammar is the fallback).
+// "today" / "tonight" name no other day and "tomorrow" is the app's next, as the model reads it; any other day word ("friday",
+// "in 2 days", "the 20th") the grammar can't place, so no time at all — a wrong day is worse than none.
+export function spokenFallbackDue(
+  line: string,
+  ctx: Pick<ParseContext, 'now' | 'today'>,
+): { dueDay: string; dueTime: string } | null {
+  const spoken = spokenTimeIn(line);
+  if (!spoken) return null;
+  const tomorrow = spoken.kind !== 'relative' && TOMORROW_WORD.test(line);
+  const rest = line
+    .replace(new RegExp(TODAY_WORD.source, 'gi'), ' ')
+    .replace(new RegExp(TOMORROW_WORD.source, 'gi'), ' ');
+  if (spoken.kind !== 'relative' && DAY_WORD.test(rest)) return null;
+  const r = resolveSpoken(spoken, tomorrow ? addDays(ctx.today, 1) : null, {
+    now: ctx.now,
+    today: ctx.today,
+    dayInWords: tomorrow,
+  });
+  return { dueDay: r.day, dueTime: r.time };
 }
 
 // One line for a toast or receipt: why a parse fell back to a raw save.

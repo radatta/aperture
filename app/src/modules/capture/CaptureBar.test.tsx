@@ -40,6 +40,24 @@ function field() {
   return screen.getByLabelText('Capture log') as HTMLTextAreaElement;
 }
 
+// Review first: Enter reads a natural task line into a preview; once it has landed, Enter saves exactly it.
+async function reviewThenSave(user: ReturnType<typeof userEvent.setup>) {
+  await user.keyboard('{Enter}');
+  await screen.findByRole('button', { name: 'Save reviewed task' });
+  await user.keyboard('{Enter}');
+}
+
+// A parse result the test controls, for today unless it says otherwise.
+const parsed = (title: string, today = todayKey(4)): ParseTaskResult => ({
+  ok: true,
+  source: 'haiku',
+  input: { title },
+  categoryLabel: null,
+  placeName: null,
+  dropped: [],
+  today,
+});
+
 describe('CaptureBar', () => {
   it('logs an entry on Enter, then clears and stays in Log mode', async () => {
     const api = createStubClient({ seed: false, storageKey: 'cap-test' });
@@ -112,19 +130,25 @@ describe('CaptureBar', () => {
       await waitFor(async () => expect(await api.listLogEntries(todayKey(4))).toHaveLength(1));
     });
 
-    it('⌘Enter mid-composition never reviews or saves', async () => {
+    it('Enter or ⌘Enter mid-composition never reviews or saves a task', async () => {
       const { api, user, box } = await taskBar();
       const parse = vi.spyOn(api, 'parseTask');
       await user.type(box(), 'にほんご');
       fireEvent.compositionStart(box());
       fireEvent.keyDown(box(), { key: 'Enter', metaKey: true, isComposing: true });
+      fireEvent.keyDown(box(), { key: 'Enter', isComposing: true });
+      fireEvent.keyDown(box(), { key: 'Enter', keyCode: 229 });
       expect(box().value).toBe('にほんご');
       expect(parse).not.toHaveBeenCalled();
       expect(screen.queryByText('Reading it…')).toBeNull();
+      expect(await api.listTasks()).toHaveLength(0);
+      // The guard didn't swallow the next one: ⌘Enter after compositionend saves it as typed.
       fireEvent.compositionEnd(box());
-      await user.keyboard('{Enter}');
-      await waitFor(async () => expect(await api.listTasks()).toHaveLength(1));
-      expect(parse).toHaveBeenCalledTimes(1);
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['にほんご']),
+      );
+      expect(parse).not.toHaveBeenCalled();
     });
 
     it('Enter after compositionend saves as usual', async () => {
@@ -156,7 +180,7 @@ describe('CaptureBar', () => {
 
     await user.click(screen.getByRole('button', { name: 'Task' }));
     await user.type(screen.getByLabelText('Capture task'), 'fix the flaky test');
-    await user.keyboard('{Enter}');
+    await reviewThenSave(user);
 
     await waitFor(async () => {
       const tasks = await api.listTasks();
@@ -179,7 +203,7 @@ describe('CaptureBar', () => {
     expect(screen.getByPlaceholderText('New task for today…')).toBeTruthy();
 
     await user.type(screen.getByLabelText('Capture task'), 'buy stamps');
-    await user.keyboard('{Enter}');
+    await reviewThenSave(user);
 
     expect(await screen.findByText(/Task added → today/)).toBeTruthy();
     const [row] = await api.listPlansForDay(todayKey(4));
@@ -187,7 +211,7 @@ describe('CaptureBar', () => {
     expect(pill.getAttribute('aria-pressed')).toBe('false'); // one-shot
 
     await user.type(screen.getByLabelText('Capture task'), 'next one');
-    await user.keyboard('{Enter}');
+    await reviewThenSave(user);
     await waitFor(async () =>
       expect((await api.listTasks()).map((t) => t.title)).toContain('next one'),
     );
@@ -203,7 +227,7 @@ describe('CaptureBar', () => {
     await user.click(screen.getByRole('button', { name: 'Task' }));
     await user.click(screen.getByRole('button', { name: 'today' }));
     await user.type(screen.getByLabelText('Capture task'), 'call bank');
-    await user.keyboard('{Enter}');
+    await reviewThenSave(user);
 
     expect(await screen.findByText(/backlog \(couldn’t plan it\)/)).toBeTruthy();
     expect((await api.listTasks()).map((t) => t.title)).toContain('call bank');
@@ -239,6 +263,27 @@ describe('CaptureBar', () => {
     });
   });
 
+  // Review first is a Task-mode step only: Log and Idea save on one press, and nothing reads them.
+  it('Idea mode saves on one Enter, and on one Send', async () => {
+    const api = createStubClient({ seed: false, storageKey: `cap-idea-${Math.random()}` });
+    const parse = vi.spyOn(api, 'parseTask');
+    const user = userEvent.setup();
+    renderWithProviders(<CaptureBar />, { api });
+    await user.click(screen.getByRole('button', { name: 'Idea' }));
+    const box = () => screen.getByLabelText('Capture idea') as HTMLTextAreaElement;
+    await user.type(box(), 'a podcast about bridges');
+    await user.keyboard('{Enter}');
+    await waitFor(async () =>
+      expect((await api.listIdeas()).map((i) => i.text)).toEqual(['a podcast about bridges']),
+    );
+    expect(box().value).toBe('');
+    await user.type(box(), 'a map of every bakery');
+    await user.click(screen.getByRole('button', { name: 'Save idea' }));
+    await waitFor(async () => expect(await api.listIdeas()).toHaveLength(2));
+    expect(parse).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Read with AI' })).toBeNull();
+  });
+
   describe('Task tokens', () => {
     it('parses optional tokens after " | " into the created task', async () => {
       const { api, user, box } = await taskBar();
@@ -257,19 +302,23 @@ describe('CaptureBar', () => {
       expect(await screen.findByText(/Task added/)).toBeTruthy();
     });
 
+    // ⌘Enter saves as typed, so the grammar alone decides: without ' | ' it reads no tokens.
     it('without " | " a title is literal and nothing is previewed', async () => {
       const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
       await user.type(box(), 'fix issue #42 ~5');
       expect(box().getAttribute('aria-describedby')).toBeNull();
-      await user.keyboard('{Enter}');
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
       await user.type(box(), 'a|b');
-      await user.keyboard('{Enter}');
+      expect(box().getAttribute('aria-describedby')).toBeNull();
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
 
       await waitFor(async () => {
         const titles = (await api.listTasks()).map((t) => t.title).sort();
         expect(titles).toEqual(['a|b', 'fix issue #42 ~5']);
       });
       expect((await api.listTasks()).every((t) => t.estimateMin === null)).toBe(true);
+      expect(parse).not.toHaveBeenCalled();
     });
 
     it('an empty token region waits while the caret sits after " | ", and refuses a save visibly', async () => {
@@ -650,15 +699,21 @@ describe('CaptureBar', () => {
     });
   });
 
-  // Quick add (docs/areas/tasks/quick-add.md): the stub's heuristic stands in for Haiku, through the
+  // Quick add (docs/areas/tasks/quick-add.md): the stub's heuristic stands in for the model, through the
   // same shared flow and validator as the Lambda.
   describe('quick add', () => {
     const adminId = async (api: { listCategories(): Promise<{ id: string; label: string }[]> }) =>
       (await api.listCategories()).find((c) => c.label === 'Admin')!.id;
 
-    it('Enter clears at once, saves what the parse read, and says what it saved', async () => {
+    it('Enter shows the parse, Enter again saves exactly it, and says what it saved', async () => {
       const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
       await user.type(box(), 'admin, file taxes due tmw 30m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      expect(screen.getByText('due tomorrow')).toBeTruthy();
+      expect(box().value).toBe('admin, file taxes due tmw 30m'); // the text stays until you save
+      expect(await api.listTasks()).toHaveLength(0);
       await user.keyboard('{Enter}');
       expect(box().value).toBe('');
       await waitFor(async () =>
@@ -674,6 +729,7 @@ describe('CaptureBar', () => {
       expect(screen.getByRole('status').textContent).toMatch(
         /Task added → backlog: file taxes · Admin/,
       );
+      expect(parse).toHaveBeenCalledTimes(1);
     });
 
     it("a ' | ' line never reaches the model", async () => {
@@ -704,60 +760,167 @@ describe('CaptureBar', () => {
       expect(box().value).toBe('');
     });
 
-    it('⌘Enter reviews, and Enter on a shown preview saves it', async () => {
+    it('⌘Enter on a shown preview saves exactly it, without parsing again', async () => {
       const { api, user, box } = await taskBar();
       const parse = vi.spyOn(api, 'parseTask');
       await user.type(box(), 'admin, renew passport');
-      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      await user.keyboard('{Enter}');
       expect(await screen.findByText('renew passport')).toBeTruthy();
       expect(await api.listTasks()).toHaveLength(0);
-      await user.keyboard('{Enter}');
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
       await waitFor(async () =>
-        expect((await api.listTasks())[0]).toMatchObject({ title: 'renew passport' }),
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'renew passport',
+          categoryId: await adminId(api),
+        }),
       );
       expect(parse).toHaveBeenCalledTimes(1);
+      expect(box().value).toBe('');
     });
 
-    it('editing the text hides the preview, and the next save parses the new text', async () => {
+    it('⌘Enter with no preview saves the line as typed, never parsing', async () => {
       const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, renew passport 30m');
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, renew passport 30m',
+          categoryId: null,
+          estimateMin: null,
+        }),
+      );
+      expect(parse).not.toHaveBeenCalled();
+      expect(box().value).toBe('');
+      expect(await screen.findByText('Task added → backlog')).toBeTruthy();
+    });
+
+    it('editing the text hides the preview, and the next press parses the new text', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
       await user.type(box(), 'admin, call bank');
       await user.click(screen.getByRole('button', { name: 'Review before saving' }));
       expect(await screen.findByText('call bank')).toBeTruthy();
       await user.type(box(), ' 15m');
       expect(screen.queryByText('call bank')).toBeNull();
       expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       await waitFor(async () =>
         expect((await api.listTasks())[0]).toMatchObject({ title: 'call bank', estimateMin: 15 }),
       );
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(parse.mock.calls.map(([t]) => t)).toEqual([
+        'admin, call bank',
+        'admin, call bank 15m',
+      ]);
     });
 
-    it('a parse that lands after the text changed never shows', async () => {
+    // A press while the parse runs waits for it: no second parse, nothing saved, the text stays put.
+    it('a press while the parse is in flight is a no-op; the landed parse is what saves', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      const parse = vi
+        .spyOn(api, 'parseTask')
+        .mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'pay the water bill');
+      await user.keyboard('{Enter}');
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(box().value).toBe('pay the water bill');
+      expect(await api.listTasks()).toHaveLength(0);
+      await act(async () => resolve(parsed('water bill')));
+      await user.click(await screen.findByRole('button', { name: 'Save reviewed task' }));
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['water bill']),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    it('Send is outlined "Review before saving" until the parse lands, then "Save reviewed task"; other modes say Save', async () => {
       const { api, user, box } = await taskBar();
       let resolve!: (r: ParseTaskResult) => void;
       vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
-      await user.type(box(), 'old text');
-      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
-      expect(screen.getByText('Reading it…')).toBeTruthy();
-      await user.type(box(), '!');
-      resolve({
-        ok: true,
-        source: 'haiku',
-        input: { title: 'STALE' },
-        categoryLabel: null,
-        placeName: null,
-        dropped: [],
-        today: todayKey(4),
-      });
-      await new Promise((r) => setTimeout(r, 0));
-      expect(screen.queryByText('STALE')).toBeNull();
-      expect(screen.queryByText('Reading it…')).toBeNull();
+      // Send is the field row's last button (✨ sits before it); its name changes, so not found by name.
+      const send = () => [...box().parentElement!.querySelectorAll('button')].at(-1)!;
+      const filled = /(^|\s)bg-teal(\s|$)/;
+      await user.type(box(), 'water plants');
+      expect(send().getAttribute('aria-label')).toBe('Review before saving');
+      expect(send().className).not.toMatch(filled); // outlined: nothing to save yet
+      await user.keyboard('{Enter}');
+      expect(send().getAttribute('aria-label')).toBe('Review before saving'); // still parsing
+      await act(async () => resolve(parsed('water plants')));
+      await waitFor(() => expect(send().getAttribute('aria-label')).toBe('Save reviewed task'));
+      expect(send().className).toMatch(filled); // filled: the next press saves
+      await user.clear(box());
+      await user.type(box(), 'memo | ~30');
+      expect(send().getAttribute('aria-label')).toBe('Save task');
+      await user.click(screen.getByRole('button', { name: 'Log' }));
+      expect(screen.getByRole('button', { name: 'Save log' })).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Idea' }));
+      expect(screen.getByRole('button', { name: 'Save idea' })).toBeTruthy();
     });
 
-    it('a failed parse saves the line as typed, and says so', async () => {
+    it('✨ off saves the next task as typed with no parse, then turns itself back on', async () => {
       const { api, user, box } = await taskBar();
-      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      const parse = vi.spyOn(api, 'parseTask');
+      const ai = () => screen.getByRole('button', { name: 'Read with AI' });
+      expect(ai().getAttribute('aria-pressed')).toBe('true'); // on by default
       await user.type(box(), 'admin, file taxes 30m');
+      await user.click(ai());
+      expect(ai().getAttribute('aria-pressed')).toBe('false');
+      expect(document.activeElement).toBe(box()); // the toggle never takes focus
+      await user.click(screen.getByRole('button', { name: 'Save task' }));
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, file taxes 30m',
+          categoryId: null,
+          estimateMin: null,
+        }),
+      );
+      expect(parse).not.toHaveBeenCalled();
+      expect(box().value).toBe('');
+      expect(ai().getAttribute('aria-pressed')).toBe('true'); // one-shot
+      // …so the next line is read again.
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText('call bank')).toBeTruthy();
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(await api.listTasks()).toHaveLength(1);
+      // ✨ off with that preview showing drops it: the next Enter saves the line as typed, not the parse.
+      await user.click(ai());
+      expect(ai().getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByText('call bank')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Save reviewed task' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Save task' })).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title).sort()).toEqual([
+          'admin, call bank',
+          'admin, file taxes 30m',
+        ]),
+      );
+      expect((await api.listTasks()).every((t) => t.categoryId === null)).toBe(true);
+      expect(parse).toHaveBeenCalledTimes(1); // no further parse
+      expect(ai().getAttribute('aria-pressed')).toBe('true');
+      // No ✨ on a ' | ' line: it has no model step.
+      await user.clear(box());
+      await user.type(box(), 'memo | ~30');
+      expect(screen.queryByRole('button', { name: 'Read with AI' })).toBeNull();
+    });
+
+    it('a failed create of a ✨-off save comes back ✨ off: the retry saves as typed, unparsed', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      const ai = () => screen.getByRole('button', { name: 'Read with AI' });
+      vi.spyOn(api, 'createTask').mockRejectedValueOnce(new Error('offline'));
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.click(ai());
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
+      expect(ai().getAttribute('aria-pressed')).toBe('false');
       await user.keyboard('{Enter}');
       await waitFor(async () =>
         expect((await api.listTasks())[0]).toMatchObject({
@@ -766,41 +929,202 @@ describe('CaptureBar', () => {
           estimateMin: null,
         }),
       );
-      expect(await screen.findByText(/Saved unparsed → backlog/)).toBeTruthy();
-      expect(
-        screen.getByText(/Saved as typed — couldn’t parse \(unavailable: stub failNextParse\)/),
-      ).toBeTruthy();
-      expect(box().value).toBe('');
+      expect(parse).not.toHaveBeenCalled();
+      expect(ai().getAttribute('aria-pressed')).toBe('true'); // one-shot again once it saved
     });
 
-    it('a transport error on the parse is a raw save too', async () => {
+    it('a failed create brings the reviewed preview back: the retry saves it, with no second parse', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      vi.spyOn(api, 'createTask').mockRejectedValueOnce(new Error('offline'));
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
+      expect(screen.getByText('file taxes')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Save reviewed task' })).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'file taxes',
+          categoryId: await adminId(api),
+          estimateMin: 30,
+        }),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    // The hint sits in the DOM at every width (`hidden sm:block`); jsdom applies no CSS, so it's readable here.
+    it('the hint says what Enter does: reads on a natural line with ✨ on, saves otherwise', async () => {
+      const { user, box } = await taskBar();
+      const READS = 'Enter reads it, again saves · ⌘Enter saves now';
+      const SAVES = 'Enter saves · Tab switches';
+      await user.type(box(), 'admin, call bank');
+      expect(screen.getByText(READS)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+      expect(screen.getByText(SAVES)).toBeTruthy();
+      expect(screen.queryByText(READS)).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+      expect(screen.getByText(READS)).toBeTruthy();
+      await user.clear(box());
+      await user.type(box(), 'memo | ~30 '); // past the token: no chips, so the plain hint
+      expect(screen.getByText(SAVES)).toBeTruthy();
+      expect(screen.queryByText(READS)).toBeNull();
+    });
+
+    it('⌘Enter while a parse is in flight saves the line as typed; the late parse never shows', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['admin, call bank']),
+      );
+      expect(box().value).toBe('');
+      resolve(parsed('LATE'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('LATE')).toBeNull();
+      expect(await api.listTasks()).toHaveLength(1);
+    });
+
+    it('✨ off while a parse is in flight drops it: the late parse never shows, and Send saves as typed', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+      expect(screen.queryByText('Reading it…')).toBeNull();
+      resolve(parsed('LATE'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('LATE')).toBeNull();
+      expect(box().value).toBe('admin, call bank');
+      await user.click(screen.getByRole('button', { name: 'Save task' }));
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['admin, call bank']),
+      );
+    });
+
+    // The client's ceiling (withTimeout, useQuickParse.test) answers a timeout outcome; the bar treats it like
+    // any failed parse: said, the text kept, nothing saved.
+    it('a parse past the client timeout is a failed preview, never a save', async () => {
+      const { api, user, box } = await taskBar();
+      vi.spyOn(api, 'parseTask').mockResolvedValueOnce({
+        ok: false,
+        reason: 'timeout',
+        detail: 'no reply in 10s',
+      });
+      await user.type(box(), 'admin, call bank');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn’t parse \(timeout: no reply in 10s\)/)).toBeTruthy();
+      expect(box().value).toBe('admin, call bank');
+      expect(screen.getByRole('button', { name: 'Retry parse' })).toBeTruthy();
+      expect(await api.listTasks()).toHaveLength(0);
+    });
+
+    it('a parse that lands after the text changed never shows, and never saves', async () => {
+      const { api, user, box } = await taskBar();
+      let resolve!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (resolve = r)));
+      await user.type(box(), 'old text');
+      await user.click(screen.getByRole('button', { name: 'Review before saving' }));
+      expect(screen.getByText('Reading it…')).toBeTruthy();
+      await user.type(box(), '!');
+      resolve(parsed('STALE'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(screen.queryByText('STALE')).toBeNull();
+      expect(screen.queryByText('Reading it…')).toBeNull();
+      expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
+      // The next press reads the edited line; what saves is that, never the late parse.
+      await reviewThenSave(user);
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title)).toEqual(['old text!']),
+      );
+      expect(api.parseTask).toHaveBeenCalledTimes(2);
+    });
+
+    // Review first never saves behind your back: a failed parse keeps the text and says why, Send asks
+    // again, and "Save as typed" is the one-tap way to keep the line raw.
+    it('a failed parse keeps the text and says why; Send retries, Save as typed saves it raw', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      expect(
+        await screen.findByText(
+          'Couldn’t parse (unavailable: stub failNextParse) — Send tries again',
+        ),
+      ).toBeTruthy();
+      expect(box().value).toBe('admin, file taxes 30m');
+      expect(await api.listTasks()).toHaveLength(0);
+      expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull(); // nothing sent yet
+      expect(screen.getByRole('button', { name: 'Retry parse' })).toBeTruthy();
+      // Retry: one more parse, and still nothing saved — this one lands ok.
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(await api.listTasks()).toHaveLength(0);
+      // Fail it again, then keep the line as typed.
+      await user.type(box(), '!');
+      localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
+      await user.keyboard('{Enter}');
+      await user.click(await screen.findByRole('button', { name: 'Save as typed' }));
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, file taxes 30m!',
+          categoryId: null,
+          estimateMin: null,
+        }),
+      );
+      expect(parse).toHaveBeenCalledTimes(3);
+      expect(box().value).toBe('');
+      expect(document.activeElement).toBe(box());
+      expect(await screen.findByText('Task added → backlog')).toBeTruthy();
+    });
+
+    it('a transport error on the parse is a failed parse too: the text stays, nothing saves', async () => {
       const { api, user, box } = await taskBar();
       vi.spyOn(api, 'parseTask').mockRejectedValueOnce(new Error('offline'));
       await user.type(box(), 'water plants');
       await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn’t parse \(network: offline\)/)).toBeTruthy();
+      expect(box().value).toBe('water plants');
+      expect(await api.listTasks()).toHaveLength(0);
+      await user.click(screen.getByRole('button', { name: 'Save as typed' }));
       await waitFor(async () =>
         expect((await api.listTasks())[0]).toMatchObject({ title: 'water plants' }),
       );
-      expect(await screen.findByText(/Saved unparsed/)).toBeTruthy();
     });
 
-    it('a failed Review says so in the preview, and saving keeps the line as typed', async () => {
+    it('a failed Review says so in the preview, and ⌘Enter saves the line as typed', async () => {
       const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
       localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
       await user.type(box(), 'admin, file taxes');
       await user.click(screen.getByRole('button', { name: 'Review before saving' }));
       expect(await screen.findByText(/Couldn’t parse \(unavailable/)).toBeTruthy();
-      await user.keyboard('{Enter}');
+      await user.keyboard('{Meta>}{Enter}{/Meta}');
       await waitFor(async () =>
-        expect((await api.listTasks())[0]).toMatchObject({ title: 'admin, file taxes' }),
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, file taxes',
+          categoryId: null,
+        }),
       );
+      expect(parse).toHaveBeenCalledTimes(1);
     });
 
     it('a failed create puts the typed text back and says so', async () => {
       const { api, user, box } = await taskBar();
       api.createTask = () => Promise.reject(new Error('offline'));
       await user.type(box(), 'admin, file taxes 30m');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
       await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
     });
@@ -816,24 +1140,24 @@ describe('CaptureBar', () => {
         .mockReturnValueOnce(new Promise((_, r) => (reject = r)))
         .mockImplementation(real);
       await user.type(box(), 'first');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
       await user.type(box(), 'second');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(2));
       reject(new Error('offline'));
       expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
       await waitFor(() => expect(box().value).toBe('first'));
     });
 
-    // The restore above only works into an empty field. Auto waits on a parse first, so by the time a
-    // create fails the user may be mid-way through the next capture — that one must not be overwritten.
+    // The restore above only works into an empty field. A create can take seconds, so by the time it
+    // fails the user may be mid-way through the next capture — that one must not be overwritten.
     it('a failed save never overwrites a newer capture: it is parked, and Put back trades places', async () => {
       const { api, user, box } = await taskBar();
       let reject!: (e: Error) => void;
       api.createTask = vi.fn().mockReturnValueOnce(new Promise((_, r) => (reject = r)));
       await user.type(box(), 'first');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
       await user.type(box(), 'half-typed second');
       reject(new Error('offline'));
@@ -853,10 +1177,12 @@ describe('CaptureBar', () => {
       expect(screen.queryByText(/Set aside/)).toBeNull();
     });
 
-    it('an Auto capture sits in the outbox through the parse AND the create, until it settles', async () => {
+    // While the parse runs the text is still in the field, so nothing can be lost; once the save clears the
+    // field, the capture is in the outbox until its create settles.
+    it('a task capture sits in the outbox through the create, until it settles', async () => {
       const { api, user, box } = await taskBar();
-      let parsed!: (r: ParseTaskResult) => void;
-      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (parsed = r)));
+      let landed!: (r: ParseTaskResult) => void;
+      vi.spyOn(api, 'parseTask').mockReturnValueOnce(new Promise((r) => (landed = r)));
       const real = api.createTask.bind(api);
       let created!: () => void;
       api.createTask = vi.fn(
@@ -865,11 +1191,16 @@ describe('CaptureBar', () => {
       const outbox = () => JSON.parse(localStorage.getItem(CAPTURE_OUTBOX_KEY) ?? '[]');
       await user.type(box(), 'call bank');
       await user.keyboard('{Enter}');
+      expect(box().value).toBe('call bank'); // parsing: the field still holds it
+      expect(outbox()).toEqual([]);
+      await act(async () => landed(parsed('call bank')));
+      await screen.findByRole('button', { name: 'Save reviewed task' });
+      expect(outbox()).toEqual([]);
+      await user.keyboard('{Enter}');
       expect(box().value).toBe('');
       expect(outbox()).toMatchObject([{ text: 'call bank', mode: 'task', toToday: false }]);
-      parsed({ ok: false, reason: 'timeout' });
       await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
-      expect(outbox()).toHaveLength(1); // parsed, but the create hasn't landed
+      expect(outbox()).toHaveLength(1); // sent, but the create hasn't landed
       created();
       await waitFor(async () => expect((await api.listTasks())[0]?.title).toBe('call bank'));
       await waitFor(() => expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull());
@@ -880,7 +1211,7 @@ describe('CaptureBar', () => {
       let reject!: (e: Error) => void;
       api.createTask = vi.fn().mockReturnValueOnce(new Promise((_, r) => (reject = r)));
       await user.type(box(), 'first');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
       await user.type(box(), 'busy');
       reject(new Error('offline'));
@@ -891,25 +1222,25 @@ describe('CaptureBar', () => {
       ]);
     });
 
-    it('"→ today" Auto captures leave the outbox too, planned or not', async () => {
+    it('"→ today" quick-add captures leave the outbox too, planned or not', async () => {
       const { api, user, box } = await taskBar();
       api.upsertPlan = () => Promise.reject(new Error('offline'));
       await user.click(screen.getByRole('button', { name: 'today' }));
       await user.type(box(), 'pay rent');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       expect(await screen.findByText(/couldn’t plan it/)).toBeTruthy();
       expect(localStorage.getItem(CAPTURE_OUTBOX_KEY)).toBeNull();
     });
 
     it('parked captures survive closing the app again', async () => {
       const { api, user, box } = await taskBar();
-      api.createTask = vi.fn().mockRejectedValueOnce(new Error('offline'));
-      vi.spyOn(api, 'parseTask').mockImplementationOnce(async (t) => {
-        await user.type(box(), 'busy'); // the field is taken by the time the save fails
-        return { ok: false, reason: 'timeout', detail: t };
-      });
+      let reject!: (e: Error) => void;
+      api.createTask = vi.fn().mockReturnValueOnce(new Promise((_, r) => (reject = r)));
       await user.type(box(), 'first');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
+      await waitFor(() => expect(api.createTask).toHaveBeenCalledTimes(1));
+      await user.type(box(), 'busy'); // the field is taken by the time the save fails
+      reject(new Error('offline'));
       await screen.findByText('Couldn’t save: “first”');
       cleanup(); // the app closes
       const api2 = createStubClient({ seed: false, storageKey: `cap-reopen-${Math.random()}` });
@@ -966,7 +1297,7 @@ describe('CaptureBar', () => {
       );
     });
 
-    it('✨ on a failed preview parses again; the preview reads due dates relatively', async () => {
+    it('Send on a failed preview parses again; the preview reads due dates relatively', async () => {
       const { user, box } = await taskBar();
       localStorage.setItem(STUB_FAIL_NEXT_PARSE_KEY, '1');
       await user.type(box(), 'admin, file taxes due tmw');
@@ -989,6 +1320,7 @@ describe('CaptureBar', () => {
       expect(screen.queryByText('call bank')).toBeNull();
       await user.clear(box());
       await user.type(box(), 'memo | ~30');
+      expect(screen.queryByRole('button', { name: 'Read with AI' })).toBeNull();
       expect(screen.queryByRole('button', { name: /Review|Retry/ })).toBeNull();
       await user.keyboard('{Meta>}{Enter}{/Meta}');
       await waitFor(async () =>
@@ -996,7 +1328,7 @@ describe('CaptureBar', () => {
       );
     });
 
-    it('✨ keeps focus in the field (the phone keyboard stays up)', async () => {
+    it('Send keeps focus in the field (the phone keyboard stays up)', async () => {
       const { user, box } = await taskBar();
       await user.type(box(), 'admin, call bank');
       const blurs = vi.fn();
@@ -1025,12 +1357,12 @@ describe('CaptureBar', () => {
       expect(screen.queryByText('yesterday parse')).toBeNull();
     });
 
-    it('"→ today" plans a quick-added task, from Auto and from Review', async () => {
+    it('"→ today" plans a quick-added task, saved by Enter and by Send', async () => {
       const { api, user, box } = await taskBar();
       const today = todayKey(4);
       await user.click(screen.getByRole('button', { name: 'today' }));
       await user.type(box(), 'admin, pay rent 10m');
-      await user.keyboard('{Enter}');
+      await reviewThenSave(user);
       expect(await screen.findByText(/Task added → today/)).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'today' }));
       await user.type(box(), 'admin, book flight');
@@ -1123,11 +1455,18 @@ describe('CaptureBar — Review category suggestion', () => {
     expect(await screen.findByText(`${LINE} · no category`)).toBeTruthy();
   });
 
-  it('Auto (Enter, no Review) never takes a suggestion', async () => {
+  it('⌘Enter past an untapped chip, or ✨ off, never takes a suggestion', async () => {
     const { api, user, box } = await seededBar();
     await user.type(box(), LINE);
-    await user.keyboard('{Enter}');
+    await review(user);
+    await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    await user.keyboard('{Meta>}{Enter}{/Meta}');
     await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
+    expect(chip()).toBeNull();
+    await user.type(box(), `${LINE} too`);
+    await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+    await user.keyboard('{Enter}');
+    await waitFor(async () => expect((await saved(api, `${LINE} too`))?.categoryId).toBeNull());
     expect(chip()).toBeNull();
   });
 
@@ -1204,15 +1543,23 @@ describe('CaptureBar — Review category suggestion', () => {
     expect(document.activeElement).toBe(box());
   });
 
-  it('a capture nobody reviews never reads the task list', async () => {
-    const { user, box, list } = await taskBar();
+  // The chip is the only reader: a capture that shows no preview never fetches the history it scores.
+  it('a grammar, ✨-off or ⌘Enter capture never reads the task list', async () => {
+    const { api, user, box, list } = await taskBar();
+    const create = vi.spyOn(api, 'createTask'); // waits on this: saved() would read the list itself
     await user.type(box(), 'memo | ~30');
     await user.keyboard('{Enter}');
     await screen.findByText(/Task added/);
     await user.type(box(), 'file taxes');
+    await user.click(screen.getByRole('button', { name: 'Read with AI' }));
     await user.keyboard('{Enter}');
-    await screen.findByText('file taxes · no category');
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    await user.type(box(), 'water plants');
+    await user.keyboard('{Meta>}{Enter}{/Meta}');
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(3));
+    await act(async () => {});
     expect(list).not.toHaveBeenCalled();
+    expect(create.mock.calls.map(([i]) => i.title)).toEqual(['memo', 'file taxes', 'water plants']);
   });
 
   it('a failed create puts the text back with the tap; the retry saves under it, without parsing again', async () => {
@@ -1241,6 +1588,9 @@ describe('CaptureBar — Review category suggestion', () => {
     await user.click(screen.getByRole('button', { name: 'Task' }));
     expect(screen.queryByText('#Garden')).toBeNull();
     await user.click(box());
+    await user.keyboard('{Enter}'); // read again: the chip is offered afresh, untaken
+    await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    expect(screen.queryByText('#Garden')).toBeNull();
     await user.keyboard('{Enter}');
     await waitFor(async () => expect((await saved(api, LINE))?.categoryId).toBeNull());
   });
@@ -1291,10 +1641,13 @@ describe('CaptureBar — Review category suggestion', () => {
     await waitFor(() => expect(parse).toHaveBeenCalledTimes(1));
     await act(async () => {});
     expect(screen.queryByText('yesterday parse')).toBeNull(); // hidden: its day has gone
-    await user.keyboard('{Enter}');
+    expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
+    expect(await api.listTasks()).toHaveLength(24); // the seeded history only
+    await reviewThenSave(user);
     await waitFor(async () => expect(await saved(api, LINE)).toBeTruthy());
     expect(parse).toHaveBeenCalledTimes(2);
     expect(await saved(api, 'yesterday parse')).toBeUndefined();
+    expect((await saved(api, LINE))?.categoryId).toBeNull(); // the stale parse's Garden didn't carry
   });
 });
 
@@ -1616,6 +1969,9 @@ describe('CaptureBar — places', () => {
   it('quick add takes a known @word and says which list it went on', async () => {
     const { api, user, box } = await placeBar();
     await user.type(box(), 'milk @corner');
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('@Corner Shop')).toBeTruthy(); // previewed before it saves
+    expect(await api.listTasks()).toHaveLength(0);
     await user.keyboard('{Enter}');
     await waitFor(async () =>
       expect((await api.listTasks())[0]).toMatchObject({ title: 'milk', place: 'corner' }),

@@ -1,6 +1,6 @@
-// Voice capture's clock (capture.md → Time rules). A spoken line's time comes from here, never from the
-// model: the model only says which day was named, this module finds the time in the words and resolves it
-// against the server clock. The rules (the maintainer, 2026-11-16):
+// Voice capture's clock (capture.md → Time rules). The grammar here reads a spoken line's time from its words —
+// the fallback when the model doesn't run, and a check beside the model's reading when it does (quickParse.ts
+// placeModelClock) — and resolveSpoken places either against the server clock. The rules (the maintainer, 2026-11-16):
 //   - a bare "at N" / "N o'clock" is the next N o'clock, wrapping (2am + "at 5" → 5am; 6am → 5pm);
 //   - a time already past rolls forward to its next occurrence (3pm + "at 9am" → tomorrow 9am);
 //   - "morning" is 9 AM, "tonight" is 8 PM;
@@ -233,8 +233,9 @@ export function resolveSpoken(
     return { day: r.day, time: r.hhmm };
   }
   const calToday = zonedDayTime(ctx.now, zone).day;
-  // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward.
-  const bareHour = spoken.kind === 'bare' && spoken.part === null;
+  // A past day (the model reading "monday" as last Monday) isn't named either: it rolls forward. A model that
+  // dated a bare hour — or tonight's ("at 1 tonight") — calendar tomorrow with no day in the words isn't trusted.
+  const bareHour = spoken.kind === 'bare' && (spoken.part === null || spoken.part === 'tonight');
   const named =
     modelDay !== null &&
     modelDay > calToday &&

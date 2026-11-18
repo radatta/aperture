@@ -1,5 +1,5 @@
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
-import type { ModelOutcome } from '@aperture/shared';
+import { isDueTimeHalf, type DueTimeHalf, type ModelOutcome } from '@aperture/shared';
 import type {
   AnthropicGateway,
   CoachPickRequest,
@@ -14,7 +14,13 @@ import {
   coachPickSystemPrompt,
   coachPickUserContent,
 } from './coachPickPrompt';
-import { PARSE_MODEL, parseOutputSchema, parseSystemPrompt } from './parsePrompt';
+import {
+  PARSE_EFFORT,
+  PARSE_MODEL,
+  PARSE_THINKING,
+  parseOutputSchema,
+  parseSystemPrompt,
+} from './parsePrompt';
 import {
   fluxNoteOutputSchema,
   fluxNoteSystemPrompt,
@@ -93,8 +99,8 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     maxTokens: number;
     timeoutMs: number;
     // Haiku's calls turn thinking off and run at low effort; Opus 5.5 can't turn it off (a 400), so its call omits
-    // `thinking` and names its effort.
-    thinking?: 'disabled' | 'omit';
+    // `thinking` and names its effort. Sonnet 5.5 refuses `disabled` too: off there is `between_tools`.
+    thinking?: 'disabled' | 'between_tools' | 'omit';
     effort?: 'low' | 'medium' | 'high';
   }
 
@@ -123,7 +129,7 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         body: JSON.stringify({
           model: req.model,
           max_tokens: req.maxTokens,
-          ...(req.thinking === 'omit' ? {} : { thinking: { type: 'disabled' } }),
+          ...(req.thinking === 'omit' ? {} : { thinking: { type: req.thinking ?? 'disabled' } }),
           output_config: {
             effort: req.effort ?? 'low',
             format: { type: 'json_schema', schema: req.schema },
@@ -176,6 +182,11 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     return { ok: true, fields, meta };
   }
 
+  const halfOf = (f: unknown): DueTimeHalf | null => {
+    const v = (f as { dueTimeHalf?: unknown }).dueTimeHalf;
+    return isDueTimeHalf(v) ? v : null;
+  };
+
   return {
     async parseTask(req) {
       const started = Date.now();
@@ -183,9 +194,16 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         model: PARSE_MODEL,
         system: parseSystemPrompt(req.today, req.categories, { voice: req.voice }),
         user: req.text,
-        schema: parseOutputSchema(req.categories.map((c) => c.id)),
-        maxTokens: 2048,
+        schema: parseOutputSchema(
+          req.categories.map((c) => c.id),
+          { voice: req.voice },
+        ),
+        // Room for the longest app line (2,500 characters) copied whole into notes, dense text included (a
+        // token a character at worst); unused room costs nothing. The capture route asks for 512.
+        maxTokens: req.maxTokens ?? 2048,
         timeoutMs: req.timeoutMs,
+        thinking: PARSE_THINKING,
+        effort: PARSE_EFFORT,
       });
       // status + stop_reason tell a revoked key (401) from a rate limit (429), an overload (529), a
       // refusal or max_tokens — all `reason: 'api'` to the caller.
@@ -197,6 +215,10 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
           status: meta?.status,
           stop_reason: meta?.stop,
           ms: Date.now() - started,
+          model: PARSE_MODEL,
+          voice: req.voice === true,
+          // the model's half-of-day reading, a fixed enum value — its spread on dev shows the field's variance
+          half: out.ok && req.voice ? halfOf(out.fields) : undefined,
           chars: req.text.length,
           input_tokens: meta?.usage?.input_tokens,
           output_tokens: meta?.usage?.output_tokens,

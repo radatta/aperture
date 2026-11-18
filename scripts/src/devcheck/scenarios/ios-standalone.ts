@@ -137,9 +137,9 @@ const CAPTURE_LONG: IosOp[] = [
   { op: 'keys', text: LONG_LINE, in: 'long-bar-task' },
   {
     op: 'tap',
-    label: 'Review before saving',
-    scan: DOCK(355),
-    hint: { x: 353, y: 505 },
+    label: 'Review before saving', // Send, since review-first (2026-11-17)
+    scan: DOCK(395),
+    hint: { x: 395, y: 505 },
     role: 'AXButton',
   },
   { op: 'wait', s: 6 },

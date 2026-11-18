@@ -77,6 +77,17 @@ describe('captureSay', () => {
     expect(captureSay({ ...base, duplicate: true, raw: true })).toBe('Already added: call mum.');
   });
 
+  it("a raw save with its own words' time says it was added without AI, and when", () => {
+    expect(
+      captureSay({
+        ...base,
+        raw: true,
+        title: 'call mum at 5',
+        due: { day: '2026-11-16', time: '17:00' },
+      }),
+    ).toBe('Added without AI, as typed: call mum at 5, today 5 PM.');
+  });
+
   it('cuts a long title at a word', () => {
     const say = captureSay({ ...base, title: `${'word '.repeat(30)}end` });
     expect(say.startsWith('Added: word word')).toBe(true);

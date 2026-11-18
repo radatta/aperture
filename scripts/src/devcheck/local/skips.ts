@@ -17,7 +17,7 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
   },
   'category-suggest': {
     steps: ['real-review', 'real-named', 'real-auto'],
-    reason: 'local: the real Haiku parse is dev’s (parsing is off locally) — runs on dev',
+    reason: 'local: the real model parse is dev’s (parsing is off locally) — runs on dev',
   },
   'timed-reminders': {
     steps: [
@@ -69,11 +69,13 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
       'ui-typed-bar',
       'api-relative',
       'api-wrap',
+      'api-half',
+      'api-latency',
       'api-roll',
       'api-parse-cap',
     ],
     reason:
-      'local: the real Haiku parse is dev’s (parsing is off locally, so a spoken line saves as typed) — runs on dev',
+      'local: the real model parse is dev’s (parsing is off locally, so a spoken line saves as typed) — runs on dev',
   },
   'capture-titles': {
     steps: ['api-sample', 'mcp-sample', 'ui-review', 'api-spoken', 'api-overflow'],

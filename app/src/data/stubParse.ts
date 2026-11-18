@@ -11,7 +11,7 @@ import {
 // be plausible — the real parse is the Lambda's prompt — and it feeds the same validateParsedTask.
 
 // Dev/test hook: set this localStorage key (any value) and the stub's next parseTask fails, once — to see
-// the "saved unparsed" path without a Lambda.
+// the failed-parse preview (Retry, Save as typed) without a Lambda.
 export const STUB_FAIL_NEXT_PARSE_KEY = 'aperture:stub:failNextParse';
 export function takeStubParseFailure(): boolean {
   try {

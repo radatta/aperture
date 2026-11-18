@@ -1,29 +1,32 @@
 # Quick add — natural-language task capture
 
-Type a task the way you'd say it — `aperture, fix login bug due fri 4pm 30m` — and **Claude Haiku** reads
+Type a task the way you'd say it — `aperture, fix login bug due fri 4pm 30m` — and **Claude Sonnet** reads
 the structure out of it: a short title, notes for the overflow, the category, due day/time, estimate. It
-runs in the capture bar's Task mode and behind the Raycast hotkey, through **one server-side parse**.
+runs in the capture bar's Task mode, behind the Raycast hotkey and Siri ([capture](capture.md)), through **one
+server-side parse**.
 Started as a request for optional fields on quick add (2026-10-12); the user chose a model parse over field pickers.
 
 ```
 capture bar (Task) ─┐                                   ┌─ ' | ' line → strict grammar (no model)
                      ├─ parseTask(text) ─ BackendClient ┤
-Raycast ─ parse_task ┘     (RPC / MCP)    runQuickParse └─ else → AnthropicGateway → Haiku → validate
+Raycast ─ parse_task ┘     (RPC / MCP)    runQuickParse └─ else → AnthropicGateway → Sonnet → validate
                                           (shared)            (gated: noop in testMode/smoke)
 ```
 
 ## How it behaves
 
-- **Enter / Send = Auto.** The field clears at once; the parse and the create run behind it; the receipt
-  reads back what was saved (`Task added → backlog`, plus a 4s line under the field — `fix login bug ·
-Aperture · due Fri 4pm · 30m` — until you start the next capture). On the phone, type it as you'd
-  say it — nothing in a natural line needs the symbols page (`|`, `~` and `#` all sit on it).
-- **✨ Review (or ⌘/Ctrl+Enter).** Parses into a preview under the field — title, `no category` or the
-  category chip, due (relative: `due tomorrow 4pm`), estimate, notes (2 lines), and any dropped field in
-  gold. A second press (✨, Enter or Send) saves exactly the preview, without parsing again. On a failed
-  preview ✨ parses again ("Retry parse") and Enter saves the line as typed. Editing the text,
-  switching modes, or the 4am rollover (the parse resolved "tmw" against yesterday) drops the preview.
-  ✨ keeps focus in the field, so the phone keyboard stays up.
+- **Review first (the maintainer, 2026-11-17).** Enter / Send on a natural line parses it into a preview
+  under the field — title, `no category` or the category chip, due (relative: `due tomorrow 4pm`), estimate,
+  notes (2 lines), and any dropped field in gold — and the text stays. Send is outlined until the parse lands,
+  then filled ("Review before saving" → "Save reviewed task"); the next Enter / Send saves exactly the preview,
+  without parsing again, and the receipt reads it back (`Task added → backlog`, plus a 4s line under the field —
+  `fix login bug · Aperture · due Fri 4pm · 30m` — until you start the next capture). A press while the parse
+  runs waits for it. Editing the text, switching modes, or the 4am rollover (the parse resolved "tmw" against
+  yesterday) drops the preview. Focus stays in the field, so the phone keyboard stays up. On the phone, type it
+  as you'd say it — nothing in a natural line needs the symbols page (`|`, `~` and `#` all sit on it).
+- **✨ = read with AI**, on by default. Off, the next Send saves the line as typed with no parse; after that
+  save it's on again (one-shot, like `→ today`), so the parse can't stay off unnoticed. **⌘/Ctrl+Enter saves
+  now**: the shown parse, or the line as typed — never a parse first.
 - **The preview's category chip.** When the parse found no category and the user's own history is
   confident, a dashed `Garden?` stands in for `no category` ([same scorer and gates as the
   editor's](task-editor.md)). The tap fills the preview and writes nothing; the next press saves it. It is
@@ -33,19 +36,18 @@ Aperture · due Fri 4pm · 30m` — until you start the next capture). On the ph
   failed create puts the text back with the tap; a capture parked below (the field had moved on) keeps only
   its text, so Review it again.
 - **A grammar line — space, pipe, space, as in `memo | ~30 #Admin`** — never reaches the model: it is the
-  [bulk-add](bulk-add.md) grammar, as before, and shows no ✨ (⌘Enter saves it like Enter). `a|b` is
-  not one; it goes to the model.
-- **A failed parse saves the line as typed, loudly** — gold `Saved unparsed → backlog`, and `Saved as
-typed — couldn't parse (reason)` under the field (`timeout`, `unavailable: no API key on this stage`,
-  …). The app gives a parse 10s before saving raw — a long line (8s model budget) on a Lambda cold start
-  can hit that and save raw; accepted.
+  [bulk-add](bulk-add.md) grammar, as before, saves on the first Enter and shows no ✨. `a|b` is not one; it
+  goes to the model.
+- **A failed parse keeps the text and says why** — `Couldn't parse (timeout) — Send tries again` under the
+  field, with **Save as typed** beside it (`timeout`, `unavailable: no API key on this stage`, …); Send reads
+  "Retry parse". The app gives a parse 10s before calling it failed.
 - **A failed create never loses the text.** Into an empty field it goes back ("Couldn't save — your text
   is back in the box", and `→ today` set to where it was headed); if you've started the next capture
   meanwhile, it's **parked** under the field — `Couldn't save: "…"` (up to three lines; Put back shows
   all of it) with **Put back** (trades places with whatever the field holds, which is parked as "Set
   aside") and **× Discard**. Each row's text describes its buttons for screen readers.
-- **Closing the app can't lose it either.** Each Auto capture sits in a localStorage outbox
-  (`aperture:captureOutbox`) from Enter until its create settles, and parked captures are stored too
+- **Closing the app can't lose it either.** The save clears the field before its create settles, so each
+  task save sits in a localStorage outbox (`aperture:captureOutbox`) from the press until the create settles, and parked captures are stored too
   (`aperture:captureParked`) until put back or discarded — an outbox entry moves to parked in one
   storage write, never through memory alone. A leftover outbox entry comes back parked as "Unsent when the
   app closed — it may have saved, check first", announced ("Unsent capture kept below the box"). The sweep
@@ -55,21 +57,21 @@ typed — couldn't parse (reason)` under the field (`timeout`, `unavailable: no 
 
 ## Pieces
 
-| Where                                   | What                                                                                                                          |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `packages/shared/src/quickParse.ts`     | `ParseTaskResult` contract, `validateParsedTask` (the server's field rules over Haiku's untrusted JSON), `runQuickParse` flow |
-| `packages/shared/src/titleWords.ts`     | `keepTitleWords`: the model's title lined up against the typed words — dropped words back, a used due phrase out              |
-| `lambdas/src/anthropic/`                | gateway (`noopAnthropic` / `FakeAnthropic` / `createLiveAnthropic`), the one prompt + JSON schema (`parsePrompt.ts`)          |
-| `lambdas/src/backend.ts` `parseTask`    | server owns today (`dayStartHour` in LA) and the active category list; the client sends only text                             |
-| `lambdas/src/mcp/tools.ts` `parse_task` | the same method for Raycast (agent token)                                                                                     |
-| `app/src/modules/capture/`              | `useQuickParse` (preview, in-flight reuse, 10s ceiling), `captureOutbox.ts`, `parsePreview.ts`, CaptureBar wiring + parking   |
-| `app/src/data/stubParse.ts`             | the stub's heuristic stand-in for Haiku (same flow + validator); `aperture:stub:failNextParse` fails the next parse once      |
+| Where                                   | What                                                                                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/shared/src/quickParse.ts`     | `ParseTaskResult` contract, `validateParsedTask` (the server's field rules over the model's untrusted JSON), `runQuickParse` flow |
+| `packages/shared/src/titleWords.ts`     | `keepTitleWords`: the model's title lined up against the typed words — dropped words back, a used due phrase out                  |
+| `lambdas/src/anthropic/`                | gateway (`noopAnthropic` / `FakeAnthropic` / `createLiveAnthropic`), the one prompt + JSON schema (`parsePrompt.ts`)              |
+| `lambdas/src/backend.ts` `parseTask`    | server owns today (`dayStartHour` in LA) and the active category list; the client sends only text                                 |
+| `lambdas/src/mcp/tools.ts` `parse_task` | the same method for Raycast (agent token)                                                                                         |
+| `app/src/modules/capture/`              | `useQuickParse` (preview, in-flight reuse, 10s ceiling), `captureOutbox.ts`, `parsePreview.ts`, CaptureBar wiring + parking       |
+| `app/src/data/stubParse.ts`             | the stub's heuristic stand-in for the model (same flow + validator); `aperture:stub:failNextParse` fails the next parse once      |
 
-The model call: `claude-haiku-5-5`, structured outputs (`categoryId` an enum of active ids), `thinking`
-disabled, `effort: low`, `max_tokens 2048`, one attempt, 4s budget +1s per 400 chars (cap 8s; Lambda is
-15s). Input capped at 2,500 characters (the overflow comes back as notes, so a longer line can't fit the
+The model call: `claude-sonnet-5-5` (Haiku until 2026-11-17), structured outputs (`categoryId` an enum of
+active ids), thinking off (`between_tools` — Sonnet 5.5 refuses `disabled`), `effort: low`, `max_tokens 2048`
+(512 on the capture route), one attempt, 6s budget +1s per 400 chars (cap 8s; Lambda is 15s; 4s under Haiku, raised for Sonnet's p95 3.1s on dev, 2026-11-18; the capture route caps it at 5s). Input capped at 2,500 characters (the overflow comes back as notes, so a longer line can't fit the
 output or the budget). One JSON log line per call (`event: parse_task`, ok/reason, HTTP status,
-stop_reason, ms, tokens) — never the text or the key.
+stop_reason, ms, model, voice, tokens) — never the text or the key.
 
 ## Operator step (once per stage)
 
@@ -83,6 +85,29 @@ read -rs key; aws ssm put-parameter --region us-west-1 --type SecureString \
 Without it every parse returns `unavailable` and lines save raw — deploys and smoke pass either way. A
 warm Lambda holds the key it read; a 401 from the API drops it, so a rotated key is picked up on the next
 parse.
+
+## Decision log (2026-11-17, Sonnet and review first — an autonomous build)
+
+The maintainer's calls: the parse moves to Sonnet rather than growing the grammar further (an "o'clock" grammar
+fix was dropped as over-built), the app reviews first, and Siri is the main path (voice: [capture](capture.md)).
+Built autonomously from those:
+
+- **`claude-sonnet-5-5`, thinking off, effort low** — the parse is on Siri's clock, so no variable thinking time.
+  Adaptive thinking at low effort is the fallback if dev shows misses. No server-side model fallback on a
+  refusal: a second run can't fit the deadline, and a refusal is already a failed parse.
+- **Review first replaces Auto.** Enter's first press parses, the second saves; ⌘Enter saves now; ✨ became the
+  one-shot "read with AI" toggle. The outbox stays for the create window (the field still clears before the
+  create settles); only Auto's parse-then-save path and its "Saved unparsed" receipt went. A failed parse keeps
+  the text instead of saving raw — the user chooses Retry or Save as typed.
+- **Never into a category because it's there:** the prompt says a category only when the line names it or is
+  plainly about it, never because it's the only or nearest one (dev: a line about nothing filed under the user's
+  only category). No validator guard — one would stop filing by topic.
+- **Notes on a short line go back into the title** (F232, dev 2026-11-18): the model put a typed line's marker
+  and a trailing word in notes ("call the dentist", notes "devcheck … typed"). When every notes word is the line's
+  own and the title with them back still fits its 80 characters, they return in place and the notes go
+  (`titleBackFromNotes`); real overflow, or a word the line never had, keeps its notes.
+- **Cost:** ~$0.003–0.006 a parse, ~20× Haiku, inside the maintainer's API credit; the app's own parse isn't
+  capped (one parse per explicit press). The capture route's caps: [capture → Caps](capture.md#caps).
 
 ## Decision log (2026-10-12)
 
@@ -166,6 +191,8 @@ against the typed words; then:
 
 ## Decision log (2026-11-17, the maintainer)
 
+- **A spoken clock's half of the day is the model's reading** (`dueTimeHalf`, voice only — typed, app and MCP
+  schemas are unchanged): [capture → Time rules](capture.md#4-time-rules) and its decision log.
 - **A clock with no day lands on its next occurrence, typed or spoken.** A typed time already past rolls
   forward as a spoken one does: "call 9am" at 3pm → tomorrow 9am; "1 am" at 02:01 (the app's day still
   yesterday) → the coming night's 01:00, not the hour just gone. Found by the voice-capture dev check at 02:01,

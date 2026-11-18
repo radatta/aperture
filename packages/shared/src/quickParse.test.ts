@@ -4,6 +4,7 @@ import {
   parseFailText,
   PARSE_TEXT_MAX,
   runQuickParse,
+  spokenFallbackDue,
   validateParsedTask,
   type ModelOutcome,
 } from './quickParse';
@@ -204,10 +205,11 @@ describe('validateParsedTask', () => {
 });
 
 describe('parseBudgetMs', () => {
-  it('4s, +1s per 400 characters, capped at 8s', () => {
-    expect(parseBudgetMs('')).toBe(4_000);
-    expect(parseBudgetMs('x'.repeat(399))).toBe(4_000);
-    expect(parseBudgetMs('x'.repeat(400))).toBe(5_000);
+  it('6s, +1s per 400 characters, capped at 8s', () => {
+    expect(parseBudgetMs('')).toBe(6_000);
+    expect(parseBudgetMs('x'.repeat(399))).toBe(6_000);
+    expect(parseBudgetMs('x'.repeat(400))).toBe(7_000);
+    expect(parseBudgetMs('x'.repeat(800))).toBe(8_000);
     expect(parseBudgetMs('x'.repeat(1_600))).toBe(8_000);
     expect(parseBudgetMs('x'.repeat(40_000))).toBe(8_000);
   });
@@ -364,13 +366,14 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       voice: true,
     })!;
 
-  it('takes the time from the words, not the model', () => {
+  it('a bare hour wraps whatever the model wrote; a clock with no words for it is dropped', () => {
+    // No model clock: the grammar fills.
     expect(voice('call mum at 5').input).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
-    // The model's own clock is ignored when the words say otherwise…
+    // The model's 05:00 read as said, no half: a bare 5 at 06:00 is today's evening…
     expect(voice('call mum at 5', { dueDay: '2026-11-16', dueTime: '05:00' }).input.dueTime).toBe(
       '17:00',
     );
-    // …and dropped when the words have none.
+    // …and a clock the words don't hold is dropped.
     const v = voice('call mum', { dueDay: '2026-11-16', dueTime: '10:00' });
     expect(v.input).toEqual({ title: 'call mum', dueDay: '2026-11-16' });
     expect(v.dropped).toEqual(['dropped due time']);
@@ -422,10 +425,98 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     ).toMatchObject({ dueDay: '2026-11-18', dueTime: '17:00' });
   });
 
-  it('a minute the grammar can’t read leaves the model’s clock, rolled forward', () => {
-    expect(voice('call mum at five twenty pm', { dueTime: '17:20' }).input).toMatchObject({
-      dueDay: '2026-11-16',
-      dueTime: '17:20',
+  it('a minute the grammar can’t read leaves the model’s clock, placed by its half', () => {
+    // 06:00: stated 05:20 is tomorrow's (a bare 5:20 would be today's 17:20).
+    expect(
+      voice('call mum at five twenty in the morning', { dueTime: '05:20', dueTimeHalf: 'stated' })
+        .input,
+    ).toMatchObject({ dueDay: '2026-11-17', dueTime: '05:20' });
+    expect(
+      voice('call mum at five twenty', { dueTime: '05:20', dueTimeHalf: 'none' }).input,
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:20' });
+  });
+
+  it('a night never moves a clock the words stated, and 13:00–15:59 is no night hour', () => {
+    // 06:00: "tonight … at 6 am" — the grammar read 06:00 stated; as a night hour it would be 18:00.
+    expect(
+      voice('remind me tonight to call mum at 6 am', {
+        title: 'call mum',
+        dueTime: '06:00',
+        dueTimeHalf: 'night',
+      }).input,
+    ).toMatchObject({ dueDay: '2026-11-17', dueTime: '06:00' });
+    for (const line of [
+      'remind me at 3 pm to pack for tonight',
+      'pack for tonight at three in the afternoon',
+    ])
+      expect(
+        voice(line, { title: 'pack for tonight', dueTime: '15:00', dueTimeHalf: 'night' }).input,
+      ).toMatchObject({ dueDay: '2026-11-16', dueTime: '15:00' });
+  });
+
+  it('a night the model dated calendar tomorrow with no day in the words stays tonight’s', () => {
+    // 22:00 Monday: "at 1 tonight" is Tuesday 01:00, not Wednesday's.
+    const v = validateParsedTask(
+      fields({ title: 'call mum', dueDay: '2026-11-17', dueTime: '01:00', dueTimeHalf: 'night' }),
+      {
+        ...ctx,
+        today: '2026-11-16',
+        line: 'call mum at 1 tonight',
+        now: Date.UTC(2026, 10, 17, 6, 0),
+        voice: true,
+      },
+    )!;
+    expect(v.input).toMatchObject({ dueDay: '2026-11-17', dueTime: '01:00' });
+  });
+
+  it('a day-part noun the model kept never blocks its clock; its words stay in the title', () => {
+    // Before: the kept "morning" made the line's time "dropped".
+    expect(
+      voice('send the morning report by seven', {
+        title: 'send the morning report',
+        dueTime: '07:00',
+        dueTimeHalf: 'none',
+      }).input,
+    ).toMatchObject({ title: 'send the morning report', dueDay: '2026-11-16', dueTime: '07:00' });
+    // The model dropped the task's own "morning": a bare hour's day-part words come back.
+    expect(
+      voice('at 5 send the morning report', {
+        title: 'send the report',
+        dueTime: '05:00',
+        dueTimeHalf: 'none',
+      }).input.title,
+    ).toBe('send the morning report');
+  });
+
+  it('a day-part beside clock words the grammar can’t read leaves the model’s title', () => {
+    expect(
+      voice('remind me tonight around eight to call mum', {
+        dueTime: '20:00',
+        dueTimeHalf: 'night',
+      }).input,
+    ).toMatchObject({ title: 'call mum', dueDay: '2026-11-16', dueTime: '20:00' });
+    expect(
+      voice('remind me this morning by nine to send the report', {
+        title: 'send the report',
+        dueTime: '09:00',
+        dueTimeHalf: 'stated',
+      }).input,
+    ).toMatchObject({ title: 'send the report', dueTime: '09:00' });
+  });
+
+  it('a day-part beside a day with no clock leaves the title, as does one beside a grammar-filled clock', () => {
+    for (const line of [
+      'remind me tomorrow evening to call mum',
+      'call mum friday afternoon',
+      'call mum tomorrow night',
+    ])
+      expect(voice(line, { dueDay: '2026-11-17' }).input.title).toBe('call mum');
+    // The model gave no clock: the grammar fills it, and "evening" goes with it.
+    expect(
+      voice('call mum at 5 pm tomorrow evening', { dueDay: '2026-11-17' }).input,
+    ).toMatchObject({
+      title: 'call mum',
+      dueTime: '17:00',
     });
   });
 
@@ -437,15 +528,109 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     );
   });
 
-  it("a clock the grammar can't read is the model's, rolled forward; an invented one is dropped", () => {
-    // 06:00 now: "quarter past five" — the model's 05:15 has passed, so it rolls to tomorrow.
+  it("a clock the grammar can't read is the model's, placed by the rules; an invented one is dropped", () => {
+    // 06:00 now: "quarter past five" says no half of the day, so it's a bare hour (rule 1): the next 5:15 is the
+    // evening's (2026-11-17, Sonnet; before, the model's 05:15 was taken as stated and rolled to tomorrow).
     expect(voice('call mum at quarter past five', { dueTime: '05:15' }).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:15',
+    });
+    expect(voice('call mum at quarter past five am', { dueTime: '05:15' }).input).toMatchObject({
       dueDay: '2026-11-17',
       dueTime: '05:15',
     });
     const made = voice('call mum soon', { dueTime: '10:00' });
     expect(made.input.dueTime).toBeUndefined();
     expect(made.dropped).toEqual(['dropped due time']);
+  });
+
+  it('the model says which half of the day: none wraps, stated stands, night is the night’s', () => {
+    // 06:00. One line, every reading of the field: missing or unknown is none (a bare hour, rule 1).
+    const half = (dueTimeHalf: unknown, dueTime = '05:00') =>
+      voice('call mum at 5', { dueTime, dueTimeHalf }).input;
+    expect(half('none')).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+    expect(half(undefined)).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+    expect(half('garbage')).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+    expect(half('none', '17:00')).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+    expect(half('stated')).toMatchObject({ dueDay: '2026-11-17', dueTime: '05:00' });
+    expect(half('night')).toMatchObject({ dueDay: '2026-11-16', dueTime: '17:00' });
+    // No clock in the line: a half with nothing to place sets no time.
+    expect(voice('call mum', { dueTimeHalf: 'stated' }).input.dueTime).toBeUndefined();
+    // A stated clock the grammar read stays stated whatever the field says (06:00: as a bare 5 it would be
+    // today 5 PM), and its due phrase leaves the title.
+    expect(
+      voice('call mum at 5 am', {
+        title: 'call mum at 5 am',
+        dueTime: '05:00',
+        dueTimeHalf: 'none',
+      }).input,
+    ).toMatchObject({ title: 'call mum', dueDay: '2026-11-17', dueTime: '05:00' });
+  });
+
+  it('a day-part word that belongs to the task says nothing; a time phrase anywhere does', () => {
+    // 06:00: "morning" belongs to the report, not the 5 — a bare 5, today's evening.
+    for (const title of ['send the morning report', 'send this morning’s notes'])
+      expect(
+        voice(`remind me at 5 to ${title}`, { title, dueTime: '05:00', dueTimeHalf: 'none' }).input,
+      ).toMatchObject({ title, dueDay: '2026-11-16', dueTime: '17:00' });
+    for (const dueTime of ['21:00', '09:00'])
+      expect(
+        voice('remind me tonight to call mum at 9', {
+          title: 'call mum',
+          dueTime,
+          dueTimeHalf: 'night',
+        }).input,
+      ).toMatchObject({ dueDay: '2026-11-16', dueTime: '21:00' });
+    expect(
+      voice('remind me tomorrow morning to go for a run at 6', {
+        title: 'go for a run',
+        dueDay: '2026-11-17',
+        dueTime: '06:00',
+        dueTimeHalf: 'stated',
+      }).input,
+    ).toMatchObject({ dueDay: '2026-11-17', dueTime: '06:00' });
+    // A clock the grammar can't read, said for tonight: the model's 20:30, and its title — the grammar has no
+    // words for that clock, so none come back into it.
+    expect(
+      voice('remind me tonight at half past eight to call mum', {
+        dueTime: '20:30',
+        dueTimeHalf: 'night',
+      }).input,
+    ).toMatchObject({ title: 'call mum', dueDay: '2026-11-16', dueTime: '20:30' });
+    expect(
+      voice('remind me at quarter past five to book the night bus', {
+        title: 'book the night bus',
+        dueTime: '05:15',
+        dueTimeHalf: 'none',
+      }).input,
+    ).toMatchObject({ title: 'book the night bus', dueTime: '17:15' });
+  });
+
+  it('a night\'s small hour lands after its day, as "at 1 tonight" does', () => {
+    const night = (line: string, dueTime: string, dueDay: string | null = '2026-11-20') =>
+      voice(line, { dueDay, dueTime, dueTimeHalf: 'night' }).input;
+    expect(night('call mum at 1 friday night', '01:00')).toMatchObject({
+      dueDay: '2026-11-21',
+      dueTime: '01:00',
+    });
+    expect(night('call mum at one twenty friday night', '01:20')).toMatchObject({
+      dueDay: '2026-11-21',
+      dueTime: '01:20',
+    });
+    expect(night('call mum at 1 am friday night', '01:00')).toMatchObject({
+      dueDay: '2026-11-21',
+      dueTime: '01:00',
+    });
+    expect(night('call mum at 9 friday night', '21:00')).toMatchObject({
+      dueDay: '2026-11-20',
+      dueTime: '21:00',
+    });
+    // "at 12 tonight" is midnight, written either way.
+    for (const t of ['00:00', '12:00'])
+      expect(night('call mum at 12 tonight', t, null)).toMatchObject({
+        dueDay: '2026-11-17',
+        dueTime: '00:00',
+      });
   });
 
   it('a named day from the model stays; "today" rolls a past time forward', () => {
@@ -457,6 +642,87 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
       dueDay: '2026-11-17',
       dueTime: '05:00',
     });
+  });
+
+  it("the model's clock and its half place the time; the grammar's misreads don't (F213 class)", () => {
+    // 02:00 Monday, before the day start (the app's today is Sunday).
+    const night = Date.UTC(2026, 10, 16, 10, 0);
+    const at = (line: string, over: Record<string, unknown>) =>
+      validateParsedTask(fields({ title: 'call mum', ...over }), {
+        ...ctx,
+        today: '2026-11-15',
+        line,
+        now: night,
+        voice: true,
+      })!.input;
+    const stated = { dueTimeHalf: 'stated' };
+    const none = { dueTimeHalf: 'none' };
+    // The grammar reads "at 5 in the evening" as a bare 5; the model's stated 17:00 stands.
+    expect(at('call mum at 5 in the evening', { dueTime: '17:00', ...stated })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+    // A bare hour wraps (rule 1) whatever hour the model wrote: 02:00 + "at 5" is 5 AM.
+    expect(at('call mum at 5', { dueTime: '17:00', ...none })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '05:00',
+    });
+    expect(at('call mum at 4', { dueTime: '05:00', ...none })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '05:00',
+    });
+    // "5:30" is a bare hour: 02:00 + 5:30 is the morning's; at 06:00 the evening's.
+    expect(at('call mum at 5:30', { dueTime: '05:30', ...none })).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '05:30',
+    });
+    expect(voice('call mum at 5:30', { dueTime: '05:30', ...none }).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:30',
+    });
+    expect(
+      at('at 4 book the night bus', { title: 'book the night bus', dueTime: '16:00', ...none }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '04:00' });
+    expect(
+      at('call mum at five twenty and book the night bus', {
+        title: 'call mum and book the night bus',
+        dueTime: '16:20',
+        ...none,
+      }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '04:20' });
+    // A stated half anywhere in the line: the model's clock as said.
+    expect(
+      at('call mum at 8 tomorrow evening', { dueDay: '2026-11-16', dueTime: '20:00', ...stated }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '20:00' });
+    expect(
+      at('call flat 4 owner at 4 this afternoon', {
+        title: 'call flat 4 owner',
+        dueTime: '16:00',
+        ...stated,
+      }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '16:00' });
+    expect(
+      at('remind me this evening to call mum at 6', { dueTime: '18:00', ...stated }),
+    ).toMatchObject({ dueDay: '2026-11-16', dueTime: '18:00' });
+    expect(at('call mum this evening at 5', { dueTime: '17:00', ...stated })).toMatchObject({
+      dueTime: '17:00',
+    });
+    // "tonight" alone: the rule's 8 PM — a line with no number has no clock for the model to read.
+    expect(at('call mum tonight', { dueTime: '21:00', dueTimeHalf: 'night' })).toMatchObject({
+      dueTime: '20:00',
+    });
+    // "at 1 tonight" and "friday at 1 tonight": the small hours after the day.
+    expect(at('call mum at 1 tonight', { dueTime: '01:00', dueTimeHalf: 'night' })).toMatchObject({
+      dueDay: '2026-11-17',
+      dueTime: '01:00',
+    });
+    expect(
+      at('call mum friday at 1 tonight', {
+        dueDay: '2026-11-20',
+        dueTime: '01:00',
+        dueTimeHalf: 'night',
+      }),
+    ).toMatchObject({ dueDay: '2026-11-21', dueTime: '01:00' });
   });
 
   it('a relative delay is a time, never an estimate', () => {
@@ -809,5 +1075,107 @@ describe('validateParsedTask — a day the typed line names', () => {
       'sat down with the plan 9am', // 11-17 is a Tuesday
     ])
       expect(typed(line, day('2026-11-17', '09:00'), 15, 0), line).toEqual(['2026-11-18', '09:00']);
+  });
+});
+
+describe('validateParsedTask — a typed day-part beside a day', () => {
+  it('"morning" the model dropped with its day stays out of the title', () => {
+    const v = validateParsedTask(fields({ title: 'gym', dueDay: '2026-11-20' }), {
+      ...ctx,
+      line: 'gym nov 20 morning',
+    })!;
+    expect(v.input).toMatchObject({ title: 'gym', dueDay: '2026-11-20' });
+  });
+});
+
+describe('spokenFallbackDue (a spoken line saved without the model)', () => {
+  // Monday 2026-11-16, 14:00 in LA.
+  const c = { now: Date.UTC(2026, 10, 16, 22, 0), today: '2026-11-16' };
+  it("places the words' own time by the voice rules", () => {
+    expect(spokenFallbackDue('call mum at 5', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+    expect(spokenFallbackDue('call mum at 9 am', c)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '09:00',
+    });
+    expect(spokenFallbackDue('call mum in 20 minutes', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '14:20',
+    });
+    expect(spokenFallbackDue('call mum tonight', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '20:00',
+    });
+    expect(spokenFallbackDue('call mum today at 5', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+  });
+  it('"tomorrow" is the app\'s next day, as the model reads it; any other day word means no time', () => {
+    // 00:30 before the day rolls: the app's today is still yesterday, so its tomorrow is the calendar's today.
+    const late = { now: Date.UTC(2026, 10, 17, 8, 30), today: '2026-11-16' };
+    expect(spokenFallbackDue('call mum tomorrow at 9', late)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '09:00',
+    });
+    expect(spokenFallbackDue('call mum tomorrow at 9', c)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '09:00',
+    });
+    expect(spokenFallbackDue('call mum friday at 5', c)).toBeNull();
+    expect(spokenFallbackDue('call mum the day after tomorrow at 5', c)).toBeNull();
+  });
+  it("the fallback is the grammar alone: its day-parts and the words' own clock", () => {
+    // Known fallback reading (as before the model read the half): "morning" anywhere is the 5's.
+    expect(spokenFallbackDue('remind me at 5 to send the morning report', c)).toEqual({
+      dueDay: '2026-11-17',
+      dueTime: '05:00',
+    });
+    // No "evening" in the grammar: a bare 5.
+    expect(spokenFallbackDue('call mum at 5 in the evening', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+    // 06:00: "tonight" anywhere makes the 9 the evening's (the bare wrap alone would give 09:00).
+    const early = { now: Date.UTC(2026, 10, 16, 14, 0), today: '2026-11-16' };
+    expect(spokenFallbackDue('remind me tonight to call mum at 9', early)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '21:00',
+    });
+  });
+  it('no time in the words: none', () => {
+    expect(spokenFallbackDue('call mum', c)).toBeNull();
+  });
+});
+
+describe('validateParsedTask — notes on a short line (F232)', () => {
+  const now = Date.UTC(2026, 10, 18, 0, 41); // Tue 2026-11-17, 16:41 in LA
+  const run = (line: string, over: Record<string, unknown>) =>
+    validateParsedTask(
+      fields({ title: 'call the dentist', dueDay: '2026-11-18', dueTime: '17:00', ...over }),
+      { ...ctx, categories: [], today: '2026-11-17', now, line },
+    )!.input;
+
+  it("the line's own words the model moved to notes go back into the title", () => {
+    expect(
+      run('devcheck aaebaafull call the dentist typed tomorrow at 5 pm', {
+        notes: 'devcheck aaebaafull typed',
+      }),
+    ).toEqual({
+      title: 'devcheck aaebaafull call the dentist typed',
+      dueDay: '2026-11-18',
+      dueTime: '17:00',
+    });
+  });
+
+  it('notes with a word the line never had, or that would overflow the title, stand', () => {
+    expect(
+      run('call the dentist typed tomorrow at 5 pm', { notes: 'bring the insurance card' }),
+    ).toMatchObject({ title: 'call the dentist', notes: 'bring the insurance card' });
+    const long = `call the dentist ${'about the crown and the bridge and the cleaning '.repeat(3)}tomorrow at 5 pm`;
+    const rest = long.slice('call the dentist '.length, long.indexOf(' tomorrow'));
+    expect(run(long, { notes: rest })).toMatchObject({ title: 'call the dentist', notes: rest });
   });
 });

@@ -4,6 +4,7 @@ import {
   CAPTURE_IN_FLIGHT_MS,
   CAPTURE_PARSE_DAILY_CAP,
   CAPTURE_PARSE_DEADLINE_MS,
+  CAPTURE_PARSE_TEXT_MAX,
   CAPTURE_SAY,
   USER_TIME_ZONE,
   zonedEpoch,
@@ -14,11 +15,12 @@ import { liveWrites } from './ddb/writes';
 import { ScopedTokenStore } from './ddb/scopedTokens';
 import { BackendClient } from './backend';
 import { FakeAnthropic } from './anthropic/gateway';
-import { resolveScopedToken } from './auth/scopedToken';
+import { CaptureBusyError, resolveScopedToken } from './auth/scopedToken';
+import { pk, sk } from './ddb/keys';
 
 // Voice capture's server half (capture.md): BackendClient.captureForToken over the gated model seam. The
 // edge (status codes, body checks, logging) is index.test.ts's; this is the flow — caps, the duplicate
-// guard, the deadline, the voice time rules end to end. No network: FakeAnthropic stands in for Haiku.
+// guard, the deadline, the voice time rules end to end. No network: FakeAnthropic stands in for the model.
 
 const MON_6AM = zonedEpoch('2026-11-16', '06:00', USER_TIME_ZONE);
 
@@ -67,6 +69,29 @@ describe('captureForToken — a spoken line', () => {
     expect(anthropic.calls).toHaveLength(1);
     expect(anthropic.calls[0]).toMatchObject({ voice: true, today: '2026-11-16' });
     expect(anthropic.calls[0]!.timeoutMs).toBeLessThanOrEqual(CAPTURE_PARSE_DEADLINE_MS);
+  });
+
+  it("the model's half of the day places it: stated as said, a night's small hour after its day", async () => {
+    const { anthropic, mint, capture } = setup();
+    const token = await mint();
+    // 06:00 Monday: "at 7 in the evening", stated 19:00 → today 7 PM (as a bare 7 it would be 7 AM).
+    anthropic.next = {
+      ok: true,
+      fields: fields({ title: 'call mum', dueTime: '19:00', dueTimeHalf: 'stated' }),
+    };
+    const pm = await capture(token, 'call mum at 7 in the evening');
+    expect(pm).toMatchObject({ due: { day: '2026-11-16', time: '19:00' }, raw: false });
+    anthropic.next = {
+      ok: true,
+      fields: fields({
+        title: 'call dad',
+        dueDay: '2026-11-20',
+        dueTime: '01:00',
+        dueTimeHalf: 'night',
+      }),
+    };
+    const night = await capture(token, 'call dad at 1 friday night');
+    expect(night).toMatchObject({ due: { day: '2026-11-21', time: '01:00' }, raw: false });
   });
 
   it('a time already past rolls to tomorrow, and the answer names the day', async () => {
@@ -130,15 +155,39 @@ describe('captureForToken — a spoken line', () => {
     expect(spoken.say).toBe('Added: call the vet, tomorrow 6 PM.');
   });
 
-  it('a failed or timed-out parse saves the line as typed and says so', async () => {
+  it("a failed or timed-out parse saves the line as typed, with its own words' time, and says so", async () => {
     const { anthropic, b, mint, capture } = setup();
     const token = await mint();
     anthropic.next = { ok: false, reason: 'timeout' };
     const r = await capture(token, 'call mum at five');
-    expect(r).toMatchObject({ raw: true, due: null });
-    expect(r.say).toBe('Added as typed, with no date or time: call mum at five.');
-    expect(r.detail).toBe("Added RAW (couldn't parse: timeout): call mum at five");
-    expect(await b.getTask(r.id!)).toMatchObject({ title: 'call mum at five', dueDay: null });
+    // 06:00 + a bare "at five": the grammar places it as the voice rules do (rule 1), 5 PM today.
+    expect(r).toMatchObject({ raw: true, due: { day: '2026-11-16', time: '17:00' } });
+    expect(r.say).toBe('Added without AI, as typed: call mum at five, today 5 PM.');
+    expect(r.detail).toContain("Added RAW (couldn't parse: timeout): call mum at five ·");
+    expect(await b.getTask(r.id!)).toMatchObject({
+      title: 'call mum at five',
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
+    // No time in the words, or a day the grammar can't place: no date or time, said so.
+    anthropic.next = { ok: false, reason: 'timeout' };
+    const plain = await capture(token, 'call mum');
+    expect(plain).toMatchObject({ raw: true, due: null });
+    expect(plain.say).toBe('Added as typed, with no date or time: call mum.');
+    anthropic.next = { ok: false, reason: 'timeout' };
+    expect((await capture(token, 'call dad friday at 5')).due).toBeNull();
+    // A typed line (Raycast) keeps the typed fallback: no time from the grammar.
+    anthropic.next = { ok: false, reason: 'timeout' };
+    expect((await capture(token, 'call nan at five', false)).due).toBeNull();
+  });
+
+  it('reports the parse time and why it fell back, for the route log only', async () => {
+    const { anthropic, mint, capture } = setup();
+    const token = await mint();
+    anthropic.next = { ok: false, reason: 'timeout' };
+    const r = await capture(token, 'call mum');
+    expect(r.timing).toMatchObject({ fallback: 'timeout' });
+    expect(r.timing!.parseMs).toBeGreaterThanOrEqual(0);
   });
 });
 
@@ -159,6 +208,7 @@ describe('captureForToken — caps and the duplicate guard', () => {
     const r = await capture(token, 'call mum at 5');
     expect(r.raw).toBe(true);
     expect(r.detail).toContain('daily parse limit reached');
+    expect(r.timing!.fallback).toBe('cap');
     expect(anthropic.calls).toHaveLength(0);
     // A grammar line needs no model, so it still parses.
     expect((await capture(token, 'milk | ~5')).raw).toBe(false);
@@ -225,13 +275,107 @@ describe('captureForToken — caps and the duplicate guard', () => {
     expect(r.id).toBeTruthy();
   });
 
-  it('the voice prompt only when the words hold a time the grammar reads', async () => {
+  it('every spoken line gets the voice prompt; a typed one the typed; the answer is capped', async () => {
     const { anthropic, mint, capture } = setup();
     const token = await mint();
     anthropic.next = { ok: true, fields: fields() };
     await capture(token, 'call mum at 5');
     await capture(token, 'call mum at quarter past five');
-    expect(anthropic.calls.map((c) => c.voice)).toEqual([true, false]);
+    await capture(token, 'call mum', false);
+    expect(anthropic.calls.map((c) => c.voice)).toEqual([true, true, false]);
+    expect(anthropic.calls.map((c) => c.maxTokens)).toEqual([512, 512, 512]);
+  });
+
+  it(`a line over ${CAPTURE_PARSE_TEXT_MAX} characters saves as typed without the model, and spends no parse`, async () => {
+    const { anthropic, store, b, mint, capture } = setup();
+    const token = await mint();
+    const r = await capture(token, `call mum ${'and '.repeat(CAPTURE_PARSE_TEXT_MAX / 4)}`);
+    expect(r.raw).toBe(true);
+    expect(r.detail).toContain('too long for the model');
+    expect(r.timing!.fallback).toBe('long');
+    expect(anthropic.calls).toHaveLength(0);
+    const [info] = await b.listScopedTokens('capture');
+    expect((await store.row('u1', info!.id))!.parses).toBe(0);
+    // Exactly the limit still reaches the model.
+    anthropic.next = { ok: true, fields: fields() };
+    const at = `call mum ${'x'.repeat(CAPTURE_PARSE_TEXT_MAX - 9)}`;
+    expect(at).toHaveLength(CAPTURE_PARSE_TEXT_MAX);
+    expect((await capture(token, at)).raw).toBe(false);
+    expect(anthropic.calls).toHaveLength(1);
+  });
+
+  it(`the parse cap is per user: ${CAPTURE_PARSE_DAILY_CAP} across all their capture tokens`, async () => {
+    const { anthropic, store, b, mint, capture } = setup();
+    const phone = await mint();
+    await b.mintScopedToken('capture', 'Raycast');
+    const [a, c] = await b.listScopedTokens('capture');
+    const spend = async (id: string, parses: number) => {
+      const row = (await store.row('u1', id))!;
+      await store.replaceRow('u1', row, {
+        ...row,
+        usesDay: '2026-11-16',
+        uses: parses,
+        parses,
+        updatedAt: row.updatedAt + 1,
+      });
+    };
+    // The other token made all but one of today's parses: this one gets the last…
+    await spend(c!.id, CAPTURE_PARSE_DAILY_CAP - 1);
+    anthropic.next = { ok: true, fields: fields() };
+    expect((await capture(phone, 'call mum')).raw).toBe(false);
+    // …and the next is past the cap, whichever token asks.
+    const past = await capture(phone, 'call dad');
+    expect(past.raw).toBe(true);
+    expect(past.detail).toContain('daily parse limit reached');
+    expect(anthropic.calls).toHaveLength(1);
+    expect((await store.row('u1', a!.id))!.parses).toBe(1);
+  });
+
+  it("another token's parses from an earlier day don't count", async () => {
+    const { anthropic, store, b, mint, capture } = setup();
+    const phone = await mint();
+    await b.mintScopedToken('capture', 'Raycast');
+    const [, c] = await b.listScopedTokens('capture');
+    const row = (await store.row('u1', c!.id))!;
+    await store.replaceRow('u1', row, {
+      ...row,
+      usesDay: '2026-11-15',
+      uses: CAPTURE_PARSE_DAILY_CAP,
+      parses: CAPTURE_PARSE_DAILY_CAP,
+      updatedAt: row.updatedAt + 1,
+    });
+    anthropic.next = { ok: true, fields: fields() };
+    expect((await capture(phone, 'call mum')).raw).toBe(false);
+  });
+
+  it('a parse claim that loses every race is busy, and forgets the line so the retry is new', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const { anthropic, doc, store, b, mint, capture } = setup();
+    const token = await mint();
+    const [info] = await b.listScopedTokens('capture');
+    const key = [pk('u1'), sk.stoken(info!.id)] as const;
+    // Every one of the claim's tries finds the row moved on; the forget after it lands.
+    const lose = (times: number) => {
+      let left = times;
+      const rival = () => {
+        const r = doc.snapshot().find((i) => i.PK === key[0] && i.SK === key[1])!;
+        doc.putNow({ ...r, updatedAt: (r.updatedAt as number) + 1 });
+        if (--left > 0) doc.interceptNextPutIf(...key, rival);
+      };
+      doc.interceptNextPutIf(...key, rival);
+    };
+    const list = store.list.bind(store);
+    vi.spyOn(store, 'list').mockImplementationOnce(async (u) => {
+      lose(8);
+      return list(u);
+    });
+    const err = await capture(token, 'call mum').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CaptureBusyError);
+    expect(anthropic.calls).toHaveLength(0);
+    anthropic.next = { ok: true, fields: fields() };
+    const again = await capture(token, 'call mum');
+    expect(again).toMatchObject({ raw: false, duplicate: false });
+    vi.restoreAllMocks();
   });
 
   it('a failed settings read after the count forgets the line, so the retry is new', async () => {
