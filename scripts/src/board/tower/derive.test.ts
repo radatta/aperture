@@ -1029,11 +1029,11 @@ describe('round 3', () => {
   });
   it('health carries the slowdown ratio from the job history', () => {
     const i = inputs();
-    const job = (agoMin: number, wallSec: number) => ({
+    const job = (agoMin: number, wallSec: number, cls = 'lint') => ({
       t: NOW - agoMin * MIN,
       start: 0,
-      cls: 'lint',
-      label: 'lint',
+      cls,
+      label: cls,
       name: null,
       branch: null,
       exit: 0,
@@ -1042,11 +1042,18 @@ describe('round 3', () => {
       verdict: null,
       excluded: false,
     });
-    i.tower.jobs = [...[60, 120, 180, 240, 300].map((m) => job(m, 4)), job(5, 8), job(10, 8)];
-    expect(derive(i).health.slowdown).toMatchObject({
-      worst: { cls: 'lint', ratio: 2 },
-      tone: 'bad',
-    });
+    i.tower.jobs = [
+      ...[60, 120, 180, 240, 300].map((m) => job(m, 4)),
+      job(5, 8),
+      job(10, 8),
+      ...[60, 120, 180, 240, 300].map((m) => job(m, 100, 'gate-narrow')),
+      job(5, 300, 'gate-narrow'),
+      job(10, 300, 'gate-narrow'),
+    ];
+    const s = derive(i).health.slowdown;
+    expect(s).toMatchObject({ worst: { cls: 'lint', ratio: 2 }, tone: 'bad' });
+    expect(s.classes.find((c) => c.cls === 'gate-narrow')).toMatchObject({ ratio: 3 });
+    expect(s.short).toMatch(/^slow 30m lint×2\.0 gn×3\.0 · tc, gl, gw no data in 7 d$/);
   });
   it('an unreadable lock is a failed source, not ok', () => {
     const i = inputs({ lock: lock(null, { bad: 'holder unreadable' }) });

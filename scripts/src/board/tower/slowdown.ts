@@ -1,18 +1,41 @@
 // The slowdown ratio (F120, docs/ops/SESSION-BOARD.md → History → Slowdown): per heavy.sh class, the median wall time
 // of the last 30 min's clean runs over the median of the 24 h before them, so a throttled Mac (battery, Low Power
 // Mode, heat) or a crowded container shows as "test ×1.8" rather than as a vague feeling. One function for the tower
-// and `board.sh status` (via `cli.ts machine`), so the two never disagree.
+// and `board.sh status` (via `cli.ts machine`), so the two never disagree. The gate's outer runs (gate-narrow,
+// gate-wide) are classes of their own, each against its own baseline; a class with no clean run for SLOW_STALE_MS
+// says since when instead of a dash (F293), and `short` is the status line's cut (board.line → statusline-board.sh).
 import type { Job } from './model.ts';
 
-export const SLOW_CLASSES = ['typecheck', 'lint', 'test', 'ui'] as const; // lib.sh sb_classify; the rest are too mixed
+// lib.sh sb_classify, plus the gate's (heavy.sh HEAVY_CLASS): its eslint step, which runs beside tsc in either gate,
+// and its outer runs. The rest are too mixed; gate-typecheck too, its tsc cache hits make it bimodal (0.6–59 s)
+export const SLOW_CLASSES = [
+  'typecheck',
+  'lint',
+  'test',
+  'ui',
+  'gate-lint',
+  'gate-narrow',
+  'gate-wide',
+] as const;
 export const SLOW_WINDOW_MIN = 30;
-const HEADLINE = new Set(['typecheck', 'lint']);
+// gate-lint because lanes rarely run plain typecheck or lint since the gate; the outer gates follow the diff's size
+const HEADLINE = new Set(['typecheck', 'lint', 'gate-lint']);
 export const MIN_RECENT = 2;
 export const MIN_BASE = 5;
 export const SLOW_WARN = 1.5;
 export const SLOW_BAD = 2;
 const MIN = 60_000;
 const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+export const SLOW_STALE_MS = 2 * HOUR;
+const LOOKBACK_D = 7; // the job history both loaders read (source.ts JOB_DAYS, cli.ts machine)
+const SHORT: Record<string, string> = {
+  typecheck: 'tc',
+  lint: 'lint',
+  'gate-lint': 'gl',
+  'gate-narrow': 'gn',
+  'gate-wide': 'gw',
+};
 
 export type SlowClass = {
   cls: string;
@@ -22,6 +45,8 @@ export type SlowClass = {
   nRecent: number;
   nBase: number;
   base: '24h' | '7d' | null; // which baseline: 7 d when the 24 h one is thin
+  lastAt: number | null; // the newest clean run in the loaded history
+  stale: boolean; // no clean run for over SLOW_STALE_MS
 };
 export type Slowdown = {
   windowMin: number;
@@ -29,6 +54,7 @@ export type Slowdown = {
   worst: { cls: string; ratio: number } | null;
   tone: 'ok' | 'warn' | 'bad';
   line: string; // slowdownLine: what board.sh status and the CONTAINER details print
+  short: string; // slowdownShort: the status line's segment
 };
 
 const median = (xs: number[]) => {
@@ -38,7 +64,7 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 };
 
-export function slowdown(jobs: Job[], now: number): Slowdown {
+export function slowdown(jobs: Job[], now: number, hm: (t: number) => string): Slowdown {
   const from = now - SLOW_WINDOW_MIN * MIN;
   const clean = jobs.filter((j) => j.exit === 0 && !j.excluded && j.wallSec > 0 && j.t <= now);
   const classes = SLOW_CLASSES.map((cls): SlowClass => {
@@ -51,6 +77,7 @@ export function slowdown(jobs: Job[], now: number): Slowdown {
       base = '7d';
       pool = before.filter((j) => j.t > from - 7 * 24 * HOUR).map((j) => j.wallSec);
     }
+    const lastAt = mine.length ? Math.max(...mine.map((j) => j.t)) : null;
     const recentSec = median(recent);
     const baseSec = median(pool);
     const ok = recent.length >= MIN_RECENT && pool.length >= MIN_BASE && !!baseSec;
@@ -62,10 +89,12 @@ export function slowdown(jobs: Job[], now: number): Slowdown {
       nRecent: recent.length,
       nBase: pool.length,
       base: pool.length >= MIN_BASE ? base : null,
+      lastAt,
+      stale: lastAt === null || now - lastAt > SLOW_STALE_MS,
     };
   });
   // the headline (tile colour, "slow ×…") from the clean signals only: test mixes suites with filtered runs, ui dev
-  // checks with captures; both still show in the line
+  // checks with captures, and a gate's wall time follows its diff; all still show in the line
   const rated = classes.filter((c) => c.ratio !== null && HEADLINE.has(c.cls));
   const top = rated.sort((a, b) => b.ratio! - a.ratio!)[0];
   const worst = top ? { cls: top.cls, ratio: top.ratio! } : null;
@@ -77,17 +106,50 @@ export function slowdown(jobs: Job[], now: number): Slowdown {
         ? 'warn'
         : 'ok';
   const out = { windowMin: SLOW_WINDOW_MIN, classes, worst, tone } as Slowdown;
-  out.line = slowdownLine(out);
+  out.line = slowdownLine(out, now, hm);
+  out.short = slowdownShort(out, now, hm);
   return out;
 }
 
-// "test ×1.8 (3/41) · typecheck ×1.1 (2/37) · lint – (1 recent) · ui – (0 recent)": counts are recent/baseline runs.
-export function slowdownLine(s: Pick<Slowdown, 'classes'>): string {
+// "no data since 22:58" within a day; an HH:MM from days ago would mislead, so older is a day count
+const noData = (lastAt: number | null, now: number, hm: (t: number) => string) =>
+  lastAt === null
+    ? `no data in ${LOOKBACK_D} d`
+    : now - lastAt <= DAY
+      ? `no data since ${hm(lastAt)}`
+      : `no data in ${Math.floor((now - lastAt) / DAY)} d`;
+
+// "test ×1.8 (3/41) · typecheck ×1.1 (2/37) · lint – (1 recent) · ui – (no data since 14:02)": counts are
+// recent/baseline runs.
+export function slowdownLine(
+  s: Pick<Slowdown, 'classes'>,
+  now: number,
+  hm: (t: number) => string,
+): string {
   return s.classes
     .map((c) =>
       c.ratio !== null
         ? `${c.cls} ×${c.ratio.toFixed(1)} (${c.nRecent}/${c.nBase}${c.base === '7d' ? ' 7d' : ''})`
-        : `${c.cls} – (${c.nRecent < MIN_RECENT ? `${c.nRecent} recent` : `${c.nBase} baseline`})`,
+        : c.stale
+          ? `${c.cls} – (${noData(c.lastAt, now, hm)})`
+          : `${c.cls} – (${c.nRecent < MIN_RECENT ? `${c.nRecent} recent` : `${c.nBase} baseline`})`,
     )
     .join(' · ');
+}
+
+// The status line's cut, typecheck, lint and the gate classes: "slow 30m tc×1.2 lint– gw×1.1 · gn no data since 19:02".
+// Stale classes share one tail at the newest of their last runs, which is true of each.
+export function slowdownShort(
+  s: Pick<Slowdown, 'classes'>,
+  now: number,
+  hm: (t: number) => string,
+): string {
+  const cs = s.classes.filter((c) => c.cls in SHORT);
+  const live = cs.filter((c) => !c.stale);
+  const stale = cs.filter((c) => c.stale);
+  const dated = stale.map((c) => c.lastAt).filter((t) => t !== null);
+  const since = noData(dated.length ? Math.max(...dated) : null, now, hm);
+  if (!live.length) return `slow: ${since}`;
+  const head = `slow ${SLOW_WINDOW_MIN}m ${live.map((c) => `${SHORT[c.cls]}${c.ratio === null ? '–' : `×${c.ratio.toFixed(1)}`}`).join(' ')}`;
+  return stale.length ? `${head} · ${stale.map((c) => SHORT[c.cls]).join(', ')} ${since}` : head;
 }

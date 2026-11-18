@@ -300,8 +300,17 @@ export function boardTone(
 //   merge <atEpoch> <HH:MM> <what>    the next merge row not done (derived), due no more than 2 h ago; absent when none
 //   usage <atEpoch> <text>            `pnpm usage line`'s last good answer; absent when none
 //   ctx <n≥40> <n≥50> <names≥50,…>     sessions over the context lines (ctx.ts); absent when none is, or ctx.json is stale
+//   slow <ok|warn|bad> <text>          the slowdown's status line cut and its tone (slowdown.ts); absent without one
+//   mac <l1> <l5> <l15> <cpus>         the Mac's load averages, whole numbers; absent unless mac-stats.json is fresh
+//   vm <cores>                         the container's core count, for the live /proc/loadavg the status line reads
 export const NEXT_MERGE_PAST_MS = 2 * 3600e3; // next-merge.sh's window
 export type UsageLine = { at: number; text: string };
+export type LoadLine = {
+  slow: { tone: 'ok' | 'warn' | 'bad'; short: string } | null;
+  mac: { load: number[]; cpus: number } | null;
+  cores: number | null;
+};
+const whole = (n: number) => Number.isFinite(n) && n >= 0;
 // one line, no control bytes: every session's status line prints these as they are (an ESC would reach the terminal)
 const oneLine = (s: string) =>
   Array.from(s, (c) => {
@@ -318,6 +327,7 @@ export function boardLine(
   hhmm: (t: number) => string,
   usage: UsageLine | null = null,
   ctx: CtxView | null = null,
+  load: LoadLine | null = null,
 ): string {
   const sec = (t: number) => Math.floor(t / 1000);
   const head = `${sec(now)} ${b.updatedAt === null ? '-' : sec(b.updatedAt)} ${b.items.length}${b.unsure ? '?' : ''} ${b.tone}`;
@@ -334,6 +344,13 @@ export function boardLine(
     ctx && ctx.warn.length + ctx.bad.length
       ? `ctx ${ctx.warn.length + ctx.bad.length} ${ctx.bad.length} ${ctx.bad.map((e) => oneLine(e.name).replace(/[ ,]/g, '_')).join(',') || '-'}`
       : null,
+    load?.slow && oneLine(load.slow.short)
+      ? `slow ${load.slow.tone} ${oneLine(load.slow.short)}`
+      : null,
+    load?.mac && load.mac.load.length === 3 && [...load.mac.load, load.mac.cpus].every(whole)
+      ? `mac ${load.mac.load.map(Math.round).join(' ')} ${Math.round(load.mac.cpus)}`
+      : null,
+    load?.cores && whole(load.cores) ? `vm ${Math.round(load.cores)}` : null,
   ]
     .filter((l) => l !== null)
     .map((l) => `${l}\n`)

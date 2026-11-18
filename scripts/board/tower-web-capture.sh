@@ -81,7 +81,7 @@ function stress(v) {
   if (v.sparks) v.sparks.mac = Array(58).fill(null).concat([30000, 31000]); // two points: no line to draw
   // F120: every power alert at once, and a slow container
   v.health.power = { known: true, line: 'battery 12% discharging (0:50 left) · Low Power Mode on · limit: CPU speed 80%, thermal warning 2', alerts: ['battery 12%', 'Low Power Mode', 'CPU speed 80%', 'thermal warning 2'], advice: '≤ 3 lanes (on battery under 30% or Low Power Mode)' };
-  v.health.slowdown = { ...v.health.slowdown, worst: { cls: 'typecheck', ratio: 2.4 }, tone: 'bad', line: 'typecheck ×2.4 (3/41) · lint ×2.0 (2/37) · test ×1.2 (2/12) · ui – (0 recent)' };
+  v.health.slowdown = { ...v.health.slowdown, worst: { cls: 'typecheck', ratio: 2.4 }, tone: 'bad', line: 'typecheck ×2.4 (3/41) · lint ×2.0 (2/37) · test ×1.2 (2/12) · ui – (no data since 14:02) · gate-lint ×1.8 (3/40) · gate-narrow ×1.4 (3/21) · gate-wide ×1.1 (4/9 7d)' };
   return v;
 }
 function empty(v) {

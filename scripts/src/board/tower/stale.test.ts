@@ -337,6 +337,33 @@ describe('the derived files', () => {
       `${s(NOW)} ${s(NOW - 12 * MIN)} 0 dim\nusage ${s(NOW - MIN)} usage 41% · 0.8%/h\n`,
     );
   });
+  it('board.line: the slow, mac and vm rows ride after ctx, each absent without its fact', () => {
+    const head = `${Math.floor(NOW / 1000)} ${Math.floor((NOW - 12 * MIN) / 1000)} 0 dim`;
+    const cx = { at: NOW, stale: false, warn: [{ name: 'a', pct: 41 }], bad: [] };
+    const load = {
+      slow: { tone: 'warn' as const, short: 'slow 30m tc×1.6 gw×1.1' },
+      mac: { load: [6.31, 7.86, 12.5], cpus: 12 },
+      cores: 9,
+    };
+    expect(boardLine(board(), [], NOW, hm, null, cx, load)).toBe(
+      `${head}\nctx 1 0 -\nslow warn slow 30m tc×1.6 gw×1.1\nmac 6 8 13 12\nvm 9\n`,
+    );
+    expect(boardLine(board(), [], NOW, hm, null, null, null)).toBe(`${head}\n`);
+    expect(
+      boardLine(board(), [], NOW, hm, null, null, { slow: null, mac: null, cores: null }),
+    ).toBe(`${head}\n`);
+    // control bytes can't split the row or reach the terminal; nothing left is no row
+    const odd = (short: string) =>
+      boardLine(board(), [], NOW, hm, null, null, { ...load, slow: { tone: 'bad', short } });
+    expect(odd('slow 30m tc×1.2\u001b[2J\nx')).toContain('\nslow bad slow 30m tc×1.2 [2J x\nmac ');
+    expect(odd('\u001b\n\t')).not.toContain('slow');
+    // a Mac read short of three averages, or with a bad number, is no row; so is a zero core count
+    const mac = (m: { load: number[]; cpus: number }) =>
+      boardLine(board(), [], NOW, hm, null, null, { slow: null, mac: m, cores: 0 });
+    expect(mac({ load: [1, 2], cpus: 12 })).toBe(`${head}\n`);
+    expect(mac({ load: [1, NaN, 3], cpus: 12 })).toBe(`${head}\n`);
+    expect(mac({ load: [1, 2, 3], cpus: NaN })).toBe(`${head}\n`);
+  });
   it('pnpm board stale: age, count, tone and each item with its fix; missing and unreadable say so', () => {
     const it = {
       kind: 'merge-order' as const,

@@ -32,7 +32,14 @@ import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
 import { PrCache, ghFetch, type Fetch } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
-import { boardLine, parseMainSync, staleFile, SYNC_SILENT_MS, type UsageLine } from '../stale.ts';
+import {
+  boardLine,
+  parseMainSync,
+  staleFile,
+  SYNC_SILENT_MS,
+  type LoadLine,
+  type UsageLine,
+} from '../stale.ts';
 import { createHandler, serve } from './server.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
@@ -369,7 +376,16 @@ export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }
     renameSync(tmp, join(dir, name));
   };
   put('stale.json', JSON.stringify(staleFile(v.board, v.now)) + '\n');
-  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null, v.ctx));
+  const mac = v.health.mac;
+  const load: LoadLine = {
+    slow: v.health.slowdown,
+    mac:
+      mac.state === 'ok' && mac.stats?.load && mac.stats.cpus
+        ? { load: mac.stats.load, cpus: mac.stats.cpus }
+        : null,
+    cores: v.health.container?.cores ?? null,
+  };
+  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null, v.ctx, load));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).

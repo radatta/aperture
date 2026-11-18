@@ -5,11 +5,14 @@
 # with a count at 40 %, nothing below. Builtins only — no processes; silent when the file is absent or unreadable.
 # Dim when the board is fresh, amber with stale items, red past the tower's threshold; red "tower down" once the tower
 # hasn't written for 3 min (its facts are then old). Replaces localNotes/board/next-merge.sh, whose merge row it reads
-# after the tower's own derivation (a merged PR's row is gone).
+# after the tower's own derivation (a merged PR's row is gone). First, from the same file, `· mac 6 8 12/12 · vm 2 5 9/9 ·
+# slow 30m tc×1.2 gl×1.0 gn– gw×1.1` (F293): the Mac's load, the container's live /proc/loadavg over its cores (shown
+# even when the tower is down), and the slowdown's cut in its tone. Replaces localNotes/board/slowdown-line.sh: while
+# that file is still there, it prints these three itself, so this leaves them out.
 _bl_f="${APERTURE_BOARD_DIR:-/workspace/localNotes/board}/board.line"
 if [ -r "$_bl_f" ]; then
   printf -v _bl_now '%(%s)T' -1 # bash ≥ 4.2 (the container's; not the Mac's 3.2)
-  _bl_merge= _bl_usage= _bl_ctx=
+  _bl_merge= _bl_usage= _bl_ctx= _bl_slow= _bl_mac= _bl_vm= _bl_vmt=
   {
     IFS=' ' read -r _bl_w _bl_q _bl_n _bl_tone _bl_x
     while IFS=' ' read -r _bl_k _bl_rest; do
@@ -17,13 +20,37 @@ if [ -r "$_bl_f" ]; then
         merge) _bl_merge=$_bl_rest ;;
         usage) _bl_usage=$_bl_rest ;;
         ctx) _bl_ctx=$_bl_rest ;;
+        slow) _bl_slow=$_bl_rest ;;
+        mac) _bl_mac=$_bl_rest ;;
+        vm) _bl_vm=$_bl_rest ;;
       esac
     done
   } <"$_bl_f"
+  _bl_own=1
+  [ -r "${_bl_f%/*}/slowdown-line.sh" ] && _bl_own=
+  # the container's load (1/5/15 min) over its cores: live, so it needs no tower
+  if [ -n "$_bl_own" ] && read -r _bl_l1 _bl_l5 _bl_l15 _bl_x 2>/dev/null <"${APERTURE_LOADAVG:-/proc/loadavg}"; then
+    _bl_re='^[0-9]+(\.[0-9]+)?$'
+    if [[ "$_bl_l1" =~ $_bl_re ]] && [[ "$_bl_l5" =~ $_bl_re ]] && [[ "$_bl_l15" =~ $_bl_re ]]; then
+      _bl_cx=; [[ "$_bl_vm" =~ ^[0-9]+$ ]] && _bl_cx="/$_bl_vm"
+      printf -v _bl_vmt ' \033[2m· vm %.0f %.0f %.0f%s\033[0m' "$_bl_l1" "$_bl_l5" "$_bl_l15" "$_bl_cx"
+    fi
+  fi
   if [[ "$_bl_w" =~ ^[0-9]+$ ]]; then
     if [ $((_bl_now - _bl_w)) -gt 180 ]; then
-      printf ' \033[31m· tower down (board.line %s min old)\033[0m' $(((_bl_now - _bl_w) / 60))
+      printf '%s \033[31m· tower down (board.line %s min old)\033[0m' "$_bl_vmt" $(((_bl_now - _bl_w) / 60))
     else
+      if [ -n "$_bl_own" ]; then
+        read -r _bl_m1 _bl_m5 _bl_m15 _bl_mn _bl_x <<<"$_bl_mac"
+        [[ "$_bl_m1" =~ ^[0-9]+$ ]] && [[ "$_bl_m5" =~ ^[0-9]+$ ]] && [[ "$_bl_m15" =~ ^[0-9]+$ ]] && [[ "$_bl_mn" =~ ^[0-9]+$ ]] &&
+          printf ' \033[2m· mac %s %s %s/%s\033[0m' "$_bl_m1" "$_bl_m5" "$_bl_m15" "$_bl_mn"
+        printf '%s' "$_bl_vmt"
+        # the slowdown: "<ok|warn|bad> <text>", dim, amber or red like the tower's CONTAINER tile
+        _bl_slt=${_bl_slow%% *} _bl_slx=${_bl_slow#* }
+        if [[ "$_bl_slow" == *' '* ]] && [ -n "$_bl_slx" ]; then
+          case $_bl_slt in ok) printf ' \033[2m· %s\033[0m' "$_bl_slx" ;; warn) printf ' \033[33m· %s\033[0m' "$_bl_slx" ;; bad) printf ' \033[31m· %s\033[0m' "$_bl_slx" ;; esac
+        fi
+      fi
       # the usage line, while under 15 min old: "<atEpoch> <text>"
       _bl_ua=${_bl_usage%% *}
       [[ "$_bl_ua" =~ ^[0-9]+$ ]] && [ $((_bl_now - _bl_ua)) -le 900 ] && printf ' \033[2m· %s\033[0m' "${_bl_usage#* }"
@@ -53,6 +80,7 @@ if [ -r "$_bl_f" ]; then
       fi
     fi
   fi
+  unset _bl_slow _bl_mac _bl_vm _bl_vmt _bl_own _bl_l1 _bl_l5 _bl_l15 _bl_re _bl_cx _bl_m1 _bl_m5 _bl_m15 _bl_mn _bl_slt _bl_slx
   unset _bl_sx _bl_f _bl_now _bl_merge _bl_usage _bl_ctx _bl_c40 _bl_c50 _bl_cn _bl_w _bl_q _bl_n _bl_tone _bl_k _bl_rest _bl_ua _bl_c _bl_age _bl_m _bl_txt _bl_at _bl_hm _bl_what _bl_mark _bl_x
 else
   unset _bl_f
