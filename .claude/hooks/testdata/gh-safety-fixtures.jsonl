@@ -75,3 +75,10 @@
 {"expect":"allow","why":"the infra lens's synth carries dummy values, no dot-path","cmd":"APERTURE_ORIGIN_SECRET=synth APERTURE_DEVICE_TOKEN=synth pnpm --filter cdk exec cdk synth --output /tmp/x"}
 {"expect":"allow","why":"the sanctioned text search spells the name without the literal","cmd":"git grep -n -e '\\.secre[t]' -- docs"}
 {"expect":"allow","why":"a word char before the dot, under -i too","cmd":"echo cfg.Secret"}
+{"expect":"deny","why":"a mixed-case glob","reason":"at any depth","cmd":"cat .Secrets/*"}
+{"expect":"deny","why":"an upper-case wildcard","reason":"at any depth","cmd":"cat .SECRET*/ci-bot/app.env"}
+{"expect":"allow","why":"bare ls under any case is still names only","cmd":"ls -la .SECRETS"}
+{"expect":"deny","why":"accepted false positive under -i: a capitalised member after a quote","reason":"at any depth","cmd":"jq -r '.SecretString' out.json"}
+{"expect":"deny","why":"the secrets arm past the 64 KiB pipe buffer (the SIGPIPE fail-open)","reason":"at any depth","cmd":"cat .secrets/ci-bot/app.env\n#{PAD_200K}"}
+{"expect":"deny","why":"every arm past the pipe buffer, e.g. rm -rf","cmd":"rm -rf /tmp/x\n#{PAD_200K}"}
+{"expect":"allow","why":"known gap: a quote-split name defeats a text match (README: not a wall)","cmd":"cat .sec\"\"rets/ci-bot/app.env"}

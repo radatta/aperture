@@ -57,14 +57,13 @@ its own location, never the session's cwd. Format: `docs/ops/DEV-CHECK.md` → _
 `main`/`master`/`dev`, any `pnpm bot` force flag, `gh pr merge|review`, and any Bash line touching a `.secrets/`
 dir except a bare `ls`/`stat`. Its push checks see through git's global options (`git -C dir push`, `git -c k=v push`)
 and deny `--all`/`--mirror`. `secrets-read-guard.sh` (Read, Grep, Glob) denies those tools a path into a `.secrets/`
-dir, and a Grep whose glob could re-admit the gitignored dir where one sits within reach (depth 6, `node_modules`
-pruned). Both match every `.secrets/` at any depth — the root one (bot key, devcheck session) and `cdk/.secrets/`
-(stage secrets) — in any case, since the `/workspace` mount is case-insensitive. rg re-admits an ignored dir only
-when the glob matches the dir's own name, so `*`, `**`, `*.*`, `.*`, `*s*` and brace globs are denied there and
-`*.json`, `*.ts`, `device-token*` pass; the bot key's names (`*.pem`, `*.env`) are denied too, as a margin. A Grep
-_pattern_ is content, so searching the repo for the text stays allowed. Glob gets no glob arm: it doesn't honour
-`.gitignore` and can list the dir's file names, the same exposure as the bare `ls`. Both are second walls (a symlink
-or a `.s*` path gets past them) — the in-process readers refuse on their own, and the ruleset is the real one.
+dir, and a Grep whose glob could re-admit the gitignored dir where one sits within reach (depth 6). Both match every
+`.secrets/` at any depth — the root one (bot key, devcheck session) and `cdk/.secrets/` (stage secrets) — in any case.
+Catch-all globs (`*`, `**`, `*.*`, `*/`, braces) are denied near one; typed ones (`*.json`, `*.ts`) pass. A Grep
+_pattern_ is content, so searching the repo for the text stays allowed; Glob may list the dir's file names, never
+contents. The why — rg's re-admission rule, how the Grep tool splits a glob, the known gaps — is in
+`secrets-read-guard.sh`'s header. Both are second walls — the in-process readers refuse on their own, and the
+ruleset is the real one.
 
 ## Testing
 

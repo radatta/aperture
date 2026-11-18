@@ -36,9 +36,9 @@ suite's tool name, e.g. Monitor, which carries a shell command like Bash);
 "payload" (extra top-level payload keys, e.g. hook_event_name and tool_response for a PostToolUse case);
 "ledger" (lines pre-written to the repo's MCP ledger; a string is written raw, e.g. a corrupt line), "expect_ledger" ("op:id" lines that must be in it
 after the hook ran) and "ledger_count" (its exact line count after);
-{SECRETS_PARENT}, {DEEP_PARENT}, {DECOY_DIR} and {PLAIN_DIR} anywhere in "input" or "cwd" expand to fresh temp
-dirs holding synthetic `.secrets` dirs — at the root and under `cdk/`; only at a worktree's depth; only under
-`node_modules/`; none (SECRET_DIRS);
+{SECRETS_PARENT}, {DEEP_PARENT}, {DECOY_DIR}, {PLAIN_DIR} and the rest of SECRET_DIRS anywhere in "input" or "cwd"
+expand to fresh temp dirs holding synthetic `.secrets` dirs (at the root and under `cdk/`; only at a worktree's depth;
+only under pruned trees; none; …), {LINK_PARENT} to a symlink to a {SECRETS_PARENT}; {PAD_200K} in "input" too;
 {PAD_200K} in "stage" expands to ~200 KB of filler (a diff past the 64 KiB pipe buffer);
 {FAKE_AWS_KEY} in "stage" expands to AWS's documented example key, assembled here
 so the literal never sits in the repo for the CI secret scanner to flag.
@@ -257,7 +257,13 @@ SECRET_DIRS = {
     "{SECRETS_PARENT}": {".secrets/ci-bot": ("app.env",), ".secrets": ("devcheck.dev.state.json",),
                          "cdk/.secrets": ("device-token.dev",), "src": ("a.ts",)},
     "{DEEP_PARENT}": {".claude/worktrees/w/cdk/.secrets": ("device-token.dev",)},  # depth 5, like a worktree's
-    "{DECOY_DIR}": {"node_modules/x/.secrets": ("a.env",)},  # only under a tree the walk prunes
+    "{DEPTH6_DIR}": {"a/b/c/d/e/.secrets": ("x.dev",)},  # the walk's deepest
+    "{DEPTH7_DIR}": {"a/b/c/d/e/f/.secrets": ("x.dev",)},  # one past it: the known limit
+    "{PKG_PARENT}": {"pkg/.secrets": ("x.dev",)},  # under a subdir name no checkout has (relative-path cases)
+    "{CASED_DIR}": {"x/y/.SECRETS": ("x.dev",)},  # upper case on a case-sensitive disk: -iname must find it
+    # only under trees the deep walk prunes, each past the shallow walk's depth 2
+    "{DECOY_DIR}": {"node_modules/x/.secrets": ("a.env",), ".git/x/.secrets": ("a.env",),
+                    "dist/x/.secrets": ("a.env",), "cdk.out/x/.secrets": ("a.env",)},
     "{PLAIN_DIR}": {},
 }
 
@@ -267,9 +273,10 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
     tool_input = case["input"] if "input" in case else {"command": expand_ids(case["cmd"])}
     raw = json.dumps(tool_input)
     cwd = case.get("cwd")
-    if any(p in raw + (cwd or "") for p in SECRET_DIRS):
+    if any(p in raw + (cwd or "") for p in [*SECRET_DIRS, "{LINK_PARENT}"]):
         # Throwaway dirs (a space in the name on purpose) for guards that look for a `.secrets` dir on disk, each
-        # holding synthetic one-line files only. Under `scratch`, so they go when the run ends.
+        # holding synthetic one-line files only; {LINK_PARENT} is a symlink to {SECRETS_PARENT}. Under `scratch`,
+        # so they go when the run ends.
         dirs = {p: tempfile.mkdtemp(prefix=f"{p.strip('{}').split('_')[0].lower()} with space ", dir=scratch) for p in SECRET_DIRS}
         for p, secret_dirs in SECRET_DIRS.items():
             for rel, files in secret_dirs.items():
@@ -277,10 +284,14 @@ def run_case(hook: pathlib.Path, tool: str, case: dict, root: str | None, scratc
                 d.mkdir(parents=True, exist_ok=True)
                 for name in files:
                     (d / name).write_text("synthetic\n", encoding="utf-8")
+        dirs["{LINK_PARENT}"] = tempfile.mktemp(prefix="link with space ", dir=scratch)
+        os.symlink(dirs["{SECRETS_PARENT}"], dirs["{LINK_PARENT}"])
         for p, d in dirs.items():
             raw = raw.replace(p, d)
             cwd = cwd.replace(p, d) if cwd else cwd
         tool_input = json.loads(raw)
+    if "{PAD_200K}" in raw:  # a field past the 64 KiB pipe buffer (the SIGPIPE fail-open)
+        tool_input = json.loads(raw.replace("{PAD_200K}", json.dumps(PLACEHOLDERS["{PAD_200K}"])[1:-1]))
     if board:
         return decision_for(hook, tool, tool_input, None, case.get("payload"), env=board_env(case, root))
     if root is None:

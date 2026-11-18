@@ -20,6 +20,9 @@
 # normal-but-destructive git commands the sandbox treats as ordinary dev activity.
 
 set -euo pipefail
+export LC_ALL=C.UTF-8 # `grep -i` case folding (the secrets arm) needs a UTF-8 locale
+# Every check greps a here-string, never `echo | grep -q`: under pipefail an early `grep -q` exit SIGPIPEs an echo of
+# more than 64 KiB, and the match reads as none — a fail-open on any long command.
 
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
@@ -36,28 +39,28 @@ deny() {
 }
 
 # Recursive force-delete.
-if echo "$COMMAND" | grep -qE '\brm[[:space:]]+-([a-zA-Z]*r[a-zA-Z]*f|[a-zA-Z]*f[a-zA-Z]*r)\b'; then
+if grep -qE '\brm[[:space:]]+-([a-zA-Z]*r[a-zA-Z]*f|[a-zA-Z]*f[a-zA-Z]*r)\b' <<<"$COMMAND"; then
   deny "\`rm -rf\` is blocked. Confirm before removing files recursively. For tracked files use \`git restore\`; for one file drop the -r."
 fi
 
 # Destructive git: hard reset.
-if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+reset[[:space:]]+--hard\b'; then
+if grep -qE '\bgit[[:space:]]+reset[[:space:]]+--hard\b' <<<"$COMMAND"; then
   deny "\`git reset --hard\` is blocked — it loses uncommitted work irrecoverably. Use \`git stash\`, or a soft/mixed reset, or stop and surface the situation."
 fi
 
 # Destructive git: clean -f.
-if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f'; then
+if grep -qE '\bgit[[:space:]]+clean[[:space:]]+-[a-zA-Z]*f' <<<"$COMMAND"; then
   deny "\`git clean -f...\` is blocked — it deletes untracked files irrecoverably. Stop and confirm before removing them."
 fi
 
 # Destructive git: force delete branch.
-if echo "$COMMAND" | grep -qE '\bgit[[:space:]]+branch[[:space:]]+-D\b'; then
+if grep -qE '\bgit[[:space:]]+branch[[:space:]]+-D\b' <<<"$COMMAND"; then
   deny "\`git branch -D\` (force delete) is blocked. Use \`git branch -d\` (safe; fails if unmerged). Force-delete only after confirming."
 fi
 
 # The bot CLI (docs/ops/CI-BOT.md) refuses these itself; this is the second wall.
-if echo "$COMMAND" | grep -qE '(\bpnpm[[:space:]]+(run[[:space:]]+)?bot|bot/cli\.ts)\b'; then
-  BOT_ARGS=$(echo "$COMMAND" | grep -oE '(\bpnpm[[:space:]]+(run[[:space:]]+)?bot|bot/cli\.ts)\b[^|;&]*' | head -1)
+if grep -qE '(\bpnpm[[:space:]]+(run[[:space:]]+)?bot|bot/cli\.ts)\b' <<<"$COMMAND"; then
+  BOT_ARGS=$({ grep -oE '(\bpnpm[[:space:]]+(run[[:space:]]+)?bot|bot/cli\.ts)\b[^|;&]*' <<<"$COMMAND" || true; } | head -1)
   # Only `push` takes a target; a `logs --filter` value may say "dev" freely.
   if echo "$BOT_ARGS" | grep -qE '(bot|cli\.ts)[[:space:]]+push\b' \
     && echo "$BOT_ARGS" | grep -qE '[[:space:]:/+"'\''](main|master|dev)([^[:alnum:]_./-]|$)'; then
@@ -70,7 +73,7 @@ fi
 
 # Reviewing and merging PRs are the user's (docs/ops/CI-BOT.md); opening one has no path either — the App holds no
 # Pull requests permission and the container's own token is read-only.
-if echo "$COMMAND" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+(merge|review)\b|\bgh[[:space:]]+api\b.*pulls/[0-9]+/(merge|reviews)\b'; then
+if grep -qE '\bgh[[:space:]]+pr[[:space:]]+(merge|review)\b|\bgh[[:space:]]+api\b.*pulls/[0-9]+/(merge|reviews)\b' <<<"$COMMAND"; then
   deny "\`gh pr merge\` / \`gh pr review\` are blocked — reviewing and merging PRs are the user's."
 fi
 
@@ -82,7 +85,7 @@ fi
 # The exception is matched on the WHOLE command (bash =~, newline excluded) — grep is per line, so
 # `ls .secrets` + a second line would pass.
 LS_ONLY=$'^[[:space:]]*(ls|stat)[[:space:]][^;&|<>`$()\n]*$'
-if echo "$COMMAND" | grep -qiE '(^|[^[:alnum:]_])\.secret' && ! [[ $COMMAND =~ $LS_ONLY ]]; then
+if grep -qiE '(^|[^[:alnum:]_])\.secret' <<<"$COMMAND" && ! [[ $COMMAND =~ $LS_ONLY ]]; then
   deny "Touching a \`.secrets/\` directory from Bash is blocked, at any depth (repo root, \`cdk/\`): the bot key, the devcheck session, cdk's stage secrets. The tools that need them read them in-process (\`pnpm bot\`, \`pnpm devcheck\`, cdk synth); to check modes use a bare \`ls -la\` or \`stat\`."
 fi
 
@@ -94,29 +97,29 @@ GIT_PUSH='\bgit([[:space:]]+(-[Cc][[:space:]]+'"$ARG"'|--(git-dir|work-tree|name
 PUSH_ARGS="$GIT_PUSH"'[[:space:]]+([^|;&]*[[:space:]])?'
 
 # Destructive git: force push (any flag form, or a `+refspec`).
-if echo "$COMMAND" | grep -qE "$PUSH_ARGS"'(-f\b|--force\b|--force-with-lease\b|\+[^[:space:]])'; then
+if grep -qE "$PUSH_ARGS"'(-f\b|--force\b|--force-with-lease\b|\+[^[:space:]])' <<<"$COMMAND"; then
   deny "Force-push is blocked — it rewrites shared history. If genuinely needed, stop and confirm which commits would be rewritten first."
 fi
 
 # Destructive git: remote branch delete (`--delete`, `-d`, or an empty-source `:ref`).
-if echo "$COMMAND" | grep -qE "$PUSH_ARGS"'(--delete\b|-d\b|:[^[:space:]])'; then
+if grep -qE "$PUSH_ARGS"'(--delete\b|-d\b|:[^[:space:]])' <<<"$COMMAND"; then
   deny "\`git push --delete\` is blocked — remote branch deletion is destructive. Stop and confirm first."
 fi
 
 # Every-branch pushes reach the deploy branches without naming them.
-if echo "$COMMAND" | grep -qE "$PUSH_ARGS"'--(all|mirror|branches)\b'; then
+if grep -qE "$PUSH_ARGS"'--(all|mirror|branches)\b' <<<"$COMMAND"; then
   deny "\`git push --all/--mirror\` is blocked — it pushes every local branch, deploy branches included. Push one feature branch by name."
 fi
 
 # Push to a protected/deploy branch — by current branch OR explicit target.
-if echo "$COMMAND" | grep -qE "$GIT_PUSH"; then
+if grep -qE "$GIT_PUSH" <<<"$COMMAND"; then
   # --git-dir/--work-tree point the push at a repo this hook can't resolve the branch of.
-  if echo "$COMMAND" | grep -qE '\bgit[[:space:]].*--(git-dir|work-tree)\b'; then
+  if grep -qE '\bgit[[:space:]].*--(git-dir|work-tree)\b' <<<"$COMMAND"; then
     deny "\`git --git-dir/--work-tree … push\` is blocked — the guard can't check which branch it pushes. Use \`git -C <dir> push\`."
   fi
   # Explicit target: ` main`, `HEAD:dev`, `refs/heads/dev`, `"dev"`, `+dev`. The name must END there: `\b` treated
   # `-` `.` `/` as ends, so `dev-e2e`, `main-x` and even `2>/dev/null` were denied.
-  if echo "$COMMAND" | grep -qE '[[:space:]:/+"'\''](main|master|dev)([^[:alnum:]_./-]|$)'; then
+  if grep -qE '[[:space:]:/+"'\''](main|master|dev)([^[:alnum:]_./-]|$)' <<<"$COMMAND"; then
     deny "Pushing to \`main\`/\`master\`/\`dev\` is blocked — these are deploy branches (a push there deploys). Push a feature branch and open a PR; merges to main happen via PR, not a direct push."
   fi
   # Only the current-branch resolution needs the repo dir — resolve cwd here, NOT above the string-match
@@ -136,12 +139,12 @@ if echo "$COMMAND" | grep -qE "$GIT_PUSH"; then
 fi
 
 # gh auth lifecycle — never manage credentials autonomously.
-if echo "$COMMAND" | grep -qE '\bgh[[:space:]]+auth[[:space:]]+(login|refresh|token|setup-git)\b'; then
+if grep -qE '\bgh[[:space:]]+auth[[:space:]]+(login|refresh|token|setup-git)\b' <<<"$COMMAND"; then
   deny "\`gh auth (login|refresh|token|setup-git)\` is blocked — Claude does not manage GitHub credentials. If gh fails with an auth error, STOP and surface the exact error; credential state is the user's to resolve."
 fi
 
 # Raw API calls against api.github.com.
-if echo "$COMMAND" | grep -qE '(curl|wget)[[:space:]].*api\.github\.com'; then
+if grep -qE '(curl|wget)[[:space:]].*api\.github\.com' <<<"$COMMAND"; then
   deny "Raw HTTP against api.github.com is blocked — use \`gh\` or \`gh api <path>\` (same auth, recognized as legitimate dev activity)."
 fi
 

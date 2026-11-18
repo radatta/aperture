@@ -3,17 +3,25 @@
 # root one (the bot's private key and app.env, docs/ops/CI-BOT.md; the devcheck session, docs/ops/DEV-CHECK.md) and
 # `cdk/.secrets/` (cdk's stage secrets) alike. gh-safety-guard.sh covers Bash; Read/Grep/Glob never pass through it.
 # The tools that need them read them in-process (`pnpm bot`, `pnpm devcheck`, cdk synth), so no tool call ever
-# needs to. Builtins + jq only, like the other guards. Case-insensitive: the /workspace mount is, so `.SECRETS/` opens
-# the real dir.
-# A Grep *pattern* is content, not a path — searching the repo for the text `.secrets/` stays allowed. A broad
-# Grep from a parent dir skips `.secrets/` (gitignored, hidden), but an rg `--glob` overrides ignore rules: it
-# re-admits an ignored dir when the glob matches the directory's own name (`*`, `**`, `*.*`, `.*`, `*s*`), never
-# for `*.json` or `*.ts` (rg 14.1, probed on synthetic dirs 2026-11-17). So a Grep whose glob could match the name
-# `.secrets` (or any `{…}` brace glob, which can't be checked here), rooted where a `.secrets` dir sits within
-# reach, is denied too. Glob gets no such arm: it doesn't honour .gitignore and can list the dir's file *names*,
-# the same exposure as the bare `ls` the Bash guard allows; a path or pattern naming the dir is still denied.
-# Second wall, not a proof (a symlink into the dir, a `.s*` in a path, a dir deeper than the walk).
+# needs to. Builtins + jq + find only, like the other guards. Case-insensitive, in a UTF-8 locale: the /workspace
+# mount folds case (`.SECRETS/`, even `ſ` for `s`, opens the real dir).
+#
+# Arm 1, any path-like field naming the dir. A Grep *pattern* is content, not a path — searching the repo for the
+# text `.secrets/` stays allowed.
+# Arm 2, a Grep glob that re-admits the dir. The Grep tool (Claude Code 2.1.327, read from its installed source)
+# runs rg with `--hidden --no-follow`, splits `glob` on whitespace, comma-splits each piece without both `{` and `}`,
+# and passes each piece as its own `--glob`. With `--hidden`, only the gitignore keeps rg out of `.secrets/`, and a
+# `--glob` overrides ignore rules: rg re-admits an ignored dir when a glob matches the dir's own name (`*`, `**`,
+# `*.*`, `.*`, `*s*`, `*/`), and then reads every file inside some glob matches. `*.json`, `*.ts` never match the
+# name (rg 14.1, probed on synthetic dirs). So a glob piece whose last segment could match `.secrets` — or holds a
+# brace, which can't be tested here — with a `.secrets` dir within reach of the search root is denied. The bot key's
+# own names (`*.pem`, `*.env`) count too, as a margin. A glob with anything but printable ASCII (a newline, NBSP —
+# JS splits on them, this hook doesn't try to) or over 4 KiB counts as `*`.
+# Glob gets no arm 2: it doesn't honour .gitignore and can list the dir's file *names* — via a glob arm 1 can't read
+# (`[.]secrets/**`) or any catch-all — the same exposure as the bare `ls` the Bash guard allows; never contents.
+# Second wall, not a proof: a symlink into the dir, a dir deeper than the walk, or under a pruned tree, gets past.
 set -euo pipefail
+export LC_ALL=C.UTF-8
 INPUT=$(cat)
 
 deny() {
@@ -26,67 +34,82 @@ deny() {
   }'
   exit 0
 }
+# A failure past this point denies rather than exiting non-zero (which Claude Code reads as "run the tool").
+trap 'deny "The secrets guard failed on this input, so it is denied to be safe. Narrow the call (a plain path, a file-type glob)."' ERR
 
 # Path-like fields only: Read file_path, Grep path/glob, Glob path/pattern.
-TEXT=$(printf '%s' "$INPUT" | jq -r '[.tool_input.file_path, .tool_input.path, .tool_input.glob,
+TEXT=$(jq -r '[.tool_input.file_path, .tool_input.path, .tool_input.glob,
   (if .tool_name == "Glob" then .tool_input.pattern else null end)]
-  | map(select(type == "string")) | join("\n")')
-# `.secret…` starting a path component (`.secrets`, `.secret*`, `{.secrets,x}` all count), any case.
-if printf '%s\n' "$TEXT" | grep -qiE '(^|[/*{,[:space:]])\.secret'; then
+  | map(select(type == "string")) | join("\n")' <<<"$INPUT")
+# `.secret…` after any non-word character, any case. A here-string, not a pipe: under pipefail an early `grep -q`
+# exit SIGPIPEs a writer of more than 64 KiB, and the match would read as none.
+if grep -qiE '(^|[^[:alnum:]_])\.secret' <<<"$TEXT"; then
   deny "Reading or searching a \`.secrets/\` directory is blocked, at any depth (repo root, \`cdk/\`): the bot key, the devcheck session, cdk's stage secrets. The tools that need them read them in-process (\`pnpm bot\`, \`pnpm devcheck\`, cdk synth)."
 fi
 
-# A Grep with a glob. Each value on its own line (paths may hold spaces): glob, path, session cwd.
-{ IFS= read -r GLOB || true; IFS= read -r ROOT || true; IFS= read -r CWD || true; } < <(printf '%s' "$INPUT" | jq -r '
-  if .tool_name == "Grep" and ((.tool_input.glob // "") != "")
-  then .tool_input.glob, (.tool_input.path // ""), (.cwd // "") else "", "", "" end')
+# Grep with a glob: the glob (normalised), a flag for control characters in path/cwd (stripped so lines stay aligned),
+# the path, the session cwd.
+FIELDS=$(jq -r 'def ctl: test("[\\x00-\\x1f\\x7f]"); def clean: gsub("[\\x00-\\x1f\\x7f]"; "");
+  if .tool_name == "Grep" and ((.tool_input.glob // "") | type == "string" and . != "") then
+    (.tool_input.glob | if test("[^ -~]") or length > 4096 then "*" else . end),
+    (if ((.tool_input.path // "") | ctl) or ((.cwd // "") | ctl) then "1" else "0" end),
+    ((.tool_input.path // "") | clean), ((.cwd // "") | clean)
+  else "", "0", "", "" end' <<<"$INPUT")
+{ IFS= read -r GLOB || true; IFS= read -r CTL || true; IFS= read -r ROOT || true; IFS= read -r CWD || true; } <<<"$FIELDS"
 [ -n "${GLOB:-}" ] || exit 0
 
-# Cheap string test first: the disk walk below runs only for a glob that could re-admit the dir. Each token (split on
-# whitespace, and on commas outside braces, in case the tool splits a list) is tested on its last path segment;
-# a `!` exclusion admits nothing.
+# Cheap string test first; the disk walk below runs only for a glob that could re-admit the dir.
 HIT=0
-check_token() {
-  local tok=$1 seg name
-  [ -n "$tok" ] && [[ $tok != '!'* ]] || return 0
-  seg=${tok##*/}
-  if [[ $seg == *'{'* ]]; then HIT=1; return 0; fi
+hit_piece() { # one `--glob` as the tool passes it
+  local p=$1 seg name
+  case $p in '' | '!'*) return 0 ;; esac # an exclusion admits nothing
+  while [[ $p == */ ]]; do p=${p%/}; done # `*/` matches dirs only — the dir itself
+  if [ -z "$p" ]; then HIT=1; return 0; fi
+  case $p in *'{'* | *'}'*) HIT=1; return 0 ;; esac
+  seg=${p##*/}
   shopt -s nocasematch
-  # shellcheck disable=SC2053 # seg is a glob on purpose
-  for name in .secrets private-key.pem app.env; do  # the dir name; the bot's two file names (belt and braces)
+  for name in .secrets private-key.pem app.env; do
+    # shellcheck disable=SC2053 # seg is a glob on purpose
     if [[ $name == $seg ]]; then HIT=1; fi
   done
   shopt -u nocasematch
 }
-TOK=''
-DEPTH=0
-GLOB_LEN=${#GLOB}
-for ((i = 0; i < GLOB_LEN; i++)); do
-  c=${GLOB:i:1}
-  case $c in
-    '{') DEPTH=$((DEPTH + 1)); TOK+=$c ;;
-    '}') [ "$DEPTH" -gt 0 ] && DEPTH=$((DEPTH - 1)); TOK+=$c ;;
-    ',') if [ "$DEPTH" -eq 0 ]; then check_token "$TOK"; TOK=''; else TOK+=$c; fi ;;
-    ' ' | $'\t') check_token "$TOK"; TOK='' ;;
-    *) TOK+=$c ;;
-  esac
+IFS=' ' read -r -a PIECES <<<"$GLOB"
+for piece in ${PIECES[@]+"${PIECES[@]}"}; do
+  if [[ $piece == *'{'* && $piece == *'}'* ]]; then
+    hit_piece "$piece"
+  else
+    IFS=, read -r -a SUBS <<<"$piece"
+    for sub in ${SUBS[@]+"${SUBS[@]}"}; do hit_piece "$sub"; done
+  fi
 done
-check_token "$TOK"
 [ "$HIT" = 1 ] || exit 0
 
-# Where rg starts: the path (relative ones from the session cwd), else the cwd.
-if [ -z "${ROOT:-}" ]; then ROOT=${CWD:-}; elif [[ $ROOT != /* ]] && [ -n "${CWD:-}" ]; then ROOT=$CWD/$ROOT; fi
-[ -d "${ROOT:-}" ] || exit 0
-# A `.secrets` within reach: shallow first (a checkout root answers here), then deeper — a worktree's
-# `cdk/.secrets` sits at depth 5 under /workspace — pruning the trees rg skips anyway. `|| true` + a non-empty
-# test, not a pipeline: under pipefail, find's exit 1 on an unreadable dir would read as "none". What it finds is
-# never printed.
-FOUND=$(find "$ROOT" -maxdepth 2 -iname .secrets -print -quit 2>/dev/null || true)
+NARROW="Narrow the glob to a file type (\`*.ts\`, \`*.json\`) or root the search below the checkout (e.g. \`docs/\`)."
+if [ "${CTL:-0}" = 1 ]; then
+  deny "This Grep's path or cwd holds a control character, so the guard can't tell where its glob (\`$GLOB\`) would reach. $NARROW"
+fi
+# Where rg starts: the path (`~` expanded; relative ones from the session cwd), else the cwd — always absolute.
+CWD=${CWD:-$PWD}
+case ${ROOT:-} in '~') ROOT=$HOME ;; '~/'*) ROOT=$HOME/${ROOT#'~/'} ;; esac
+ROOT=${ROOT:-$CWD}
+[[ $ROOT == /* ]] || ROOT=$CWD/$ROOT
+[[ $ROOT == /* ]] || ROOT=$PWD/$ROOT
+if ! [ -d "$ROOT" ]; then
+  [ -e "$ROOT" ] && exit 0 # one file: rg searches just it
+  deny "This Grep's glob (\`$GLOB\`) could re-admit a gitignored \`.secrets\` directory, and its root (\`$ROOT\`) doesn't resolve here to check. $NARROW"
+fi
+# A `.secrets` within reach: shallow first (a checkout root answers here), then deeper — a worktree's `cdk/.secrets`
+# sits at depth 5 under /workspace. `-H`: rg follows a symlinked root, so find must too. The deep walk prunes
+# node_modules, .git, dist and cdk.out for speed (a catch-all glob re-admits them too; no secrets dir lives there).
+# `|| true` + a non-empty test, not a pipeline: under pipefail, find's exit 1 on an unreadable dir would read as
+# "none". What it finds is never printed.
+FOUND=$(find -H "$ROOT" -maxdepth 2 -type d -iname .secrets -print -quit 2>/dev/null || true)
 if [ -z "$FOUND" ]; then
-  FOUND=$(find "$ROOT" -maxdepth 6 \( -name node_modules -o -name .git -o -name dist -o -name cdk.out \) -prune \
+  FOUND=$(find -H "$ROOT" -maxdepth 6 \( -name node_modules -o -name .git -o -name dist -o -name cdk.out \) -prune \
     -o -type d -iname .secrets -print -quit 2>/dev/null || true)
 fi
 if [ -n "$FOUND" ]; then
-  deny "This Grep's glob (\`$GLOB\`) could match the gitignored \`.secrets\` directory's own name (or the bot key's) under \`$ROOT\`, so rg would pull the dir back into the search. Narrow the glob to a file type (\`*.ts\`, \`*.json\`) or root the search below the checkout (e.g. \`docs/\`)."
+  deny "This Grep's glob (\`$GLOB\`) could match the gitignored \`.secrets\` directory's own name (or the bot key's) under \`$ROOT\`, so rg would pull the dir back into the search. $NARROW"
 fi
 exit 0
