@@ -7,7 +7,9 @@
 # sim.sh's run_sim. Run by .github/workflows/ios-probe.yml (the ios-ci-probe branch only); every knob is here, so the
 # probe iterates by pushing this file. Writes ios-probe-out/: steps.tsv (step, pass|fail|soft|skip, ms, note), shots/,
 # trees/, log.txt, summary.md, cpu.log (process names and CPU), procs.txt (process table and memory, never after sign-in);
-# after sign-in only rows.tsv (op, status, ms) plus step lines and CPU samples: no shots, reads or notes from the app.
+# after sign-in only rows.tsv (op, status, ms), landmark.tsv (per sign-in Home read: seconds, class already|false|blank|
+# hung|other, probes used, the owning process's name, WebContent count/CPU) plus step lines and CPU samples: no shots,
+# reads or notes from the app.
 # bash 3.2-safe (macOS /bin/bash).
 set -uo pipefail
 
@@ -18,7 +20,7 @@ variant() {
   case "$SHARD" in
     1) echo "restore rows nohub,axe2,hostlog,nospot" ;;
     2) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
-    *) echo "restore rows nohub,axe2mix,hostlog,nospot" ;;
+    *) echo "restore rows nohub,axe2mix,hostlog,nospot,warmsw,light,taplanded" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -406,6 +408,18 @@ s_nospot() {
   if cap 30 sudo -n mdutil -a -i off >"$OUT/mdutil.log" 2>&1; then note "Spotlight indexing off: $(tr '\n\t' '  ' <"$OUT/mdutil.log" | cut -c1-160)"; else note "mdutil refused (rc $?)"; fi
   return 0
 }
+# warmsw (rows run 4, dispatch's arm): the cached device's PWA shell is many deploys old, so its first launch also
+# fetches the new service worker and autoUpdate reloads the page, maybe across the sign-in redirect. This arm opens the
+# app to its signed-out card first, gives the update 45 s, and quits it, so the rows' launch starts on the new shell.
+s_warm() {
+  s_icon && s_launch || { note "warm arm missed the card"; return 2; }
+  sleep 45
+  cap 30 xcrun simctl terminate "$U" com.apple.webapp >/dev/null 2>&1 || note "terminate refused"
+  ax button home >/dev/null 2>&1 || true
+  sleep 3
+  note "45 s on the signed-out card, then the app quit"
+  return 0
+}
 # simlog (run 19): the sim's own diagnosticd (run 18: sim:diagnosticd ~15% at the card), disabled and booted out
 # inside the sim: the one logging knob the Mac could take too (in-sim only; never the Mac's host logging).
 s_simlog() {
@@ -779,6 +793,7 @@ run_sim_ci() (
   # yes/no only, never a value (a filled field's value is the password's length at least).
   sim_diag() {
     local y e l out="" x0 y0 v
+    if [ -e "$SIM_P.over" ] || [ -e "$SIM_P.late" ]; then printf 'no reads (probe budget or deadline)'; return 0; fi
     for y in $(seq 60 20 940); do
       e="$(SIM_SENSITIVE=true sim_point "$SIM_X" "$y")" || continue
       l="$(jq -r '.label // ""' <<<"$e")"
@@ -788,6 +803,7 @@ run_sim_ci() (
     e="$(SIM_SENSITIVE=false sim_point "$x0" "$y0")" || e="{}"
     v="$(jq -r '.value // "" | gsub("^[\u200e\u200f\u202a-\u202e\u2066-\u2069]+"; "")' <<<"$e")"
     if [[ "$v" =~ $SIM_COGNITO_RE ]]; then v=dev-cognito; elif [ -z "$v" ]; then v=empty; else v=other; fi
+    [ ! -e "$SIM_P.over" ] && [ ! -e "$SIM_P.late" ] || out="$out (cut short: probe budget or deadline)"
     printf 'labels:%s; bar at %s: %s/%s host=%s' "${out:- none}" "$SIM_PT_ADDRESS" "$(jq -r '.role // "-"' <<<"$e")" "$(jq -r '.label // "-"' <<<"$e")" "$v"
   }
   sim_err() {
@@ -816,7 +832,43 @@ run_sim_ci() (
     return 1
   }
   eval "ci_orig_landmark() $(declare -f sim_landmark | sed 1d)"
-  sim_landmark() { local r; r="$(ci_orig_landmark)" || return 1; [ "$r" = already ] || sleep 3; printf '%s\n' "$r"; }
+  # Rows run 3: past Cognito on all 3 shards, then the app sat blank (no labels, empty host) through all 12 Home reads.
+  # During sign-in only, a blank read polls on for up to ~25 s before answering, so the 12 reads span ~7.5 min, to tell
+  # slow from stuck. landmark.tsv keeps seconds-since-sign-in and the answer's class: no content leaves the runner.
+  sim_landmark() {
+    local r k
+    r="$(ci_orig_landmark)" || return 1
+    # polls only inside the submit window (SIM_SENSITIVE is true from the email to the Home check), never in the
+    # relaunch or icon checks, whose blank answers drive re-taps and the ICON_TAP_DROPPED answer (review S2)
+    if [ "${SIM_SENSITIVE:-false}" = true ] && [ -z "$r" ]; then
+      for k in 1 2 3 4; do
+        [ ! -e "$SIM_P.late" ] && [ ! -e "$SIM_P.over" ] || break
+        sleep 5
+        rm -f "$SIM_P.unread" # the class and sim.sh's clean flag follow the last read, not any earlier one (review S2)
+        r="$(ci_orig_landmark)" || return 1
+        [ -z "$r" ] || break
+      done
+    fi
+    [ -z "${CI_SIGNIN_T0:-}" ] || ci_landmark_trace "$r"
+    [ "$r" = already ] || sleep 3
+    printf '%s\n' "$r"
+  }
+  # Rows run 4 tells slow from stuck from wrong-context (search, 11-17): which process owns the element at the Home
+  # point (the PWA's webapp, SafariViewService still in front, SpringBoard) and whether WebContent is busy. A pid and
+  # process names only: the element's label and value never leave this function.
+  ci_landmark_trace() {
+    local c="$1" pid=- own=- wc
+    case "$c" in already | false) ;; "") c=blank ;; *) c=other ;; esac
+    [ ! -e "$SIM_P.unread" ] || [ "$c" != blank ] || c=hung
+    if [ "$c" = blank ] || [ "$c" = false ]; then # not on a hung AX: that read would only time out too
+      pid="$(SIM_AX_CAP=8 ax describe-ui --point "$SIM_X,$SIM_Y_HOME" 2>/dev/null | jq -r '(if type == "array" then (.[0] // {}) else . end) | .pid // empty' 2>/dev/null | tr -cd '0-9')"
+      [ -z "$pid" ] || own="$(ps -o comm= -p "$pid" 2>/dev/null | sed 's#.*/##' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"
+    fi
+    wc="$(ps -Ao pcpu=,comm= 2>/dev/null | awk '/WebContent/ {n++; c += $1} END {printf "%d/%.0f", n, c}')"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$((SECONDS - CI_SIGNIN_T0))" "$c" "$(cat "$SIM_P.probes" 2>/dev/null || echo 0)" "${own:--}" "$wc" >>"$OUT/landmark.tsv"
+  }
+  eval "ci_orig_sign_in() $(declare -f sim_sign_in | sed 1d)"
+  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
@@ -891,18 +943,18 @@ s_rows() {
   for j in $ROW_JOBS; do
     late && { bad="budget"; break; }
     job="$WORK/job-$j.json"
-    left=$((DEADLINE - SECONDS - 60))
-    [ "$left" -le 600 ] || left=600
-    [ "$left" -ge 60 ] || { bad="budget"; break; }
+    t=$(now_ms)
+    # IOS-CHECK.md → Failures: these are dropped input ("rerun the step"), so a job that ends on one runs once more
+    for try in 1 2; do
+    left=$((DEADLINE - SECONDS - 60)) # per try, so a rerun can't run past the deadline (review S2)
+    [ "$left" -le 900 ] || left=900 # rows run 4: the launch job carries up to ~6 min of Home reads after submit
+    [ "$left" -ge 60 ] || { st=error rs=BUDGET js="{}"; break; }
     jq -e --arg n "$j" --arg sha "$sha" --argjson to "$left" --argjson last "$([ "$j" = "$last" ] && echo true || echo false)" \
       '. as $p | ($p.jobs[] | select(.name == $n)) as $j
        | {job: "sim", params: {sha: $sha, timeoutSec: $to, shutdown: $last, steps: $j.steps}}' \
       "$REPO/tools/mailroom/bench/plans.json" >"$job" || { note "no $j job in plans.json"; return 1; }
-    t=$(now_ms)
-    # IOS-CHECK.md → Failures: these are dropped input ("rerun the step"), so a job that ends on one runs once more
-    for try in 1 2; do
       : >"$WORK/diag.txt"
-      out="$(run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j-$try" 2>>"$WORK/sim.err")" || true
+      out="$(CI_JOB_TAG="$j try $try" run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j-$try" 2>>"$WORK/sim.err")" || true
       read -r st rs js <<<"$out"
       [ -n "$js" ] || js="{}"
       # only known shapes reach the artifact, whatever run_sim printed
@@ -925,7 +977,7 @@ s_rows() {
     fi
   done
   [ -z "$bad" ] || {
-    case "$bad" in *SIGNIN_FAILED*AUTH_REJECTED* | *AUTH_REJECTED*) note "sign-in rejected: password rotated? reset the ios-probe secret" ;; esac
+    case "$bad" in *AUTH_REJECTED* | *TIMEOUT*) [ ! -s "$OUT/landmark.tsv" ] || note "not on Home after submit within the job (landmark.tsv has the trace)" ;; esac
     note "stopped at: $bad"
     return 1
   }
@@ -993,7 +1045,9 @@ if [ "$SRC" = cold ]; then
   step add-to-home-screen s_a2hs
   step export export_webclip
 fi
-if [ "$AFTER" != rows ]; then
+if [[ ",$OPTS," == *,warmsw,* ]] && [ "$AFTER" = rows ]; then
+  step warm-sw s_warm # soft: a missed warm-up must not cost the shard its rows (review S2)
+elif [ "$AFTER" != rows ]; then
   step home-screen-icon s_icon
   step launch-to-sign-in s_launch && CARD_MS=$(($(now_ms) - T0))
   procs at-card
