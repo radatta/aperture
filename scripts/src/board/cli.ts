@@ -2,7 +2,16 @@
 // `pnpm board lane`; the commands are in USAGE below.
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { check, parseCache, type GitRun, type Head } from './conflicts.ts';
 import { decideHeavy } from './lease.ts';
@@ -32,7 +41,7 @@ import { machine } from './machine.ts';
 export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on any command: its usage; nothing runs)
   decide-heavy                          stdin {limits, liveLimits, live, slots, req} → HeavyDecision
   staleness <limits.json> <historyDir>  warning lines
-  overlap <repo> <boardDir>             writes <boardDir>/overlap.json
+  overlap <repo> <boardDir>             writes <boardDir>/overlap.json and its merge cache, conflicts-cache.json
   report <historyDir> [days] [--json]   usage by mix + job peaks
   barriers <historyDir> [days] [--json] how limiting the cap is
   machine <boardDir> [--json]           the Mac's power line and the slowdown ratio (F120)
@@ -92,7 +101,8 @@ function readJsonl(dir: string, prefix: string): unknown[] {
   );
 }
 
-const git = (cwd: string, ...a: string[]) => {
+// null when git failed — a caller that would read an empty answer as "nothing there" must tell the two apart.
+const gitOr = (cwd: string, ...a: string[]): string | null => {
   try {
     return execFileSync('git', ['-C', cwd, ...a], {
       encoding: 'utf8',
@@ -101,9 +111,10 @@ const git = (cwd: string, ...a: string[]) => {
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
     });
   } catch {
-    return '';
+    return null;
   }
 };
+const git = (cwd: string, ...a: string[]) => gitOr(cwd, ...a) ?? '';
 
 // Every worktree on a branch (the detached main checkout is skipped) with the files its branch touches, and its
 // committed head for the merge-tree check (a branch with no commit of its own has none).
@@ -120,12 +131,14 @@ function worktrees(repo: string): { trees: Tree[]; heads: Head[] } {
     if (!base) continue;
     const branch = line.slice('branch refs/heads/'.length);
     const committed = git(path, 'diff', '--name-only', base, 'HEAD');
-    const dirty = git(path, 'diff', '--name-only', 'HEAD');
-    const untracked = git(path, 'ls-files', '--others', '--exclude-standard');
+    const dirty = gitOr(path, 'diff', '--name-only', 'HEAD');
+    const untracked = gitOr(path, 'ls-files', '--others', '--exclude-standard');
+    const files = branchFiles(committed, dirty ?? '', untracked ?? '');
     trees.push({
       branch,
-      files: branchFiles(committed, dirty, untracked),
-      uncommitted: branchFiles('', dirty, untracked),
+      files,
+      // unreadable working tree: every file may be dirty, so none of its overlaps reads "merges clean"
+      uncommitted: dirty === null || untracked === null ? files : branchFiles('', dirty, untracked),
     });
     const at = Number(git(path, 'log', '-1', '--format=%ct', 'HEAD').trim()) * 1000;
     if (sha && sha !== base && at)
@@ -134,15 +147,32 @@ function worktrees(repo: string): { trees: Tree[]; heads: Head[] } {
   return { trees, heads };
 }
 
-// The merge-tree check's git: read-only, and the objects each merge writes go to a scratch store that is emptied
-// after the run (the shared object store stays as it was: docs/ops/SESSION-BOARD.md → Overlaps).
+const SCRATCH = 'aperture-conflicts-';
+const SCRATCH_TTL_MS = 3600_000;
+
+// A run killed before its finally (SIGKILL, the VM's memory killer) leaves its scratch store: sweep old ones.
+function sweepScratch(now: number) {
+  for (const d of readdirSync(tmpdir()))
+    if (d.startsWith(SCRATCH))
+      try {
+        if (now - statSync(join(tmpdir(), d)).mtimeMs > SCRATCH_TTL_MS)
+          rmSync(join(tmpdir(), d), { recursive: true, force: true });
+      } catch {
+        // another run's, removed under us
+      }
+}
+
+// The merge-tree check's git: read-only, and the objects each merge writes go to a scratch store on the
+// container's own disk, removed after the run — none are added to the shared store (docs/ops/SESSION-BOARD.md →
+// Overlaps).
 function conflictCheck(repo: string, boardDir: string, heads: Head[], now: Date) {
   const mainSha = git(repo, 'rev-parse', '--verify', '--quiet', 'origin/main').trim();
   const mainTree = git(repo, 'rev-parse', '--verify', '--quiet', 'origin/main^{tree}').trim();
   const common = git(repo, 'rev-parse', '--git-common-dir').trim();
   if (!mainSha || !mainTree || !common) return undefined;
   const cacheFile = join(boardDir, 'conflicts-cache.json');
-  const objects = mkdtempSync(join(boardDir, 'conflicts-objects.'));
+  sweepScratch(now.getTime());
+  const objects = mkdtempSync(join(tmpdir(), SCRATCH));
   const run: GitRun = (args, timeoutMs) => {
     const r = spawnSync('git', ['-C', repo, ...args], {
       encoding: 'utf8',

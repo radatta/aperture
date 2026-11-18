@@ -39,7 +39,8 @@ export const MAIN = 'main';
 export const STALE_DAYS = 7;
 export const RUN_BUDGET_MS = 10_000;
 export const MERGE_TIMEOUT_MS = 5_000;
-const MAX_CANDIDATES = 200; // main commits tried per lane when looking for its squash
+const MAX_CANDIDATES = 200; // main commits tried per lane per run when looking for its squash
+const MAX_PATHSPEC = 500; // more files than this: walk main unfiltered (a long argv can hit E2BIG)
 
 export const emptyCache = (): Cache => ({ v: 1, pairs: {}, landed: {} });
 
@@ -96,27 +97,27 @@ export function check(input: Input, run: GitRun, old: Cache, clock = Date.now): 
     return m;
   };
 
-  const stale = input.heads
-    .filter((h) => input.now - h.at > STALE_DAYS * 86400_000)
-    .map((h) => h.branch);
+  const isStale = (h: Head) => input.now - h.at > STALE_DAYS * 86400_000;
+  const stale: string[] = [];
   const live: Head[] = [];
   const landed: string[] = [];
   const mainHit = new Map<string, Merge>();
 
-  for (const h of input.heads) {
-    if (stale.includes(h.branch)) continue;
+  // A stale lane is still checked for having landed — that's the cleanup hint — but never counts as pending, and
+  // goes after the live ones, so it never spends their budget.
+  const byLive = [...input.heads].sort((x, y) => Number(isStale(x)) - Number(isStale(y)));
+  for (const h of byLive) {
     const vsMain = merge(h.sha, main.sha);
-    if (!vsMain) {
-      pending++;
-      continue;
-    }
-    const l = landedAt(h, vsMain, main, run, merge, old.landed[h.sha], () => clock() >= deadline);
-    if (l.record) cache.landed[h.sha] = l.record;
-    if (l.state === 'unknown') pending++;
-    else if (l.state === 'landed') landed.push(h.branch);
+    const l = vsMain
+      ? landedAt(h, vsMain, main, run, merge, old.landed[h.sha], () => clock() >= deadline)
+      : null;
+    if (l?.record) cache.landed[h.sha] = l.record;
+    if (l?.state === 'landed') landed.push(h.branch);
+    else if (isStale(h)) stale.push(h.branch);
+    else if (!l || l.state === 'unknown') pending++;
     else {
       live.push(h);
-      mainHit.set(h.branch, vsMain);
+      mainHit.set(h.branch, vsMain!);
     }
   }
 
@@ -173,17 +174,11 @@ function landedAt(
     return { state: 'landed', record: { at: main.sha } };
   if (prev?.through === main.sha) return { state: 'live', record: prev };
   if (!h.files.length) return { state: 'live', record: { through: main.sha } };
+  if (spent()) return { state: 'unknown', record: prev };
   const from = prev?.through ?? h.base;
+  const paths = h.files.length > MAX_PATHSPEC ? [] : ['--', ...h.files];
   const r = run(
-    [
-      'log',
-      '--first-parent',
-      '--reverse',
-      '--format=%H %T',
-      `${from}..${main.sha}`,
-      '--',
-      ...h.files,
-    ],
+    ['log', '--first-parent', '--reverse', '--format=%H %T', `${from}..${main.sha}`, ...paths],
     MERGE_TIMEOUT_MS,
   );
   if (r.code !== 0) return { state: 'unknown', record: prev };
@@ -191,15 +186,18 @@ function landedAt(
     .split('\n')
     .map((l) => l.trim().split(' '))
     .filter((p): p is [string, string] => p.length === 2 && OID.test(p[0]!) && OID.test(p[1]!))
-    .filter(([c]) => c !== main.sha)
-    .slice(-MAX_CANDIDATES);
+    .filter(([c]) => c !== main.sha);
+  // Oldest first, a run's worth at a time: `through` is the last one tried, and the next run goes on from it.
+  const cut = commits.length > MAX_CANDIDATES;
   let through = prev?.through;
-  for (const [c, tree] of commits) {
+  for (const [c, tree] of commits.slice(0, MAX_CANDIDATES)) {
     if (spent()) return { state: 'unknown', record: through ? { through } : prev };
     const m = merge(h.sha, c);
     if (!m) return { state: 'unknown', record: through ? { through } : prev };
     if (!m.files.length && m.tree === tree) return { state: 'landed', record: { at: c } };
     through = c;
   }
+  // more left than a run tries: not known yet, and the next run picks up after `through`
+  if (cut) return { state: 'unknown', record: { through } };
   return { state: 'live', record: { through: main.sha } };
 }

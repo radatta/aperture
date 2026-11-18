@@ -4,6 +4,7 @@ import {
   DEV_START_ATTEMPTS_PER_DAY,
   DEV_STARTS_PER_DAY,
   LC_START_ATTEMPT_CAP_ERROR,
+  SITTING_ACTIVE_ERROR,
   SITTING_START_CAP_ERROR,
   appDay,
   budgetLine,
@@ -14,11 +15,17 @@ import {
 import type { LedgerEntry } from './ledger';
 
 describe('budget', () => {
-  it('matches the BFF: the refusal texts and the dev caps are shared/sittings.ts’s', () => {
+  it('matches the BFF: the refusal texts and the dev caps are shared/sittings.ts’s, the zone dates.ts’s', () => {
     const src = readFileSync(
       new URL('../../../packages/shared/src/sittings.ts', import.meta.url),
       'utf8',
     );
+    const dates = readFileSync(
+      new URL('../../../packages/shared/src/dates.ts', import.meta.url),
+      'utf8',
+    );
+    expect(dates).toContain("USER_TIME_ZONE = 'America/Los_Angeles'");
+    expect(src).toContain(`SITTING_ACTIVE_ERROR = '${SITTING_ACTIVE_ERROR}'`);
     expect(src).toContain(`SITTING_START_CAP_ERROR = '${SITTING_START_CAP_ERROR}'`);
     expect(src).toContain(`LC_START_ATTEMPT_CAP_ERROR = '${LC_START_ATTEMPT_CAP_ERROR}'`);
     expect(src).toContain(`SITTING_STARTS_PER_DAY_DEV = ${DEV_STARTS_PER_DAY};`);
@@ -38,6 +45,7 @@ describe('budget', () => {
     expect(appDay(Date.parse('2026-11-17T12:00:00Z'))).toBe('2026-11-17'); // 04:00 PST
     expect(appDay(Date.parse('2026-07-01T10:59:00Z'))).toBe('2026-06-30'); // 03:59 PDT
     expect(appDay(Date.parse('2026-07-01T11:00:00Z'))).toBe('2026-07-01'); // 04:00 PDT
+    expect(appDay(Date.parse('2026-11-17T11:00:00Z'), 2)).toBe('2026-11-17'); // 03:00 PST, a 02:00 day start
   });
 
   it('counts today’s distinct sitting Starts only — not reps, other kinds, yesterday or a torn timestamp', () => {
@@ -67,7 +75,7 @@ describe('budget', () => {
     expect(startsToday(entries, now)).toBe(2);
   });
 
-  it('believes a refusal only at a plausible count: half the cap or more', () => {
+  it('believes a starts refusal only at a plausible count, half the cap or more; an attempts one always', () => {
     expect(budgetReason('starts', 500)).toEqual({
       needsYou:
         "the test user's 1000 sitting starts for today are spent (~500 counted); rerun after 04:00 PT",
@@ -75,8 +83,10 @@ describe('budget', () => {
     expect(budgetReason('starts', 499)).toEqual({
       fail: 'the BFF refused a Start for its daily cap of 1000 sitting starts at ~499 counted — check the gate counter',
     });
-    expect(budgetReason('attempts', 1999)).toHaveProperty('fail');
-    expect(budgetReason('attempts', 2000)).toHaveProperty('needsYou');
+    expect(budgetReason('attempts', 3, 6)).toEqual({
+      needsYou:
+        "the test user's 4000 Start attempts for today are spent (~3 sittings counted; resumes and refused Starts aren't in the ledger); rerun after 06:00 PT",
+    });
   });
 
   it('says the estimate in one line', () => {

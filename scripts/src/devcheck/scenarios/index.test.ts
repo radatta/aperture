@@ -48,9 +48,64 @@ describe('discovery', () => {
   });
 
   it('keeps the scenarios that predate it in their old order, and the list frozen', () => {
-    expect(LEGACY_ORDER).toHaveLength(44);
+    // the run order before discovery (the SCENARIOS array it replaced, 2026-11-17): never edited
+    expect([...LEGACY_ORDER]).toEqual([
+      'smoke',
+      'dev-slot-b',
+      'ios-standalone',
+      'ios-probe',
+      'capture-task',
+      'capture-dock',
+      'parts-v2',
+      'parts-v2b',
+      'parts-v2b-reads',
+      'day-guards',
+      'dead-rows',
+      'plan-write-refetch',
+      'flux-history',
+      'flux-perf',
+      'attachment-delete',
+      'places',
+      'errand-rows-night',
+      'log-mcp',
+      'private-log',
+      'reflection-line',
+      'phone-nits',
+      'timer-credit',
+      'calibration-integrity',
+      'recurring',
+      'areas',
+      'category-suggest',
+      'finance',
+      'timed-reminders',
+      'cognito-refresh',
+      'lc-coach-ai',
+      'lc-catalog',
+      'lc-sittings',
+      'lc-coach',
+      'coach-fixes',
+      'dev-concurrency-caps',
+      'bff-hardening',
+      'bff-shapes',
+      'per-slot-runs',
+      'identifier-cleanup',
+      'capture-titles',
+      'siri-capture',
+      'lc-extension',
+      'failed-reads',
+      'sitting-auto-close',
+    ]);
     const legacy = new Set<string>(LEGACY_ORDER);
     expect(SCENARIOS.map((s) => s.id).filter((id) => legacy.has(id))).toEqual([...LEGACY_ORDER]);
+  });
+
+  it('DEV-CHECK.md names no scenario file that isn’t there', () => {
+    const doc = readFileSync(new URL('../../../../docs/ops/DEV-CHECK.md', import.meta.url), 'utf8');
+    const named = [...doc.matchAll(/scenarios\/([a-z0-9-]+)\.ts/g)].map((m) => `${m[1]}.ts`);
+    expect(named.length).toBeGreaterThan(0);
+    expect(
+      named.filter((f) => !scenarioFiles().includes(f) && f !== 'index.ts' && f !== 'ios-paths.ts'),
+    ).toEqual([]);
   });
 
   it('refuses a file with no scenario, two, or one under another id', () => {
@@ -72,6 +127,8 @@ describe('discovery', () => {
       'areas',
     ]);
     expect(() => ordered([smoke, sc('no-order')])).toThrow('scenario no-order has no order');
+    expect(() => ordered([smoke, sc('nan', NaN)])).toThrow('order must be a number above 10');
+    expect(() => ordered([smoke, sc('first', 10)])).toThrow('order must be a number above 10'); // smoke runs first
   });
 });
 

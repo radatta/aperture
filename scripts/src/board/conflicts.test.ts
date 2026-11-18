@@ -1,9 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { main as cli } from './cli.ts';
 import { check, emptyCache, mergeTree, parseCache, type GitRun, type Head } from './conflicts.ts';
 
 const hex = (s: string) => createHash('sha1').update(s).digest('hex');
@@ -143,13 +152,13 @@ describe('check', () => {
       return g.run(args, ms);
     };
     const heads = [head('a', 'a'), head('b', 'b')];
-    // 600 ms a merge against a 500 ms budget: one new merge a run
+    // 600 ms a merge against a 500 ms budget: one new merge a run, and no landed walk once it's spent
     const first = check({ heads, main, now: NOW, budgetMs: 500 }, slow, emptyCache(), clock);
-    expect(first.pending).toBe(1); // b vs main didn't run, so b's pair wasn't tried
+    expect(first.pending).toBe(2); // a vs main ran but a's walk waits; b vs main didn't run
     expect(first.conflicts).toEqual([]);
     t = 0;
     const second = check({ heads, main, now: NOW, budgetMs: 500 }, slow, first.cache, clock);
-    expect(second.pending).toBe(1); // b vs main ran; a vs b waits
+    expect(second.pending).toBe(1); // a walked (live); b vs main ran, its walk and a vs b wait
     t = 0;
     const third = check({ heads, main, now: NOW, budgetMs: 500 }, slow, second.cache, clock);
     expect(third.pending).toBe(0);
@@ -216,12 +225,35 @@ describe('check', () => {
     expect(c2.cache.landed[sha('a')]).toEqual({ through: main2.sha });
   });
 
-  it('a lane with no commit for STALE_DAYS is stale: no merges, out of the lists', () => {
-    const g = fake({});
+  it('a lane with no commit for STALE_DAYS is stale: out of the lists, never pending, and no pair merges', () => {
+    const g = fake(
+      { [k('a', 'm')]: { tree: T('1'), files: ['x.ts'] }, [k('b', 'm')]: { tree: T('2') } },
+      { [`${sha('0')}..${sha('m')}`]: '' },
+    );
     const old = { ...head('a', 'a'), at: NOW - 8 * 86400_000 };
+    const c = check({ heads: [old, head('b', 'b')], main, now: NOW }, g.run, emptyCache());
+    expect(c).toMatchObject({ stale: ['a'], conflicts: [], landed: [] });
+    expect(g.calls.filter((x) => x.includes(sha('a')) && x.includes(sha('b')))).toEqual([]);
+  });
+
+  it('a stale lane that squash-landed reads landed, so the cleanup hint is kept', () => {
+    const g = fake({ [k('a', 'm')]: { tree: main.tree } });
+    const old = { ...head('a', 'a'), at: NOW - 30 * 86400_000 };
     const c = check({ heads: [old], main, now: NOW }, g.run, emptyCache());
-    expect(c).toMatchObject({ stale: ['a'], conflicts: [], landed: [], pending: 0 });
-    expect(g.calls).toEqual([]);
+    expect(c).toMatchObject({ stale: [], landed: ['a'], pending: 0 });
+  });
+
+  it('a lane is pending, not live, its walk has more main commits than a run tries', () => {
+    const many = Array.from({ length: 201 }, (_, i) => `${sha(`c${i}`)} ${T(`c${i}`)}`).join('\n');
+    const merges: Record<string, { tree: string; files?: string[] }> = {
+      [k('a', 'm')]: { tree: T('1') },
+    };
+    for (let i = 0; i < 201; i++)
+      merges[[sha('a'), sha(`c${i}`)].sort().join(' ')] = { tree: T(`x${i}`) };
+    const g = fake(merges, { [`${sha('0')}..${sha('m')}`]: many });
+    const c = check({ heads: [head('a', 'a')], main, now: NOW }, g.run, emptyCache());
+    expect(c.pending).toBe(1);
+    expect(c.cache.landed[sha('a')]).toEqual({ through: sha('c199') }); // the 200th, oldest first
   });
 
   it('parseCache starts over on a torn or foreign file', () => {
@@ -231,61 +263,141 @@ describe('check', () => {
   });
 });
 
-// The real git: a temp repo with a lane that conflicts with main, one that merges cleanly, and one squash-merged.
+// The caller's GIT_DIR, GIT_INDEX_FILE… would point git away from the temp repo.
+const cleanEnv = () =>
+  Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('GIT_')));
+
+// The real git: a temp repo with a lane that conflicts with main, one that merges cleanly, one squash-merged, and
+// one squash-merged that main then edited over (found by walking main's history).
 describe('check against git', () => {
-  it('tells a conflict, a clean lane and a squash-landed lane apart', () => {
+  it('tells a conflict, a clean lane and two squash-landed lanes apart', () => {
     const dir = mkdtempSync(join(tmpdir(), 'conflicts-'));
-    const g = (...a: string[]) =>
-      execFileSync('git', ['-C', dir, ...a], {
-        encoding: 'utf8',
-        env: {
-          ...process.env,
-          GIT_AUTHOR_NAME: 't',
-          GIT_AUTHOR_EMAIL: 't@t',
-          GIT_COMMITTER_NAME: 't',
-          GIT_COMMITTER_EMAIL: 't@t',
-        },
-      }).trim();
-    const write = (f: string, s: string) => writeFileSync(join(dir, f), s);
-    const commit = (m: string) => (g('add', '-A'), g('commit', '-qm', m), g('rev-parse', 'HEAD'));
-    g('init', '-q', '-b', 'trunk');
-    write('a.txt', 'one\ntwo\nthree\n');
-    write('b.txt', 'b\n');
-    const base = commit('base');
-    g('switch', '-qc', 'hot');
-    write('a.txt', 'one\nHOT\nthree\n');
-    const hot = commit('hot');
-    g('switch', '-q', 'trunk');
-    g('switch', '-qc', 'cool');
-    write('b.txt', 'b\ncool\n');
-    const cool = commit('cool');
-    g('switch', '-q', 'trunk');
-    g('switch', '-qc', 'done');
-    write('c.txt', 'c\n');
-    const done = commit('done');
-    g('switch', '-q', 'trunk');
-    write('c.txt', 'c\n'); // the squash of `done`
-    commit('squash done');
-    write('a.txt', 'one\nMAIN\nthree\n');
-    const m = commit('main edit');
-    const run: GitRun = (args, ms) => {
-      const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: ms });
-      return { code: r.status, stdout: r.stdout };
-    };
-    const at = Date.now();
-    const heads: Head[] = [
-      { branch: 'hot', sha: hot, base, files: ['a.txt'], at },
-      { branch: 'cool', sha: cool, base, files: ['b.txt'], at },
-      { branch: 'done', sha: done, base, files: ['c.txt'], at },
-    ];
-    const c = check(
-      { heads, main: { sha: m, tree: g('rev-parse', `${m}^{tree}`) }, now: at },
-      run,
-      emptyCache(),
-    );
-    expect(c.conflicts).toEqual([{ a: 'hot', b: 'main', files: ['a.txt'] }]);
-    expect(c.landed).toEqual(['done']);
-    expect(c.clean).toEqual([['cool', 'hot']]);
-    expect(c.pending).toBe(0);
+    try {
+      realGit(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function realGit(dir: string) {
+  const g = (...a: string[]) =>
+    execFileSync('git', ['-C', dir, '-c', 'commit.gpgsign=false', ...a], {
+      encoding: 'utf8',
+      env: {
+        ...cleanEnv(),
+        GIT_AUTHOR_NAME: 't',
+        GIT_AUTHOR_EMAIL: 't@t',
+        GIT_COMMITTER_NAME: 't',
+        GIT_COMMITTER_EMAIL: 't@t',
+      },
+    }).trim();
+  const write = (f: string, s: string) => writeFileSync(join(dir, f), s);
+  const commit = (m: string) => (g('add', '-A'), g('commit', '-qm', m), g('rev-parse', 'HEAD'));
+  g('init', '-q', '-b', 'trunk');
+  write('a.txt', 'one\ntwo\nthree\n');
+  write('b.txt', 'b\n');
+  const base = commit('base');
+  g('switch', '-qc', 'hot');
+  write('a.txt', 'one\nHOT\nthree\n');
+  const hot = commit('hot');
+  g('switch', '-q', 'trunk');
+  g('switch', '-qc', 'cool');
+  write('b.txt', 'b\ncool\n');
+  const cool = commit('cool');
+  g('switch', '-q', 'trunk');
+  g('switch', '-qc', 'done');
+  write('c.txt', 'c\n');
+  const done = commit('done');
+  g('switch', '-q', 'trunk');
+  g('switch', '-qc', 'later');
+  write('d.txt', 'd\nLATER\n');
+  const later = commit('later');
+  g('switch', '-q', 'trunk');
+  write('c.txt', 'c\n'); // the squash of `done`
+  commit('squash done');
+  write('d.txt', 'd\nLATER\n'); // the squash of `later`…
+  commit('squash later');
+  write('d.txt', 'd\nMAIN\n'); // …that main then edits over
+  write('a.txt', 'one\nMAIN\nthree\n');
+  const m = commit('main edit');
+  const run: GitRun = (args, ms) => {
+    const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: ms });
+    return { code: r.status, stdout: r.stdout };
+  };
+  const at = Date.now();
+  const heads: Head[] = [
+    { branch: 'hot', sha: hot, base, files: ['a.txt'], at },
+    { branch: 'cool', sha: cool, base, files: ['b.txt'], at },
+    { branch: 'done', sha: done, base, files: ['c.txt'], at },
+    { branch: 'later', sha: later, base, files: ['d.txt'], at },
+  ];
+  const c = check(
+    { heads, main: { sha: m, tree: g('rev-parse', `${m}^{tree}`) }, now: at },
+    run,
+    emptyCache(),
+  );
+  expect(c.conflicts).toEqual([{ a: 'hot', b: 'main', files: ['a.txt'] }]);
+  expect(c.landed).toEqual(['done', 'later']);
+  expect(c.clean).toEqual([['cool', 'hot']]);
+  expect(c.pending).toBe(0);
+}
+
+// cli.ts overlap end to end: the worktrees it finds, the scratch object store (removed, and the shared one left as it
+// was), the cache it writes, and an old scratch store a killed run left behind swept.
+describe('cli.ts overlap against git', () => {
+  it('writes the conflict and the cache, and adds nothing to the shared object store', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'conflicts-cli-'));
+    const was = process.env.TMPDIR;
+    try {
+      const env = {
+        ...cleanEnv(),
+        GIT_AUTHOR_NAME: 't',
+        GIT_AUTHOR_EMAIL: 't@t',
+        GIT_COMMITTER_NAME: 't',
+        GIT_COMMITTER_EMAIL: 't@t',
+      };
+      const g = (cwd: string, ...a: string[]) =>
+        execFileSync('git', ['-C', cwd, '-c', 'commit.gpgsign=false', ...a], {
+          encoding: 'utf8',
+          env,
+        }).trim();
+      const repo = join(dir, 'repo');
+      const board = join(dir, 'board');
+      const scratch = join(dir, 'tmp');
+      for (const d of [repo, board, scratch]) mkdirSync(d);
+      const commit = (cwd: string, f: string, s: string) => {
+        writeFileSync(join(cwd, f), s);
+        g(cwd, 'add', '-A');
+        g(cwd, 'commit', '-qm', f);
+      };
+      g(repo, 'init', '-q', '-b', 'trunk');
+      commit(repo, 'a.txt', 'one\ntwo\n');
+      g(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+      g(repo, 'worktree', 'add', '-q', '-b', 'hot', join(dir, 'hot'));
+      commit(join(dir, 'hot'), 'a.txt', 'one\nHOT\n');
+      commit(repo, 'a.txt', 'one\nMAIN\n');
+      g(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+      const killed = join(scratch, 'aperture-conflicts-old');
+      mkdirSync(killed);
+      utimesSync(killed, new Date(Date.now() - 2 * 3600_000), new Date(Date.now() - 2 * 3600_000));
+      const objects = () => g(repo, 'count-objects', '-v');
+      const before = objects();
+
+      process.env.TMPDIR = scratch;
+      expect(cli(['overlap', repo, board], () => '')).toBe('0 overlapping pair(s), 1 conflict(s)');
+
+      const o = JSON.parse(readFileSync(join(board, 'overlap.json'), 'utf8'));
+      expect(o.conflicts).toEqual([{ a: 'hot', b: 'main', files: ['a.txt'] }]);
+      const cache = JSON.parse(readFileSync(join(board, 'conflicts-cache.json'), 'utf8'));
+      expect(Object.keys(cache.pairs)).toHaveLength(1);
+      expect(objects()).toBe(before);
+      expect(readdirSync(scratch)).toEqual([]); // this run's store removed, the killed run's swept
+      expect(readdirSync(board).sort()).toEqual(['conflicts-cache.json', 'overlap.json']);
+    } finally {
+      if (was === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = was;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

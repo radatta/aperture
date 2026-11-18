@@ -61,10 +61,12 @@ describe('earlierOrphans', () => {
   it('pairs answers with intents one to one: a dropped create retried under the same title stays an orphan (F257)', () => {
     const created = (id: string, run = 'r') =>
       e('created', id, { run, via: 'api:createTask', title: 'x' });
-    // A dropped (no answer), then B answered: A is the orphan, whatever B's answer says.
-    expect(orphanIntents([intent('r', 'x'), intent('r', 'x'), created('b')])).toEqual([
-      intent('r', 'x'),
-    ]);
+    // Two sent, one answered: one is an orphan. Which one dropped can't be told from the ledger, so the answer
+    // pairs with the oldest (first in, first out) and the later intent is the one reported.
+    const at = (t: string) => ({ ...intent('r', 'x'), t });
+    const first = at('2026-10-13T00:00:01.000Z');
+    const second = at('2026-10-13T00:00:02.000Z');
+    expect(orphanIntents([first, second, created('b')])).toEqual([second]);
     // Two in flight at once, answered out of order: both resolved.
     expect(orphanIntents([intent('r', 'x'), intent('r', 'x'), created('b'), created('a')])).toEqual(
       [],

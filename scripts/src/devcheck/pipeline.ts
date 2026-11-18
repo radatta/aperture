@@ -6,7 +6,16 @@ import { DEV_WORK_MIN, coachSlotOf, financeRowOf, ledgerKind, type ApiClient } f
 import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
-import { budgetLine, budgetReason, capRefusal, startsToday, type Refusal } from './budget';
+import {
+  DAY_START_HOUR,
+  SITTING_ACTIVE_ERROR,
+  budgetLine,
+  budgetReason,
+  capRefusal,
+  leftOpenReason,
+  startsToday,
+  type Refusal,
+} from './budget';
 import { DevcheckError, codeOf, detailOf, type ReasonCode } from './errors';
 import { IOS_NOTE, type Ios, type IosClient } from './ios';
 import { earlierOrphans, orphanIntents, pendingIds, type Ledger, type LedgerEntry } from './ledger';
@@ -203,12 +212,14 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
 
   d.ledger.append({ run: d.runId, op: 'run-start' });
   // The sitting budget (budget.ts): this step's cap refusal, from an answer the step may have swallowed or the page's
-  // own Start; the body reads it waits for before calling a failure.
+  // own Start; the body reads it waits for before calling a failure. A read still in flight from an earlier step
+  // is that step's, never this one's (`stepNo`). `spent`: the reason, once the budget has run out this run.
   let refusal: Refusal | null = null;
+  let stepNo = 0;
+  let spent: string | null = null;
+  let dayStart: number | undefined; // the test user's, once read; budget.ts's default till then
   const bodyReads: Promise<unknown>[] = [];
   const noteRefusal = (text: string) => (refusal ??= capRefusal(text));
-  r.sittingStarts = startsToday(d.ledger.read(), d.now());
-  d.log(budgetLine(r.sittingStarts));
   try {
     if (d.waitForDeploy) r.deployUrl = (await d.waitForDeploy()).url;
 
@@ -260,7 +271,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     page.on('response', (res) => {
       if (res.status() < 400 || new URL(res.url()).origin !== targetOrigin()) return;
       if (methodOf(res.url()) !== 'lcSittingStart') return;
-      bodyReads.push(res.text().then(noteRefusal, () => undefined));
+      const n = stepNo;
+      bodyReads.push(
+        res.text().then(
+          (t) => n === stepNo && noteRefusal(t),
+          () => undefined,
+        ),
+      );
     });
     page.on('requestfailed', (req) => {
       const why = req.failure?.()?.errorText ?? 'failed';
@@ -277,7 +294,6 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       fresh,
       (_method, status, text) => void (status !== 200 && noteRefusal(text)),
     );
-
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
     for (const id of categoriesLast(pendingIds(d.ledger.read()))) {
       const out = await clean(api, id);
@@ -298,6 +314,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // only lc-coach-ai's steps, which turn it on for themselves. LeetCode Premium goes back on (lc-coach's progress
     // step switches it off and back on), and the plan mode back to auto (coach-fixes sets one per step).
     const settings = await api.reads.getSettings();
+    dayStart = settings.dayStartHour ?? DAY_START_HOUR; // the gate's day, as the BFF keys it
+    r.sittingStarts = startsToday(d.ledger.read(), d.now(), dayStart);
+    d.log(budgetLine(r.sittingStarts, dayStart));
     const base = {
       ...(settings.pomodoroWorkMin !== DEV_WORK_MIN ? { pomodoroWorkMin: DEV_WORK_MIN } : {}),
       ...(settings.coachAiPick !== false ? { coachAiPick: false } : {}),
@@ -388,6 +407,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           continue;
         }
         const s0 = d.now();
+        stepNo++;
         refusal = null;
         bodyReads.length = 0;
         try {
@@ -409,18 +429,24 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           const error = err instanceof Error ? err.message : String(err);
           await Promise.allSettled(bodyReads);
           const kind = capRefusal(error) ?? refusal;
-          const budget = kind ? budgetReason(kind, startsToday(d.ledger.read(), d.now())) : null;
-          if (budget && 'needsYou' in budget) {
+          const budget = kind
+            ? budgetReason(kind, startsToday(d.ledger.read(), d.now(), dayStart), dayStart)
+            : null;
+          const leftOpen: string | null =
+            !kind && spent && error.includes(SITTING_ACTIVE_ERROR) ? leftOpenReason(spent) : null;
+          const why: string | null = budget && 'needsYou' in budget ? budget.needsYou : leftOpen;
+          if (why) {
             // The day's budget is spent: nothing broke, and every step after builds on a Start it can't get.
-            needs = budget.needsYou;
+            spent ??= why;
+            needs = why;
             res.status = 'needs-you';
-            res.note = budget.needsYou;
+            res.note = why;
             res.ms = d.now() - s0;
             continue;
           }
           failed = true;
           res.status = 'fail';
-          res.error = budget ? `${error} (${budget.fail})` : error;
+          res.error = budget && 'fail' in budget ? `${error} (${budget.fail})` : error;
           fail('STEP_FAILED');
           // A secret may have been on screen (scenario.ts hidingSecret): the error text stands alone.
           if (!shotWithheld(err))

@@ -140,9 +140,9 @@ export const INPUT_RULES: InputRule[] = [
     why: 'imports lambdas/src/rpc/argSpecs.ts by path at runtime (and so everything it imports)',
   },
   {
-    inputs: ['packages/shared/src/sittings.ts'],
+    inputs: ['packages/shared/src/sittings.ts', 'packages/shared/src/dates.ts'],
     tests: ['scripts/src/devcheck/budget.test.ts'],
-    why: 'pins the sitting caps and refusal texts to shared’s by reading the file',
+    why: 'pins the sitting caps, refusal texts and the user’s zone to shared’s by reading the files',
   },
   {
     inputs: ['packages/shared/src/'],
@@ -320,6 +320,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/commit-identity.test.ts': 'temp repos; spawns its sibling commit-identity.ts',
   'scripts/src/devcheck/ios-plans.test.ts': 'reads devcheck/scenarios (same area)',
   'scripts/src/devcheck/ledger.test.ts': 'temp dir',
+  'scripts/src/devcheck/list.test.ts': 'reads devcheck/*.ts, api/ and mcp/ (same area)',
   'scripts/src/devcheck/login.test.ts': 'temp dir',
   'scripts/src/devcheck/mcp-login.test.ts': 'temp dir',
   'scripts/src/identifiers-scan.test.ts': 'temp repos',

@@ -78,11 +78,15 @@ runs, and every sitting row then failed `Too many sittings started today.` until
 On a dev slot the BFF lifts them to 1000 and 4000, keyed off its `STAGE` (shared `sittings.ts` →
 `sittingStartsPerDay`, `lcStartAttemptsPerDay`); any other stage, an unset one included, keeps prod's. The gate
 row isn't readable through the API, so the harness estimates it (`budget.ts`): every Start is in the slot's ledger
-before its call, so the report's header gives today's count ("Sitting starts today (ledger estimate): ~N of 1000,
-resets 04:00 PT"), and a step that fails on either cap's refusal — thrown, swallowed by the step (the API client's
-answers) or the page's own Start — reads **needs-you** with the reason, as does the rest of its scenario, and the run
-stays green. Only when the count is plausible, half the cap or more: under it the step stays a failure, "check the
-gate counter" (a counter bug, or another writer on the test user, isn't a spent budget).
+before its call, so the report's header gives today's count over the app day the BFF keys the gate by (the test
+user's `dayStartHour`, read at run start: "Sitting starts today (ledger estimate): ~N of 1000, resets 04:00 PT"),
+and a step that fails on either cap's refusal — thrown, swallowed by the step (the API client's answers) or the
+page's own Start, while that step runs — reads **needs-you** with the reason, as does the rest of its scenario, and
+the run stays green. A starts refusal only when the count is plausible, half the cap or more: under it the step stays
+a failure, "check the gate counter" (a counter bug, or another writer on the test user, isn't a spent budget). An
+attempts refusal always — that gate also counts resumes and refused Starts, which the ledger never sees. Once the
+budget has run out in a run, a later Start refused because a sitting the cut-short scenario opened is still open
+(`Another sitting is still open`) reads needs-you too.
 
 ## One-time setup
 
@@ -301,7 +305,7 @@ one:
 
 ```ts
 export const quickAdd: Scenario = {
-  id: 'quick-add', // the file is scenarios/quick-add.ts
+  id: 'quick-add', // its file's name: quick-add.ts
   title: 'Quick add parses a line',
   order: 65, // after capture-dock (60), before parts-v2 (70)
   tiers: ['full'],

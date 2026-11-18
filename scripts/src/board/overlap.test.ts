@@ -119,6 +119,25 @@ describe('overlaps with a merge-tree check', () => {
     ]);
   });
 
+  it('a landed or stale lane picked up again keeps its new, uncommitted edits in the overlap — only those', () => {
+    const o = overlaps(
+      [
+        { branch: 'a', files: ['x.ts', 'y.ts'] },
+        { branch: 'gone', files: ['x.ts', 'y.ts'], uncommitted: ['y.ts'] },
+        { branch: 'old', files: ['x.ts'], uncommitted: ['x.ts'] },
+      ],
+      {},
+      { ...none, landed: ['gone'], stale: ['old'] },
+    );
+    expect(o.pairs).toEqual([
+      { a: 'a', b: 'gone', files: ['y.ts'], git: 'unchecked' }, // x.ts is gone's landed commit: not news
+      { a: 'a', b: 'old', files: ['x.ts'], git: 'unchecked' },
+    ]);
+    expect(o.messages['gone']).toEqual([
+      'a also touches 1 of your files: y.ts — read its plan; expect a rebase conflict whichever merges second.',
+    ]);
+  });
+
   it('says an overlap git merges cleanly is harmless, after the unchecked ones', () => {
     const o = overlaps(
       [

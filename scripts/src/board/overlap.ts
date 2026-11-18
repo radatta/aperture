@@ -17,7 +17,7 @@ export const ALWAYS_COLLIDE = new Set([
 ]);
 
 // git: what merge-tree said of the two heads — absent when no check ran; 'unchecked' when a shared file is
-// uncommitted or the merge is still pending.
+// uncommitted, the merge is still pending, or its only conflicts are ones a lane already has with main.
 export type Pair = {
   a: string;
   b: string;
@@ -32,8 +32,8 @@ export type Overlap = {
   // from the merge-tree check, when one ran:
   conflicts?: Conflict[]; // git can't merge these (b 'main': against origin/main)
   clean?: [string, string][]; // overlapping or not, git merges these two cleanly at both heads
-  landed?: string[]; // squash-merged, worktree not cleaned up: out of every list above
-  stale?: string[]; // no commit in STALE_DAYS: out of every list above
+  landed?: string[]; // squash-merged, worktree not cleaned up: out of every list above but its uncommitted files
+  stale?: string[]; // no commit in STALE_DAYS: out of every list above but its uncommitted files
   uncommitted?: { branch: string; files: string[] }[];
   pending?: number; // merges left for the next run
 };
@@ -65,8 +65,11 @@ export function overlaps(
         0,
       );
 
+  // A landed or stale lane's commits say nothing about what comes next, but edits made since do: those stay in.
   const sorted = trees
-    .filter((t) => !gone.has(t.branch))
+    .flatMap((t) =>
+      !gone.has(t.branch) ? [t] : t.uncommitted?.length ? [{ ...t, files: t.uncommitted }] : [],
+    )
     .sort((x, y) => x.branch.localeCompare(y.branch));
   for (let i = 0; i < sorted.length; i++) {
     for (let j = i + 1; j < sorted.length; j++) {

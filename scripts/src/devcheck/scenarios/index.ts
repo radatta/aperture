@@ -91,6 +91,9 @@ export function orderOf(s: Scenario): number {
     throw new Error(
       `scenario ${s.id} has no order — set one (scenario.ts → order) to place it among the others`,
     );
+  // smoke (10) runs first — delta runs rely on it — and NaN would leave the sort's order undefined
+  if (!Number.isFinite(s.order) || s.order <= 10)
+    throw new Error(`scenario ${s.id}: order must be a number above 10 (got ${s.order})`);
   return s.order;
 }
 
@@ -105,7 +108,7 @@ export const scenarioFiles = (dir = new URL('.', import.meta.url)) =>
 export const SCENARIOS: Scenario[] = ordered(
   await Promise.all(
     scenarioFiles().map(async (f) =>
-      scenarioOf(f, (await import(`./${f}`)) as Record<string, unknown>),
+      scenarioOf(f, (await import(/* @vite-ignore */ `./${f}`)) as Record<string, unknown>),
     ),
   ),
 );

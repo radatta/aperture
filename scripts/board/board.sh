@@ -155,7 +155,8 @@ cmd_status() {
     (.barriers // empty),
     (.machine.lines // [] | .[]),
     (if ((.overlap.conflicts // []) | length) > 0  # git merge-tree at the heads (SESSION-BOARD.md → Overlaps)
-     then "conflicts:", (.overlap.conflicts[] | "  \(.a) ✗ \(.b): \(.files | join(", "))") else empty end),
+     then "conflicts\(.overlap.t // null | if . then ((now - (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)) / 60 | floor) else 0 end | if . >= 10 then " (\(.) min old: is the sampler running?)" else "" end):",
+       (.overlap.conflicts[] | "  \(.a) ✗ \(.b): \(.files | join(", "))") else empty end),
     (if .overlap and ((.overlap.pairs // []) | length) > 0
      then "overlaps:", (.overlap.pairs[] | "  \(.a) ↔ \(.b): \(.files | join(", "))\(if .git == "clean" then " — merges clean" else "" end)") else empty end),
     (if ((.overlap.landed // []) | length) > 0 then "landed, worktree not cleaned up: \(.overlap.landed | join(", "))" else empty end),

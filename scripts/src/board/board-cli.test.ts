@@ -1351,4 +1351,24 @@ describe('board.sh status: conflicts and overlaps', () => {
       expect.stringMatching(/^sampler: /),
     ]);
   });
+
+  it('says how old the conflicts are once the last overlap run is 10 minutes back', () => {
+    mkdirSync(join(tmp, 'board'), { recursive: true });
+    const at = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
+    const status = (t: string) => {
+      writeFileSync(
+        join(tmp, 'board/overlap.json'),
+        JSON.stringify({ v: 1, t, pairs: [], conflicts: [{ a: 'a', b: 'main', files: ['z.ts'] }] }),
+      );
+      return spawnSync('bash', [join(boardDir, 'board.sh'), 'status'], {
+        env,
+        cwd: tmp,
+        encoding: 'utf8',
+      })
+        .stdout.split('\n')
+        .find((l) => l.startsWith('conflicts'));
+    };
+    expect(status(at(2))).toBe('conflicts:');
+    expect(status(at(25))).toBe('conflicts (25 min old: is the sampler running?):');
+  });
 });

@@ -278,18 +278,23 @@ last fetched; the merge-base keeps that safe.
 the files git can't merge. A lane pair lists only files neither lane already conflicts on with main (a lane behind
 main would otherwise repeat its main conflicts against every rebased neighbour). Each overlap pair carries `git`:
 `conflict`, `clean` (git merges both heads; the line says so and sorts last), or `unchecked` (a shared file is
-uncommitted — merge-tree sees commits only — or the merge is pending). Two lanes drop out of every list:
+uncommitted — merge-tree sees commits only, and a working tree git couldn't read counts as all uncommitted — the
+merge is pending, or it conflicts only on files a lane already conflicts on with main). Two lanes drop out of every
+list but for their uncommitted files, which still overlap (a parked lane picked up again):
 
 - **landed** — squash-merged, worktree not cleaned up: merging its head into main changes nothing, or into the
   first-parent main commit that squashed it gives that commit's tree (it would otherwise read as conflicting with
   its own squash once main moves over the same lines);
-- **stale** — no commit in 7 days (`STALE_DAYS`).
+- **stale** — no commit in 7 days (`STALE_DAYS`), and not landed (a stale lane is still checked for that, after the
+  live ones).
 
 Cost: one merge is 26–112 ms here (2026-11-17), so every merge is cached by its two shas in
 `board/conflicts-cache.json` — a run merges only what moved (a lane's commit: N merges; main moving: one per lane);
 entries whose shas are no longer a head or main drop out. A run stops new merges at 10 s (5 s per merge) and
-counts the rest as `pending`, picked up next run. Merges write objects, so they go to a scratch object dir (the
-shared store as an alternate) that is deleted after the run; a failed merge is never cached.
+counts the rest as `pending`, picked up next run; a landed walk tries 200 main commits a run, oldest first. Merges
+write objects, so they go to a scratch object dir on the container's own disk (`$TMPDIR/aperture-conflicts-*`, the
+shared store as an alternate), deleted after the run — and one a killed run left, an hour on: no object, ref or lock
+is added to the shared store (git may touch an existing object's mtime). A failed merge is never cached.
 
 SessionStart injects this branch's lines, conflicts first: "merge conflict with main on 1 file: … — rebase onto
 origin/main now.", "flux will conflict with you on 2 files: … (git merge-tree) — SendMessage session `flux`; whichever
