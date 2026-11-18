@@ -380,20 +380,36 @@ const sigCode = (sig: NodeJS.Signals | null) => 128 + (sig ? (constants.signals[
 
 // A step is done when heavy.sh exits; its pipes get 2 s to drain, so a leftover holder (a stray worker, the sampler's
 // last `sleep 1`) can't hold the gate open.
+// Each step reports its own exit code through step.sh, as the inner pass does through GATE_RESULT: heavy.sh's 0
+// alone is never a pass.
+const STEP_SH = fileURLToPath(new URL('./step.sh', import.meta.url));
 export const spawnExec: Exec = (step, heavy, root) => {
-  const c = spawn(heavy, ['--', ...step.argv], {
+  const dir = mkdtempSync(join(tmpdir(), 'gate-step-'));
+  const result = join(dir, 'code');
+  const c = spawn(heavy, ['--', 'sh', STEP_SH, ...step.argv], {
     cwd: root,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: stepEnv(process.env, step, !!process.stdout.isTTY),
+    env: { ...stepEnv(process.env, step, !!process.stdout.isTTY), GATE_STEP_RESULT: result },
   });
   const chunks: Buffer[] = [];
   c.stdout.on('data', (b: Buffer) => chunks.push(b));
   c.stderr.on('data', (b: Buffer) => chunks.push(b));
   const done = new Promise<{ code: number; out: string }>((resolve) => {
     const out = () => Buffer.concat(chunks).toString('utf8');
-    c.on('error', (err) => resolve({ code: 127, out: `couldn't start heavy.sh: ${err.message}` }));
+    c.on('error', (err) => {
+      rmSync(dir, { recursive: true, force: true });
+      resolve({ code: 127, out: `couldn't start heavy.sh: ${err.message}` });
+    });
     c.on('exit', (code, sig) => {
-      const r = code ?? sigCode(sig);
+      const got = code ?? sigCode(sig);
+      const r = reconcile(got, () => readFileSync(result, 'utf8'));
+      rmSync(dir, { recursive: true, force: true });
+      if (got === 0 && r !== 0)
+        chunks.push(
+          Buffer.from(
+            `\ngate:fast — heavy.sh exited 0, but ${step.label} ${r === 2 ? 'never reported' : `exited ${r}`} (a broken heavy.sh?)\n`,
+          ),
+        );
       const t = setTimeout(() => {
         c.stdout.destroy();
         c.stderr.destroy();

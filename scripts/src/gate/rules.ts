@@ -78,8 +78,9 @@ export const REPO_FULL: FullRule[] = [
   {
     // The selection code, and any gate file not yet classed below. rules.ts is data: base.ts plans a change to it
     // with the merge-base's rules too, so it can't narrow its own gate. The others are ordinary modules and tests.
-    // fixture-inputs.ts is selection code too: plan.ts asks it whether the fixture suite runs.
-    match: ['scripts/src/gate/', 'scripts/src/fixture-inputs.ts'],
+    // fixture-inputs.ts and bot/sh.ts are selection code too: plan.ts asks the first whether the fixture suite runs, and
+    // cli.ts reads the diff through the second.
+    match: ['scripts/src/gate/', 'scripts/src/fixture-inputs.ts', 'scripts/src/bot/sh.ts'],
     except: [
       'scripts/src/gate/rules.ts',
       'scripts/src/gate/ci.ts',
@@ -322,8 +323,8 @@ export const INPUT_RULES: InputRule[] = [
   {
     // limits.json's vitest readers: heavy.sh, lib.sh, the watchers and the heavy guard hook (spawned by the board
     // tests), the board and lane modules (the rule above), and this one. The hook fixtures read it too, outside vitest
-    // (run them by hand: .claude/hooks/README.md). CI never runs heavy.sh, and cli.ts fails a gate whose inner pass
-    // never reported, so a broken heavy.sh can't pass it.
+    // (run them by hand: .claude/hooks/README.md). CI never runs heavy.sh, and the inner pass and every step report
+    // their own exit codes past it (GATE_RESULT, step.sh), so a heavy.sh that loses a code can't pass the gate.
     inputs: ['scripts/board/limits.json'],
     tests: ['scripts/src/gate/cli.test.ts'],
     why: 'pins NARROW_WORKERS to tuning.test.maxWorkers',

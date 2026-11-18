@@ -486,7 +486,7 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
     const { dir, f } = stub('echo "args: $*"; echo "label: $HEAVY_LABEL"; echo oops >&2; exit 3');
     const r = await spawnExec(s, f, dir).done;
     expect(r.code).toBe(3);
-    expect(r.out).toMatch(/args: -- pnpm lint/);
+    expect(r.out).toMatch(/args: -- sh \S+\/gate\/step\.sh pnpm lint/);
     expect(r.out).toMatch(/label: lint/);
     expect(r.out).toMatch(/oops/);
   });
@@ -499,6 +499,26 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
     expect(r.out).toMatch(/couldn't start heavy\.sh/);
   });
 
+  // The step reports its own code through step.sh: heavy.sh's 0 alone is never a pass.
+  it('a heavy.sh that runs the step: its code comes through, even when heavy.sh itself says 0', async () => {
+    const passes = stub('shift; "$@"');
+    expect(
+      (await spawnExec({ ...s, argv: ['sh', '-c', 'exit 5'] }, passes.f, passes.dir).done).code,
+    ).toBe(5);
+    expect((await spawnExec({ ...s, argv: ['true'] }, passes.f, passes.dir).done).code).toBe(0);
+    const swallows = stub('shift; "$@"; exit 0');
+    const r = await spawnExec({ ...s, argv: ['false'] }, swallows.f, swallows.dir).done;
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/heavy\.sh exited 0, but lint exited 1/);
+  });
+
+  it('a heavy.sh that exits 0 without running the step: 2, never a pass', async () => {
+    const { dir, f } = stub('exit 0');
+    const r = await spawnExec(s, f, dir).done;
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/heavy\.sh exited 0, but lint never reported/);
+  });
+
   it('stop sends TERM', async () => {
     const { dir, f } = stub("trap 'kill $!; exit 99' TERM; sleep 30 & wait");
     const c = spawnExec(s, f, dir);
@@ -508,9 +528,9 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
   });
 
   it('a pipe held open past exit ends the step within the drain bound, not with the holder', async () => {
-    const { dir, f } = stub('sleep 8 & exit 0'); // holds the pipes 8 s
+    const { dir, f } = stub('shift; sleep 8 & "$@"'); // holds the pipes 8 s
     const t0 = Date.now();
-    expect((await spawnExec(s, f, dir).done).code).toBe(0);
+    expect((await spawnExec({ ...s, argv: ['true'] }, f, dir).done).code).toBe(0);
     expect(Date.now() - t0).toBeLessThan(6000); // the 2 s bound, not the holder
   }, 10000);
 

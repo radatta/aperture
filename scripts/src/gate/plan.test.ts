@@ -67,6 +67,9 @@ describe('plan', () => {
     ['scripts/src/gate/cli.ts'],
     ['scripts/src/gate/registry.ts'],
     ['scripts/src/gate/base.ts'],
+    ['scripts/src/gate/step.sh'],
+    ['scripts/src/fixture-inputs.ts'],
+    ['scripts/src/bot/sh.ts'],
     ['scripts/src/gate/new-helper.ts'], // a gate file not yet classed: selection code until it is
   ])('%s → the whole suite', (path) => {
     const p = plan(ch(path), TESTS);

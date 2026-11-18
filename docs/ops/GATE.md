@@ -22,7 +22,7 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
    **skip**. A fast run is `vitest related` on the changed modules plus the test files a rule names. The plan is
    printed with the reason for each choice, so a skip is never silent.
 3. **The steps, at once.** The gate re-runs itself under one outer `scripts/board/heavy.sh` slot, then starts every
-   step inside it, each under its own `heavy.sh` with `HEAVY_NOSLOT` naming the outer one: measured and logged, but
+   step inside it, each under its own `heavy.sh` (through `step.sh`, which reports its exit code) with `HEAVY_NOSLOT` naming the outer one: measured and logged, but
    taking no slot (SESSION-BOARD.md → _Heavy wrapper_).
    - **Wide** means 3+ packages' tests, or any whole suite. A wide gate counts as a full suite: its slot is a `test`
      one, so it takes one of the 2 full-suite places, with the same wait and exit 75 (`--wait <sec>` sets the wait,
@@ -81,8 +81,8 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 
 - **Every package** (`REPO_FULL`): the lockfile, the workspace file, the root `package.json`, `.nvmrc`/`.npmrc`, the
   root tsconfigs, the eslint config, `identifiers.json` (cdk and scripts read it at import time, behind a cast `tsc`
-  can't check), and the gate's selection code: `cli.ts`, `plan.ts`, `registry.ts`, `base.ts`, `fixture-inputs.ts`
-  and any gate file the rule's `except` doesn't name yet (`rules.test.ts` pins that list). A bug there could skip
+  can't check), and the gate's selection code: `cli.ts`, `plan.ts`, `registry.ts`, `base.ts`, `step.sh`,
+  `fixture-inputs.ts`, `bot/sh.ts` (it reads the diff) and any gate file the rule's `except` doesn't name yet (`rules.test.ts` pins that list). A bug there could skip
   tests in the very run judging it.
 - **One package** (`PACKAGE_FULL`): its `package.json`, tsconfigs and vitest/vite config, and its `src/test/` (the
   shared test setup and harness). Also every module a setupFile imports from outside `src/test/` — the console guard
@@ -107,8 +107,8 @@ same-area rule runs every gate test on any change to it.
   - The board shell (`scripts/board/`: `heavy.sh`, `lib.sh`, `limits.json`, the watchers) runs the board and lane
     tests, which spawn it and read it; `limits.json` also runs `gate/cli.test.ts`, which pins `NARROW_WORKERS` to it.
     Every vitest reader is in scripts, and CI never runs `heavy.sh`. A broken `heavy.sh` can't pass the gate: the
-    inner pass reports its exit code through a file the caller names (`GATE_RESULT`), and a `heavy.sh` 0 with no
-    report is exit 2. The hook fixtures read `limits.json` too, outside vitest: after a change to it, run them by hand
+    inner pass and every step report their own exit codes past it, through a file named in their env (`GATE_RESULT`;
+    `GATE_STEP_RESULT`, written by `step.sh`), and a `heavy.sh` 0 with no report is exit 2. The hook fixtures read `limits.json` too, outside vitest: after a change to it, run them by hand
     (`.claude/hooks/README.md` → _Testing_), as before.
   - `extension/` runs every extension test plus `lc-e2e`, because `test/load.ts` reads the extension's `.js` from
     disk.
@@ -164,7 +164,8 @@ On a failed run (conclusion `failure`), `gate:ci` prints the verdict, then check
 - **missed:** its package was skipped, ran named tests only, or no changed module reaches it;
 - **unsure:** the checkout isn't at the run's sha or has tracked edits (so its rules may not be the run's: every file
   is unsure), the file is in no test package or vitest doesn't collect it, the graph helper failed, or a PR run tests
-  a merge with a main that has moved past the merge-base (a miss there is only unsure).
+  a merge with a main that has moved past the merge-base (a miss there is only unsure; "moved" is judged by the local
+  `origin/main`, so fetch first).
 
 gh prints vitest's colours as the literal text `^[[…m` (piped), and a coloured project label (`app`) can come
 before the path; both are read. The graph helper starts one vitest per fast package with an unnamed failing file
@@ -294,7 +295,7 @@ there:
    - `gate:ci` logs a failing test the plan skipped (_A miss_).
 7. **Timing-sensitive tests no longer run under container load.**
 8. **A `heavy.sh` or `lib.sh` change runs the board and lane tests, not every package** (2026-11-18). A change that
-   breaks only another package's run under it shows on the next gate that runs that package; one that exits 0
-   without running the gate fails it (`GATE_RESULT`). CI never uses them.
+   breaks only another package's run under it shows on the next gate that runs that package; one that loses an exit
+   code fails the gate (`GATE_RESULT`, `step.sh`). CI never uses them.
 
 **Not weaker:** typecheck and lint (full every time), the required PR checks, and main's pipeline.
