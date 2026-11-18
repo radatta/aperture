@@ -120,16 +120,30 @@ Then it runs these steps, each registering an undo:
    `precompact.log` line should show no `skip reason=fork`). 2026-11-17 probes on 2.1.327 (`claude -p`, filler files, a
    100k window) compacted at the window less about 20k with `trigger: "auto"`, by the flag, the env var and
    `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` alike. `tools/coi/tmux-restore.sh` keeps the flag when it relaunches the lane.
-9. Writes the board lane: phase `plan`, step `kickoff sent`, after clearing a past same-name file (`writeLane` would
-   carry its PR number on).
-10. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a
+9. **Warms the caches** (`scripts/src/lane/warm.ts`): when the box is calm by the pace gate's rules, bar the
+   spacing this start just stamped, runs the worktree's `scripts/board/warm.sh` detached (`setsid -f`, the
+   worktree's copy, since bash reads a script as it runs and step 12 moves the main checkout). It runs
+   `pnpm typecheck`, then `pnpm lint`, each under `nice`, in one `heavy.sh --wait 0` slot of class `warm`,
+   labelled `warm:<branch>`, stopped after 300 s, so the lane's first gate finds `tsc -b`'s buildinfo and eslint's
+   cache warm (the measurement: `docs/ops/SESSION-BOARD.md` → _Results_ → the warm-caches A/B). `CLAUDE_PID=0`
+   leaves the job with no owner, so its event names the worktree's branch, not the hub's session. Output goes to
+   `<worktree>/localNotes/warm.log`. A box that isn't calm (an `--over-pace` start on a hot box, a missing or
+   stale `pace.json`) skips it, saying why in the start's output and in `warm.log`; a full box at the slot is
+   `heavy.sh`'s exit 75 and a `gaveUp` barrier. **It yields:** once a live heavy slot runs in the worktree (the
+   lane's gate, a typecheck under `heavy.sh`), it stops its own `heavy.sh` (exit 143), so two `tsc -b` or two
+   eslint runs never write one cache at once; a bare `pnpm typecheck` there isn't seen. Never re-run after a
+   rebase: the gate follows the rebase at once, so there is no idle window to fill (the A/B's rebase arm). A
+   failed spawn only warns.
+10. Writes the board lane: phase `plan`, step `kickoff sent`, after clearing a past same-name file (`writeLane` would
+    carry its PR number on).
+11. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a
     session named `<branch>` in the worktree. This only warns.
-11. Runs sync-main in-process (`docs/ops/TOWER.md` → _Run it_): `/workspace` to `origin/main` again, and the tower
+12. Runs sync-main in-process (`docs/ops/TOWER.md` → _Run it_): `/workspace` to `origin/main` again, and the tower
     restarted when its code is stale. A failure only warns.
 
 A failure in steps 1–8 runs the undos in reverse (kill the window by id, `git worktree remove`, the safe
 `git branch -d`, which works because the branch is still at the main checkout's HEAD, and drop the record), then names anything
-left behind. The script never force-deletes. Steps 9–11 never roll back a live session. Because the install is in
+left behind. The script never force-deletes. Steps 9–12 never roll back a live session. Because the install is in
 it, a caller gives it a **600 s timeout** or runs it in the background.
 
 **By hand**, only when `lanes start` can't run:

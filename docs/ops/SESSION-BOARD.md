@@ -177,6 +177,10 @@ in a low-power window: typecheck ×1.8, lint ×2, test ×1.2.
 
 - **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
   measured, no slot), `typecheck`, `lint`, `build`, `dev`, `ui`, `other` (no slot). `HEAVY_CLASS` overrides;
+  `warm` is only ever set that way: `pnpm lanes start`'s cache warm (`docs/ops/LANES.md` → _Start_, step 9), whose
+  `CLAUDE_PID=0` makes the event's `pid` 0 and its `branch` the worktree's (no session owns it). It isn't a
+  slowdown class; since it takes the cold run off a lane's first typecheck and lint, those classes' baselines lose
+  most of their cold first runs from then on.
   `HEAVY_LABEL` names the run — **never on argv** (a `pkill -f <label>` once killed the wrong process).
   `test-fast` was the class of a pre-gate-parallel `pnpm gate:fast`'s per-package runs: the `tuning.test` worker
   cap unless the caller set `VITEST_MAX_WORKERS`, not the 2-suite cap, and not a slowdown class.

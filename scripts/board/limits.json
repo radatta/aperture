@@ -130,6 +130,12 @@
       "anonMiB": 1500,
       "p95Sec": 60,
       "source": "estimate — not in the matrix"
+    },
+    "warm": {
+      "pids": 30,
+      "anonMiB": 1800,
+      "p95Sec": 200,
+      "source": "PLACEHOLDER until the warm-caches A/B: tsc -b then eslint in sequence, so the larger of the two cold runs (a cold tsc -b's subtree 1692 MiB RSS, 2026-11-18); p95 from lanes' first runs"
     }
   }
 }

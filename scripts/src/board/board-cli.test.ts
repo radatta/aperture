@@ -1446,6 +1446,114 @@ describe('heavy.sh test cap', () => {
   });
 });
 
+describe('warm.sh (the cache warm at lanes start)', () => {
+  // A stub pnpm on PATH: records each call, and `typecheck` sleeps WARM_TC_SLEEP s (a slow cold tsc).
+  function stub() {
+    const bin = join(tmp, 'bin');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(
+      join(bin, 'pnpm'),
+      `#!/bin/bash\necho "$*" >>"${join(tmp, 'pnpm.calls')}"\ncase "$*" in *typecheck*) sleep "\${WARM_TC_SLEEP:-0}" ;; esac\nexit 0\n`,
+    );
+    chmodSync(join(bin, 'pnpm'), 0o755);
+    return { ...env, PATH: `${bin}:${env.PATH}` };
+  }
+  const calls = () => readFileSync(join(tmp, 'pnpm.calls'), 'utf8').trim().split('\n');
+  const log = () => readFileSync(join(tmp, 'warm.log'), 'utf8');
+  // a live heavy slot whose wrapper runs in `cwd` (a lane's gate, or another checkout's)
+  function slotIn(cwd: string, label: string) {
+    const c = spawn('sleep', ['300'], { cwd, stdio: 'ignore' });
+    children.push(c);
+    const dir = join(tmp, 'board/leases/heavy');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `1-${c.pid}.json`),
+      JSON.stringify({
+        v: 1,
+        pid: 1,
+        class: 'test',
+        label,
+        wrapperPid: c.pid,
+        wrapperStart: startOf(c.pid!),
+        startedAt: new Date().toISOString(),
+      }),
+    );
+  }
+
+  it('runs typecheck then lint in one warm slot, logged as the cwd branch with no owner', () => {
+    const wt = repo('lane-x');
+    slotIn(tmp, 'gate:other-lane'); // another checkout's job: no yield
+    const r = spawnSync('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
+      env: { ...stub(), HEAVY_CLASS: 'test', HEAVY_NOSLOT: '1' }, // a caller's HEAVY_* never reaches it
+      cwd: wt,
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(0);
+    expect(r.stdout + r.stderr).toBe(''); // all of it goes to the log
+    expect(calls()).toEqual(['--silent typecheck', '--silent lint']);
+    expect(log()).toMatch(/^warm: \S+ typecheck \+ lint in .*lane-x\n/);
+    expect(log()).toMatch(/warm: typecheck exit 0 · \d+\.\d s\nwarm: lint exit 0 · \d+\.\d s\n/);
+    expect(events().filter((e) => e.kind === 'job')).toEqual([
+      expect.objectContaining({
+        pid: 0,
+        class: 'warm',
+        label: 'warm:lane-x',
+        branch: 'lane-x',
+        exit: 0,
+      }),
+    ]);
+    expect(readdirSync(join(tmp, 'board/leases/heavy'))).toHaveLength(1); // its own slot released
+  });
+
+  it('yields to a heavy job of its own worktree: stops before lint, exit 143, slot freed', async () => {
+    const wt = repo('lane-y');
+    const c = spawn('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
+      env: { ...stub(), WARM_TC_SLEEP: '30' },
+      cwd: wt,
+      stdio: 'ignore',
+    });
+    children.push(c);
+    const heavyDir = join(tmp, 'board/leases/heavy');
+    // typecheck is running (so the slot is there too): the yield must cut a step short, not just skip one
+    for (let i = 0; i < 100 && !existsSync(join(tmp, 'pnpm.calls')); i++)
+      await new Promise((r) => setTimeout(r, 100));
+    const own = JSON.parse(readFileSync(join(heavyDir, readdirSync(heavyDir)[0]!), 'utf8'));
+    const cost = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).classes.warm;
+    expect(own).toMatchObject({ pid: 0, class: 'warm', label: 'warm:lane-y' });
+    expect(own.cost).toEqual({ pids: cost.pids, anonMiB: cost.anonMiB });
+    slotIn(wt, 'gate:lane-y');
+    const code = await new Promise<number | null>((r) => c.on('exit', (n) => r(n)));
+    expect(code).toBe(143);
+    expect(log()).toMatch(/warm: yielding to gate:lane-y \(pid \d+\)/);
+    expect(calls()).toEqual(['--silent typecheck']);
+    expect(events().find((e) => e.kind === 'job')).toMatchObject({
+      class: 'warm',
+      exit: 143,
+      signal: 15,
+    });
+    expect(readdirSync(heavyDir)).toHaveLength(1); // only the lane's slot is left
+  }, 30000);
+
+  it('a box past the hard line skips it at once: exit 75, a gaveUp barrier, no run', () => {
+    const wt = repo('lane-z');
+    cgroup(3760, 2 * GiB); // + the warm class's 30 pids: past the 3768 hard line
+    limits({ enforce: true });
+    const r = spawnSync('bash', [join(boardDir, 'warm.sh'), join(tmp, 'warm.log')], {
+      env: stub(),
+      cwd: wt,
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(75);
+    expect(existsSync(join(tmp, 'pnpm.calls'))).toBe(false);
+    expect(events().filter((e) => e.kind === 'job')).toEqual([]);
+    expect(events().find((e) => e.kind === 'lease')).toMatchObject({
+      action: 'gaveUp',
+      class: 'warm',
+    });
+    expect(log()).toMatch(/tell the user|hard/);
+  });
+});
+
 describe('board.sh status: conflicts and overlaps', () => {
   it('prints merge-tree conflicts above the overlaps, then the landed and stale lanes', () => {
     mkdirSync(join(tmp, 'board'), { recursive: true });

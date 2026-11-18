@@ -173,6 +173,7 @@ const SLOT = new Set([
   'dev',
   'gate-wide',
   'gate-narrow',
+  'warm', // lanes start's cache warm (scripts/board/warm.sh)
 ]);
 
 export type ConcRow = { bin: string; runs: number; failed: number; p50Sec: number | null };

@@ -25,6 +25,7 @@ import { MainBusy } from '../board/main-lock.ts';
 import { LANES_THROTTLED, powerSummary } from '../board/tower/health.ts';
 import { FETCH_TIMEOUT_MS } from '../board/sync-main.ts';
 import { lastStartFile, lastStartText, paceBlock, waitForPace } from './pace.ts';
+import { warmCaches } from './warm.ts';
 
 export const KICKOFF_MAX = 256 * 1024;
 export const CONFIRM_MS = 20_000;
@@ -413,6 +414,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
 
   // A live session now: nothing below rolls back.
+  warmCaches(d, wt);
   try {
     d.lanes.clear(b); // a lingering file of a past same-name lane would hand its PR number on (writeLane keeps pr)
     d.lanes.write(b, 'plan', kickoff !== null ? 'kickoff sent' : 'started', b, rec.baseSha);
