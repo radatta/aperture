@@ -3,6 +3,7 @@
 // Plain `node` (Node 22 strips types; same as classify-changes.ts): erasable syntax, node: builtins only.
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -37,6 +38,9 @@ import { readMacStats } from './tower/health.ts';
 import { formatStale } from './tower/stale.ts';
 import { compactJob } from './tower/history.ts';
 import { machine } from './machine.ts';
+import { ranId, ranOut } from './ran.ts';
+import { BRIEF_FILE, briefOut } from './tower/brief.ts';
+import { macRoot } from '../mac-root.ts';
 
 export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on any command: its usage; nothing runs)
   decide-heavy                          stdin {limits, liveLimits, live, slots, req} → HeavyDecision
@@ -47,7 +51,9 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   machine <boardDir> [--json]           the Mac's power line and the slowdown ratio (F120)
   lane <phase> [--step …] [--plan …] [--needs … --link|--cmd …] | --clear   this lane's status file (pnpm board lane --help)
   sync-main                             the main checkout to origin/main; restarts the web tower if its code changed
-  stale [--json]                        where queue.json contradicts the derived board (the web tower's stale.json)`;
+  stale [--json]                        where queue.json contradicts the derived board (the web tower's stale.json)
+  brief                                 the status block the hub pastes verbatim (the web tower's brief.txt)
+  ran <slug>                            the suffix that records a Mac line's exit code for merge-watch.sh`;
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
 export const FLAGS: Record<string, Spec> = {
@@ -60,6 +66,8 @@ export const FLAGS: Record<string, Spec> = {
   lane: null, // main skips the guard for lane; the entry keeps the table covering USAGE
   'sync-main': {},
   stale: { bare: ['json'] },
+  brief: {},
+  ran: { args: 1 },
 };
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.
@@ -312,13 +320,17 @@ export function main(argv: string[], stdin: () => string): string {
         now,
       });
     }
-    case 'sync-main':
+    case 'sync-main': {
+      const here = process.env.INIT_CWD ?? process.cwd(); // pnpm runs scripts from the root; INIT_CWD is where it was typed
+      const dir = boardDir((c, a) => execFileSync(c, a, { cwd: here, encoding: 'utf8' }).trim());
       return syncMain(
         execRun,
-        process.env.INIT_CWD ?? process.cwd(), // pnpm runs scripts from the root; INIT_CWD is where it was typed
+        here,
         withMainLock,
         withRestartLock,
+        dir ? { dir, now: () => new Date() } : undefined, // the merge log (merge-record.ts)
       );
+    }
     case 'stale': {
       const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
       if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
@@ -330,9 +342,31 @@ export function main(argv: string[], stdin: () => string): string {
       }
       return rest.includes('--json') ? (text ?? '').trim() : formatStale(text, now.getTime());
     }
+    case 'brief': {
+      const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
+      if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+      const f = join(dir, BRIEF_FILE);
+      let text: string, mtime: number;
+      try {
+        text = readFileSync(f, 'utf8');
+        mtime = statSync(f).mtimeMs;
+      } catch {
+        throw new Error(`no ${f} yet: the web tower writes it every 30 s (board.sh tower start)`);
+      }
+      return briefOut(text, mtime, now.getTime());
+    }
+    case 'ran': {
+      const [slug] = args;
+      if (!slug) throw new Error('usage: ran <slug>');
+      const id = ranId(slug, now);
+      const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
+      if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+      mkdirSync(join(dir, 'ran'), { recursive: true }); // the suffix never makes it: a missing folder fails loud
+      return ranOut(macRoot(), id);
+    }
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | lane | sync-main | stale (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | lane | sync-main | stale | brief | ran (got ${cmd ?? 'nothing'})`,
       );
   }
 }

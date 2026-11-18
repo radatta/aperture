@@ -184,16 +184,19 @@ touch <area>; whichever merges second rebases — agree an order.`
   keeps, with the reason: CI-BOT.md → _Commands_. A branch admitted to the `dev` environment still needs the user's removal command
   (`docs/ops/FEATURE-WORKFLOW.md` → phase 11).
 - **Relay** to the user what they ask for, not every message.
+- **Status.** When the user asks what's happening, paste `pnpm board brief`'s block verbatim — the script composes,
+  the hub doesn't (`docs/ops/TOWER.md` → _Board freshness_ → _Derived files_); add a line only for what it can't know.
 
 ## Watchers
 
-The hub runs the three board watchers (`docs/ops/SESSION-BOARD.md` → _Watchers_: what each reads, its thresholds) from
+The hub runs the four board watchers (`docs/ops/SESSION-BOARD.md` → _Watchers_: what each reads, its thresholds) from
 the main checkout, each in the background so its exit wakes the hub:
 
 ```
 timeout 65m /workspace/scripts/board/pace-watch.sh
 timeout 65m /workspace/scripts/board/usage-watch.sh
 timeout 65m /workspace/scripts/board/context-watch.sh
+timeout 65m /workspace/scripts/board/merge-watch.sh
 ```
 
 **Restart a watcher after every exit**, once the state that woke it has changed — else exits 4, 5 and 8 fire again
@@ -211,6 +214,8 @@ is follow-up F274). What each exit asks:
 | 7     | usage   | soft stop (below); restart with `--hard-only`, dropped once usage is back under the soft line (the weekly reset) |
 | 8     | usage   | hard stop (below); no restart until usage is under the line: the meter rows' `rl.seven_day.resets_at` says when  |
 | 9     | context | a session at the urgent line: tell the user at once                                                              |
+| 10    | merge   | PRs merged on main (a `MERGED` line each): the after-merge duties for each, unprompted (_The hub's duties_)      |
+| 11    | merge   | a Mac line finished (`RAN <id> exit <n>`): carry on with what waited on it; not 0, or unreadable: look into it   |
 | 124   | any     | an hour with nothing to report: restart with the same arguments                                                  |
 | 78    | any     | a `limits.json` key is missing or bad (stderr and `<board>/<watcher>.log` name it): fix it, then restart         |
 | other | any     | 2 (a bad argument or override), 1, 126 …: read stderr and the watcher's log, fix the cause — never restart blind |
@@ -221,6 +226,23 @@ releases any dev lock.
 
 `autoStart` entries in `queue.json` (`SESSION-BOARD.md` → _Control tower_ → `queue.json`) are lanes the user has
 already approved to start; exit 6 only finds capacity for one, it never adds approval.
+
+### Mac lines
+
+Every one-line Mac command the hub hands the user ends with a marker, so "ran it" needs no typing:
+`pnpm board ran <slug>` prints the suffix (and makes `localNotes/board/ran/`), and the hub appends it to the line as
+printed:
+
+```
+cd <mac-repo> && <cmd> && <cmd>; echo $? >| <mac-repo>/localNotes/board/ran/<slug>-<4 base36>
+```
+
+`$?` there is the whole `&&` chain's status, so the line joins its steps with `&&` only (a `;` inside would record
+just the part after it); `>|` writes past zsh's `noclobber`; the path is absolute, as the chain may `cd` into a
+worktree. The terminal's own status afterwards is the `echo`'s. `merge-watch.sh` exits 11 with the code. The trust
+boundary holds: the line writes only a number, nothing on the Mac reads the folder, and the container reads at most
+4 bytes of a file whose name it could have issued (`ran.ts`, `SESSION-BOARD.md` → _Watchers_). A line with no marker
+(a step on a web page, a line typed before the marker existed) still needs the user's word.
 
 ## Lock etiquette
 

@@ -195,6 +195,15 @@ export type QueueData = {
   followups: Followup[];
   mergeOrder: MergeOrderItem[];
   autoStart?: string[]; // dispatch's auto-start queue, branches only (its shape is pq-check's); read leniently
+  autoQueue?: AutoStartItem[]; // the same entries in full, for QUEUED (queued.ts); a bad field reads as null
+};
+export type AutoStartItem = {
+  branch: string;
+  order: number | null;
+  cls: 'p0' | 'p1' | null;
+  after: string[];
+  note: string | null;
+  approvedAt: number | null;
 };
 
 // A plan time: a whole ISO date-time to the second, a real calendar date, an optional Z / offset. The
@@ -419,10 +428,21 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   });
 
   // never a problem row: the tower only asks whether a listed lane has started (stale.ts)
-  const autoStart = arr(raw.autoStart).flatMap((x) => {
-    const b = str((x as Record<string, unknown> | null)?.branch);
-    return b && LANE_RE.test(b) ? [b] : [];
+  const autoQueue: AutoStartItem[] = arr(raw.autoStart).flatMap((x) => {
+    const o = (x ?? {}) as Record<string, unknown>;
+    const b = str(o.branch);
+    if (!b || !LANE_RE.test(b)) return [];
+    const order = typeof o.order === 'number' && Number.isFinite(o.order) ? o.order : null;
+    const cls = o.class === 'p0' || o.class === 'p1' ? o.class : null;
+    const after = arr(o.after).flatMap((a) => {
+      const s = str(a);
+      return s ? [s] : [];
+    });
+    return [
+      { branch: b, order, cls, after, note: str(o.note), approvedAt: parseTime(o.approvedAt) },
+    ];
   });
+  const autoStart = autoQueue.map((a) => a.branch);
 
   return {
     status: problems.length ? 'bad' : 'ok',
@@ -438,6 +458,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       followups,
       mergeOrder,
       autoStart,
+      autoQueue,
     },
     problems,
     ...(unread.length ? { unread } : {}),

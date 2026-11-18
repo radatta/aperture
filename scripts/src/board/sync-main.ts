@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { towerChanged } from './tower/behind.ts';
 import { timedOut } from '../bot/sh.ts';
+import { recordMerges, type MergeRecord } from './merge-record.ts';
 
 // throws on a non-zero exit, and past timeoutMs (SIGTERM: git removes its lock files on TERM)
 export type Run = (cmd: string, args: string[], cwd: string, timeoutMs?: number) => string;
@@ -37,16 +38,17 @@ export function syncMain(
   here: string,
   locked: Locked = (fn) => fn(),
   restartLocked: Locked = (fn) => fn(),
+  record?: MergeRecord, // the merge log (merge-record.ts): the main sync loop passes it, tests opt in
 ): string {
   const git = (args: string[], timeoutMs?: number) => run('git', args, mainRoot, timeoutMs).trim();
   const mainRoot = dirname(
     run('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], here).trim(),
   );
-  const { old, target } = locked(() => move(run, git, mainRoot));
+  const { old, target, merged } = locked(() => move(run, git, mainRoot, record));
   const moved =
-    old === target
+    (old === target
       ? `main checkout: already at ${short(target)}`
-      : `main checkout: moved ${short(old)} → ${short(target)}`;
+      : `main checkout: moved ${short(old)} → ${short(target)}`) + (merged ? `\n${merged}` : '');
   return restartLocked(() => restartTower(run, git, mainRoot, target, moved));
 }
 
@@ -54,7 +56,8 @@ function move(
   run: Run,
   git: (args: string[], timeoutMs?: number) => string,
   mainRoot: string,
-): { old: string; target: string } {
+  record?: MergeRecord,
+): { old: string; target: string; merged: string | null } {
   const dirty = run('git', ['status', '--porcelain', '--untracked-files=no'], mainRoot) // untrimmed: XY columns
     .split('\n')
     .filter(Boolean);
@@ -77,6 +80,15 @@ function move(
   }
   const old = git(['rev-parse', 'HEAD']);
   const target = git(['rev-parse', 'origin/main']);
+  // Under the lock, before the switch: two callers never record one merge twice, and a failed switch still records
+  // what reached origin/main. A failed record never fails the sync: it says so and the baseline holds.
+  let merged: string | null = null;
+  if (record)
+    try {
+      merged = recordMerges(git, target, record);
+    } catch (e) {
+      merged = `merge log: ${(e as Error).message.split('\n')[0]}`;
+    }
   if (old !== target)
     try {
       git(['switch', '--detach', target]); // the sha: a concurrent fetch can't split it
@@ -84,7 +96,7 @@ function move(
       // git aborts a switch whole (an untracked file it would overwrite): HEAD is where it was
       throw new Error(`git switch failed — nothing moved: ${(e as Error).message}`, { cause: e });
     }
-  return { old, target };
+  return { old, target, merged };
 }
 
 function restartTower(

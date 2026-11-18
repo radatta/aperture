@@ -29,6 +29,7 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 | `pnpm board sync-main`                                     | The main checkout to `origin/main` (fetch, then `git switch --detach`; refuses tracked changes or a checkout on a branch, untracked files are fine), then `board.sh tower restart` only when the tower is running and its served commit differs from the new HEAD in a file the tower runs (`behind.ts` `TOWER_PATHS`: `scripts/src/board`, `scripts/board` and the files they import or read outside them, tests and fixtures excluded; a test holds the list to the import graph) or is unknown. Never starts a stopped tower. Prints what moved and why it restarted or didn't; a rerun is a no-op. Runs from any worktree. The tower check and restart run under their own lock (`/tmp/aperture-tower-restart.lock`, 30 s wait), so two callers at once (the main sync and a `lanes end`) restart it once and the second says not needed.                                                              |
 | `board.sh sync start\|restart\|stop\|status\|once\|ensure` | The main sync loop (_Board freshness_ → _Main sync_). `ensure` starts it only for the real board, which `tower start` and the tower's minute tick do.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `pnpm board stale [--json]`                                | The tower's last `stale.json`: queue.json's age and each fact it contradicts, with the fix (_Board freshness_).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `pnpm board brief`                                         | The tower's last `brief.txt`, verbatim: the status block the hub pastes when the maintainer asks for status (_Board freshness_ → _Derived files_). Past 180 s old it opens `TOWER DOWN: this brief is from HH:MM`; with no file yet it refuses (exit 2).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `scripts/board/tower-web.sh --once`                        | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
@@ -115,6 +116,11 @@ From the top:
      merged (in the PR list's newest 40) or whose row is merged / deploying drops out;
    - the dev order per slot (`devQueue` `next` / `waiting`): a different order from the landing order, so a lane
      can show in both;
+   - **QUEUED**: dispatch's `autoStart` lanes not started yet (no lane file, no open PR), by `order`, then p0 before
+     p1, then file order (`queued.ts`). Each is `ready`, `after <lane>` (an `after` lane still in `devQueue` or
+     `autoStart`) or held (a note starting `LOW` or `HOLD`): the rule `pace-watch.sh`'s exit 6 starts them by, which a
+     test holds the two to. The glance folds them into one `QUEUED n · k ready: <lanes>` row; expanded, a _Queued to
+     start_ group, one row each;
    - one muted PARKED line for the lanes whose `waitingOn` starts `PARKED`.
 5. **DONE TODAY**: PRs merged since the day began: local midnight, but before noon it reaches back 12 h
    (`dayStart` in `web/main.ts`), so last night's merges stay in view through the morning (marked `yest`) and age
@@ -299,7 +305,7 @@ beside it (the tower runs `usage line --no-scan` every 5 min: `docs/ops/USAGE-ME
 third header button at 390 px, so its sources chip carries the first two of `behind`, `n stale`, `n off`, in the
 worse tone. SLIPPING's BOARD rows; SOURCES' `main sync` row. Context per session shares the header and the status line (below).
 
-**Derived files.** The board's own tower (started by `board.sh`, never a fixtures or `--once` server) writes two files
+**Derived files.** The board's own tower (started by `board.sh`, never a fixtures or `--once` server) writes three files
 beside `queue.json` every 30 s, tmp + rename:
 
 - `stale.json`: `{v, t, updatedAt, items, unsure, tone, why}`, which `pnpm board stale` prints;
@@ -317,6 +323,24 @@ beside `queue.json` every 30 s, tmp + rename:
 
   Text fields are one line with no control bytes (every session's terminal prints them); a ctx name's spaces and
   commas become `_`.
+
+- `brief.txt`, which `pnpm board brief` prints (`brief.ts`): one fixed block, every heading always there in this
+  order, with `none` or `unknown` written out (gh unreachable reads `MERGE unknown (gh PRs …)`, never `none`).
+  Board text is one line, control bytes out, capped. A new line is one more entry in `SECTIONS`.
+
+  ```
+  BRIEF 13:42 · board 4m · 2 stale · tower c5797521
+  LANES 5 · 2 building · 1 testing · 1 pr · 1 merge me     then one row per NOW lane: state, PR or its PR window, ctx ≥ 40
+  SLOTS dev <lane> until 14:05 · devb free
+  MERGE 1 · PR 231 <lane> "<title>"                         MERGE ME, then HOLD with its reason
+  QUEUED 12 · 3 ready · 5 held                              then the first 5 (QUEUED above), +n more
+  ASK ~14:10–14:30 <what>                                   NEXT ASK
+  NEEDS 3 · <first item> (+2)
+  USAGE 53% · 9.6%/h · ~4.8 h to 100% (13:40)               pnpm usage line, with when it was read
+  MAC AC 79% charging … · load 8.2 11.0 12.1 /12            the Mac line (Low Power and battery as RED:) and load
+  VM anon 6.2G/18.0G · cpu 3.1/9 · slow <slowdown line>
+  CTX ≥50 <session> 78% · ≥40 <session> 41%
+  ```
 
 **Status line.** `scripts/board/statusline-board.sh` (builtins only, sourced by `statusline-snippet.sh`) prints
 `· mac 6 8 12/12 · vm 2 5 9/9 · slow 30m tc×1.2 gl×1.0 gn– gw×1.1 · lint no data since 16:58 · usage … · board 12m ·
@@ -378,6 +402,14 @@ down. It writes `localNotes/board/main-sync.json` (`{v, t, pid, ok, head, msg}`)
   `board.sh sync ensure`, which starts it only for the real board
   (`BOARD_DIR` the default; a test's temp board never does; `APERTURE_SYNC=on|off` overrides).
 - It pins `INIT_CWD` to its own checkout: sync-main finds the checkout from it.
+- **The merge record** (`merge-record.ts`): after the fetch, under the main-checkout lock, each squash merge (`(#N)`
+  subject) on `origin/main`'s first-parent line since `<board>/merge-seen` is appended to
+  `history/events-<UTC day>.jsonl` as `{v: 1, t, kind: "merged", pr, sha, mergedAt, title}` (title cleaned, ≤ 120),
+  oldest first, and the round's output says `merged: PR <n> (<sha7>)`. The rows go before the baseline moves, so a
+  crash repeats a row rather than losing one (`merge-watch.sh` dedupes by sha). A missing or malformed `merge-seen`,
+  or one `origin/main` no longer descends from, only sets the baseline: nothing is back-filled. A failed record never
+  fails the round (`merge log: <error>`, the baseline holds). The hub wakes on it through `merge-watch.sh`
+  (`docs/ops/SESSION-BOARD.md` → _Watchers_).
 
 ## Lane states
 

@@ -5,6 +5,7 @@
 //   --now <iso>       a fixed clock          --no-gh   no GitHub reads (their sources show `gh off`)
 //   --once            print one View as JSON and exit (no socket)
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
+import { BRIEF_FILE, briefText, type BriefView } from '../brief.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -388,6 +389,13 @@ export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }
   put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null, v.ctx, load));
 }
 
+// brief.txt (brief.ts): `pnpm board brief` prints it. Its own writer, beside writeDerived's two files.
+export function writeBrief(dir: string, v: BriefView) {
+  const tmp = join(dir, `.${BRIEF_FILE}.tmp.${process.pid}`);
+  writeFileSync(tmp, briefText(v));
+  renameSync(tmp, join(dir, BRIEF_FILE));
+}
+
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
 function refreshDevlock() {
   execFile(
@@ -435,7 +443,9 @@ async function run(a: Args) {
   if (pidFile && !a.fixtures) {
     const derived = () => {
       try {
-        writeDerived(t.paths.boardDir, t.view(false));
+        const v = t.view(false);
+        writeDerived(t.paths.boardDir, v);
+        writeBrief(t.paths.boardDir, v);
       } catch (e) {
         process.stderr.write(`tower-web: derived files: ${(e as Error).message}\n`);
       }

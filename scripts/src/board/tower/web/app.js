@@ -585,6 +585,46 @@ function next(v) {
     group('Your items (NEEDS YOU)');
     for (const n of v.needs) items.push(needItem(n));
   }
+  // QUEUED: approved autoStart lanes not started, in start order (queued.ts); the glance folds them into one row
+  const queued = v.queued ?? [];
+  const qLine = (q) =>
+    `${q.order ?? '-'} ${q.branch}${q.cls ? ` ${q.cls}` : ''} · ${
+      q.state === 'held'
+        ? (q.note ?? 'held')
+        : q.state === 'after'
+          ? `after ${q.waitsOn.join(', ')}`
+          : 'ready'
+    }`;
+  if (queued.length && inFull) {
+    group('Queued to start (autoStart)');
+    for (const q of queued)
+      items.push(
+        item(`queued:${q.branch}`, {
+          c: q.state === 'ready' ? '' : 'c-dim',
+          badge: q.state === 'ready' ? 'READY' : q.state === 'held' ? 'HELD' : 'AFTER',
+          text: [
+            el('b', null, q.branch),
+            `  ·  ${short(qLine(q).split(' · ').slice(1).join(' · '), 60)}`,
+          ],
+          meta: [q.cls, q.order !== null ? `#${q.order}` : null],
+          more: [q.note, q.after.length ? `after ${q.after.join(', ')}` : null],
+        }),
+      );
+  } else if (queued.length) {
+    const ready = queued.filter((q) => q.state === 'ready');
+    items.push(
+      item('next:queued', {
+        c: 'c-dim',
+        badge: 'QUEUED',
+        sig: queued.map((q) => `${q.branch}:${q.state}`).join(','),
+        text: [
+          `${queued.length} · ${ready.length} ready`,
+          ready.length ? el('span', 'who', `: ${ready.map((q) => q.branch).join(', ')}`) : '',
+        ],
+        more: queued.map(qLine),
+      }),
+    );
+  }
   if (v.next.queue.length) group('Dev order');
   for (const slot of ['dev', 'devb'])
     v.next.queue

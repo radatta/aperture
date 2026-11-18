@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -23,6 +23,7 @@ type World = {
   changed?: Record<string, string[] | 'fail'>; // `${from}..${to}` → tower files
   restartFails?: boolean;
   switchFails?: boolean;
+  log?: string; // `git log <seen>..<target>` for the merge record
 };
 
 function fake(w: World) {
@@ -62,6 +63,10 @@ function fake(w: World) {
         if (w.switchFails) throw new Error('untracked file would be overwritten');
         w.head = rest[1]!;
         return '';
+      case 'merge-base':
+        return '';
+      case 'log':
+        return w.log ?? '';
       case 'diff': {
         const c = w.changed?.[`${rest[1]}..${rest[2]}`] ?? [];
         if (c === 'fail') throw new Error('bad object');
@@ -301,6 +306,64 @@ describe('sync-main', () => {
     ).toThrow(/tower restart busy/);
     expect(f.calls.map((c) => c.args[0])).toContain('switch');
     expect(f.calls.some((c) => c.args[2] === 'restart')).toBe(false);
+  });
+});
+
+describe('sync-main: the merge record (merge-record.ts)', () => {
+  const rec = (seen?: string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'sync-main-rec-'));
+    if (seen) writeFileSync(join(dir, 'merge-seen'), seen);
+    return { dir, now: () => new Date('2026-11-18T20:00:00Z') };
+  };
+  it('records the merges after the fetch, inside the lock, before the switch, and prints them', () => {
+    const f = fake({ head: A, origin: B, tower: 'running', served: B, log: `${B}\t1\tx (#7)` });
+    const r = rec(A);
+    const order: string[] = [];
+    const locked = <T>(fn: () => T) => {
+      order.push('lock');
+      const out = fn();
+      order.push('unlock');
+      return out;
+    };
+    const out = syncMain(f.run, '/repo/wt', locked, (fn) => fn(), r);
+    expect(out).toMatch(/main checkout: moved aaaaaaa → bbbbbbb\nmerged: PR 7 \(bbbbbbb\)/);
+    const g = f.calls.filter((c) => c.cmd === 'git').map((c) => c.args[0]);
+    expect(g.indexOf('fetch')).toBeLessThan(g.indexOf('log'));
+    expect(g.indexOf('log')).toBeLessThan(g.indexOf('switch'));
+    expect(order).toEqual(['lock', 'unlock']);
+    expect(readFileSync(join(r.dir, 'merge-seen'), 'utf8').trim()).toBe(B);
+  });
+  it('a failed record never fails the sync: a merge log line, the move stands', () => {
+    const f = fake({ head: A, origin: B, tower: 'running', served: B });
+    const r = { dir: '/nonexistent/board', now: () => new Date() };
+    const out = syncMain(
+      f.run,
+      '/repo/wt',
+      (fn) => fn(),
+      (fn) => fn(),
+      r,
+    );
+    expect(out).toMatch(/moved aaaaaaa → bbbbbbb\nmerge log: /);
+    expect(f.did('switch')).toBe(true);
+  });
+  it('a failed fetch records nothing', () => {
+    const f = fake({ head: A, origin: B, fetchFails: true });
+    const r = rec(A);
+    expect(() =>
+      syncMain(
+        f.run,
+        '/repo/wt',
+        (fn) => fn(),
+        (fn) => fn(),
+        r,
+      ),
+    ).toThrow(/fetch failed/);
+    expect(readFileSync(join(r.dir, 'merge-seen'), 'utf8')).toBe(A);
+  });
+  it('no record argument: no merge-base or log call', () => {
+    const f = fake({ head: A, origin: B, tower: 'running', served: B });
+    syncMain(f.run, '/repo/wt');
+    expect(f.did('merge-base') || f.calls.some((c) => c.args[0] === 'log')).toBe(false);
   });
 });
 
