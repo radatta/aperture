@@ -809,7 +809,10 @@ describe('CaptureBar', () => {
         expect((await api.listTasks())[0]).toMatchObject({ title: 'call bank', estimateMin: 15 }),
       );
       expect(parse).toHaveBeenCalledTimes(2);
-      expect(parse.mock.calls.map(([t]) => t)).toEqual(['admin, call bank', 'admin, call bank 15m']);
+      expect(parse.mock.calls.map(([t]) => t)).toEqual([
+        'admin, call bank',
+        'admin, call bank 15m',
+      ]);
     });
 
     // A press while the parse runs waits for it: no second parse, nothing saved, the text stays put.
@@ -885,10 +888,90 @@ describe('CaptureBar', () => {
       expect(await screen.findByText('call bank')).toBeTruthy();
       expect(parse).toHaveBeenCalledTimes(1);
       expect(await api.listTasks()).toHaveLength(1);
+      // ✨ off with that preview showing drops it: the next Enter saves the line as typed, not the parse.
+      await user.click(ai());
+      expect(ai().getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByText('call bank')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Save reviewed task' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Save task' })).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks()).map((t) => t.title).sort()).toEqual([
+          'admin, call bank',
+          'admin, file taxes 30m',
+        ]),
+      );
+      expect((await api.listTasks()).every((t) => t.categoryId === null)).toBe(true);
+      expect(parse).toHaveBeenCalledTimes(1); // no further parse
+      expect(ai().getAttribute('aria-pressed')).toBe('true');
       // No ✨ on a ' | ' line: it has no model step.
       await user.clear(box());
       await user.type(box(), 'memo | ~30');
       expect(screen.queryByRole('button', { name: 'Read with AI' })).toBeNull();
+    });
+
+    it('a failed create of a ✨-off save comes back ✨ off: the retry saves as typed, unparsed', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      const ai = () => screen.getByRole('button', { name: 'Read with AI' });
+      vi.spyOn(api, 'createTask').mockRejectedValueOnce(new Error('offline'));
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.click(ai());
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
+      expect(ai().getAttribute('aria-pressed')).toBe('false');
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'admin, file taxes 30m',
+          categoryId: null,
+          estimateMin: null,
+        }),
+      );
+      expect(parse).not.toHaveBeenCalled();
+      expect(ai().getAttribute('aria-pressed')).toBe('true'); // one-shot again once it saved
+    });
+
+    it('a failed create brings the reviewed preview back: the retry saves it, with no second parse', async () => {
+      const { api, user, box } = await taskBar();
+      const parse = vi.spyOn(api, 'parseTask');
+      await user.type(box(), 'admin, file taxes 30m');
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText('file taxes')).toBeTruthy();
+      vi.spyOn(api, 'createTask').mockRejectedValueOnce(new Error('offline'));
+      await user.keyboard('{Enter}');
+      expect(await screen.findByText(/Couldn't save/)).toBeTruthy();
+      await waitFor(() => expect(box().value).toBe('admin, file taxes 30m'));
+      expect(screen.getByText('file taxes')).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Save reviewed task' })).toBeTruthy();
+      await user.keyboard('{Enter}');
+      await waitFor(async () =>
+        expect((await api.listTasks())[0]).toMatchObject({
+          title: 'file taxes',
+          categoryId: await adminId(api),
+          estimateMin: 30,
+        }),
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+    });
+
+    // The hint sits in the DOM at every width (`hidden sm:block`); jsdom applies no CSS, so it's readable here.
+    it('the hint says what Enter does: reads on a natural line with ✨ on, saves otherwise', async () => {
+      const { user, box } = await taskBar();
+      const READS = 'Enter reads it, again saves · ⌘Enter saves now';
+      const SAVES = 'Enter saves · Tab switches';
+      await user.type(box(), 'admin, call bank');
+      expect(screen.getByText(READS)).toBeTruthy();
+      await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+      expect(screen.getByText(SAVES)).toBeTruthy();
+      expect(screen.queryByText(READS)).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Read with AI' }));
+      expect(screen.getByText(READS)).toBeTruthy();
+      await user.clear(box());
+      await user.type(box(), 'memo | ~30 '); // past the token: no chips, so the plain hint
+      expect(screen.getByText(SAVES)).toBeTruthy();
+      expect(screen.queryByText(READS)).toBeNull();
     });
 
     it('a parse that lands after the text changed never shows, and never saves', async () => {
