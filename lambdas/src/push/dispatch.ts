@@ -23,7 +23,7 @@ import type {
 import { ConditionFailedError } from '../ddb/DocClient';
 import type { DocClient } from '../ddb/DocClient';
 import { CAS_ATTEMPTS, Repo } from '../ddb/repo';
-import type { PushArmRow, PushQueue, PushUserHealth, RemindRow } from '../ddb/repo';
+import type { PushArmRow, PushRows, PushUserHealth, RemindRow } from '../ddb/repo';
 import { PushRegistry } from '../ddb/pushRegistry';
 import type { PushRegistryUser } from '../ddb/pushRegistry';
 import type { Writes } from '../ddb/writes';
@@ -76,6 +76,7 @@ export interface SourceContext {
   from: number; // the window [from, to] the rows were read for
   to: number;
   catchUp: boolean; // the gap pass: reminders that fell out of the window while no tick ran
+  sent(fireAt: number, key: string): boolean; // its dedup row was there when the tick began
   // The earliest fire time a kind may still ping for: the user's reminders on, and that kind's toggle on.
   notBefore(kind: Exclude<ReminderKind, 'test'>): number;
 }
@@ -245,12 +246,15 @@ export async function runPushTick(
   };
   const faults: unknown[] = [];
   const prev = await registry.getPoller();
-  // No tick ran for longer than the window (an outage, a stalled schedule): what fell due in between, up
-  // to MISS_KEEP_MS back, is caught up once instead of lost.
+  // No tick checked every user for longer than the window — an outage, a stalled schedule, a stage that
+  // couldn't sign, ticks that kept failing: what fell due in between, up to MISS_KEEP_MS back, is caught
+  // up once instead of lost.
+  const checked = prev?.lastCheckedAt ?? prev?.lastRunAt ?? null;
   const gapFrom =
-    prev?.lastRunAt != null && started - prev.lastRunAt > REMINDER_WINDOW_MS
-      ? Math.max(prev.lastRunAt, started - MISS_KEEP_MS)
+    checked !== null && started - checked > REMINDER_WINDOW_MS
+      ? Math.max(checked, started - MISS_KEEP_MS)
       : null;
+  let checkedAll = false;
 
   // A user's tick: select → dedup → guard → send → retries → catch-up → stamp. Throws only on an infra
   // fault (DynamoDB).
@@ -271,9 +275,13 @@ export async function runPushTick(
     const notBefore = (kind: Exclude<ReminderKind, 'test'>) =>
       Math.max(createdAt ?? 0, arm?.[SETTING_OF_KIND[kind]] ?? 0);
     const now = deps.now();
+    // One read of the user's poller rows: the send queue, the dedup rows, the Send-test rows.
+    const own = await repo.listPushRows();
+    const went = new Set(own.sent.map((r) => `${r.fireAt}#${r.key}`));
+    const sent = (fireAt: number, key: string) => went.has(`${fireAt}#${key}`);
     const find = async (from: number, to: number, catchUp: boolean) => {
       const rows = await repo.remindRowsInWindow(from, to);
-      const ctx = { repo, rows, settings, now, from, to, catchUp, notBefore };
+      const ctx = { repo, rows, settings, now, from, to, catchUp, notBefore, sent };
       return dueWins((await Promise.all(sources.map((s) => s(ctx)))).flat());
     };
     const found = await find(now - REMINDER_WINDOW_MS, now, false);
@@ -282,19 +290,19 @@ export async function runPushTick(
     const fresh: FoundCandidate[] = [];
     for (const c of found)
       if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now })) fresh.push(c);
-    const missed: FoundCandidate[] = [];
-    if (gapFrom !== null && gapFrom < now - REMINDER_WINDOW_MS)
-      for (const c of (await find(gapFrom, now - REMINDER_WINDOW_MS - 1, true)).filter(missable))
-        if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now })) missed.push(c);
-
-    const queue = await repo.listPushQueue();
-    const health = await repo.getPushUserHealth();
     const send = new Deliverer(
       { repo, push: deps.push, appUrl: deps.appUrl, now, past, log },
       subs,
-      health?.lastSentAt ?? null,
-      queue.retries,
+      own.retries,
     );
+    // The gap's reminders: deduped, then queued as misses at once — before any send, so a fault later in
+    // this tick can't leave them deduped but never caught up.
+    if (gapFrom !== null && gapFrom < now - REMINDER_WINDOW_MS) {
+      const missed: FoundCandidate[] = [];
+      for (const c of (await find(gapFrom, now - REMINDER_WINDOW_MS - 1, true)).filter(missable))
+        if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now })) missed.push(c);
+      if (missed.length > 0) await send.queueMisses(send.subIds(), missed, now);
+    }
     const guard = () => takeGuard(repo, now);
     // The reminders as one notification; each ritual as its own (its tap opens Home, not a task).
     const batches = [
@@ -311,10 +319,8 @@ export async function runPushTick(
       report.notifications++;
       await send.sendBatch(batch, reminderTag(batch));
     }
-    await send.runRetries(queue.retries);
-    if (missed.length > 0) await send.queueMisses(send.subIds(), missed, now);
-    const misses = missed.length > 0 ? (await repo.listPushQueue()).misses : queue.misses;
-    await send.runCatchUps(misses, guard);
+    await send.runRetries(own.retries);
+    await send.runCatchUps(own.misses, guard);
 
     report.notifications += send.tally.caughtUp;
     report.delivered += send.tally.delivered;
@@ -324,17 +330,25 @@ export async function runPushTick(
     if (send.tally.deadline) report.deadline = true;
     // The last alive device went: off the registry, unless a subscribe raced it (dropUser re-reads).
     if (send.removed > 0 && !(await alive())) await registry.dropUser(userId, alive, now);
-    if (send.attempted)
+    if (send.attempted) {
+      // Read only when it's written: a quiet tick costs no read of it.
+      const health = await repo.getPushUserHealth();
       await repo.putPushUserHealth({
-        lastSentAt: send.sentAt,
+        lastSentAt: send.sentAt ?? health?.lastSentAt ?? null,
         lastError: send.fails.length > 0 ? send.fails.join(' · ') : (health?.lastError ?? null),
         lastErrorAt: send.fails.length > 0 ? now : (health?.lastErrorAt ?? null),
         updatedAt: now,
       } satisfies PushUserHealth);
+    }
 
     // Send-test rows are one-shot: handled (sent, deduped or held back) means gone.
-    for (const c of found) if (c.testId) await repo.deletePushTest(c.testId);
-    await sweep(repo, now, new Set(send.subIds()), queue);
+    const handled = new Set<string>();
+    for (const c of found)
+      if (c.testId) {
+        await repo.deletePushTest(c.testId);
+        handled.add(c.testId);
+      }
+    await sweep(repo, now, new Set(send.subIds()), own, handled);
   }
 
   let stageError: string | null = null;
@@ -345,9 +359,11 @@ export async function runPushTick(
       if (!coldStart.logged.has(ready)) log(JSON.stringify({ event: STAGE_ERROR[ready].event }));
       coldStart.logged.add(ready);
     } else {
+      checkedAll = true;
       for (const user of await registry.listUsers()) {
         if (past()) {
           report.deadline = true;
+          checkedAll = false;
           log(JSON.stringify({ event: 'push_deadline' }));
           break;
         }
@@ -371,6 +387,7 @@ export async function runPushTick(
   // stage's state now; `lastErrorAt` keeps when it last went wrong.
   await registry.putPoller({
     lastRunAt: started,
+    lastCheckedAt: checkedAll && faults.length === 0 ? started : (checked ?? null),
     lastError: stageError,
     lastErrorAt: stageError ? started : (prev?.lastErrorAt ?? null),
     updatedAt: started,
@@ -402,24 +419,27 @@ async function takeGuard(repo: Repo, now: number): Promise<boolean> {
 }
 
 // The poller's own rows don't pile up (the table has no TTL — adding one touches the data stack): dedup
-// rows past PSENT_KEEP_MS, guard counters older than two days, and Send-test rows that fell out of the
-// window unsent.
+// rows past PSENT_KEEP_MS, Send-test rows that fell out of the window unsent, retry and miss rows of a
+// device that's gone, misses past MISS_KEEP_MS — all from the tick's one read of them — and, every
+// SWEEP_COUNTS_EVERY minutes, guard counters older than two days.
+export const SWEEP_COUNTS_EVERY = 10;
 async function sweep(
   repo: Repo,
   now: number,
   alive: ReadonlySet<string>,
-  queue: PushQueue, // as the tick read it: a row this tick wrote is a live device's, and young
+  own: PushRows, // as the tick read it: a row this tick wrote is a live device's, and young
+  handled: ReadonlySet<string>, // Send-test rows this tick already deleted
 ): Promise<void> {
-  for (const r of await repo.listPushSent())
-    if (r.fireAt < now - PSENT_KEEP_MS) await repo.deletePushSent(r);
+  for (const r of own.sent) if (r.fireAt < now - PSENT_KEEP_MS) await repo.deletePushSent(r);
+  for (const t of own.tests)
+    if (!handled.has(t.id) && t.createdAt < now - REMINDER_WINDOW_MS)
+      await repo.deletePushTest(t.id);
+  for (const r of own.retries)
+    if (!alive.has(r.subId)) await repo.deletePushRetry(r.subId, r.topic);
+  for (const m of own.misses)
+    if (!alive.has(m.subId) || m.cand.fireAt < now - MISS_KEEP_MS) await repo.deletePushMissIf(m);
+  if (Math.floor(now / 60_000) % SWEEP_COUNTS_EVERY !== 0) return;
   const keepDay = dayKeyInZone(now - PSENT_KEEP_MS, USER_TIME_ZONE, 0);
   for (const c of await repo.listPushCounts())
     if (c.day < keepDay) await repo.deletePushCount(c.day);
-  for (const t of await repo.listPushTests())
-    if (t.createdAt < now - REMINDER_WINDOW_MS) await repo.deletePushTest(t.id);
-  // Retry and miss rows of a device that's gone, and misses past MISS_KEEP_MS (never caught up).
-  for (const r of queue.retries)
-    if (!alive.has(r.subId)) await repo.deletePushRetry(r.subId, r.topic);
-  for (const m of queue.misses)
-    if (!alive.has(m.subId) || m.cand.fireAt < now - MISS_KEEP_MS) await repo.deletePushMissIf(m);
 }

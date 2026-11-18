@@ -27,6 +27,9 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
       'server-test-sent',
       'fuse-device',
       'api-e2e-sent',
+      'retry-first',
+      'retry-ran-out',
+      'catch-up-sent',
     ],
     reason:
       'local: the push-dispatch poller’s minute ticks and the push services are dev’s — runs on dev',

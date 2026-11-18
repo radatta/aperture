@@ -516,6 +516,7 @@ describe('push dispatch — retry and catch-up', () => {
       [503, 'push service answered 503'],
       [500, 'push service answered 500'],
       [502, 'push service answered 502'],
+      [504, 'push service answered 504'],
       [429, 'push service answered 429'],
       [{ status: 0, reason: 'timeout' as const }, 'timed out'],
       [{ status: 0, reason: 'network' as const }, 'network error'],
@@ -584,9 +585,11 @@ describe('push dispatch — retry and catch-up', () => {
       await w.tick();
     }
     expect(w.push.sends).toHaveLength(4);
-    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
-      "Last reminder didn't reach this device (push service answered 503) after 4 tries",
-    );
+    const ranOut =
+      "Last reminder didn't reach this device (push service answered 503) after 4 tries";
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(ranOut);
+    // One message for the last try, not the bare refusal and then the run-out.
+    expect((await w.repo().getPushUserHealth())?.lastError).toBe(`iPhone S1: ${ranOut}`);
     expect((await w.repo().listPushQueue()).misses).toHaveLength(1);
     // Settling: nothing goes before 14:08.
     w.push.status = 201;
@@ -717,6 +720,210 @@ describe('push dispatch — retry and catch-up', () => {
     expect(w.push.sends).toHaveLength(2);
   });
 
+  const tombstone = (w: ReturnType<typeof world>, id: string) =>
+    w.mem.putNow(
+      entityItem(
+        U,
+        sk.pushSub(id),
+        sub(id, { endpoint: '', p256dh: '', auth: '', deletedAt: 9, updatedAt: 9 }),
+      ),
+    );
+  const runOut = async (w: ReturnType<typeof world>, from = TWO_PM) => {
+    for (let m = 0; m <= 3; m++) {
+      w.set(from + m * MIN);
+      await w.tick();
+    }
+  };
+
+  it('only the device whose retries ran out gets the catch-up', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = (t) => (t.endpoint.endsWith('S2') ? 503 : 201);
+    await runOut(w);
+    w.push.status = 201;
+    w.set(TWO_PM + 8 * MIN);
+    await w.tick();
+    const catchUps = w.push.sends.filter((x) => x.opts.topic.startsWith('c'));
+    expect(catchUps.map((x) => x.target.endpoint.slice(-2))).toEqual(['S2']);
+  });
+
+  it('after a gap, every device gets the catch-up', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '13:15' }));
+    await w.tick();
+    expect(
+      w.push.sends.map((x) => [x.target.endpoint.slice(-2), x.opts.topic.slice(0, 1)]),
+    ).toEqual([
+      ['S1', 'c'],
+      ['S2', 'c'],
+    ]);
+  });
+
+  it('a gap counts from the last tick that could check: a stage fault for an hour is a gap', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastCheckedAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '13:15' }));
+    w.push.readyAs = 'no-key';
+    for (let m = 59; m >= 1; m -= 29) {
+      w.set(TWO_PM - m * MIN);
+      await w.tick(); // the heartbeat moves; the check doesn't
+    }
+    expect(w.push.sends).toHaveLength(0);
+    w.push.readyAs = 'ok';
+    w.set(TWO_PM);
+    await w.tick();
+    expect(w.notes().map((n) => n.title)).toEqual(['1 reminder didn’t reach you']);
+    expect((await w.registry.getPoller())?.lastCheckedAt).toBe(TWO_PM);
+  });
+
+  it('a catch-up the daily guard refuses is dropped, and the health line says so', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '13:15' }));
+    await w.repo().putPushCountIf({ day: TODAY, count: PUSH_DAILY_GUARD, updatedAt: 1 }, null);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0);
+    expect((await w.repo().getPushUserHealth())?.lastError).toMatch(/^Daily reminder limit/);
+    expect(await w.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
+  });
+
+  it('a retry the poller stalled past 5 minutes runs out untried', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    await w.tick();
+    w.set(TWO_PM + 6 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+      "Last reminder didn't reach this device (push service answered 503) after 1 try",
+    );
+    expect((await w.repo().listPushQueue()).misses).toHaveLength(1);
+  });
+
+  it('a device removed mid-chain: its retry and misses go, and it is never sent to again', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = (t) => (t.endpoint.endsWith('S1') ? 503 : 201);
+    await w.tick();
+    expect((await w.repo().listPushQueue()).retries).toHaveLength(1);
+    tombstone(w, 'S1');
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(2);
+    expect(await w.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
+
+    // Misses of a device removed while they settle are swept too.
+    const w2 = world();
+    await w2.device('S1');
+    await w2.device('S2');
+    await w2.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w2.push.status = (t) => (t.endpoint.endsWith('S1') ? 503 : 201);
+    await runOut(w2);
+    expect((await w2.repo().listPushQueue()).misses).toHaveLength(1);
+    tombstone(w2, 'S1');
+    w2.set(TWO_PM + 4 * MIN);
+    await w2.tick();
+    expect(await w2.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
+  });
+
+  it('a device waits for its pending retries, then gets one catch-up for all its misses', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ id: 'A', title: 'First', dueDay: TODAY, dueTime: '14:00' }));
+    await w.repo().putTask(task({ id: 'B', title: 'Second', dueDay: TODAY, dueTime: '14:07' }));
+    w.push.status = 503;
+    for (let m = 0; m <= 14; m++) {
+      w.set(TWO_PM + m * MIN);
+      await w.tick();
+    }
+    // A ran out at 14:03 (ready 14:08), but B was retrying until 14:10 (ready 14:15).
+    const catchUps = w.notes().filter((n) => n.tag?.startsWith('c'));
+    console.log(JSON.stringify(w.push.sends.map((x) => x.opts.topic)), JSON.stringify(catchUps));
+    expect(catchUps).toEqual([]);
+    w.set(TWO_PM + 15 * MIN);
+    await w.tick();
+    expect(w.notes().at(-1)).toMatchObject({
+      title: '2 reminders didn’t reach you',
+      body: 'First · Second',
+    });
+  });
+
+  it('a nudge whose retries run out leaves no miss: never caught up', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device('S1');
+    const MORNING = AT(TODAY, '08:30');
+    w.push.status = 503;
+    await runOut(w, MORNING);
+    expect((await w.repo().getPushSub('S1'))?.lastError).toMatch(/after 4 tries$/);
+    expect(await w.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
+  });
+
+  it('a retry whose claim another tick took is skipped', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    await w.tick();
+    const [row] = (await w.repo().listPushQueue()).retries;
+    // Another tick claims it between this one's read and its claim.
+    w.mem.interceptNextPutIf(
+      pk(U),
+      sk.pushRetry('S1', 'T1'),
+      () =>
+        void w.mem.putNow(
+          entityItem(U, sk.pushRetry('S1', 'T1'), { ...row!, updatedAt: row!.updatedAt + 5 }),
+        ),
+    );
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+  });
+
+  it('a planned task taken off the plan before its retry stays quiet', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ id: 'P', title: 'Planned' }));
+    await w.repo().putPlan(plan({ taskId: 'P' }));
+    w.set(NINE_AM);
+    w.push.status = 503;
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+    await w
+      .repo()
+      .putPlan(plan({ taskId: 'P', day: '2026-11-05', updatedAt: 2 }), plan({ taskId: 'P' }));
+    w.push.status = 201;
+    w.set(NINE_AM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+  });
+
   it('no gap, no catch-up: a reminder older than the window is still just missed', async () => {
     const w = world();
     await w.device('S1');
@@ -845,12 +1052,43 @@ describe('push dispatch — ritual nudges', () => {
     expect(w2.push.sends).toHaveLength(0);
   });
 
+  it('a plan moved to another day, or a task deleted since, is not counted', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    await w.repo().putTask(task({ id: 'A', title: 'Stays' }));
+    await w.repo().putTask(task({ id: 'B', title: 'Moved' }));
+    await w.repo().putTask(task({ id: 'C', title: 'Deleted', deletedAt: 5 }));
+    await w.repo().putPlan(plan({ id: 'P1', taskId: 'A' }));
+    await w.repo().putPlan(plan({ id: 'P2', taskId: 'B', order: 1 }));
+    await w.repo().putPlan(plan({ id: 'P3', taskId: 'C', order: 2 }));
+    await w
+      .repo()
+      .putPlan(
+        plan({ id: 'P2', taskId: 'B', day: '2026-11-05', updatedAt: 2 }),
+        plan({ id: 'P2', taskId: 'B', order: 1 }),
+      );
+    w.set(AT(TODAY, '08:30'));
+    await w.tick();
+    expect(w.notes().map((n) => n.body)).toEqual(['1 planned today']);
+  });
+
   it('keeps its wall-clock time across a DST change', async () => {
     const w = world(undefined, { rituals: true });
     await w.device();
     w.set(AT('2026-11-01', '08:30')); // the day US clocks fall back
     await w.tick();
-    expect(w.notes().map((n) => n.title)).toEqual(['Plan your day']);
+    w.set(AT('2026-11-01', '21:30'));
+    await w.tick();
+    w.set(AT('2026-03-08', '08:30')); // the day they spring forward
+    await w.tick();
+    w.set(AT('2026-03-08', '21:30'));
+    await w.tick();
+    expect(w.notes().map((n) => n.title)).toEqual([
+      'Plan your day',
+      'Close the day',
+      'Plan your day',
+      'Close the day',
+    ]);
   });
 });
 
@@ -861,6 +1099,7 @@ describe('push dispatch — the tick', () => {
     expect(report).toMatchObject({ users: 0, notifications: 0, error: null });
     expect(await w.registry.getPoller()).toEqual({
       lastRunAt: TWO_PM,
+      lastCheckedAt: TWO_PM,
       lastError: null,
       lastErrorAt: null,
       updatedAt: TWO_PM,

@@ -191,8 +191,8 @@ export const reminderTag = (cands: readonly ReminderCandidate[]): string => {
   return c.taskId ?? (c.kind === 'test' ? 'test' : c.kind);
 };
 
-// Where a tap lands: the task's modal on Today, or Today for a batch. `n` is the notification's tag (for
-// PR 3's "opened" signal; ignored today).
+// Where a tap lands: the task's modal on Today, or Today for a batch. `n` is the notification's tag
+// (nothing reads it: the auto-mute it was kept for was dropped).
 export const taskPushPath = (taskId: string | null, tag: string): string =>
   `/tasks?lens=today${taskId ? `&task=${encodeURIComponent(taskId)}` : ''}&n=${encodeURIComponent(tag)}`;
 
@@ -236,7 +236,7 @@ function declarative(
 // The plaintext a send encrypts. `appUrl` is the stage's origin (config), never stored data. A retry
 // passes the tag its first try went out under, so the push service replaces an undelivered first copy
 // (RFC 8030 §5.4 Topic). A ritual is always alone in its notification and opens Home, whose clock mode
-// is the ritual's (morning at 08:30, night at 21:30).
+// is the ritual's (morning at 08:30, night at 21:30 — for a day that starts by 08:30, dayStartHour ≤ 8).
 export function reminderPayload(
   cands: readonly ReminderCandidate[],
   appUrl: string,

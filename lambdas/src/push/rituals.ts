@@ -26,6 +26,7 @@ export const ritualSource: CandidateSource = async ({
   from,
   to,
   catchUp,
+  sent,
 }) => {
   if (catchUp) return []; // a late nudge is noise: never caught up
   const out: FoundCandidate[] = [];
@@ -34,7 +35,7 @@ export const ritualSource: CandidateSource = async ({
     if (!reminderEnabled(r.kind, settings) || notBefore(r.kind) > r.fireAt) continue;
     const key = RITUAL_KEY[r.kind];
     // Counted only until it has gone: the window holds a nudge for 30 ticks.
-    if (await repo.hasPushSent(r.fireAt, key)) continue;
+    if (sent(r.fireAt, key)) continue;
     const { title, body } = ritualCopy(r.kind, await dayCounts(repo, r.day));
     out.push({ kind: r.kind, fireAt: r.fireAt, taskId: null, title, body, dueTime: null, key });
   }

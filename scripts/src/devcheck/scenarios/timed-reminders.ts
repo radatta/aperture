@@ -129,11 +129,12 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // N's state as push/deliver.ts writes it: its error and when. A send that never resolves reads as a network
 // failure (or, if the resolver stalls past the 10 s cap, a timeout) — both retried.
-const RETRYING =
+// Exported for timed-reminders.test.ts, which pins them to push/deliver.ts's copy.
+export const RETRYING =
   /^Last reminder didn't reach this device \((network error|timed out)\) — retrying$/;
-const RAN_OUT =
+export const RAN_OUT =
   /^Last reminder didn't reach this device \((network error|timed out)\) after 4 tries$/;
-const CAUGHT_UP =
+export const CAUGHT_UP =
   /^Couldn't deliver the catch-up for 1 missed reminder \((network error|timed out)\)$/;
 async function nState(ctx: Ctx): Promise<{ error: string; at: number }> {
   const s = await status(ctx);
@@ -154,6 +155,7 @@ let testAt = 0; // just before Send test was clicked
 let deviceR: DevPushDevice; // "this browser's" device, removed by the API as if from another device
 let deviceN: DevPushDevice; // the retry chain's device: real keys on a host that never resolves
 let ranOutAt = 0; // when N's retries ran out (read off its error)
+let e2eStatus: DevPushStatus | null = null; // the status that showed A's outcome: that tick's health line
 
 // The server (or the page) catches up: the poller's tick, a save the page already showed.
 async function until<T>(
@@ -268,7 +270,7 @@ export const timedReminders: Scenario = {
       offDev: {
         file: 'lambdas/src/backend.push.test.ts',
         test: 'the nudge toggles: on by default, a boolean only, and one switched back on is armed from then',
-        why: 'the harness writes settings only as real booleans (a restore can’t touch the rest); the contract suite runs the same refusal against the stub too',
+        why: 'the harness has no raw settings call — its one settings writer takes real booleans for the reminder keys only, so a restore can’t write anything else; the contract suite runs the same refusal against the stub too',
       },
     },
     {
@@ -331,7 +333,7 @@ export const timedReminders: Scenario = {
       id: 'ui-link-clears-search',
       entry: 'ui',
       kind: 'edge',
-      what: 'A search typed on Tasks earlier is cleared by the tap-through, so closing the modal lands on Today',
+      what: 'A search typed on Tasks earlier is cleared by the tap-through: the search box is empty when the modal opens and after it closes',
     },
     {
       id: 'ui-deep-link-gone',
@@ -1004,6 +1006,10 @@ export const timedReminders: Scenario = {
           ctx.log(`removing the harness's own live device ${d.label}`);
           await ctx.api.writes.removeHarnessStray(d.id, d.label);
         }
+        // The nudges off for the chain: one falling inside it (08:30, 21:30 LA) would be another notification
+        // on its devices, and the retry chain reads N's error alone. Cleanup turns them back on regardless.
+        ctx.api.writes.recordReminderToggles();
+        await ctx.api.writes.setReminderSettings({ nudgeMorning: false, nudgeNight: false });
         deviceC = await ctx.api.writes.subscribeHarnessPush('c', UNUSABLE_KEYS, label(ctx, 'C'));
         await ctx.ui.goto('/settings');
         const send = ctx.page.getByRole('button', { name: 'Send test', exact: true });
@@ -1100,7 +1106,11 @@ export const timedReminders: Scenario = {
           await until(
             'the poller’s send',
             () => status(ctx),
-            (v) => (outcome = e2eOutcome(v, deviceA.id, label(ctx, 'A'), fireAt)) !== null,
+            (v) => {
+              outcome = e2eOutcome(v, deviceA.id, label(ctx, 'A'), fireAt);
+              if (outcome !== null) e2eStatus = v;
+              return outcome !== null;
+            },
             Math.max(fireAt + TICK_WAIT_MS - Date.now(), 10_000),
             3_000,
           );
@@ -1120,7 +1130,7 @@ export const timedReminders: Scenario = {
       entry: 'api',
       proves: ['retry-network', 'retry-neighbour'],
       title:
-        'The same tick failed N in transit: its error reads “— retrying”, and it is still listed while A was dropped',
+        'The same tick failed N in transit: its error reads “— retrying”, and that tick’s health line names A’s final answer beside it',
       async run(ctx) {
         const v = await until(
           'N’s first try',
@@ -1132,6 +1142,14 @@ export const timedReminders: Scenario = {
         if (!RETRYING.test(v.error))
           throw new Error(`N’s first failure isn’t a retrying network failure: ${v.error}`);
         ctx.log(`N: ${v.error}`);
+        // The neighbour: the tick that showed A's final answer named N as retrying beside it, and A not.
+        const line = errorsOf(e2eStatus!);
+        const a = line.filter((e) => e.startsWith(label(ctx, 'A')));
+        const n = line.filter((e) => e.startsWith(`${label(ctx, 'N')}: `));
+        if (a.length !== 1 || a[0]!.endsWith('— retrying'))
+          throw new Error(`A's entry on that tick's health line: ${JSON.stringify(line)}`);
+        if (n.length !== 1 || !RETRYING.test(n[0]!.slice(`${label(ctx, 'N')}: `.length)))
+          throw new Error(`N's entry on that tick's health line: ${JSON.stringify(line)}`);
       },
     },
     {
@@ -1177,6 +1195,7 @@ export const timedReminders: Scenario = {
         } finally {
           if ((await status(ctx)).devices.some((d) => d.id === deviceN.id))
             await ctx.api.writes.unsubscribePush(deviceN.id);
+          await ctx.api.writes.setReminderSettings({ nudgeMorning: true, nudgeNight: true });
         }
       },
     },

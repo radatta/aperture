@@ -64,7 +64,7 @@ export function useTaskQuery() {
   // The store a Places link points at (?place=<slug> — the Shortcut's tap-through, placeLensPath).
   const focusPlace = lens === 'places' ? params.get('place') : null;
   // A reminder's tap-through (reminders.ts taskPushPath): ?task=<id> opens that task once; ?n= is the
-  // notification's tag (PR 3 reads it). Both leave the URL once handled — replaced, so Back doesn't
+  // notification's tag (nothing reads it). Both leave the URL once handled — replaced, so Back doesn't
   // reopen the task.
   const linkedTaskId = params.get('task');
   const hasLink = linkedTaskId !== null || params.has('n');
@@ -106,11 +106,15 @@ export function useTaskQuery() {
   );
 
   // A reminder's tap-through lands on Today unsearched: a sticky search from earlier would hide Today
-  // (and the list the task sits in) behind the modal it opens. Once per link — the link leaves the URL
-  // when handled, so typing again stays typed.
+  // (and the list the task sits in) behind the modal it opens. Once per link: the link can stay in the
+  // URL while its task loads (or its read fails), and what's typed meanwhile stays typed.
+  const link = hasLink ? `${linkedTaskId ?? ''}#${params.get('n') ?? ''}` : null;
+  const cleared = useRef<string | null>(null);
   useEffect(() => {
-    if (hasLink && query.text !== '') setQuery({ ...query, text: '' });
-  }, [hasLink, query, setQuery]);
+    if (link === null || cleared.current === link) return;
+    cleared.current = link;
+    if (query.text !== '') setQuery({ ...query, text: '' });
+  }, [link, query, setQuery]);
 
   // Switching lens keeps what's typed and resets the rest to the new lens's preset.
   const setLens = useCallback(

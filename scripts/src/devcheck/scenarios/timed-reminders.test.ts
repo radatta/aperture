@@ -1,7 +1,16 @@
 import { createECDH } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { DevPushDevice, DevPushStatus } from '../api';
-import { droppedForKeys, e2eOutcome, laClock, pushKeys, stageFault } from './timed-reminders';
+import {
+  CAUGHT_UP,
+  droppedForKeys,
+  e2eOutcome,
+  laClock,
+  pushKeys,
+  RAN_OUT,
+  RETRYING,
+  stageFault,
+} from './timed-reminders';
 
 // The end-to-end step reads the poller's own words back (lambdas/src/push/dispatch.ts — scripts doesn't
 // depend on lambdas): the strings below are what it writes for each answer Apple can give a never-issued
@@ -180,5 +189,26 @@ describe('the end-to-end task and keys', () => {
     e.generateKeys();
     expect(e.computeSecret(point)).toHaveLength(32);
     expect(pushKeys().p256dh).not.toBe(k.p256dh);
+  });
+});
+
+// The retry chain reads N's error by these; push/deliver.ts writes it (scripts can't import lambdas), so a
+// change to that copy fails here first.
+describe('the retry chain’s copy', () => {
+  const lead = "Last reminder didn't reach this device";
+  it('matches what a network failure or a timeout writes at each step, and nothing else', () => {
+    for (const why of ['network error', 'timed out']) {
+      expect(RETRYING.test(`${lead} (${why}) — retrying`)).toBe(true);
+      expect(RAN_OUT.test(`${lead} (${why}) after 4 tries`)).toBe(true);
+      expect(CAUGHT_UP.test(`Couldn't deliver the catch-up for 1 missed reminder (${why})`)).toBe(
+        true,
+      );
+    }
+    expect(RETRYING.test(`${lead} (push service answered 503) — retrying`)).toBe(false);
+    expect(RETRYING.test(`${lead} (network error)`)).toBe(false);
+    expect(RAN_OUT.test(`${lead} (network error) after 3 tries`)).toBe(false);
+    expect(
+      CAUGHT_UP.test(`Couldn't deliver the catch-up for 2 missed reminders (network error)`),
+    ).toBe(false);
   });
 });

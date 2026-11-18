@@ -137,6 +137,12 @@ export interface PushQueue {
   retries: PushRetryRow[];
   misses: PushMissRow[];
 }
+// What one poller tick reads of a user's own rows, in one Query: the send queue, the dedup rows and the
+// Send-test rows (pq#, psent#, ptest# sort next to each other; nothing else falls between).
+export interface PushRows extends PushQueue {
+  sent: PushSentRow[];
+  tests: PushTestRow[];
+}
 // This user's last send and last error, as Settings' health line shows them.
 export interface PushUserHealth {
   lastSentAt: number | null;
@@ -1281,19 +1287,31 @@ export class Repo {
     await this.writes.delete(this.p(), sk.pushCount(day));
   }
 
-  // Has this reminder gone (or is it going)? Consistent: the dedup row may be a moment old.
-  async hasPushSent(fireAt: number, key: string): Promise<boolean> {
-    return !!(await this.doc.get(this.p(), sk.pushSent(fireAt, key), { consistent: true }));
-  }
-
-  // The send queue (push/deliver.ts), in one consistent read: what a tick acts on was written by the last.
-  async listPushQueue(): Promise<PushQueue> {
-    const out: PushQueue = { retries: [], misses: [] };
-    for (const it of await this.doc.query(this.p(), sk.pushQueuePrefix(), { consistent: true })) {
+  // The tick's one read of its own rows (PushRows), consistent: what it acts on was written by the last
+  // tick. A range over `pq#` … `ptest#`, so it costs what the sweep's two reads of psent# and ptest# did.
+  async listPushRows(): Promise<PushRows> {
+    const out: PushRows = { retries: [], misses: [], sent: [], tests: [] };
+    const items = await this.doc.query(this.p(), 'p', {
+      consistent: true,
+      from: sk.pushQueuePrefix(),
+      to: `${sk.pushTestPrefix()}${SK_END}`,
+    });
+    for (const it of items) {
       if (it.SK.startsWith(sk.pushRetryPrefix())) out.retries.push(toEntity<PushRetryRow>(it));
       else if (it.SK.startsWith(sk.pushMissPrefix())) out.misses.push(toEntity<PushMissRow>(it));
+      else if (it.SK.startsWith(sk.pushSentPrefix())) out.sent.push(toEntity<PushSentRow>(it));
+      else if (it.SK.startsWith(sk.pushTestPrefix())) out.tests.push(toEntity<PushTestRow>(it));
     }
     return out;
+  }
+  async listPushQueue(): Promise<PushQueue> {
+    const { retries, misses } = await this.listPushRows();
+    return { retries, misses };
+  }
+  // A new retry replaces one still pending under the same device and Topic: that one is the same task's
+  // earlier fire (since re-dated — its own retry would drop it) or an earlier Send test.
+  async putPushRetry(row: PushRetryRow): Promise<void> {
+    await this.writes.put(entityItem(this.userId, sk.pushRetry(row.subId, row.topic), row));
   }
   // Lands only while the stored row is still at `expectedUpdatedAt` (null: none yet). false = lost.
   async putPushRetryIf(row: PushRetryRow, expectedUpdatedAt: number | null): Promise<boolean> {

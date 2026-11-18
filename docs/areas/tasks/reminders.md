@@ -53,7 +53,8 @@ Notifications:
   today" or "Nothing planned yet"; night "3 left open · 2 done" (either half alone) or "Nothing on today's
   plan". The counts are the day's plan as the app reads it (each plan's newest copy, its task not cancelled).
   Each nudge is its own notification, tagged by its kind, and opens Home (`/`), whose clock mode is already
-  morning at 08:30 and night at 21:30. Armed like any kind (the toggle's switch-on time, the registry row). No
+  morning at 08:30 and night at 21:30 — for a day that starts by 08:30 (`dayStartHour` ≤ 8; the default is 4).
+  Its day is the calendar day of its fire time. Armed like any kind (the toggle's switch-on time, the registry row). No
   auto-mute (the maintainer, 2026-11-18). A nudge is never caught up: one the window misses is gone.
 - **Same-tick batching:** several reminders in one minute become one notification ("3 reminders", titles joined).
 - **Tap-through:** `/tasks?lens=today&task=<id>&n=<tag>` opens the task's modal on Today. A batch opens Today.
@@ -113,21 +114,28 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
   is ever found twice.
 - **Retry and catch-up** (`push/deliver.ts`, D17–D22). Each device's answer is classified:
   - delivered (2xx); gone (404, 410, unusable keys — the device is dropped, as before);
-  - **transient** — a timeout, a network failure, 429, 500, 502, 503 (RFC 8030, Apple's and FCM's status
-    tables): a retry row `pq#r#<subId>#<topic>` holds the notification's candidates, and the next
+  - **transient** — a timeout, a network failure, 429, 500, 503 (RFC 8030, Apple's and FCM's status
+    tables), and 502/504, a gateway's fault of the same kind (inference): a retry row `pq#r#<subId>#<topic>` holds the notification's candidates, and the next
     `RETRY_MAX` = 3 ticks retry that device only, under the same Topic, so a first copy the service took but
     never answered for is replaced while still undelivered (RFC 8030 §5.4). The device reads "… — retrying".
-    Each retry re-reads its tasks: one finished, deleted or re-dated since stays quiet. Retries take no guard
-    unit. A device the tick's deadline skipped gets a retry row too, with no try spent;
+    Each retry re-reads its tasks: one finished, deleted, re-dated or taken off that day's plan since stays
+    quiet. Retries take no guard unit. Each try is claimed (counted, on the version read) before its POST. A
+    device the tick's deadline skipped gets a retry row too, with no try spent, and goes first among the
+    retries; a device with a retry pending goes last in a fresh batch, so one that keeps timing out (10 s)
+    can't use up a tick before the rest. A new failure under a Topic still retrying replaces that row;
   - final — anything else (400, 403, 413, a fault of ours): the device's error, as before.
 
   Retries that run out (or a retry older than 5 minutes: the poller stalled) leave the device "… after N
-  tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick for longer
-  than the window — leaves misses too: what fell due in it, up to 12 h back, armed, enabled and still open,
-  deduped by its `psent#` row. A device's misses go out once, as "N reminders didn't reach you" with their
+  tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick that could
+  check every user (the poller's `lastCheckedAt`: the stage could sign and no user's tick threw) for longer
+  than the window — leaves misses too, for every device: what fell due in it, up to 12 h back, armed, enabled
+  and still open, deduped by its `psent#` row and queued before any send of that tick. A device's misses go out once, as "N reminders didn't reach you" with their
   titles (opening Today), when all of them have settled (5 minutes after a run-out; at once after a gap) and
-  no retry is pending for it. The rows are claimed before the send; the catch-up is tried once, costs one guard
-  unit, and its failure stays on the device and the health line. Tests and nudges are never missed.
+  no retry is pending for it. The rows are claimed before the guard and the send; each device's catch-up is its
+  own notification against the guard (one refused is dropped and said, as a reminder past the guard is),
+  tried once, its failure on the device and the health line; one that lands clears the device's error like
+  any delivery. Tests and nudges are never missed. Queue rows of a device removed later are swept by the
+  user's next tick; a user who leaves the registry leaves them behind, small and inert.
   A rare duplicate is possible: a timed-out POST the service accepted and delivered before its retry arrived
   shows twice (iOS doesn't replace by tag — WebKit bug 258922); a missed deadline was judged worse.
 
@@ -194,8 +202,10 @@ proves the whole chain. The BFF never holds the private key.
   line carries the status, the task ids and a sub-id prefix — never the endpoint, the keys or the title.
 - **Cost bound:**
   - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
-    tiers. The send queue adds one consistent Query per user per tick (~43 k a month, about $0.01); the nudges
-    a plan read twice a day. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
+    tiers. A tick reads a user's send queue, dedup and Send-test rows in one consistent range Query (`pq#` …
+    `ptest#`, which sort together), reads the health row only when it writes it, and sweeps guard counters
+    every 10 minutes — fewer reads than before the queue existed (2026-11-18: about 1.1 Queries per user per
+    tick, against 3). The nudges add a plan read twice a day. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
     per stage, against CloudWatch's free 5 GB.
   - Worst case is a tick stuck at the 20 s timeout every minute: 1,440 × 20 s × 0.25 GB = 7,200 GB-s, about
     **$0.12/day of compute**, about $0.15/day with DynamoDB and logs, with pushes capped by the guard.
