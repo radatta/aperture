@@ -1047,20 +1047,22 @@ export const categorySuggest: Scenario = {
           if (/\bbg-teal\b/.test((await send.getAttribute('class')) ?? ''))
             throw new Error('Send is filled before any parse');
           const t0 = Date.now();
+          const answer = ctx.page.waitForResponse((r) => r.url().endsWith('/api/parseTask'), {
+            timeout: 15_000,
+          });
           await send.click();
           const save = ctx.page.getByRole('button', { name: 'Save reviewed task' });
           await save.waitFor({ timeout: 15_000 });
           ctx.log(`real parse into the preview: ${Date.now() - t0} ms`);
           if (!/\bbg-teal\b/.test((await save.getAttribute('class')) ?? ''))
             throw new Error('Send did not fill when the parse landed');
-          const shown = (
-            await ctx.page.locator('[aria-live="polite"][id]').first().innerText()
-          ).split('\n')[0]!;
+          const shown = ((await (await answer).json()) as { input?: { title?: string } }).input
+            ?.title;
           await ctx.shot('real-send');
           await save.click();
           await ctx.ui.expectText(/Task added/, 20_000);
           const t = await newestTask(ctx, before);
-          if (!t.title || !shown.startsWith(t.title))
+          if (!t.title || t.title !== shown)
             throw new Error(`saved “${t.title}”, the preview showed “${shown}”`);
           if (parses !== 1) throw new Error(`${parses} parses for one capture`);
         } finally {
