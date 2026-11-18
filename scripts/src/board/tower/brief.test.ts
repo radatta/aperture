@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BRIEF_FILE, BRIEF_STALE_MS, briefOut, briefText, type BriefView } from './brief.ts';
-import { build, parseArgs, writeBrief } from './web/main.ts';
+import { budgetLine, parseBudget } from '../budget.ts';
+import { briefBudget, build, parseArgs, writeBrief } from './web/main.ts';
 const ctl = (s: string) => [...s].some((c) => c.charCodeAt(0) < 32 && c !== '\n'); // a control byte other than newline
 
 const FIXTURES = join(import.meta.dirname, 'fixtures');
@@ -21,6 +22,7 @@ const HEADS = [
   'USAGE',
   'MAC',
   'VM',
+  'BUDGET',
   'CTX',
 ];
 const heads = (text: string) =>
@@ -70,6 +72,35 @@ describe('briefText on the fixture board', () => {
     expect(b).toMatch(/^NEEDS 3 · india-branch: admit the branch to dev \(\+2\)$/m);
     expect(b).toMatch(/^MERGE 0 · 1 on hold$/m);
     expect(b).toMatch(/^ {2}HOLD PR 41 charlie-branch ".*": dev: bravo-branch is testing/m);
+  });
+});
+
+describe('the BUDGET line', () => {
+  const limitsPath = new URL('../../../board/limits.json', import.meta.url);
+  const shipped = JSON.parse(readFileSync(limitsPath, 'utf8'));
+
+  it('carries the log-only budget’s units, prefix stripped once, and says unknown when there are none', () => {
+    const line = budgetLine(
+      parseBudget(shipped.budget)!,
+      { jobs: 3.8, lanes: 2.6, sessions: 12 },
+      { k: 1, why: 'ac' },
+    );
+    expect(briefText({ ...fx, budget: line }, utc)).toMatch(
+      /^BUDGET jobs 3\.8\/6\.5 · lanes 2\.6\/4\.5 · sessions 12\/14 · k 1 ac \(log-only\)$/m,
+    );
+    expect(briefText({ ...fx, budget: null }, utc)).toMatch(/^BUDGET unknown$/m);
+  });
+
+  it('the tower reads it from the board dir, and null without a budget block or a readable limits.json', () => {
+    const board = mkdtempSync(join(tmpdir(), 'brief-budget-'));
+    expect(briefBudget(board)).toMatch(
+      /^budget \(log-only\): jobs 0\.5\/[\d.]+ · lanes 0\.5\/[\d.]+ · sessions 0\/14 · k /,
+    );
+    const bare = join(board, 'limits.json');
+    writeFileSync(bare, JSON.stringify({ ...shipped, budget: undefined }));
+    expect(briefBudget(board, bare)).toBeNull();
+    expect(briefBudget(board, join(board, 'missing.json'))).toBeNull();
+    rmSync(board, { recursive: true });
   });
 });
 

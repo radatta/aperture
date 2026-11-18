@@ -2,6 +2,7 @@
 // `pnpm board brief` prints for the hub to paste verbatim when the maintainer asks for status — a script prints, no
 // model composes. Every heading is always there, in this order, with "none" or "unknown" written out. A new line is
 // one more entry in SECTIONS. Pure.
+import { BUDGET_PREFIX } from '../budget.ts';
 import { macLine } from '../machine.ts';
 import type { LaneRow, View } from './derive.ts';
 import { gib, hhmm as hhmmLocal } from './fmt.ts';
@@ -12,7 +13,8 @@ export const BRIEF_STALE_MS = 180_000; // six missed 30 s writes: the tower is d
 export const LIST_MAX = 5; // rows under QUEUED before `+n more`
 const TEXT_MAX = 60;
 
-export type BriefView = View & { usage?: UsageLine | null };
+// budget: the log-only budget's status line (budget-read.ts budgetNow), null when there is none to read
+export type BriefView = View & { usage?: UsageLine | null; budget?: string | null };
 type Fmt = (t: number) => string;
 
 // one line, no control bytes, capped: lane and PR text is the board's, never trusted as terminal-safe
@@ -122,6 +124,12 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
       : 'no sample';
     return [`VM ${vm} · slow ${one(v.health.slowdown.line, 80)}`];
   },
+  // the smart cap's units beside the live caps (SESSION-BOARD.md → Budget); log-only, so it says so
+  (v) => [
+    v.budget
+      ? `BUDGET ${one(v.budget.startsWith(BUDGET_PREFIX) ? v.budget.slice(BUDGET_PREFIX.length) : v.budget, 100)} (log-only)`
+      : 'BUDGET unknown',
+  ],
   (v) => {
     const x = v.ctx;
     if (!x) return ['CTX unknown (no ctx.json)'];

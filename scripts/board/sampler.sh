@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Background usage sampler: one tick every SAMPLER_INTERVAL s (30) → board/history/samples-<date>.jsonl,
 # plus board/status.line. One per container (flock, waited for up to 5 s: status/json probes hold it for
-# microseconds); started by `board.sh sampler start`, dies with the container. Pure bash + one awk per tick; reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).
+# microseconds); started by `board.sh sampler start`, dies with the container. Bash, one awk and a few jq per tick
+# (sessions, slots, lane phases); reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).
 #   sampler.sh          run forever
 #   sampler.sh --once   one tick, no lock (tests, probe)
 #   sampler.sh --print  compute a tick to stdout; writes nothing (board.sh status/json)
@@ -21,14 +22,22 @@ prev="${prev:-/tmp/aperture-sampler.prev}"
 
 tick() {  # $1 = print → stdout only, nothing written
   sb_init_dirs
-  local panes="$work.panes" sess="$work.sess" slots="$work.slots" line pOut="$prev.new" sOut="$BOARD_DIR/status.line.tmp"
+  local panes="$work.panes" sess="$work.sess" slots="$work.slots" lanes="$work.lanes" line f pOut="$prev.new" sOut="$BOARD_DIR/status.line.tmp"
   local -a live=()
   [ "${1:-}" = print ] && pOut=/dev/null sOut=/dev/null
-  : >"$panes"; : >"$sess"; : >"$slots"; touch "$prev"
+  : >"$panes"; : >"$sess"; : >"$slots"; : >"$lanes"; touch "$prev"
   [ -n "${TMUX:-}" ] || [ -S "/tmp/tmux-$(id -u)/default" ] &&
     tmux list-panes -a -F $'#{window_name}\t#{pane_pid}' >"$panes" 2>/dev/null
   compgen -G "$BOARD_DIR/sessions/*.json" >/dev/null &&
     jq -r '[.pid, .sid // "", .name // "", .branch // "", (if .lastPromptAt or .lastStopAt then .state // "" else "" end)] | @tsv' "$BOARD_DIR"/sessions/*.json >"$sess" 2>/dev/null
+  # Each lane's phase (`pnpm board lane`), so the budget's phase units can be re-measured (SESSION-BOARD.md →
+  # Budget). One jq over them all; a half-written file stops that jq there, dropping the rest, so then one per file.
+  if compgen -G "$BOARD_DIR/lanes/*.json" >/dev/null &&
+    ! jq -r 'select(.branch and .phase) | [.branch, .phase] | @tsv' "$BOARD_DIR"/lanes/*.json >"$lanes" 2>/dev/null; then
+    for f in "$BOARD_DIR"/lanes/*.json; do
+      jq -r 'select(.branch and .phase) | [.branch, .phase] | @tsv' "$f" 2>/dev/null
+    done >"$lanes"
+  fi
   mapfile -t live < <(sb_live_slots)  # a dead wrapper's slot is not a running job (lib.sh)
   [ "${#live[@]}" -eq 0 ] ||
     jq -r '[.pid, .label // .class] | @tsv' "${live[@]}" >"$slots" 2>/dev/null
@@ -39,9 +48,9 @@ tick() {  # $1 = print → stdout only, nothing written
     -v pids="$(cg_pids)" -v pidsMax="$(cg_pids_max)" -v usage="$(cg_usage_usec)" -v cpus="$(cg_cpus)" \
     -v psiMemSome="$(cg_psi memory some)" -v psiMemFull="$(cg_psi memory full)" -v psiCpuSome="$(cg_psi cpu some)" \
     -v oomKill="$(cg_oom_kill)" -v highEvents="$(cg_high_events)" -v dev="$(jq -r --argjson now "$(sb_epoch)" '.holder | select(. and (.expiresAt | sub("\\.[0-9]+"; "") | fromdate) > $now) | .branch' "$BOARD_DIR/devlock.json" 2>/dev/null)" \
-    -v prevOut="$pOut" -v statusOut="$sOut" -v F1="$panes" -v F2="$sess" -v F3="$slots" -v F4="$prev" \
-    "$panes" "$sess" "$slots" "$prev" -)
-  rm -f "$panes" "$sess" "$slots"
+    -v prevOut="$pOut" -v statusOut="$sOut" -v F1="$panes" -v F2="$sess" -v F3="$slots" -v F4="$prev" -v F5="$lanes" \
+    "$panes" "$sess" "$slots" "$prev" "$lanes" -)
+  rm -f "$panes" "$sess" "$slots" "$lanes"
   [ "${1:-}" = print ] && { printf '%s\n' "$line"; return; }
   mv -f "$prev.new" "$prev" 2>/dev/null
   mv -f "$BOARD_DIR/status.line.tmp" "$BOARD_DIR/status.line" 2>/dev/null

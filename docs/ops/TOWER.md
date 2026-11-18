@@ -339,6 +339,7 @@ beside `queue.json` every 30 s, tmp + rename:
   USAGE 53% · 9.6%/h · ~4.8 h to 100% (13:40)               pnpm usage line, with when it was read
   MAC AC 79% charging … · load 8.2 11.0 12.1 /12            the Mac line (Low Power and battery as RED:) and load
   VM anon 6.2G/18.0G · cpu 3.1/9 · slow <slowdown line>
+  BUDGET jobs 3.8/6.5 · lanes 2.6/4.5 · sessions 12/14 · k 1 ac (log-only)   SESSION-BOARD.md → Budget; unknown on a read error
   CTX ≥50 <session> 78% · ≥40 <session> 41%
   ```
 

@@ -22,6 +22,7 @@ limiting the cap is stays a number, not a feeling (`cli.ts barriers`).
 | What does a mix of sessions cost  | `node scripts/src/board/cli.ts report /workspace/localNotes/board/history 7` (days)                                                                                                                                                                                            |
 | How limiting is the test cap      | `node scripts/src/board/cli.ts barriers /workspace/localNotes/board/history 7` — blocks/day, total + p50/p90 wait, by mix / holder / blocked session (also the last line of `board.sh status`)                                                                                 |
 | Is the machine throttled          | `node scripts/src/board/cli.ts machine /workspace/localNotes/board [--json]` — the Mac's battery / Low Power Mode / thermal line and the slowdown ratio (_History_ → _Slowdown_); also two lines of `board.sh status`, `.machine` in `board.sh json`, and HEALTH on the tower  |
+| What would the smart cap say      | `board.sh status` / `pnpm lanes status` print its `budget (log-only): …` line; `node scripts/src/board/cli.ts budget-report /workspace/localNotes/board/history 1` — what it would have decided against what ran (_Budget_)                                                    |
 | Is `limits.json` stale            | `node scripts/src/board/cli.ts staleness scripts/board/limits.json /workspace/localNotes/board/history`                                                                                                                                                                        |
 | The whole picture, live           | `scripts/board/tower.sh` in its own tmux window — the control tower (_Control tower_)                                                                                                                                                                                          |
 | The web tower                     | http://localhost:6183 · `board.sh tower start\|restart\|stop\|status\|version`; the main sync loop keeps it current (`docs/ops/TOWER.md` → _Main sync_)                                                                                                                        |
@@ -80,7 +81,7 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
  "cats":{"claude":{"n":7,"thr":110,"rssMiB":2675},"vitest":{…},"vite":{…},"chromium":{…},"tsc":{…},
          "eslint":{…},"pnpm":{…},"system":{…},"other":{…},"unattributed":{"thr":0}},
  "sessions":[{"pid":2180,"name":"dev-e2e","sid":"…","branch":"dev-e2e","state":"working","stateSrc":"hook",
-              "thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test"}],
+              "thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test","phase":"gate"}],
  "mix":{"working":2,"idle":5,"heavy":1},"gapSec":null}
 ```
 
@@ -91,6 +92,10 @@ reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — pure bash plus one `
 - **state** comes from the session's hooks (`stateSrc: "hook"`: working from a prompt until Stop). A session
   that hasn't fired a hook since the hooks were installed falls back to CPU (`"cpu"`, ≥ 5 % of a core) —
   unreliable, because a session waiting on the model uses almost no CPU. `board.sh status` marks those `*`.
+- **phase** is the session's lane phase, from its branch's lane file (`board/lanes/<branch>.json`, written by
+  `pnpm board lane`), so the budget's phase units can be re-measured (_Budget_); `null` for a session off a lane, an
+  unreadable lane file (one jq per file, so one half-written file never blanks the rest), or a `sampler.sh` started
+  before the field — the running sampler keeps its old code until `board.sh sampler restart`.
 - `unattributed` counts heavy-category threads with no session (drift detector for the attribution).
 - `gapSec` is set when a tick is > 60 s late — the container was frozen or the VM slept.
 - `cpuCores` is the cgroup's CPU time since the last tick over the real time between (`$EPOCHREALTIME`, so a
@@ -107,6 +112,10 @@ actions are `kind: "lease"`. `cli.ts report` buckets the samples by mix (`2w 5i 
 anon, pids and cores; measures an idle session directly (RSS, threads); estimates each extra session's anon
 from heavy-free ticks; and summarises real jobs per class — load-test runs (`loadTest: true`: `matrix.sh`'s
 guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
+
+**Budget events** (`kind: "budget"`, `scope: "job" | "lane"`) — the log-only budget's view of each heavy.sh admission
+and each `lanes start`, beside what the live rules did: _Budget_. Every other reader skips them: each filters by
+`kind`, and `staleness` (which reads `class` and `peak`) finds no `peak` (`budget.test.ts` pins the numeric ones).
 
 **Dev-lock events** (`scripts/src/bot/lock-events.ts`) — the bot logs each dev-slot wait and hold as `kind: "devlock"`,
 `{v, t, name (the branch's board session, else null), branch, action, …}`, so a wait for a slot is measured, not read
@@ -209,7 +218,8 @@ The board's own `dev` lease is gone (removed in session-comms, 2026-11): the dev
 GitHub, below. History keeps its old `lease: "dev"` events for their 90 days, and `cli.ts barriers` ignores them;
 `board.sh gc` deletes a leftover `leases/dev.json`.
 
-**`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
+**`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`;
+it carries the job's `cmd`, 160 chars at most, so the log-only budget can tell a `ui` slot's three loads apart).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
 (not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
 with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job — a suite, or a wide `pnpm gate:fast`
@@ -226,6 +236,58 @@ longer Bash timeout or run them in the background.) A slot whose wrapper died �
 reaped) — is never a running job: every reader (`status`/`json`, the sampler's `heavy` count, the guard's offer and cap
 count) counts live slots only, through one rule (`lib.sh` `sb_slot_live` / `sb_live_slots`), and the file is dropped
 by the next acquire and by `gc`.
+
+## Budget (log-only)
+
+The smart cap (the 2026-11-18 smart-cap report): the load comes from
+heavy jobs, not lane count (the job mix explains 72–80 % of CPU PSI's variance, the working-lane count 35–42 %), so
+both budgets count **units** of about one busy core. **Log-only**: nothing reads `budget.enforce`, and no admission
+or start changes; the live rules stay the cap, the hard line and `lanes.maxActive`. Numbers: `limits.json` →
+`budget`, one home; the pure code is `scripts/src/board/budget.ts`, its reads and append `budget-read.ts`.
+
+- **Job budget** — at each `heavy.sh` admission (its first decision; polls while held don't log; the guard's
+  decide-only call and unslotted runs never do): `committed` = `base` 0.5 + every live slot's units +
+  `lightWorking` 0.3 for each working session in the last sample (≤ `sampleFreshSec` 90 old; else 0 and
+  `lightKnown: false`) holding no slot, the requester excluded. It would admit while `committed + job ≤ jobUnits / k`
+  (6.5). Units: `test` (a wide gate or a suite) 3.0, `test-fast` (narrow gate) 2.5, `ui` split by its command —
+  `devcheck:local` 1.5, a deployed `devcheck` 0.5, a capture 1.0 (a slot from an older `lease.sh`, with no `cmd`,
+  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, anything else 1.0. `test-file`
+  0.5 and `other` are in the block but reached by no admission yet: those runs take no slot, so they count only as
+  their session's light 0.3. Written by
+  `cli.ts decide-heavy` after its decision string is built, so its output is byte-identical with or without it; any
+  error is swallowed. Each worktree runs its own `lease.sh`, so a lane cut before this merged logs no job events until
+  it rebases.
+- **Lane budget** — at each `lanes start`'s cap and pace outcome (`docs/ops/LANES.md` → _The cap_): `base` + each
+  active lane's phase units (plan 0.1, build 0.4, gate 1.0, review 0.7, local 1.4, dev 0.3, pr / merged / cleanup /
+  blocked 0.05, parked 0; no lane file or an unknown phase counts as build) + `newLane` 0.4 against `laneUnits / k`
+  (4.5), and the live registered sessions, the hub's included, + 1 against `sessionsMax` (14: about 0.31 GiB anon
+  each, the binding limit since the parallel gate). The phase units rest on 1–2 lanes each: the sampler's `phase`
+  field exists to re-measure them.
+- **k**, the power factor (`mac-stats.json` `.power`, a read up to 5 min old): a CPU speed or scheduler limit under
+  100 % → 1.5 (`thermal`, a guess: no thermal sample exists); on battery (`battery`), Low Power Mode (`lpm`) or charge
+  under 30 % (`low`: the spec's words, literal, so on AC while charging, since battery is checked first) → 1.3
+  (confounded with daytime in the report); else 1.0 (`ac`); no read → 1.3 (`unknown`). Both budgets divide by it:
+  5 job and 3.46 lane units at 1.3, printed to two places as compared.
+- **Not yet**: one iOS Simulator job at a time (`macSimSlots` 1) — no lease marks a Simulator job, so events carry
+  `sim: null`. Tokens: the budget admits more light lanes, which cost little CPU and full price in tokens; the hub's
+  usage lines govern that (`docs/ops/HUB.md`).
+
+Events (`history/events-<date>.jsonl`, UTC day):
+
+| `scope` | Fields                                                                                                                                                                                                                                                                                                                                                                          |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `job`   | `pid, name, branch, class, label, cmd`, `unit: {as, units, guess?}`, `committed: {base, slots, light, total, held: [{pid, class, as, units}], lightWorking, lightKnown, sampleAgeSec}`, `limit, allowed, would: admit\|wait, k, kWhy: ac\|battery\|lpm\|low\|thermal\|unknown`, `actual: {verdict, wait}`, `cg: {psiCpuSome10, cpuCores, anonMiB} \| null`, `enforce, loadTest` |
+| `lane`  | `branch`, `lanes: [{branch, phase, units}]`, `units: {base, lanes, new, total}`, `limit, allowed`, `sessions: {live, max}`, `sim: null`, `would: admit\|refuse`, `wouldWhy: [units\|sessions]`, `k, kWhy`, `actual: {active, cap, capResult: ok\|over-cap\|refused, pace: ok\|blocked\|over-pace\|null}`, `enforce`                                                             |
+
+**Reading it.** `board.sh status` prints `budget (log-only): jobs 4.0/6.5 · lanes 3.3/4.5 · sessions 12/14 · k 1 ac`
+under its `heavy:` line (`cli.ts budget <boardDir> [--json]`, from the board dir only: its lanes are the lane files
+with a live session or a lifecycle record, without `lanes status`'s worktree check, so a lane with no lane file yet
+is left out there; a Mac with no `/proc` prints no line). `cli.ts budget-report
+<historyDir> [days]` answers the rollout question after a day of logs: admissions by unit, would-wait against what the
+live rules held, how often CPU PSI reached the pace line (`pace.psiCpuBelow`, 40) within 120 s of a would-wait and of a
+would-admit, starts the cap refused that the budget would admit (and the reverse), PSI in the 10 min after a start,
+the k mix and the would-waits at k 1, and the branches whose job runs it could not see. Rollout: log a day, read the
+report, re-derive the phase units from phase-tagged samples, then enforce in its own change.
 
 ## Dev lock line
 
@@ -277,7 +339,9 @@ over its cost.
 counts as active: `docs/ops/LANES.md` → _Start_. It was set when every lane ran the full suite 4–6 times; since
 `gate:fast` (2026-11-17) a lane runs affected tests locally and the full suite on GitHub, so re-measure it from a day
 of `cli.ts report` and `barriers` data before raising it. `lanes.autoCompactWindow` is the lanes' `claude --autocompact` window and the top-level `pace` block the
-`lanes start` pace gate's limits (`docs/ops/LANES.md` → _Start_ step 8, _The pace gate_). `watchers` holds the hub's
+`lanes start` pace gate's limits (`docs/ops/LANES.md` → _Start_ step 8, _The pace gate_). `budget` holds every number
+of the log-only budget (_Budget_; a missing or malformed block logs nothing and changes nothing, and `parseLimits`
+never reads it, since a throw there is a fail-open grant). `watchers` holds the hub's
 watchers' thresholds (_Watchers_ below).
 
 ## Hooks
@@ -689,7 +753,7 @@ of at most 8 bytes, and then only its first 4 bytes, under a 1 s `timeout` (the 
 as a 1–3 digit number; anything else waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its
 content never printed. Markers a week old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is
 dropped; a title or time loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`,
-`lease`), so a `merged` row passes them by.
+`lease`, `devlock`, `budget`), so a `merged` row passes them by.
 
 ## Script-shape rules (COI monitor)
 

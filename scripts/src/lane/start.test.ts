@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { Answer, Call, World } from './fakes.ts';
@@ -929,5 +929,200 @@ describe('lane start: the auto-compact window', () => {
   it('the tracked limits.json sets 500000', () => {
     const l = JSON.parse(readFileSync(new URL('../../board/limits.json', import.meta.url), 'utf8'));
     expect(l.lanes.autoCompactWindow).toBe(500000);
+  });
+});
+
+// The log-only budget (docs/ops/SESSION-BOARD.md → Budget): one line and one `kind: "budget"` event per start, at the
+// cap and pace outcome, beside the decision and never part of it.
+describe('lane start: the log-only budget', () => {
+  const shipped = JSON.parse(
+    readFileSync(new URL('../../board/limits.json', import.meta.url), 'utf8'),
+  );
+  const withLimits = (w: World, budget: unknown = shipped.budget) =>
+    writeFileSync(
+      join(w.main, 'scripts/board/limits.json'),
+      JSON.stringify({ ...shipped, budget }),
+    );
+  const budgets = (w: World) => {
+    const dir = join(w.board, 'history');
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir)
+      .filter((f) => f.startsWith('events-'))
+      .flatMap((f) => readFileSync(join(dir, f), 'utf8').trim().split('\n'))
+      .map((l) => JSON.parse(l))
+      .filter((e) => e.kind === 'budget');
+  };
+  const lanes = (w: World, names: string[], phase?: string) =>
+    names.forEach((b, i) => {
+      proc(w, 100 + i, '777');
+      boardSession(w, 100 + i, b);
+      if (phase) laneFile(w, b, phase);
+    });
+
+  it('an admitted start logs what the budget would say beside the cap and pace outcome', async () => {
+    const w = world();
+    withLimits(w);
+    claudeSession(w);
+    lanes(w, ['g1', 'r1'], 'gate');
+    laneFile(w, 'r1', 'review');
+    const t = deps(w, script(w, [], ['g1', 'r1']));
+    writeFileSync(join(w.board, 'mac-stats.json'), macStats(t.clock.now()));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(
+      /budget \(log-only\): lanes 2\.2\+0\.4\/4\.5 · sessions 3\/14 · k 1 ac → would admit/,
+    );
+    expect(budgets(w)).toEqual([
+      expect.objectContaining({
+        scope: 'lane',
+        branch: B,
+        lanes: [
+          { branch: 'g1', phase: 'gate', units: 1 },
+          { branch: 'r1', phase: 'review', units: 0.7 },
+        ],
+        units: { base: 0.5, lanes: 1.7, new: 0.4, total: 2.6 },
+        sessions: { live: 2, max: 14 },
+        would: 'admit',
+        actual: { active: 2, cap: 5, capResult: 'ok', pace: 'ok' },
+        enforce: false,
+      }),
+    ]);
+  });
+
+  it('a cap refusal is unchanged — same exit, same message — and logged with the budget’s view', async () => {
+    const w = world();
+    const five = ['a1', 'a2', 'a3', 'a4', 'a5'];
+    lanes(w, five);
+    const plain = deps(w, script(w, [], five));
+    expect(await start(plain.d, args())).toBe(75);
+    withLimits(w);
+    const t = deps(w, script(w, [], five));
+    expect(await start(t.d, args())).toBe(75);
+    expect(t.out().replace(/^budget .*\n/m, '')).toBe(plain.out());
+    expect(mutated(t.calls)).toEqual([]);
+    expect(budgets(w)).toEqual([
+      expect.objectContaining({
+        would: 'admit',
+        actual: expect.objectContaining({ capResult: 'refused', pace: null }),
+      }),
+    ]);
+  });
+
+  it('--over-cap and a budget that would refuse still start', async () => {
+    const w = world();
+    withLimits(w, { ...shipped.budget, sessionsMax: 1 });
+    claudeSession(w);
+    const five = ['a1', 'a2', 'a3', 'a4', 'a5'];
+    lanes(w, five);
+    const t = deps(w, script(w, [], five));
+    expect(await start(t.d, args({ overCap: 'hub asked' }))).toBe(0);
+    expect(budgets(w)).toEqual([
+      expect.objectContaining({
+        would: 'refuse',
+        wouldWhy: ['sessions'],
+        actual: expect.objectContaining({ capResult: 'over-cap', pace: 'ok' }),
+      }),
+    ]);
+  });
+
+  it('no limits.json, or a malformed block: no line, no event, the same start', async () => {
+    for (const setup of [() => {}, (w: World) => withLimits(w, { units: 'x' })]) {
+      const w = world();
+      setup(w);
+      claudeSession(w);
+      const t = deps(w, script(w));
+      expect(await start(t.d, args())).toBe(0);
+      expect(t.out()).not.toMatch(/budget/);
+      expect(budgets(w)).toEqual([]);
+    }
+  });
+
+  it('an append that throws costs the event only', async () => {
+    const w = world();
+    withLimits(w);
+    claudeSession(w);
+    const t = deps(w, script(w));
+    t.d.fs = {
+      ...t.d.fs,
+      append: () => {
+        throw new Error('EROFS');
+      },
+    };
+    expect(await start(t.d, args())).toBe(0);
+  });
+
+  it('the in-lock pace refusal is unchanged and logged as blocked; --over-pace as over-pace', async () => {
+    const racer = (w: World) =>
+      script(w, [
+        [
+          'git fetch origin',
+          () => {
+            writeFileSync(
+              join(w.board, 'lane-last-start.json'),
+              lastStartText('racer', Date.parse('2026-10-13T20:00:00Z')),
+            );
+            return '';
+          },
+        ],
+      ]);
+    const w0 = world();
+    const plain = deps(w0, racer(w0));
+    expect(await start(plain.d, args())).toBe(75);
+    const w = world();
+    withLimits(w);
+    const t = deps(w, racer(w));
+    expect(await start(t.d, args())).toBe(75);
+    expect(t.out().replace(/^budget .*\n/m, '')).toBe(plain.out());
+    expect(budgets(w)).toEqual([
+      expect.objectContaining({
+        actual: expect.objectContaining({ capResult: 'ok', pace: 'blocked' }),
+      }),
+    ]);
+
+    const w2 = world();
+    withLimits(w2);
+    claudeSession(w2);
+    const t2 = deps(w2, script(w2));
+    writeFileSync(
+      join(w2.board, 'pace.json'),
+      pace(t2.clock.now(), { state: 'hot', avg: { anonMiB: 9500, cores: 1, psiCpu: 1 } }),
+    );
+    expect(await start(t2.d, args({ overPace: 'hub: restarting the watcher' }))).toBe(0);
+    expect(budgets(w2)).toEqual([
+      expect.objectContaining({ actual: expect.objectContaining({ pace: 'over-pace' }) }),
+    ]);
+  });
+
+  it('a --wait start that loses the in-lock race logs once, at the pass that decides', async () => {
+    const T0 = Date.parse('2026-10-13T20:00:00Z');
+    const w = world();
+    withLimits(w);
+    claudeSession(w);
+    let fetches = 0;
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'git fetch origin',
+          () => {
+            if (++fetches === 1)
+              writeFileSync(
+                join(w.board, 'lane-last-start.json'),
+                lastStartText('racer', t.clock.now()),
+              );
+            return '';
+          },
+        ],
+      ]),
+    );
+    t.clock.sleep = async (ms) => {
+      t.clock.t += ms;
+      writeFileSync(join(w.board, 'pace.json'), pace(t.clock.t));
+    };
+    expect(await start(t.d, args({ waitMin: 5 }))).toBe(0);
+    expect(fetches).toBe(2);
+    expect(t.clock.t - T0).toBe(120_000);
+    expect(budgets(w)).toEqual([
+      expect.objectContaining({ actual: expect.objectContaining({ pace: 'ok' }) }),
+    ]);
   });
 });

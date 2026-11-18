@@ -52,22 +52,27 @@ _heavy_holders_json() {
 _heavy_is_load() { [ "${HEAVY_GUARD:-0}" = 1 ] || [ "${HEAVY_LOADTEST:-0}" = 1 ]; }
 
 # Under the lock: gc, decide, and on a go write the slot. Prints the decision JSON; exit 0 go, 3 wait.
+# args: slot owner class label wrapperPid wrapperStart [cmd] [blog]. blog=1 (heavy.sh's first decision only) also
+# asks decide-heavy to log the log-only budget beside it (SESSION-BOARD.md → Budget); the guard passes neither.
 _heavy_try() {
-  local slot="$1" owner="$2" class="$3" label="$4" wp="$5" ws="$6" slots live dec lt=false
+  local slot="$1" owner="$2" class="$3" label="$4" wp="$5" ws="$6" cmd="${7:-}" blog="${8:-0}" slots live dec lt=false
   sb_init_dirs; _heavy_gc
   _heavy_is_load && lt=true
-  slots=$(cat "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | jq -sc 'map({pid, class, label, startedAt, wrapperPid})')
+  slots=$(cat "$BOARD_DIR"/leases/heavy/*.json 2>/dev/null | jq -sc 'map({pid, class, label, startedAt, wrapperPid, cmd})')
   live=$(jq -nc --argjson p "$(cg_pids)" --argjson a "$(cg_anon)" '{pids: $p, anonBytes: $a}')
   dec=$(jq -nc --slurpfile l "$LIMITS_JSON" --argjson pm "$PIDS_MAX" --argjson hi "$MEM_HIGH" --argjson live "$live" \
     --argjson slots "${slots:-[]}" --arg class "$class" --argjson lt "$lt" \
-    '{limits: $l[0], liveLimits: {pidsMax: $pm, highBytes: $hi}, live: $live, slots: $slots, req: {class: $class, loadTest: $lt}}' |
+    --arg blog "$blog" --arg board "$BOARD_DIR" --arg owner "$owner" --arg label "$label" --arg cmd "${cmd:0:160}" \
+    '{limits: $l[0], liveLimits: {pidsMax: $pm, highBytes: $hi}, live: $live, slots: $slots, req: {class: $class, loadTest: $lt}}
+     + (if $blog == "1" then {budget: {board: $board, owner: ($owner | tonumber? // 0), label: $label, cmd: $cmd}} else {} end)' |
     "${BOARD_CLI[@]}" decide-heavy) || { echo '{"verdict":"grant","wait":false,"error":true}'; return 0; }  # fail open
   printf '%s\n' "$dec"
   [ "$(jq -r .wait <<<"$dec")" = true ] && return 3
   [ -n "$slot" ] || return 0  # decide only (the PreToolUse guard)
   jq -nc --argjson pid "$owner" --arg class "$class" --arg label "$label" --argjson wp "$wp" --arg ws "$ws" \
     --argjson cost "$(jq -c --arg c "$class" '.classes[$c] // {pids: 0, anonMiB: 0} | {pids, anonMiB}' "$LIMITS_JSON")" \
-    '{v: 1, pid: $pid, class: $class, label: $label, cost: $cost, wrapperPid: $wp, wrapperStart: $ws, startedAt: (now | todate)}' | sb_write "$slot"
+    --arg cmd "${cmd:0:160}" \
+    '{v: 1, pid: $pid, class: $class, label: $label, cost: $cost, wrapperPid: $wp, wrapperStart: $ws, startedAt: (now | todate), cmd: $cmd}' | sb_write "$slot"
 }
 
 # A blocking decision plus who holds the slots (outside the lock: 2 jq per slot is too slow to hold it for).
@@ -115,10 +120,11 @@ _heavy_interrupted() {
 }
 
 _heavy_acquire() {
-  local slot="$1" owner="$2" class="$3" label="$4" cmd="$5" wp="$6" ws="$7" wait="${8:-90}" t0 dec rc v first=
+  local slot="$1" owner="$2" class="$3" label="$4" cmd="$5" wp="$6" ws="$7" wait="${8:-90}" t0 dec rc v first= blog=1
   t0=$(sb_epoch)
   while :; do
-    dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws" 2>/dev/null); rc=$?
+    dec=$(sb_locked _heavy_try "$slot" "$owner" "$class" "$label" "$wp" "$ws" "$cmd" "$blog" 2>/dev/null); rc=$?
+    case "$rc" in 0|3) blog=0 ;; esac  # the budget logs the first real decision of an admission, not every poll
     # The wait is over unless still held (3) or retrying a busy lock: disarm now, so a late signal can't add a
     # second event for this hold (or a gaveUp for a granted run). A signal from here dies as it did before.
     case "$rc" in 3) ;; 75) [ $(( $(sb_epoch) - t0 )) -lt "$wait" ] || trap - INT TERM HUP ;; *) trap - INT TERM HUP ;; esac

@@ -5,6 +5,7 @@ import type { Run } from '../bot/sh.ts';
 import { BRANCH_RE } from '../board/tower/lanes.ts';
 import type { LaneFile } from '../board/tower/lanes.ts';
 import { readMacStats, type MacRead } from '../board/tower/health.ts';
+import { laneBudget, lanesNow, parseBudget, powerFactor } from '../board/budget.ts';
 
 export const EXIT = { ok: 0, failed: 1, usage: 2, refused: 3, later: 75 } as const;
 export const DEFAULT_CAP = 5;
@@ -15,6 +16,7 @@ export interface LaneFs {
   read(p: string): string | null; // null when missing
   write(p: string, s: string): void; // parents made, tmp + rename
   writeNew(p: string, s: string): boolean; // false when it exists (O_EXCL)
+  append(p: string, s: string): void; // parents made
   exists(p: string): boolean;
   rm(p: string): void;
   mkdirp(p: string): void;
@@ -116,21 +118,28 @@ export function alive(d: Deps, pid: number, start: string | null): boolean {
   return start === null || f[19] === start;
 }
 
-// branch → a live session in it, from the board's registry (board/sessions/<pid>.json, written by board.sh).
-export function liveSessionBranches(d: Deps): Set<string> {
+// The live sessions in the board's registry (board/sessions/<pid>.json, written by board.sh): how many (the hub and
+// any session off a branch included — the budget's sessions ceiling) and the branches they are in.
+export function liveSessions(d: Deps): { count: number; branches: Set<string> } {
   const dir = `${d.env.boardDir}/sessions`;
-  const out = new Set<string>();
+  const branches = new Set<string>();
+  let count = 0;
   for (const f of d.fs.list(dir).filter((x) => x.endsWith('.json'))) {
     try {
       const s = JSON.parse(d.fs.read(`${dir}/${f}`) ?? 'null');
-      if (s?.branch && s.state !== 'gone' && Number.isInteger(s.pid))
-        if (alive(d, s.pid, typeof s.pidStart === 'string' ? s.pidStart : null)) out.add(s.branch);
+      if (!s || s.state === 'gone' || !Number.isInteger(s.pid)) continue;
+      if (!alive(d, s.pid, typeof s.pidStart === 'string' ? s.pidStart : null)) continue;
+      count++;
+      if (s.branch) branches.add(s.branch);
     } catch {
       // half-written by another session
     }
   }
-  return out;
+  return { count, branches };
 }
+
+// branch → a live session in it.
+export const liveSessionBranches = (d: Deps): Set<string> => liveSessions(d).branches;
 
 export type Active = { branch: string; phase: string | null; why: string };
 
@@ -188,6 +197,32 @@ export function macRead(d: Deps): MacRead {
     if (t === null) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     return t;
   });
+}
+
+// The log-only lane budget for one more lane (board/budget.ts; docs/ops/SESSION-BOARD.md → Budget), from limits.json
+// `budget`, the active lanes' phases, the live sessions and the Mac's power. null without a usable budget block.
+export function laneBudgetNow(d: Deps, active: Active[]) {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(d.fs.read(`${d.env.mainRoot}/scripts/board/limits.json`) ?? 'null')?.budget;
+  } catch {
+    return null;
+  }
+  const b = parseBudget(raw);
+  if (!b) return null;
+  const pf = powerFactor(macRead(d), b.power);
+  const live = liveSessions(d).count;
+  const lb = laneBudget(b, active, live, pf.k);
+  const lim = (x: number) => String(Math.round(x * 100) / 100); // as budgetLine: the value it compares against
+  return {
+    b,
+    pf,
+    lb,
+    now: lanesNow(b, active),
+    line:
+      `budget (log-only): lanes ${lim(lb.units.base + lb.units.lanes)}+${lb.units.new}/${lim(lb.allowed)}` +
+      ` · sessions ${live + 1}/${b.sessionsMax} · k ${lim(pf.k)} ${pf.why} → would ${lb.would}${lb.wouldWhy.length ? ` (${lb.wouldWhy.join(', ')})` : ''}`,
+  };
 }
 
 export const describeActive = (a: Active[]) =>
