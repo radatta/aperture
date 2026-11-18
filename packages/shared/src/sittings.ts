@@ -478,7 +478,10 @@ export function coachMarkOf(payload: unknown): CoachMark {
 // One coach row into the sitting's coaching. The config is rebuilt from `nudge` alone, so a head row stored
 // before 2.2 (with the card's switches) carries nothing else into the summary.
 function foldCoach(c: SittingCoach | undefined, m: CoachMark): SittingCoach {
-  const next: SittingCoach = { config: c?.config ? { nudge: c.config.nudge } : null, nudges: c?.nudges ?? 0 };
+  const next: SittingCoach = {
+    config: c?.config ? { nudge: c.config.nudge } : null,
+    nudges: c?.nudges ?? 0,
+  };
   if (m.kind === 'config' && m.config) next.config = { nudge: m.config.nudge };
   else if (m.kind === 'nudge-shown') next.nudges += 1;
   return next;

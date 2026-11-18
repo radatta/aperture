@@ -221,7 +221,11 @@ describe('folds', () => {
     // What a 2.1 extension (the trace card's last build) still sends until it's rebuilt.
     const card = {
       config: { kind: 'config', trace: true, hold: true, nudge: true },
-      trace: { kind: 'trace', inputs: { empty: '[]', boundary: '[1]', normal: '[1,2]' }, ms: 40_000 },
+      trace: {
+        kind: 'trace',
+        inputs: { empty: '[]', boundary: '[1]', normal: '[1,2]' },
+        ms: 40_000,
+      },
       skip: { kind: 'trace-skip', ms: 900 },
       untraced: { kind: 'untraced-submit' },
     };
@@ -269,7 +273,11 @@ describe('folds', () => {
       const old = (id: string, at: number, mark: Record<string, unknown>) =>
         ({ ...coach(id, at, null), coach: mark }) as unknown as ReturnType<typeof coach>;
       const s = summarizeHeadRows([
-        old('a', 1, { kind: 'config', inputs: null, config: { trace: true, hold: false, nudge: false } }),
+        old('a', 1, {
+          kind: 'config',
+          inputs: null,
+          config: { trace: true, hold: false, nudge: false },
+        }),
         old('b', 2, { kind: 'trace', inputs: 3, config: null }),
         old('c', 3, { kind: 'untraced-submit', inputs: null, config: null }),
       ]);
