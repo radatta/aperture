@@ -58,6 +58,23 @@ describe('earlierOrphans', () => {
     ];
     expect(earlierOrphans(entries, 'now')).toEqual([]);
   });
+  it('pairs answers with intents one to one: a dropped create retried under the same title stays an orphan (F257)', () => {
+    const created = (id: string, run = 'r') =>
+      e('created', id, { run, via: 'api:createTask', title: 'x' });
+    // A dropped (no answer), then B answered: A is the orphan, whatever B's answer says.
+    expect(orphanIntents([intent('r', 'x'), intent('r', 'x'), created('b')])).toEqual([
+      intent('r', 'x'),
+    ]);
+    // Two in flight at once, answered out of order: both resolved.
+    expect(orphanIntents([intent('r', 'x'), intent('r', 'x'), created('b'), created('a')])).toEqual(
+      [],
+    );
+    // A refusal resolves one too; an answer before any intent, or another run's, resolves none.
+    const refused = e('refused', undefined, { run: 'r', via: 'api:createTask', title: 'x' });
+    expect(orphanIntents([intent('r', 'x'), refused])).toEqual([]);
+    expect(orphanIntents([created('a'), intent('r', 'x')])).toHaveLength(1);
+    expect(orphanIntents([intent('r', 'x'), created('a', 'other')])).toHaveLength(1);
+  });
   it('one already reported by a later run is not reported again', () => {
     const entries = [
       intent('killed', 'x'),
