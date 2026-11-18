@@ -19,11 +19,11 @@ the `[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
 The user names the mode; collaborative is the default.
 
 - **Collaborative.** Claude stops at decision points: Plan's model, Plan's questions, the execute, review findings
-  that need a product call or add scope, a review still finding serious bugs at its round cap, a review item only
+  that need a product call or add scope, the review's stop-and-ask, a review item only
   live state can settle or a lens that couldn't run, an effort above `high`, and the dev all-clear.
   Each is one `[ask-maintainer]` (findings as a list), and the lane waits for the hub's `[relay]`.
 - **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands
-  one back, bar the review's round cap, a review item only live state can settle or a lens that couldn't run, and an effort
+  one back, bar the review's stop-and-ask, a review item only live state can settle or a lens that couldn't run, and an effort
   above `high` (each an `[ask-maintainer]`: `docs/ops/REVIEW.md` → _Round 2 and later_, _Merge_, _Launching_). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
   (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a
   noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what
@@ -119,12 +119,12 @@ hub message (the checkpoints stay).
    - **Round 2 and later** recheck only the fix diff, and run while a round finds something serious or leaves an
      S1/S2 unfixed, and once after a risk class's code fix (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again →
      fix, gate, commit, next round on that fix. Minor only → fix, gate, commit, done.
-   - **Stop** when a round has no serious finding. After four rounds, or a round from the third on that finds no
-     fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list — in either mode.
+   - **Stop** when a round has no serious finding; stop and ask, in either mode, as `docs/ops/REVIEW.md` →
+     _Round 2 and later_ says (the round cap, a twin).
    - A serious finding in round 2 or later that the fixes didn't cause is a **lens gap**: recorded in the report and
      sent to the hub (`docs/ops/REVIEW.md` → _Lens gaps_).
 
-7. **Ready for dev** — once the review has stopped with no serious finding open (or the round cap's ask is answered),
+7. **Ready for dev** — once the review has stopped with no serious finding open (or the stop-and-ask is answered),
    every picked lens ran, and nothing is held open (`docs/ops/REVIEW.md` → _Merge_ 1 and 5): committed on the feature branch (one commit after the build, one
    per round's fixes), `gate:fast` green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and

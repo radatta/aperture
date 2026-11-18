@@ -2,7 +2,7 @@
 
 Phase 6 of the feature workflow (`docs/ops/FEATURE-WORKFLOW.md`) points here. Several independent reviews of one
 diff find more than the same review run again, and here the late rounds mostly found bugs that the previous round's
-fixes had introduced, or a twin call site a fix had missed: about 45 of the ~130 archived lanes ran an extra round
+fixes had introduced, or another call site a fix had missed: about 45 of the ~130 archived lanes ran an extra round
 (the coverage check, 2026-11-17, _Coverage_ below). So the review is one round of reviewers in parallel, each
 reading the same diff through a different **lens**, merged into one list, fixed in one pass, gated once — then a
 recheck of the fix diff alone, only while a round still finds something serious.
@@ -150,11 +150,18 @@ commit for the round.
 - **What it reports** — each fixed finding closed or not, regressions in the touched functions and their callers,
   sibling call sites with the same pattern, S1/S2 left unfixed whose reason the code doesn't bear out; each
   line tagged `cause=fix|sibling|not-closed|pre-existing`.
-- **Serious again** → fix, gate, commit, and the next round rechecks that fix diff. **Minor only** → fix, gate,
-  commit, done. **Nothing** → done, no extra gate.
-- **Stop and ask** after four rounds, or from round 3 on when a round finds no fewer serious bugs than the one before:
-  `[ask-maintainer]` with the open list and three options — another recheck, re-plan that piece, or ship with it
-  logged as a follow-up — and the lane's pick. In both modes; the lane holds until the relay.
+- **Serious again** (unless the stop below fires) → fix, gate, commit, and the next round rechecks that fix diff.
+  **Minor only** → fix, gate, commit, done. **Nothing** → done, no extra gate.
+- **Stop and ask**, in both modes: after four rounds; from round 3 on, when a round finds no fewer serious bugs
+  than the one before; or, from round 2 on, at a **twin** — a serious `cause=fix` or `cause=sibling` finding in
+  the mechanism an earlier round's fix already patched (one regex family, one parser, one state machine): the
+  design is wrong, not the code. Round 2 counts; a serious regression elsewhere (a caller, another module) does
+  not. Leave the twin unpatched. `[ask-maintainer]` with the open list and three options — another recheck,
+  re-plan that piece, or ship with it logged as a follow-up — and the lane's pick; the lane holds until the relay.
+- **The pick.** At a twin, cap or not: re-plan that piece — move the judgment to where it is made once (the
+  model, one parser) or narrow the scope. At the cap with no twin, on a diff with no risk class: ship after one
+  final broad review — `code-reviewer` on the whole branch diff, not the fix range — its S1/S2 fixed and gated
+  with no further round; one it can't fix goes back as `[ask-maintainer]`. Not another narrow recheck.
 
 ## After a dev fix or a rebase
 
@@ -189,7 +196,7 @@ them, findings by severity, gates run. No lane recorded review tokens before thi
 for the next design change.
 
 **Open findings shipped** — every S1/S2 left unfixed (a drop the second reader upheld, a product call "not now", the
-round cap's "ship it"), every live-state item still open (only after the relay's answer, _Merge_ 5) by id from the round files,
+stop-and-ask's "ship it"), every live-state item still open (only after the relay's answer, _Merge_ 5) by id from the round files,
 and every lens that didn't run, by lens and round (only after the user's yes, _Merge_ 1).
 The list goes in the report, the PR body and `[pr-open]`; an empty one is written "none".
 
@@ -248,7 +255,7 @@ owns it. Kinds no lens can own are listed last. "Also" lenses see the kind from 
 | `ios`         | inputs under 16 px; iOS probe points                                                 | UI          | dev                |
 | `webkit`      | Safari extension behaviour                                                           | extension   | dev (Safari pass)  |
 | `fix-regress` | a bug the previous round's fix introduced                                            | fix recheck |                    |
-| `sibling`     | a twin call site the fix missed                                                      | fix recheck | correctness        |
+| `sibling`     | another call site the fix missed                                                     | fix recheck | correctness        |
 
 Not a lens's to own: real-device, Simulator and model-variance behaviour (the dev check and _Needs you_), and
 product calls (the decision log or `[ask-maintainer]`).
