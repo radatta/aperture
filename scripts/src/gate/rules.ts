@@ -401,6 +401,8 @@ export const MODULE_READERS: Record<string, string> = {
     'spawns lambdas/src/local/serve.ts, shared inside (lc-e2e runs it, by the lambdas/ + shared rule)',
   'scripts/src/devcheck/login.ts': `${RUNTIME}: a storage-state file`,
   'scripts/src/devcheck/run.ts': `${RUNTIME}: a pid lock and the scenario files (same area)`,
+  'scripts/src/devcheck/scenarios/index.ts':
+    'its own scenarios/ dir, imported by name (the devcheck same-area rule)',
   'scripts/src/devcheck/scenarios/per-slot-runs.ts': `${RUNTIME}: the branch's git diff`,
   'scripts/src/devcheck/scenarios/siri-capture.ts': 'packages/shared/src (its rule)',
   'scripts/src/fixture-inputs.ts': 'stdin',
