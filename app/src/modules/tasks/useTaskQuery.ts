@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { todayKey } from '@aperture/shared';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -104,6 +104,13 @@ export function useTaskQuery() {
     },
     [today, place],
   );
+
+  // A reminder's tap-through lands on Today unsearched: a sticky search from earlier would hide Today
+  // (and the list the task sits in) behind the modal it opens. Once per link — the link leaves the URL
+  // when handled, so typing again stays typed.
+  useEffect(() => {
+    if (hasLink && query.text !== '') setQuery({ ...query, text: '' });
+  }, [hasLink, query, setQuery]);
 
   // Switching lens keeps what's typed and resets the rest to the new lens's preset.
   const setLens = useCallback(

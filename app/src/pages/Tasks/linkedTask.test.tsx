@@ -9,6 +9,45 @@ const stub = () => createStubClient({ seed: false, storageKey: `linked-${Math.ra
 
 // A reminder's tap-through (reminders D8): /tasks?lens=today&task=<id>&n=<tag>.
 describe('Tasks: a reminder’s link', () => {
+  it('clears a sticky search, so the tap lands on Today, not on an old result list', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'Renew passport' });
+    const user = userEvent.setup();
+    const { router } = renderApp({ api, path: '/tasks' });
+    await user.type(await screen.findByRole('searchbox', { name: 'Search tasks' }), 'groceries');
+    await act(() => router.navigate(taskPushPath(t.id, t.id)));
+    expect(await screen.findByRole('dialog', { name: 'Task: Renew passport' })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLInputElement>('searchbox', { name: 'Search tasks' }).value).toBe(
+        '',
+      ),
+    );
+    expect(sessionStorage.getItem('aperture.tasks.query')).not.toMatch(/groceries/);
+    // Once per link: typing again after it stays typed.
+    await waitFor(() => expect(router.state.location.search).toBe('?lens=today'));
+    await user.keyboard('{Escape}');
+    await user.type(screen.getByRole('searchbox', { name: 'Search tasks' }), 'milk');
+    expect(screen.getByRole<HTMLInputElement>('searchbox', { name: 'Search tasks' }).value).toBe(
+      'milk',
+    );
+  });
+
+  it('a search stored earlier this session is cleared by a cold-start tap too', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'Renew passport' });
+    const user = userEvent.setup();
+    const first = renderApp({ api, path: '/tasks' });
+    await user.type(await screen.findByRole('searchbox', { name: 'Search tasks' }), 'groceries');
+    first.unmount();
+    renderApp({ api, path: taskPushPath(t.id, t.id) });
+    expect(await screen.findByRole('dialog', { name: 'Task: Renew passport' })).toBeTruthy();
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLInputElement>('searchbox', { name: 'Search tasks' }).value).toBe(
+        '',
+      ),
+    );
+  });
+
   it('opens the linked task once, then drops task and n from the URL (replaced, lens kept)', async () => {
     const api = stub();
     const t = await api.createTask({ title: 'Renew passport' });

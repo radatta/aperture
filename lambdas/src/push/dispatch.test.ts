@@ -10,7 +10,9 @@ import { Repo } from '../ddb/repo';
 import { liveWrites, noopWrites } from '../ddb/writes';
 import { InMemoryPush, noopPush } from './gateway';
 import type { PushTarget } from './gateway';
+import { ritualSource } from './rituals';
 import {
+  DEFAULT_SOURCES,
   PSENT_KEEP_MS,
   PUSH_BAD_KEY_ERROR,
   PUSH_NO_APP_URL_ERROR,
@@ -88,7 +90,11 @@ const sub = (id: string, over: Partial<PushSub> = {}): PushSub => ({
   ...over,
 });
 
-function world(doc: DocClient = new InMemoryDoc()) {
+// The ritual nudges (08:30, 21:30) sit in many of these windows; the reminder tests leave them out, and
+// the nudge tests (below) put them back.
+const REMINDER_SOURCES = DEFAULT_SOURCES.filter((s) => s !== ritualSource);
+
+function world(doc: DocClient = new InMemoryDoc(), { rituals = false } = {}) {
   const writes = liveWrites(doc);
   const repo = (userId = U) => new Repo(doc, writes, userId);
   const registry = new PushRegistry(doc, writes);
@@ -105,15 +111,18 @@ function world(doc: DocClient = new InMemoryDoc()) {
     set: (ms: number) => void (clock = ms),
     now: () => clock,
     tick: (over: { deadline?: number } = {}) =>
-      runPushTick({
-        doc,
-        writes,
-        push,
-        now: () => clock,
-        appUrl: APP,
-        log: (l) => logs.push(l),
-        ...over,
-      }),
+      runPushTick(
+        {
+          doc,
+          writes,
+          push,
+          now: () => clock,
+          appUrl: APP,
+          log: (l) => logs.push(l),
+          ...over,
+        },
+        rituals ? DEFAULT_SOURCES : REMINDER_SOURCES,
+      ),
     // A device for the user, and the user in the registry (what subscribePush does).
     async device(id = 'S1', userId = U, over: Partial<PushSub> = {}) {
       await repo(userId).putPushSub(sub(id, { userId, ...over }));
@@ -466,31 +475,6 @@ describe('push dispatch — fail-closed sending', () => {
     expect(await w.registry.hasUser(U)).toBe(true);
   });
 
-  it('a 5xx or a timeout stamps the error and is not retried — this tick or the next', async () => {
-    for (const [status, why] of [
-      [503, 'push service answered 503'],
-      [{ status: 0, reason: 'timeout' as const }, 'timed out'],
-      [{ status: 0, reason: 'network' as const }, 'network error'],
-    ] as const) {
-      const w = world();
-      await w.device('S1');
-      await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
-      w.push.status = () => status;
-      await w.tick();
-      w.set(TWO_PM + MIN);
-      await w.tick();
-      expect(w.push.sends).toHaveLength(1);
-      const s1 = await w.repo().getPushSub('S1');
-      expect(s1).toMatchObject({
-        lastError: `Last reminder didn't reach this device (${why})`,
-        lastErrorAt: TWO_PM,
-      });
-      expect((await w.repo().getPushUserHealth())?.lastError).toBe(
-        `iPhone S1: Last reminder didn't reach this device (${why})`,
-      );
-    }
-  });
-
   it('a later delivery clears the device error, but the user keeps their last error', async () => {
     const w = world();
     await w.device('S1');
@@ -521,6 +505,352 @@ describe('push dispatch — fail-closed sending', () => {
     };
     await w.tick();
     expect(await w.repo().getPushSub('S1')).toMatchObject({ label: 'renamed', lastOkAt: null });
+  });
+});
+
+describe('push dispatch — retry and catch-up', () => {
+  const topics = (w: ReturnType<typeof world>) => w.push.sends.map((x) => x.opts.topic);
+
+  it('a timeout, a network failure, 429 or a 5xx is retried on the next tick, under the same Topic', async () => {
+    for (const [status, why] of [
+      [503, 'push service answered 503'],
+      [500, 'push service answered 500'],
+      [502, 'push service answered 502'],
+      [429, 'push service answered 429'],
+      [{ status: 0, reason: 'timeout' as const }, 'timed out'],
+      [{ status: 0, reason: 'network' as const }, 'network error'],
+    ] as const) {
+      const w = world();
+      await w.device('S1');
+      await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+      w.push.status = () => status;
+      const first = await w.tick();
+      expect(first).toMatchObject({ notifications: 1, failed: 1, retried: 0 });
+      expect(await w.repo().getPushSub('S1')).toMatchObject({
+        lastError: `Last reminder didn't reach this device (${why}) — retrying`,
+        lastErrorAt: TWO_PM,
+      });
+      expect((await w.repo().getPushUserHealth())?.lastError).toBe(
+        `iPhone S1: Last reminder didn't reach this device (${why}) — retrying`,
+      );
+      w.push.status = 201;
+      w.set(TWO_PM + MIN);
+      const second = await w.tick();
+      expect(second).toMatchObject({ notifications: 0, delivered: 1, retried: 1 });
+      expect(topics(w)).toEqual(['T1', 'T1']);
+      expect(w.push.sends[1]!.payload).toEqual(w.push.sends[0]!.payload);
+      expect(await w.repo().getPushSub('S1')).toMatchObject({
+        lastOkAt: TWO_PM + MIN,
+        lastError: null,
+      });
+      expect((await w.repo().getPushUserHealth())?.lastSentAt).toBe(TWO_PM + MIN);
+      expect((await w.repo().listPushQueue()).retries).toEqual([]);
+      // Done: no third send, and the retry took no guard unit.
+      w.set(TWO_PM + 2 * MIN);
+      await w.tick();
+      expect(w.push.sends).toHaveLength(2);
+      expect((await w.repo().getPushCount(TODAY))?.count).toBe(1);
+    }
+  });
+
+  it('400, 403, 413 and a send that throws are final: stamped, never retried', async () => {
+    for (const [status, why] of [
+      [400, 'push service answered 400'],
+      [403, 'push service answered 403'],
+      [413, 'push service answered 413'],
+    ] as const) {
+      const w = world();
+      await w.device('S1');
+      await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+      w.push.status = status;
+      await w.tick();
+      w.set(TWO_PM + MIN);
+      await w.tick();
+      expect(w.push.sends).toHaveLength(1);
+      expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+        `Last reminder didn't reach this device (${why})`,
+      );
+      expect(await w.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
+    }
+  });
+
+  it('retries run out after 4 tries; the miss waits 5 min, then goes once as a catch-up', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    for (let m = 0; m <= 3; m++) {
+      w.set(TWO_PM + m * MIN);
+      await w.tick();
+    }
+    expect(w.push.sends).toHaveLength(4);
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+      "Last reminder didn't reach this device (push service answered 503) after 4 tries",
+    );
+    expect((await w.repo().listPushQueue()).misses).toHaveLength(1);
+    // Settling: nothing goes before 14:08.
+    w.push.status = 201;
+    for (let m = 4; m <= 7; m++) {
+      w.set(TWO_PM + m * MIN);
+      await w.tick();
+    }
+    expect(w.push.sends).toHaveLength(4);
+    w.set(TWO_PM + 8 * MIN);
+    const report = await w.tick();
+    expect(report).toMatchObject({ caughtUp: 1, notifications: 1, delivered: 1 });
+    expect(w.notes()[4]).toMatchObject({
+      title: '1 reminder didn’t reach you',
+      body: 'Renew passport',
+      navigate: `${APP}/tasks?lens=today&n=c${Math.floor((TWO_PM + 8 * MIN) / MIN)}`,
+    });
+    expect((await w.repo().getPushCount(TODAY))?.count).toBe(2); // the catch-up is a notification
+    w.set(TWO_PM + 9 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(5);
+    expect(await w.repo().listPushQueue()).toEqual({ retries: [], misses: [] });
+  });
+
+  it('a catch-up is tried once: its failure stays on the device and the health line', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = { status: 0, reason: 'timeout' };
+    for (let m = 0; m <= 3; m++) {
+      w.set(TWO_PM + m * MIN);
+      await w.tick();
+    }
+    w.set(TWO_PM + 8 * MIN);
+    await w.tick();
+    w.set(TWO_PM + 9 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(5);
+    const why = "Couldn't deliver the catch-up for 1 missed reminder (timed out)";
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(why);
+    expect((await w.repo().getPushUserHealth())?.lastError).toBe(`iPhone S1: ${why}`);
+  });
+
+  it('only the device that failed is retried; a 404 neighbour is dropped as before', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.device('S3');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = (t) =>
+      t.endpoint.endsWith('S2') ? 503 : t.endpoint.endsWith('S3') ? 410 : 201;
+    await w.tick();
+    expect(await w.repo().getPushSub('S3')).toBeNull();
+    w.push.status = 201;
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S1', 'S2', 'S3', 'S2']);
+  });
+
+  it('a task finished or re-dated before its retry stays quiet', async () => {
+    for (const change of [{ status: 'done' as const }, { dueTime: '15:00' }]) {
+      const w = world();
+      await w.device('S1');
+      await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+      w.push.status = 503;
+      await w.tick();
+      await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00', updatedAt: 1, ...change }));
+      w.push.status = 201;
+      w.set(TWO_PM + MIN);
+      await w.tick();
+      expect(w.push.sends).toHaveLength(1);
+      expect((await w.repo().listPushQueue()).retries).toEqual([]);
+    }
+  });
+
+  it('a device the deadline skipped goes on the next tick, with no try spent', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = () => {
+      w.set(TWO_PM + 10_000); // the first send ate the budget
+      return 201;
+    };
+    await w.tick({ deadline: TWO_PM + 5_000 });
+    expect(w.push.sends).toHaveLength(1);
+    expect((await w.repo().listPushQueue()).retries).toMatchObject([{ subId: 'S2', tries: 0 }]);
+    w.push.status = 201;
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S1', 'S2']);
+  });
+
+  it('after a poller gap, what fell due in it goes once as a catch-up (12 h back, open tasks only)', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 14 * 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w
+      .repo()
+      .putTask(task({ id: 'A', title: 'An hour ago', dueDay: TODAY, dueTime: '13:00' }));
+    await w
+      .repo()
+      .putTask(task({ id: 'B', title: 'Two hours ago', dueDay: TODAY, dueTime: '12:00' }));
+    await w
+      .repo()
+      .putTask(
+        task({ id: 'C', title: 'Done since', dueDay: TODAY, dueTime: '12:30', status: 'done' }),
+      );
+    await w
+      .repo()
+      .putTask(task({ id: 'D', title: 'Too old', dueDay: '2026-11-03', dueTime: '23:00' }));
+    await w
+      .repo()
+      .putTask(task({ id: 'E', title: 'In the window', dueDay: TODAY, dueTime: '13:45' }));
+    const report = await w.tick();
+    expect(report).toMatchObject({ notifications: 2, caughtUp: 1, delivered: 2 });
+    expect(w.notes().map((n) => [n.title, n.body])).toEqual([
+      ['In the window', 'Due now · 1:45pm'],
+      ['2 reminders didn’t reach you', 'Two hours ago · An hour ago'],
+    ]);
+    // Counted once: the next tick has no gap, and the misses are gone.
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(2);
+  });
+
+  it('no gap, no catch-up: a reminder older than the window is still just missed', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - MIN,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '13:00' }));
+    await w.tick();
+    expect(w.push.sends).toHaveLength(0);
+  });
+});
+
+describe('push dispatch — ritual nudges', () => {
+  const MORNING = AT(TODAY, '08:30');
+  const NIGHT = AT(TODAY, '21:30');
+  async function day(w: ReturnType<typeof world>) {
+    await w.repo().putTask(task({ id: 'O', title: 'Open' }));
+    await w.repo().putTask(task({ id: 'K', title: 'Done', status: 'done' }));
+    await w.repo().putTask(task({ id: 'X', title: 'Dropped', status: 'cancelled' }));
+    await w.repo().putTask(task({ id: 'L', title: 'Tomorrow' }));
+    await w.repo().putPlan(plan({ id: 'P1', taskId: 'O' }));
+    await w.repo().putPlan(plan({ id: 'P2', taskId: 'K', order: 1 }));
+    await w.repo().putPlan(plan({ id: 'P3', taskId: 'X', order: 2 }));
+    await w.repo().putPlan(plan({ id: 'P4', taskId: 'L', day: '2026-11-05' }));
+  }
+
+  it('08:30 says how many are planned; 21:30 how many are open and done — each once, opening Home', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    await day(w);
+    w.set(MORNING - MIN);
+    await w.tick();
+    w.set(MORNING);
+    await w.tick();
+    w.set(MORNING + MIN);
+    await w.tick();
+    w.set(NIGHT);
+    await w.tick();
+    expect(w.notes()).toEqual([
+      expect.objectContaining({
+        title: 'Plan your day',
+        body: '2 planned today',
+        navigate: `${APP}/`,
+        tag: 'ritualMorning',
+      }),
+      expect.objectContaining({
+        title: 'Close the day',
+        body: '1 left open · 1 done',
+        navigate: `${APP}/`,
+        tag: 'ritualNight',
+      }),
+    ]);
+    expect(w.push.sends[0]!.opts.topic).toBe('ritualMorning');
+  });
+
+  it('an empty plan still nudges, by count', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    w.set(MORNING);
+    await w.tick();
+    w.set(NIGHT);
+    await w.tick();
+    expect(w.notes().map((n) => n.body)).toEqual([
+      'Nothing planned yet',
+      'Nothing on today’s plan',
+    ]);
+  });
+
+  it('never says "missed"', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    await day(w);
+    w.set(NIGHT);
+    await w.tick();
+    expect(JSON.stringify(w.notes())).not.toMatch(/miss/i);
+  });
+
+  it('each toggle silences its own nudge; one switched on after its time stays quiet that day', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    await w.repo().putSettings({ nudgeMorning: false } as Settings);
+    w.set(MORNING);
+    await w.tick();
+    w.set(NIGHT);
+    await w.tick();
+    expect(w.notes().map((n) => n.title)).toEqual(['Close the day']);
+
+    const w2 = world(undefined, { rituals: true });
+    await w2.device();
+    await w2.repo().putPushArm({ nudgeMorning: MORNING + 5 * MIN, updatedAt: 1 });
+    w2.set(MORNING + 10 * MIN);
+    await w2.tick();
+    expect(w2.push.sends).toHaveLength(0);
+  });
+
+  it('a nudge in the same minute as a reminder is its own notification', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '08:30' }));
+    w.set(MORNING);
+    const report = await w.tick();
+    expect(report.notifications).toBe(2);
+    expect(w.notes().map((n) => n.tag)).toEqual(['T1', 'ritualMorning']);
+  });
+
+  it('a nudge the poller missed by a few minutes still goes; one past the window, never (no catch-up)', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    w.set(MORNING + 20 * MIN);
+    await w.tick();
+    expect(w.notes().map((n) => n.title)).toEqual(['Plan your day']);
+
+    const w2 = world(undefined, { rituals: true });
+    await w2.device();
+    await w2.registry.putPoller({
+      lastRunAt: MORNING - 2 * 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    w2.set(MORNING + 40 * MIN);
+    await w2.tick();
+    expect(w2.push.sends).toHaveLength(0);
+  });
+
+  it('keeps its wall-clock time across a DST change', async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device();
+    w.set(AT('2026-11-01', '08:30')); // the day US clocks fall back
+    await w.tick();
+    expect(w.notes().map((n) => n.title)).toEqual(['Plan your day']);
   });
 });
 

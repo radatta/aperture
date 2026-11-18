@@ -35,7 +35,8 @@ type SendResult = PushResult | { status: 0; reason: 'error'; name: string };
 export function outcomeOf(res: SendResult): Outcome {
   if (res.status >= 200 && res.status < 300) return 'ok';
   if (res.status === 404 || res.status === 410 || res.reason === 'keys') return 'gone';
-  if (res.status === 0) return res.reason === 'timeout' || res.reason === 'network' ? 'retry' : 'final';
+  if (res.status === 0)
+    return res.reason === 'timeout' || res.reason === 'network' ? 'retry' : 'final';
   return res.status === 429 || res.status === 500 || res.status === 502 || res.status === 503
     ? 'retry'
     : 'final';
@@ -68,7 +69,8 @@ const stored = ({ kind, fireAt, taskId, title, dueTime, body, key }: StoredCandi
   key,
 });
 // A ritual or a test is never "missed": a late nudge is noise, a test is asked for now.
-export const missable = (c: Pick<ReminderCandidate, 'kind'>) => c.kind !== 'test' && !isRitual(c.kind);
+export const missable = (c: Pick<ReminderCandidate, 'kind'>) =>
+  c.kind !== 'test' && !isRitual(c.kind);
 
 export interface DelivererDeps {
   repo: Repo;
@@ -91,7 +93,13 @@ export interface DeliveryTally {
 // same tick stamps on the version the first one wrote.
 export class Deliverer {
   readonly fails: string[] = []; // this tick's failures, every one: a batch two devices refuse names both
-  readonly tally: DeliveryTally = { delivered: 0, failed: 0, retried: 0, caughtUp: 0, deadline: false };
+  readonly tally: DeliveryTally = {
+    delivered: 0,
+    failed: 0,
+    retried: 0,
+    caughtUp: 0,
+    deadline: false,
+  };
   sentAt: number | null; // the last time a push service accepted a notification (Settings' "last sent")
   removed = 0; // devices dropped after a 404/410
   attempted = false; // anything sent, held back or failed: the health line gets written
@@ -164,7 +172,13 @@ export class Deliverer {
       this.tally.retried++;
       const payload = JSON.stringify(reminderPayload(cands, this.d.appUrl, row.topic));
       const last = claimed.retries >= RETRY_MAX;
-      const { outcome, why } = await this.post(sub, payload, row.topic, cands, last ? null : 'retrying');
+      const { outcome, why } = await this.post(
+        sub,
+        payload,
+        row.topic,
+        cands,
+        last ? null : 'retrying',
+      );
       if (outcome !== 'retry') await this.dropRetry(row);
       else if (last) await this.runOut(this.subs.get(sub.id) ?? sub, { ...claimed, cands, why });
       else
@@ -178,7 +192,10 @@ export class Deliverer {
   // Each device's misses go out as one catch-up once they've all settled and no retry is still pending
   // for it. The rows are claimed (deleted on the version read) before the send; the catch-up is tried
   // once and counts as a notification against the daily guard.
-  async runCatchUps(rows: readonly PushMissRow[], takeGuard: () => Promise<boolean>): Promise<void> {
+  async runCatchUps(
+    rows: readonly PushMissRow[],
+    takeGuard: () => Promise<boolean>,
+  ): Promise<void> {
     const pending = new Set([...this.pending].map((k) => k.slice(0, k.indexOf('#'))));
     const bySub = new Map<string, PushMissRow[]>();
     for (const r of rows) bySub.set(r.subId, [...(bySub.get(r.subId) ?? []), r]);
@@ -200,7 +217,7 @@ export class Deliverer {
       const topic = catchUpTag(this.d.now);
       const payload = JSON.stringify(catchUpPayload(cands, this.d.appUrl, this.d.now));
       const n = plural(cands.length, 'missed reminder');
-      await this.post(sub, payload, topic, cands, null, `Couldn’t deliver the catch-up for ${n}`);
+      await this.post(sub, payload, topic, cands, null, `Couldn't deliver the catch-up for ${n}`);
     }
   }
 
@@ -213,12 +230,16 @@ export class Deliverer {
     topic: string,
     cands: readonly ReminderCandidate[],
     pending: 'retrying' | null,
-    lead = 'Last reminder didn’t reach this device',
+    lead = "Last reminder didn't reach this device",
   ): Promise<{ outcome: Outcome; why: string }> {
     const tasks = cands.flatMap((c) => (c.taskId ? [c.taskId] : []));
     let res: SendResult;
     try {
-      res = await this.d.push.send(sub, payload, { topic, ttlSeconds: PUSH_TTL_S, urgency: 'high' });
+      res = await this.d.push.send(sub, payload, {
+        topic,
+        ttlSeconds: PUSH_TTL_S,
+        urgency: 'high',
+      });
     } catch (err) {
       res = { status: 0, reason: 'error', name: errName(err) };
     }
@@ -238,7 +259,10 @@ export class Deliverer {
       this.d.log(JSON.stringify(line));
       this.tally.delivered++;
       this.sentAt = this.d.now;
-      await this.stamp({ ...sub, updatedAt, lastOkAt: this.d.now, lastError: null, lastErrorAt: null }, sub);
+      await this.stamp(
+        { ...sub, updatedAt, lastOkAt: this.d.now, lastError: null, lastErrorAt: null },
+        sub,
+      );
       return { outcome, why };
     }
     this.tally.failed++;
@@ -250,7 +274,9 @@ export class Deliverer {
       this.d.log(JSON.stringify({ ...line, ...(deleted ? { removed: true } : { changed: true }) }));
       this.subs.delete(sub.id);
       if (deleted) this.removed++;
-      this.fail(`${sub.label} stopped accepting reminders (${why}) — turn them on again on that device`);
+      this.fail(
+        `${sub.label} stopped accepting reminders (${why}) — turn them on again on that device`,
+      );
       return { outcome, why };
     }
     this.d.log(JSON.stringify(line));
@@ -264,11 +290,13 @@ export class Deliverer {
   // wait as misses for the catch-up.
   private async runOut(sub: PushSub, row: PushRetryRow): Promise<void> {
     await this.dropRetry(row);
-    const message = `Last reminder didn’t reach this device (${row.why}) after ${plural(row.tries, 'try', 'tries')}`;
+    const message = `Last reminder didn't reach this device (${row.why}) after ${plural(row.tries, 'try', 'tries')}`;
     const updatedAt = Math.max(this.d.now, sub.updatedAt + 1);
     await this.stamp({ ...sub, updatedAt, lastError: message, lastErrorAt: this.d.now }, sub);
     this.fail(`${sub.label}: ${message}`);
-    this.d.log(JSON.stringify({ event: 'push_retry_exhausted', sub: subRef(sub), tries: row.tries }));
+    this.d.log(
+      JSON.stringify({ event: 'push_retry_exhausted', sub: subRef(sub), tries: row.tries }),
+    );
     await this.queueMisses([sub.id], row.cands, this.d.now + CATCH_UP_SETTLE_MS);
   }
 

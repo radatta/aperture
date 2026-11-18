@@ -40,11 +40,7 @@ export const PUSH_UNCONFIGURED_ERROR = "Reminders aren't set up on this stage ye
 export const PUSH_NO_DEVICE_ERROR = 'Turn on reminders on a device first';
 
 export type ReminderSettingKey =
-  | 'remindTimed'
-  | 'remindDueDay'
-  | 'remindPlanned'
-  | 'nudgeMorning'
-  | 'nudgeNight';
+  'remindTimed' | 'remindDueDay' | 'remindPlanned' | 'nudgeMorning' | 'nudgeNight';
 export const REMINDER_SETTINGS_DEFAULTS: Pick<Settings, ReminderSettingKey> = {
   remindTimed: true,
   remindDueDay: true,
@@ -116,7 +112,9 @@ export function ritualFireAts(
 ): { kind: RitualKind; day: string; fireAt: number }[] {
   const days = [...new Set([dayKeyOf(from), dayKeyOf(to)])];
   return days
-    .flatMap((day) => RITUAL_KINDS.map((kind) => ({ kind, day, fireAt: epoch(day, RITUAL_TIMES[kind]) })))
+    .flatMap((day) =>
+      RITUAL_KINDS.map((kind) => ({ kind, day, fireAt: epoch(day, RITUAL_TIMES[kind]) })),
+    )
     .filter((r) => r.fireAt >= from && r.fireAt <= to)
     .sort((a, b) => a.fireAt - b.fireAt);
 }
@@ -145,7 +143,10 @@ export function ritualCopy(
     ...(counts.open > 0 ? [`${counts.open} left open`] : []),
     ...(counts.done > 0 ? [`${counts.done} done`] : []),
   ];
-  return { title: 'Close the day', body: parts.length > 0 ? parts.join(' · ') : 'Nothing on today’s plan' };
+  return {
+    title: 'Close the day',
+    body: parts.length > 0 ? parts.join(' · ') : 'Nothing on today’s plan',
+  };
 }
 
 // By code points, so an emoji at the cut isn't split into half a surrogate pair.

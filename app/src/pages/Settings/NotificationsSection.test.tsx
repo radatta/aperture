@@ -77,6 +77,21 @@ describe('Settings › Notifications: the toggles', () => {
     await waitFor(() => expect(planned.checked).toBe(false));
   });
 
+  it('the two ritual nudges start on, and each persists on its own', async () => {
+    const api = stub();
+    const user = userEvent.setup();
+    renderWithProviders(<NotificationsSection />, { api });
+    const morning = await toggle(/^Plan your day at 8:30am$/);
+    const night = await toggle(/^Close the day at 9:30pm$/);
+    expect([morning.checked, night.checked]).toEqual([true, true]);
+    await user.click(night);
+    await waitFor(async () =>
+      expect(await api.getSettings()).toMatchObject({ nudgeMorning: true, nudgeNight: false }),
+    );
+    await waitFor(() => expect(night.checked).toBe(false));
+    expect(morning.checked).toBe(true);
+  });
+
   it('a refused save says so and the toggle keeps the saved value', async () => {
     const api = stub();
     vi.spyOn(api, 'updateSettings').mockRejectedValueOnce(new Error('updateSettings failed (503)'));

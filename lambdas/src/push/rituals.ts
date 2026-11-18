@@ -19,7 +19,14 @@ export const RITUAL_KEY: Record<RitualKind, string> = {
   ritualNight: 'ritual-night',
 };
 
-export const ritualSource: CandidateSource = async ({ repo, settings, notBefore, from, to, catchUp }) => {
+export const ritualSource: CandidateSource = async ({
+  repo,
+  settings,
+  notBefore,
+  from,
+  to,
+  catchUp,
+}) => {
   if (catchUp) return []; // a late nudge is noise: never caught up
   const out: FoundCandidate[] = [];
   const dayKeyOf = (at: number) => dayKeyInZone(at, USER_TIME_ZONE, 0);

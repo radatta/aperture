@@ -14,7 +14,12 @@ import {
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
-import type { ReminderCandidate, ReminderKind, ReminderSettingKey, Settings } from '@aperture/shared';
+import type {
+  ReminderCandidate,
+  ReminderKind,
+  ReminderSettingKey,
+  Settings,
+} from '@aperture/shared';
 import { ConditionFailedError } from '../ddb/DocClient';
 import type { DocClient } from '../ddb/DocClient';
 import { CAS_ATTEMPTS, Repo } from '../ddb/repo';
