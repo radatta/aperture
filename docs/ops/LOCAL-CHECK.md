@@ -74,8 +74,9 @@ names a `page reload` in `vite-probe.log`. Don't edit the worktree during a loca
   the edges' live clients exist at import but are never called), and its verifier never fetches a JWKS.
 - **The deployed code paths, not a bypass.** The edges are the deployed `handler`s' own factories; auth is the real
   `aws-jwt-verify` with a JWKS passed in (`createCognitoVerifier`'s `jwks` option, which the deployed edges never
-  pass). Origin secret, D14 and per-user partitions behave as on dev, the agent and device tokens are set (no
-  'local' fallback), and a Lambda 403/404 comes back as the app shell with a 200, as CloudFront's errorResponses
+  pass). Origin secret, D14 and per-user partitions behave as on dev, and the server runs strict (`STAGE=dev`:
+  [INFRA §10](../arch/INFRA.md#10-secrets) → _Fail closed on a stage_), so the origin secret and the agent and
+  device tokens must be set — a gap would refuse, never fall back to 'local' (its `server.log` opens with an `auth_misconfigured` line naming `USER_POOL_ID` and `MCP_CLIENT_ID`, by design: its verifiers come from `localDeps`, not env) — and a Lambda 403/404 comes back as the app shell with a 200, as CloudFront's errorResponses
   do (`lambdas/src/local/edge.test.ts`, which also fails if the allowlists drift from `app-stack.ts`). The OAuth
   well-known metadata answers "not configured" locally — the façade is dev's.
 - **Lambda's clock.** The server runs with `TZ=UTC`, as Lambda does — the container is Los Angeles time, and a UTC

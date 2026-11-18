@@ -2,14 +2,24 @@
 // body is a 400 rather than a thrown handler, and updateSettings/updateStory refuse any key outside their
 // patch type. Every refusal step sends a call the BFF must refuse before it writes; a probe that a regression
 // would accept carries the row's current value, so even then it changes nothing. The legal story patch
-// works on a ledgered story, deleted after.
+// works on a ledgered story, deleted after. mcp-auth-closed: a wrong agent token is a 401 on /mcp while the
+// test user's bearer is served; every "unset on a stage" case is off dev (authClosed.test.ts).
 import { type Row, type Scenario } from '../scenario';
 
 const INDEX = 'lambdas/src/index.test.ts';
+const CLOSED = 'lambdas/src/authClosed.test.ts'; // fail closed on a stage (mcp-auth-closed)
+const UNSET = 'needs a deployed env var unset, and dev’s config is never changed to prove it';
 
-const offDev = (id: string, what: string, file: string, test: string, why: string): Row => ({
+const offDev = (
+  id: string,
+  what: string,
+  file: string,
+  test: string,
+  why: string,
+  entry: Row['entry'] = 'api',
+): Row => ({
   id,
-  entry: 'api',
+  entry,
   kind: 'edge',
   what,
   offDev: { file, test, why },
@@ -131,6 +141,84 @@ export const bffHardening: Scenario = {
       'says which ingest failures are worth a retry: 409 a lost race, 429 a throttle, 500 a fault',
       'dev can’t make DynamoDB conflict or throttle on demand',
     ),
+    {
+      id: 'mcp-test-user-ok',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: '/mcp as the test user still lists its tools and reads the backlog (a configured stage isn’t refused)',
+    },
+    {
+      id: 'mcp-wrong-agent-token',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A wrong agent token on /mcp (no bearer) is a 401 “invalid agent token” — a regression guard: the unset-token refusals are the off-dev rows',
+    },
+    offDev(
+      'no-origin-secret',
+      'A stage with no origin secret 403s every BFF HTTP call, health included (a preflight still 204s)',
+      CLOSED,
+      'no origin secret: every HTTP call is 403, health included',
+      UNSET,
+    ),
+    offDev(
+      'mcp-no-origin-secret',
+      'A stage with no origin secret 403s every /mcp call',
+      CLOSED,
+      'no origin secret: 403',
+      UNSET,
+      'mcp',
+    ),
+    offDev(
+      'bff-no-verifier',
+      'A stage with no pool wired refuses a call instead of serving the local user',
+      CLOSED,
+      'no verifier wired: a call is 401, never the local user',
+      UNSET,
+    ),
+    offDev(
+      'bff-device-token-no-user',
+      'The right device token with no user bound is refused on ingest (devb binds none)',
+      CLOSED,
+      'the right device token with no user bound: ingest is 401, never local',
+      'dev binds a user; devb binds none but the dev check never holds the device token, and never reads it',
+    ),
+    offDev(
+      'oauth-state-no-secret',
+      'A Google callback state signed with the dev key is refused on a stage',
+      CLOSED,
+      'no origin secret: a state signed with the dev key is refused on the Google callback (direct invoke)',
+      UNSET,
+    ),
+    offDev(
+      'mcp-no-agent-token',
+      'A stage with no agent token refuses the agent header instead of the local user',
+      CLOSED,
+      'no agent token configured: the agent header is 401, never local',
+      UNSET,
+      'mcp',
+    ),
+    offDev(
+      'mcp-token-no-user',
+      'The right agent token with no user bound is refused (devb binds none)',
+      CLOSED,
+      'the right agent token with no user bound is 401',
+      'dev binds a user; devb binds none but the dev check never holds the agent token, and never reads it',
+      'mcp',
+    ),
+    offDev(
+      'bff-no-claude-client',
+      'A stage whose BFF has no claude client id refuses every call (the D14 deny can’t vanish)',
+      CLOSED,
+      'no claude client id on a stage: the deployed BFF refuses every call (D14 can’t vanish)',
+      UNSET,
+    ),
+    offDev(
+      'oauth-connect-no-secret',
+      'Google connect can’t sign a state on a stage with no origin secret',
+      CLOSED,
+      'no origin secret: Google connect can’t sign a state on a stage',
+      UNSET,
+    ),
     offDev(
       'ci-smoke-event',
       'The CI smoke’s event shape is unchanged (no http context)',
@@ -140,6 +228,23 @@ export const bffHardening: Scenario = {
     ),
   ],
   steps: [
+    {
+      id: 'mcp-auth',
+      title: '/mcp: the test user is served, a wrong agent token is a 401',
+      entry: 'mcp',
+      proves: ['mcp-test-user-ok', 'mcp-wrong-agent-token'],
+      async run(ctx) {
+        if (!(await ctx.mcp.reads.toolsList()).includes('list_backlog'))
+          throw new Error('/mcp as the test user listed no list_backlog tool');
+        await ctx.mcp.reads.listBacklog();
+        const got = await ctx.mcp.reads.agentTokenProbe();
+        // The body tells a refused token from a header CloudFront dropped (that one is "requires a credential").
+        if (got.status !== 401 || got.error !== 'Unauthorized: invalid agent token')
+          throw new Error(
+            `a wrong agent token on /mcp answered ${got.status} ${JSON.stringify(got.error)}`,
+          );
+      },
+    },
     {
       id: 'story-ok',
       title: 'A legal story patch saves and reads back',

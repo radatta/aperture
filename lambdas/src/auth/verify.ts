@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import { SimpleJwksCache } from 'aws-jwt-verify/jwk';
+import { strictAuth } from './strict';
 
 export type Jwks = Parameters<ReturnType<typeof CognitoJwtVerifier.create>['cacheJwks']>[0];
 
@@ -70,6 +71,21 @@ export function createCognitoVerifier(
   };
 }
 
+// The BFF's verifier, wired only when the pool env is present (deployed); locally it's null → the dev user, and on
+// a stage a null verifier refuses (resolveUserId). clientId is left unset (single-client pool, no deploy cycle), but
+// a token minted for the claude.ai MCP client is DENIED (D14) — its ceiling is the /mcp tool surface. On a stage
+// with no MCP_CLIENT_ID that deny would silently vanish, so there it's null too: every call refuses.
+export function bffVerifier(
+  env: NodeJS.ProcessEnv,
+  make: typeof createCognitoVerifier = createCognitoVerifier,
+): Verifier | null {
+  const poolId = env.USER_POOL_ID;
+  if (!poolId) return null;
+  if (!env.MCP_CLIENT_ID)
+    return strictAuth(env) ? null : make(poolId, null, { rejectClientIds: [] });
+  return make(poolId, null, { rejectClientIds: [env.MCP_CLIENT_ID] });
+}
+
 function bearer(header: string | undefined): string | null {
   if (!header) return null;
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
@@ -79,12 +95,17 @@ function bearer(header: string | undefined): string | null {
 // Resolve the request's userId from the Authorization header.
 //   - Verifier configured (deployed): a valid Bearer ACCESS token is REQUIRED. Missing/invalid → throw
 //     an "Unauthorized" error the edge turns into a 401. The `sub` becomes the userId scoping every item.
-//   - No verifier (local dev, no pool wired): fall back to a fixed dev user so the app runs sans Cognito.
+//   - No verifier (local dev, no pool wired): fall back to a fixed dev user so the app runs sans Cognito —
+//     off a stage only. On a stage (strictAuth) a missing verifier refuses: never 'local'.
 export async function resolveUserId(
   authHeader: string | undefined,
   verifier: Verifier | null,
+  strict: boolean = strictAuth(),
 ): Promise<string> {
-  if (!verifier) return 'local';
+  if (!verifier) {
+    if (strict) throw new Error('Unauthorized: invalid token'); // as a bad token: the config gap isn't the caller's to learn
+    return 'local';
+  }
   const token = bearer(authHeader);
   if (!token) throw new Error('Unauthorized: missing bearer token');
   try {
@@ -98,14 +119,18 @@ export async function resolveUserId(
 
 // The browser extension authenticates the ingest endpoint with a static DEVICE TOKEN, not a Cognito JWT
 // (a long-lived personal key for a single-user, minimal-power write; credential class: INFRA §10). Scoped
-// by the caller to ONLY the ingest methods (LC_INGEST_METHODS). Dev (no token configured) falls back to the 'local' user,
-// mirroring resolveUserId's no-verifier path.
+// by the caller to ONLY the ingest methods (LC_INGEST_METHODS). Off a stage, no token configured falls back to the
+// 'local' user, mirroring resolveUserId's no-verifier path; on a stage (strictAuth) an unset token or owner refuses.
 export function resolveDeviceUserId(
   authHeader: string | undefined,
   expectedToken: string | undefined,
   deviceUserId: string | undefined,
+  strict: boolean = strictAuth(),
 ): string {
-  if (!expectedToken) return 'local'; // dev: no device token wired → same 'local' user as JWT-less dev
+  if (!expectedToken) {
+    if (strict) throw new Error('Unauthorized: invalid device token'); // as a wrong token, so a caller can't tell
+    return 'local'; // dev: no device token wired → same 'local' user as JWT-less dev
+  }
   const token = bearer(authHeader);
   if (!token) throw new Error('Unauthorized: missing device token');
   // Compared as SHA-256 digests: equal lengths always, so the comparison leaks nothing, not even the length.
@@ -113,22 +138,26 @@ export function resolveDeviceUserId(
   if (!timingSafeEqual(digest(token), digest(expectedToken))) {
     throw new Error('Unauthorized: invalid device token');
   }
-  return deviceUserId ?? 'local';
+  return ownerOf(deviceUserId, strict);
 }
 
 // The MCP server's static AGENT TOKEN — the same class of credential as the device token, but for the
 // /mcp surface and unscoped by method (the agent token is a full app session). It arrives as the RAW
 // value of AGENT_TOKEN_HEADER (no "Bearer" prefix — the MCP client sends the token verbatim), compared
 // with timingSafeEqual against the env-configured secret. Distinct from resolveDeviceUserId so the two
-// tokens revoke independently and the recruiting one stays method-scoped. Dev (no token configured)
-// falls back to the 'local' user, mirroring resolveUserId / resolveDeviceUserId. The caller only invokes
-// this when the header is PRESENT, so an unconfigured server still rejects a stray header (see the edge).
+// tokens revoke independently and the recruiting one stays method-scoped. Off a stage, no token configured
+// falls back to the 'local' user, mirroring resolveUserId / resolveDeviceUserId; on a stage (strictAuth) an
+// unset token or owner refuses. The caller only invokes this when the header is PRESENT.
 export function resolveAgentUserId(
   headerValue: string | undefined,
   expectedToken: string | undefined,
   agentUserId: string | undefined,
+  strict: boolean = strictAuth(),
 ): string {
-  if (!expectedToken) return 'local'; // dev: no agent token wired → same 'local' user as JWT-less dev
+  if (!expectedToken) {
+    if (strict) throw new Error('Unauthorized: invalid agent token'); // as a wrong token, so a caller can't tell
+    return 'local'; // dev: no agent token wired → same 'local' user as JWT-less dev
+  }
   const token = headerValue?.trim();
   if (!token) throw new Error('Unauthorized: missing agent token');
   const a = Buffer.from(token);
@@ -136,5 +165,14 @@ export function resolveAgentUserId(
   if (a.length !== b.length || !timingSafeEqual(a, b)) {
     throw new Error('Unauthorized: invalid agent token');
   }
-  return agentUserId ?? 'local';
+  return ownerOf(agentUserId, strict);
+}
+
+// The user a valid static token writes as (DEVICE_USER_ID). Unset: 'local' off a stage; on a stage a refusal,
+// so a token can't silently write under u#local (devb binds none, so its token paths refuse). The refusal reads
+// like any bad credential; the cold-start log says why (strict.ts).
+function ownerOf(userId: string | undefined, strict: boolean): string {
+  if (userId) return userId;
+  if (strict) throw new Error('Unauthorized: invalid token');
+  return 'local';
 }

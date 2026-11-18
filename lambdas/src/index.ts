@@ -20,7 +20,13 @@ import {
 import { isApiMethod } from '@aperture/shared';
 import type { CaptureError, CaptureResult, PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
-import { createCognitoVerifier, resolveDeviceUserId, resolveUserId } from './auth/verify';
+import {
+  bffVerifier,
+  createCognitoVerifier,
+  resolveDeviceUserId,
+  resolveUserId,
+} from './auth/verify';
+import { AUTH_ENV, logMissingAuthEnv, originPasses, stateKey } from './auth/strict';
 import type { Verifier } from './auth/verify';
 import type { DocClient } from './ddb/DocClient';
 import type { GoogleGateway } from './google/gateway';
@@ -64,14 +70,9 @@ const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
 const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
 const objects = createS3ObjectStore(process.env.FILES_BUCKET ?? ''); // deletes attachment bytes
 
-// Verifier is wired only when the pool env is present (deployed). Locally it's null → dev userId.
-// clientId is left unset (single-client pool, no deploy cycle), but a token minted for the claude.ai MCP
-// client is DENIED here (D14) — that client's ceiling is the /mcp tool surface, not the full BFF.
-const verifier = process.env.USER_POOL_ID
-  ? createCognitoVerifier(process.env.USER_POOL_ID, null, {
-      rejectClientIds: process.env.MCP_CLIENT_ID ? [process.env.MCP_CLIENT_ID] : [],
-    })
-  : null;
+// Built once at cold start (bffVerifier: when it's null and why).
+const verifier = bffVerifier(process.env, createCognitoVerifier); // passed in: the module's export, which tests mock
+logMissingAuthEnv('bff', [...AUTH_ENV.bff.required], [...AUTH_ENV.bff.optional]);
 
 // The live calendar gateway (real fetch + SSM). Constructed once; makes no call until a method runs, so
 // this is inert in local/test where APP_URL/SSM aren't set. testMode requests never reach it (handleRpc
@@ -214,8 +215,9 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
 
   // Origin lockdown for HTTP requests only: the Function URL is public, so only requests through
   // CloudFront (which stamps the shared secret) are honored. Direct invokes are AWS-cred-gated already.
+  // On a stage an unset secret refuses every HTTP call rather than skipping the gate (strict.ts).
   const originSecret = process.env.ORIGIN_SECRET;
-  if (isHttp && originSecret && event.headers?.[ORIGIN_SECRET_HEADER] !== originSecret) {
+  if (isHttp && !originPasses(event.headers?.[ORIGIN_SECRET_HEADER], originSecret, 'bff')) {
     return { statusCode: 403, headers: CORS, body: JSON.stringify({ error: 'Forbidden' }) };
   }
 
@@ -252,7 +254,7 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
     }
     let userId: string;
     try {
-      userId = verifyState(q.state, process.env.ORIGIN_SECRET ?? 'dev-state-secret').userId;
+      userId = verifyState(q.state, stateKey(process.env.ORIGIN_SECRET)).userId;
     } catch {
       return { statusCode: 400, headers: CORS, body: JSON.stringify({ error: 'Invalid state' }) };
     }

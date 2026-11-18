@@ -7,6 +7,7 @@ import { AGENT_TOKEN_HEADER, APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from 
 import type { ApiMethod } from '@aperture/shared';
 import { createLiveDoc } from '../ddb/LiveDoc';
 import { createCognitoVerifier, resolveAgentUserId, resolveUserId } from '../auth/verify';
+import { AUTH_ENV, logMissingAuthEnv, originPasses } from '../auth/strict';
 import type { Verifier } from '../auth/verify';
 import type { DocClient } from '../ddb/DocClient';
 import type { GoogleGateway } from '../google/gateway';
@@ -76,8 +77,8 @@ let cachedMcpVerifier: Verifier | null = null;
 function requireMcpVerifier(): Verifier {
   const poolId = process.env.USER_POOL_ID;
   const clientId = process.env.MCP_CLIENT_ID;
-  // No 'local' fallback (unlike resolveAgentUserId): a public OAuth endpoint must never treat
-  // "unconfigured" as "anyone is the local user". Unconfigured → the bearer is simply rejected.
+  // No 'local' fallback, on any stage or none: a public OAuth endpoint must never treat "unconfigured" as
+  // "anyone is the local user". Unconfigured → the bearer is simply rejected.
   if (!poolId || !clientId)
     throw new Error('Unauthorized: bearer auth not configured on this stage');
   if (!cachedMcpVerifier) cachedMcpVerifier = createCognitoVerifier(poolId, clientId);
@@ -138,6 +139,7 @@ export const createMcpHandler =
   (event: HttpEvent): Promise<HttpResult> =>
     handle(event, d);
 export const handler = createMcpHandler(live);
+logMissingAuthEnv('mcp', [...AUTH_ENV.mcp.required], [...AUTH_ENV.mcp.optional]);
 
 async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
   const httpMethod = event.requestContext?.http?.method;
@@ -148,8 +150,11 @@ async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
   // Origin lockdown (HTTP only): the Function URL is public, so only CloudFront-stamped requests are
   // honored. Direct invokes are AWS-cred-gated already. Same gate as the BFF. The well-known metadata
   // routes below sit BEHIND this gate too (their CloudFront behaviors share the origin-secret stamp).
-  const originSecret = process.env.ORIGIN_SECRET;
-  if (isHttp && originSecret && event.headers?.[ORIGIN_SECRET_HEADER] !== originSecret) {
+  // On a stage an unset secret refuses every HTTP call rather than skipping the gate (strict.ts).
+  if (
+    isHttp &&
+    !originPasses(event.headers?.[ORIGIN_SECRET_HEADER], process.env.ORIGIN_SECRET, 'mcp')
+  ) {
     return { statusCode: 403, headers: HEADERS, body: JSON.stringify({ error: 'Forbidden' }) };
   }
 

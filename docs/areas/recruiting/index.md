@@ -479,8 +479,10 @@ Both pairs are load-bearing:
 - `DEVICE_USER_ID_*` unset → the CI deploy **fails in deploy-stage's `Validate mode`, naming the secret**
   (dev and prod; devb never has one). Before that check, the handler fell back to userId `'local'`, so
   attempts were written under `u#local` while the page read under `u#<your sub>`: **capture worked, the
-  page stayed empty, and nothing errored anywhere** — still what a wrong value, or a local synth with
-  no `device-user-id.<stage>` file, does. The single most confusing failure mode in the feature.
+  page stayed empty, and nothing errored anywhere** — still what a wrong value does. An unset one on a stage
+  (devb, or a local synth with no `device-user-id.<stage>` file) is now a 401 on the device-token path instead
+  ([INFRA §10](../../arch/INFRA.md#10-secrets) → _Fail closed on a stage_). The single most confusing failure mode
+  in the feature.
 - `DEVICE_USER_ID_*` also gates the **finance sync schedule** ([finances/](../finances/index.md)): unset →
   no schedule on that stage — only devb or a local synth now, since dev and prod CI refuse it (Refresh
   still works); wrong → the schedule syncs an empty partition,
