@@ -11,7 +11,7 @@ import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { createApiClient } from '../devcheck/api';
 import { REPO_SLUG } from '../identifiers.ts';
-import { launch, loadPlaywright } from '../devcheck/browser';
+import { loadPlaywright } from '../devcheck/browser';
 import {
   devcheckHome,
   envPath,
@@ -25,7 +25,7 @@ import {
 } from '../devcheck/config';
 import { DevcheckError } from '../devcheck/errors';
 import { openLedger, pendingIds, type Ledger } from '../devcheck/ledger';
-import { cachedState, ensureSignedIn } from '../devcheck/login';
+import { ensureSignedIn, launchCached } from '../devcheck/login';
 import { takeLock } from '../devcheck/run';
 import { pickSlot, type SlotPick } from '../devcheck/slot';
 import { PLANS_PATH, type BenchSeed } from './sim-bench-plans.ts';
@@ -233,8 +233,16 @@ async function main(): Promise<number> {
     ledger,
     async signIn(run) {
       const log = (s: string) => console.log(`[sim-bench:seed] ${s}`);
-      const state = await cachedState(statePath(main, 'dev'), env, { fetch, now: Date.now, log });
-      const { browser, context } = await launch(loadPlaywright(), state);
+      const { browser, context } = await launchCached(
+        loadPlaywright(),
+        statePath(main, 'dev'),
+        env,
+        {
+          fetch,
+          now: Date.now,
+          log,
+        },
+      );
       try {
         const page = await context.newPage();
         const session = await ensureSignedIn(page, context, env, {

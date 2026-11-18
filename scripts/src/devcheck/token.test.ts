@@ -6,7 +6,6 @@ import {
   cognitoAuthority,
   decodeJwtPayload,
   grantTokens,
-  LAUNCH_MARGIN_MS,
   nearExpiry,
   sessionFromStorage,
   TOKEN_MARGIN_MS,
@@ -71,15 +70,6 @@ describe('nearExpiry', () => {
   });
 });
 
-describe('LAUNCH_MARGIN_MS', () => {
-  it('is 15 min, and nearExpiry takes it as its margin', () => {
-    const s = { accessToken: 'a', expiresAt: 1000, email: '', sub: '' };
-    expect(LAUNCH_MARGIN_MS).toBe(15 * 60_000);
-    expect(nearExpiry(s, 1000_000 - LAUNCH_MARGIN_MS, LAUNCH_MARGIN_MS)).toBe(false);
-    expect(nearExpiry(s, 1000_000 - LAUNCH_MARGIN_MS + 1, LAUNCH_MARGIN_MS)).toBe(true);
-  });
-});
-
 describe('grantTokens', () => {
   const HOST = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
   const reply = (status: number, body: Record<string, unknown>) =>
@@ -116,6 +106,19 @@ describe('grantTokens', () => {
     ).catch((e: unknown) => e)) as Error & { error?: string };
     expect(err.error).toBe('invalid_grant');
     expect(err.message).toBe('the token endpoint answered HTTP 400 invalid_grant');
+  });
+  it('an unreadable token is a fail of its own, never the parser quoting it', async () => {
+    const torn = reply(200, { access_token: 'h.e30.sig', id_token: 'h.eyJzdWIiOiJTRUNSRVQ.sig' });
+    const err = (await grantTokens(torn, HOST, params, () => 0, fail).catch(
+      (e: unknown) => e,
+    )) as Error;
+    expect(err.message).toBe('the token endpoint returned an unreadable token');
+  });
+  it('passes the abort signal to the request', async () => {
+    const fetch = ok();
+    const signal = new AbortController().signal;
+    await grantTokens(fetch, HOST, params, () => 0, fail, signal);
+    expect(fetch.mock.calls[0]![1].signal).toBe(signal);
   });
 });
 

@@ -20,7 +20,7 @@ import { run as sh } from '../bot/sh.ts';
 import { REPO_SLUG } from '../identifiers.ts';
 import { hostjobsDir, nodeFs, repoRunnerVersion } from '../mailroom/submit.ts';
 import { createApiClient } from './api';
-import { launch, loadPlaywright } from './browser';
+import { loadPlaywright } from './browser';
 import {
   currentSlot,
   devcheckHome,
@@ -41,7 +41,7 @@ import { openLedger } from './ledger';
 import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
-import { cachedState, ensureSignedIn, readCheckedSession, refreshSession } from './login';
+import { ensureSignedIn, launchCached, readCheckedSession, refreshSession } from './login';
 import { globMatch } from './glob';
 import { createIos, iosSlotNote } from './ios';
 import { IOS_SLOW_PATHS } from './scenarios/ios-paths';
@@ -290,8 +290,11 @@ async function main(): Promise<number> {
         : undefined,
       fetchShell,
       async openBrowser() {
-        const state = await cachedState(statePath(main), env, { fetch, now: Date.now, log });
-        const { browser, context } = await launch(pw, state);
+        const { browser, context } = await launchCached(pw, statePath(main), env, {
+          fetch,
+          now: Date.now,
+          log,
+        });
         const page = await context.newPage();
         return {
           page,

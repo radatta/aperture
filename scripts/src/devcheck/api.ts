@@ -700,6 +700,7 @@ export type FetchLike = (
     headers: Record<string, string>;
     body?: string | Uint8Array;
     redirect?: 'error'; // presigned requests and the place route: a 3xx must never leave the checked host
+    signal?: AbortSignal; // login.ts cachedState: a launch renew past its timeout is cancelled, not abandoned
   },
 ) => Promise<{
   status: number;

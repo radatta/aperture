@@ -17,11 +17,8 @@ export interface Session {
 // Under this much life left, the app session is renewed before a request (pipeline.ts `fresh`) and the MCP
 // token, which keeps no refresh token, is refused (mcp-login.ts mcpToken).
 export const TOKEN_MARGIN_MS = 60_000;
-// Under this much life left (expired included), the cached session is renewed before the browser loads anything
-// (login.ts cachedState), so the app never launches on a dead or boundary token and never renews at launch (F226).
-export const LAUNCH_MARGIN_MS = 15 * 60_000;
-export const nearExpiry = (s: Session, now: number, margin = TOKEN_MARGIN_MS): boolean =>
-  s.expiresAt * 1000 - now < margin;
+export const nearExpiry = (s: Session, now: number): boolean =>
+  s.expiresAt * 1000 - now < TOKEN_MARGIN_MS;
 
 export const userStoreKey = (authority: string, clientId: string): string =>
   `oidc.user:${authority}:${clientId}`;
@@ -76,6 +73,7 @@ export async function grantTokens(
   params: Record<string, string>,
   now: () => number,
   fail: (msg: string, error?: string) => Error,
+  signal?: AbortSignal,
 ): Promise<{ session: Session & { clientId: string }; idToken: string; refreshToken?: string }> {
   const url = `https://${host}/oauth2/token`;
   assertDevCognitoUrl(url, host, '/oauth2/token');
@@ -84,8 +82,9 @@ export async function grantTokens(
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(params).toString(),
     redirect: 'error',
+    ...(signal ? { signal } : {}),
   }).catch(() => {
-    throw fail('the token endpoint request failed'); // a refused redirect or the network; never its URL
+    throw fail('the token endpoint request failed'); // a refused redirect, the network or an abort; never its URL
   });
   const text = await res.text();
   let body: Record<string, unknown> = {};
@@ -100,8 +99,14 @@ export async function grantTokens(
   const { access_token, id_token, expires_in, refresh_token } = body;
   if (typeof access_token !== 'string' || typeof id_token !== 'string')
     throw fail('the token endpoint returned no access or id token');
-  const id = decodeJwtPayload(id_token);
-  const access = decodeJwtPayload(access_token);
+  let id: Record<string, unknown>;
+  let access: Record<string, unknown>;
+  try {
+    id = decodeJwtPayload(id_token);
+    access = decodeJwtPayload(access_token);
+  } catch {
+    throw fail('the token endpoint returned an unreadable token'); // never the parser's text: it quotes claims
+  }
   return {
     session: {
       accessToken: access_token,
