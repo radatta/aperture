@@ -21,9 +21,13 @@ variant() {
     # round 3, the last (ci-signin-round1.md): each arm changes one thing against round 1's Mac-match shard (restore,
     # Device Hub opened in the background, AXe 1.8.0, host daemons untouched), which stalled with the login overlay in
     # front; round 2 killed the restored tarball and found the overlay frozen and idle
-    1) echo "restore rows hostlog,nospot,quiet,idle" ;; # R1 CPU: host hogs off, and the Sign in tap waits for load1 < 10
-    2) echo "restore rows hubfg" ;; # R2 display: Device Hub in front with this device's window, counted before and after
-    *) echo "restore rows macmatch,tapnudge" ;; # nudge: one status-bar tap at look 1 (scroll-to-top: activates nothing)
+    # Option E's cost trial (relay 11-18 13:19, after round 3): the full rows (launch with signIn, capture, relaunch with
+    # the switcher kill) on AXe 1.8.0, the login overlay's stall cut by reopening the app (ci_reopen); the variable is
+    # how long a blank Home waits before the first reopen
+    1) echo "restore rows nohub,hostlog,nospot,reopen120" ;;
+    2) echo "restore rows nohub,hostlog,nospot,reopen45" ;;
+    *) echo "restore rows nohub,hostlog,nospot,reopen120" ;;
+    # (rounds 1-3's arms, for the record: macmatch, seed, hubfg, idle, tapnudge, with ci_stall's reads)
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -877,7 +881,7 @@ run_sim_ci() (
   }
   # Round 2, on the login page before a key is typed (signed out, public): its luminance grid for ci_stall's diff. The
   # host check before the password stays sim.sh's own single read, after this.
-  ci_pre_type() { [ -e "$WORK/grid0" ] || printf '%s\t%s\tlogin page\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$(ci_frame "$WORK/grid0")" >>"$OUT/stall.tsv"; }
+  ci_pre_type() { ci_reopen_arm || [ -e "$WORK/grid0" ] || printf '%s\t%s\tlogin page\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$(ci_frame "$WORK/grid0")" >>"$OUT/stall.tsv"; }
   # Round 2, R1 (`idle` shards): before the Sign in tap, wait until the host's 1-min load is under 10 (5 min at most),
   # so the login, submit and hand-back run on a quieter host. Logged with the load reached or the timeout.
   ci_idle_wait() {
@@ -907,12 +911,81 @@ run_sim_ci() (
         rm -f "$SIM_P.unread" # the class and sim.sh's clean flag follow the last read, not any earlier one (review S2)
         r="$(ci_orig_landmark)" || return 1
         [ -z "$r" ] || break
+        ci_reopen
+        [ -z "$r" ] || break
       done
     fi
-    [ -z "${CI_SIGNIN_T0:-}" ] || ci_landmark_trace "$r"
-    [ "${SIM_SENSITIVE:-false}" != true ] || [ -n "$r" ] || ci_stall
+    if ci_reopen_arm; then
+      [ "${SIM_SENSITIVE:-false}" != true ] || [ -n "$r" ] || ci_reopen
+    else
+      [ -z "${CI_SIGNIN_T0:-}" ] || ci_landmark_trace "$r"
+      [ "${SIM_SENSITIVE:-false}" != true ] || [ -n "$r" ] || ci_stall
+    fi
     [ "$r" = already ] || sleep 3
     printf '%s\n' "$r"
+  }
+  # Option E (relay 11-18): on the runner the login overlay never closes after the redirect, though the app behind it has
+  # signed in (rounds 1-3: a cold reopen landed signed in on 4 of 5). So in a reopen arm, once Home has been blank for
+  # the trigger (45 or 120 s, from the first blank read in the submit window), the web app's own process is killed and
+  # its icon tapped; at most 3 reopens, each waiting a fresh trigger. sim.sh's own reads then find Home or not, as
+  # always. reopen.tsv: seconds since the sign-in began, the reopen's number, and whether the icon was tapped.
+  ci_reopen_arm() { case ",$OPTS," in *,reopen45,* | *,reopen120,*) return 0 ;; esac; return 1; }
+  # Sets the caller's (the landmark wrapper's) r to the read 8 s after a tapped reopen, so a reopen on the last poll is
+  # still looked at (review).
+  ci_reopen() {
+    local now t0 n trig pids p t e v x0 y0 got=-
+    ci_reopen_arm || return 0
+    [ "${SIM_SENSITIVE:-false}" = true ] || return 0
+    case ",$OPTS," in *,reopen45,*) trig=45 ;; *) trig=120 ;; esac
+    now="$(date +%s)"
+    [ -s "$SIM_P.ciblank0" ] || echo "$now" >"$SIM_P.ciblank0"
+    t0="$(cat "$SIM_P.ciblank0")"
+    [ $((now - t0)) -ge "$trig" ] || return 0
+    n="$(cat "$SIM_P.cireopen" 2>/dev/null || echo 0)"
+    [ "$n" -lt 3 ] || return 0
+    [ $((${SIM_DEADLINE:-0} - now)) -ge 90 ] || return 0
+    # not while the login form is still up (a slow POST or a dropped submit, which sim.sh re-taps itself): the sheet's
+    # address bar still on dev's Cognito, its host class only, as sim_diag reads it (review S2). The stall reads no host.
+    read -r x0 y0 <<<"$SIM_PT_ADDRESS"
+    e="$(SIM_SENSITIVE=false sim_point "$x0" "$y0")" || e="{}"
+    v="$(jq -r '.value // "" | gsub("^[\u200e\u200f\u202a-\u202e\u2066-\u2069]+"; "")' <<<"$e" 2>/dev/null)"
+    e=""
+    if [[ "$v" =~ $SIM_COGNITO_RE ]]; then
+      echo $((now - trig + 15)) >"$SIM_P.ciblank0" # look again in 15 s
+      printf '%s\t%s\treopen held\tthe login form is still up\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" >>"$OUT/reopen.tsv"
+      return 0
+    fi
+    v=""
+    pids="$(pgrep -f 'RuntimeRoot/Applications/Web.app/Web' 2>/dev/null | head -2)"
+    if [ -z "$pids" ]; then # nothing to kill: never a tree read of whatever is in front (review)
+      echo "$now" >"$SIM_P.ciblank0"
+      printf '%s\t%s\treopen skipped\tno web app process\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" >>"$OUT/reopen.tsv"
+      return 0
+    fi
+    n=$((n + 1))
+    echo "$n" >"$SIM_P.cireopen"
+    for p in $pids; do kill -9 "$p" 2>/dev/null || true; done
+    sleep 4 # the Home Screen comes back on the icon's page; a home press would jump to page 1
+    t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null)" || t=""
+    SIM_ICON="$(sim_icon_in "$t")" || SIM_ICON=""
+    if [ -z "$SIM_ICON" ] && jq -e 'any(.. | objects | .AXValue? | select(type == "string"); test("^Page 1 of [2-9]$"))' <<<"$t" >/dev/null 2>&1; then
+      ax swipe --start-x 400 --start-y 480 --end-x 60 --end-y 480 --duration 0.4 >/dev/null 2>&1 || true
+      sleep 2
+      t="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null)" || t=""
+      SIM_ICON="$(sim_icon_in "$t")" || SIM_ICON=""
+    fi
+    t=""
+    p=noicon
+    if [ -n "$SIM_ICON" ]; then if sim_icon_tap >/dev/null 2>&1; then p=tapped; else p="tap failed"; fi; fi
+    if [ "$p" = tapped ]; then
+      sleep 8
+      rm -f "$SIM_P.unread"
+      r="$(ci_orig_landmark)" || r=""
+      case "$r" in already) got=signedin ;; false) got=card ;; "") got=blank ;; *) got=other ;; esac
+    fi
+    date +%s >"$SIM_P.ciblank0" # the next reopen waits a fresh trigger from here
+    printf '%s\t%s\treopen %s\tkilled %s\t%s\tthen %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$n" "$(grep -c . <<<"$pids")" "$p" "$got" >>"$OUT/reopen.tsv"
+    return 0
   }
   # Round 1 (11-18, localNotes/ci-signin-round1.md): rows run 5's re-entry didn't help, so the stall is measured
   # instead, at the 3rd and 8th blank Home reads in the submit window (~2 and ~6 min). One line per look in
@@ -1105,7 +1178,35 @@ BMP
     printf '%s\t%s\t%s\t%s\t%s\n' "$((SECONDS - CI_SIGNIN_T0))" "$c" "$(cat "$SIM_P.probes" 2>/dev/null || echo 0)" "${own:--}" "$wc" >>"$OUT/landmark.tsv"
   }
   eval "ci_orig_sign_in() $(declare -f sim_sign_in | sed 1d)"
-  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; rm -f "$SIM_P.ciblank"; ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort >"$WORK/wc0"; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_idle_wait; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
+  sim_sign_in() {
+    local rc=0
+    CI_SIGNIN_T0=$SECONDS
+    rm -f "$SIM_P.ciblank" "$SIM_P.ciblank0" "$SIM_P.cireopen"
+    ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort >"$WORK/wc0"
+    printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"
+    ci_idle_wait
+    ci_orig_sign_in "$@" || rc=$?
+    ! ci_reopen_arm || printf '%s\t%s\tsignIn %s after %s reopens (%s)\n' "$((SECONDS - CI_SIGNIN_T0))" "${CI_JOB_TAG:-?}" "$([ "$rc" = 0 ] && echo passed || echo failed)" "$(cat "$SIM_P.cireopen" 2>/dev/null || echo 0)" "$(printf '%s %s' "${SIM_RS:--}" "${SIM_DT:--}" | tr -cd 'A-Z_ -')" >>"$OUT/reopen.tsv"
+    CI_SIGNIN_T0=""
+    return "$rc"
+  }
+  # Option E: sim.sh's `simctl list` (sim_device, 30 s) overran in its post-sign-in launch check on every relaunched
+  # sign-in (round 3: "simctl list failed", the device mid-reboot on a loaded host), so CI gives `list` 120 s
+  eval "ci_orig_sx() $(declare -f sx | sed 1d)"
+  sx() {
+    local c=120 left
+    if [ "${2:-}" = list ] && [ "${1:-0}" -lt 120 ]; then
+      if [ -n "${SIM_DEADLINE:-}" ]; then # clamped to the job's deadline, as sim.sh clamps ax (review)
+        left=$((SIM_DEADLINE - $(date +%s)))
+        [ "$left" -ge "$c" ] || c="$left"
+        [ "$c" -ge "$1" ] || c="$1"
+      fi
+      shift
+      ci_orig_sx "$c" "$@"
+    else
+      ci_orig_sx "$@"
+    fi
+  }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
