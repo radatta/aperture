@@ -72,6 +72,13 @@ touches iOS paths the reason says to release devb and `deploy-dev` again, which 
 rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its
 reminders are configured and its poller ticking — so it stays as a standing check that a run is where its lock says.
 
+**The test user's daily LeetCode Start gate is per stage.** A full run starts ~20–25 sittings (2026-11-17 count),
+so prod's caps — 100 Starts and 400 Start attempts a user a day — ran a slot's test user dry after four or five
+runs, and every sitting row then failed `Too many sittings started today.` until the app day turned over (04:00 PT).
+On a dev slot the BFF lifts them to 1000 and 4000, keyed off its `STAGE` (shared `sittings.ts` →
+`sittingStartsPerDay`, `lcStartAttemptsPerDay`); any other stage, an unset one included, keeps prod's. The gate
+row isn't readable through the API, so a cap refusal on dev reads only as that error.
+
 ## One-time setup
 
 1. **Test user** (dev pool only — never prod). On the Mac, the plan's operator step creates it with

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LC_START_ATTEMPT_CAP_ERROR,
   LC_START_ATTEMPTS_PER_DAY,
@@ -7,6 +7,7 @@ import {
   SITTING_IDLE_TAIL_MS,
   SITTING_INGEST_WINDOW_MS,
   SITTING_RAW_KEEP_MS,
+  SITTING_START_CAP_ERROR,
   ulid,
 } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
@@ -19,12 +20,26 @@ import { BackendClient } from './backend';
 // sitting's raw bulk (snapshots, replay, submit details), 14 days past its ingest window; everything kept
 // forever carries none. And a double-fired Start makes one sitting, one rep.
 const T0 = 1_700_000_000_000;
-function setup(stage = 'prod') {
+// The Start gate's caps default by the process's STAGE: every test starts with none (prod's caps), whatever
+// the shell running vitest exports; a test that wants one sets it (withStage).
+const STAGE_BEFORE = process.env.STAGE;
+beforeEach(() => {
+  delete process.env.STAGE;
+});
+afterAll(() => {
+  if (STAGE_BEFORE === undefined) delete process.env.STAGE;
+  else process.env.STAGE = STAGE_BEFORE;
+});
+function setup(
+  stage = 'prod',
+  opts: { sittingStartsPerDay?: number; lcStartAttemptsPerDay?: number } = {},
+) {
   const doc = new InMemoryDoc();
   const now = { t: T0 };
   const backend = new BackendClient(new Repo(doc, liveWrites(doc, stage), 'u1'), {
     userId: 'u1',
     now: () => now.t,
+    ...opts,
   });
   return { doc, backend, now };
 }
@@ -204,6 +219,78 @@ describe('sittings on the table', () => {
           if (e.message === LC_START_ATTEMPT_CAP_ERROR) refusedFor = e.message;
         });
     expect(refusedFor).toBe(LC_START_ATTEMPT_CAP_ERROR);
+  });
+
+  // The Starts cap keys off the Lambda's STAGE: the dev slots get 10× (a full dev check starts ~20–25), any
+  // other stage — unset included — prod's 100. The gate row is seeded to just below the cap under test.
+  describe('the day’s Starts cap by stage', () => {
+    const withStage = async (stage: string | undefined, fn: () => Promise<void>) => {
+      const before = process.env.STAGE;
+      if (stage === undefined) delete process.env.STAGE;
+      else process.env.STAGE = stage;
+      try {
+        await fn();
+      } finally {
+        if (before === undefined) delete process.env.STAGE;
+        else process.env.STAGE = before;
+      }
+    };
+    const seedGate = async (doc: InMemoryDoc, counts: { starts?: number; attempts?: number }) => {
+      const gate = await doc.get(pk('u1'), sk.lcStart());
+      await doc.put({ ...gate!, ...counts });
+    };
+    // Starts a fresh problem and marks its rep done, so the next Start isn't refused for an open one.
+    const startDone = async (b: BackendClient, slug: string) => {
+      const { sitting } = await b.lcSittingStart({
+        ...start(),
+        problemSlug: slug,
+        problemTitle: 'S',
+      });
+      await b.setTaskActual(sitting.repTaskId, 5);
+      await b.transitionTask(sitting.repTaskId, 'done');
+    };
+    // From a seeded count, Starts on fresh problems up to the cap all pass, and the next is refused.
+    async function startsUntilRefused(from: number, cap: number, opts = {}) {
+      const { doc, backend } = setup('prod', opts);
+      await linked(backend);
+      await startDone(backend, 'first');
+      await seedGate(doc, { starts: from });
+      for (let i = from; i < cap; i++) await startDone(backend, `s-${i}`);
+      await expect(
+        backend.lcSittingStart({ ...start(), problemSlug: 'over', problemTitle: 'Over' }),
+      ).rejects.toThrow(SITTING_START_CAP_ERROR);
+    }
+    for (const stage of [undefined, '', 'prod', 'Dev', 'garbage'])
+      it(`STAGE ${JSON.stringify(stage)} refuses at prod's 100`, () =>
+        withStage(stage, () => startsUntilRefused(98, 100)));
+    // 998 and 999 pass — past prod's cap — and the 1000th is refused.
+    for (const stage of ['dev', 'devb'])
+      it(`STAGE ${stage} refuses at 1000`, () =>
+        withStage(stage, () => startsUntilRefused(998, 1000)));
+    it('STAGE dev counts attempts to 4000, not prod’s 400', () =>
+      withStage('dev', async () => {
+        const { doc, backend } = setup();
+        await linked(backend);
+        await startDone(backend, 'first');
+        await seedGate(doc, { attempts: 3999 });
+        await startDone(backend, 'a-1');
+        await expect(
+          backend.lcSittingStart({ ...start(), problemSlug: 'a-2', problemTitle: 'A' }),
+        ).rejects.toThrow(LC_START_ATTEMPT_CAP_ERROR);
+      }));
+    it('an explicit Starts cap wins over the stage', () =>
+      withStage('dev', () => startsUntilRefused(3, 5, { sittingStartsPerDay: 5 })));
+    it('an explicit attempts cap wins over the stage', () =>
+      withStage('dev', async () => {
+        const { doc, backend } = setup('prod', { lcStartAttemptsPerDay: 5 });
+        await linked(backend);
+        await startDone(backend, 'first');
+        await seedGate(doc, { attempts: 4 });
+        await startDone(backend, 'a-1');
+        await expect(
+          backend.lcSittingStart({ ...start(), problemSlug: 'a-2', problemTitle: 'A' }),
+        ).rejects.toThrow(LC_START_ATTEMPT_CAP_ERROR);
+      }));
   });
 });
 

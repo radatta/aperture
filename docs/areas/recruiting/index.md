@@ -51,8 +51,8 @@ Done on the rep ─────────────────────�
   it ended (`resumed: true`): the extension mints a new id for a new sitting — except one closed by idle the
   same app day, which it reopens (_Idle close_).
 - **The Start gate** (`lcstart`, one row a user): every Start first counts an attempt there (a CAS, ≤ 400 a
-  day, refused ones included — before any read); a new sitting then **claims** it — refused while the gate
-  holds another open sitting, or one claimed in the last two minutes that this Start can't see yet (a
+  day — 4000 on a dev slot — refused ones included, before any read); a new sitting then **claims** it —
+  refused while the gate holds another open sitting, or one claimed in the last two minutes that this Start can't see yet (a
   parallel Start) — and only then claims its head (put-if-absent on the Start's `clientSittingId`). Ending or
   deleting a sitting releases the gate (best-effort on a task's Done or Drop, which is already saved — a
   missed release lets go once its sitting reads ended). A rep-less open sitting counts as a dead half-made
@@ -263,7 +263,8 @@ parsing (413). Sizes are UTF-8 bytes. Per call ≤ 50 events / 256 KB; per event
 64 KB, run/submit ≤ 96 KB …); payloads nested ≤ 20 deep with exact numbers (what DynamoDB stores as given);
 per sitting ≤ 3,000 events / 16 MB, any type, held by a **budget row** (`lcs#<id>#budget`) that every call
 reserves in — a CAS, duplicates included — before writing anything, so parallel calls and retries can't pass
-it; the Start gate's ≤ 100 Starts and ≤ 400 attempts a day; events refused 24 h after Start, or timed off the
+it; the Start gate's ≤ 100 Starts and ≤ 400 attempts a day (1000 and 4000 on a dev slot, by the BFF's `STAGE`:
+DEV-CHECK.md → _Dev slots_); events refused 24 h after Start, or timed off the
 sitting's clock. **The grace:** for 10 minutes after its end (`SITTING_END_GRACE_MS`; Done, Drop or a later
 Start — never past the 24 h window, so a sitting ended for staleness gets none) a sitting still takes the events
 stamped before the end on the extension's clock, plus 60 s for the Start's latency (`SITTING_END_SKEW_MS`) —
