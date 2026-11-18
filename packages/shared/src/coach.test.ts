@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   applySlotChange,
+  mockView,
+  normalizeMock,
   attemptsOf,
   ATTEMPT_HISTORY_DAYS,
   coachScope,
@@ -31,6 +33,7 @@ import { buildCatalog } from './lcCatalog';
 import { NEETCODE_150 } from './neetcode150';
 import { emptySummary, mergeReview, patchReview } from './sittings';
 import type {
+  Mock,
   CoachAttempt,
   CoachDay,
   CoachFocus,
@@ -1518,5 +1521,91 @@ describe('the full catalog, once loaded', () => {
   it('never takes an untried off-list problem as a swap target', () => {
     load();
     expect(slotChangeInputs(input()).known('some-graph-problem')).toBe(false);
+  });
+});
+
+describe('mocks', () => {
+  const T = '2026-11-18'; // a Wednesday; its ISO week is 11-16 to 11-22
+  const mk = (over: Partial<Mock>): Mock => ({
+    id: over.id ?? `m-${over.day}`,
+    userId: 'u',
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+    day: T,
+    status: 'done',
+    kind: 'human',
+    partner: null,
+    sittingId: null,
+    problemSlug: null,
+    scores: over.status === 'planned' ? null : { code: 2, solve: 3 },
+    notes: null,
+    ...over,
+  });
+
+  it('upcoming is planned from today through 2 days on, soonest first; deleted ones never count', () => {
+    const v = mockView(
+      [
+        mk({ status: 'planned', day: '2026-11-21' }),
+        mk({ status: 'planned', day: '2026-11-20' }),
+        mk({ status: 'planned', day: T }),
+        mk({ status: 'planned', day: '2026-11-19', deletedAt: 5 }),
+        mk({ day: '2026-11-17', deletedAt: 5 }),
+      ],
+      T,
+    );
+    expect(v.upcoming.map((m) => m.day)).toEqual([T, '2026-11-20']);
+    expect(v).toMatchObject({
+      thisWeek: 'planned',
+      doneCount: 0,
+      last: null,
+      line: 'Mock planned today',
+    });
+  });
+
+  it('a done one this week wins over a planned one; the week is the ISO week, Monday to Sunday', () => {
+    expect(
+      mockView([mk({ status: 'planned', day: '2026-11-20' }), mk({ day: '2026-11-16' })], T),
+    ).toMatchObject({ thisWeek: 'done', line: 'Mock this week: Code 2 · Solve 3', doneCount: 1 });
+    // Sunday 11-15 is last week: none this week, but it is the last one.
+    expect(mockView([mk({ day: '2026-11-15' })], T)).toMatchObject({
+      thisWeek: 'none',
+      line: 'No mock this week yet',
+      last: { day: '2026-11-15' },
+    });
+  });
+
+  it('of planned ones this week, the next to come is named; all passed, the latest still to log', () => {
+    const past = mk({ status: 'planned', day: '2026-11-16', id: 'a' });
+    const later = mk({ status: 'planned', day: '2026-11-22', id: 'b' });
+    const sooner = mk({ status: 'planned', day: '2026-11-19', id: 'c' });
+    expect(mockView([past, later, sooner], T).line).toBe('Mock planned tomorrow');
+    expect(mockView([past, mk({ status: 'planned', day: '2026-11-17', id: 'd' })], T).line).toBe(
+      'Mock planned yesterday, not logged yet',
+    );
+  });
+
+  it('normalizeMock: a change keeps what it isn’t sent, null clears, scores replace whole', () => {
+    const stored = mk({
+      partner: 'Pat',
+      notes: 'n',
+      scores: { code: 2, solve: 3, communicate: 1 },
+    });
+    expect(normalizeMock({ id: stored.id, notes: null }, T, stored)).toMatchObject({
+      partner: 'Pat',
+      notes: null,
+      scores: { code: 2, solve: 3, communicate: 1 },
+    });
+    expect(normalizeMock({ scores: { code: 4, solve: 4 } }, T, stored).scores).toEqual({
+      code: 4,
+      solve: 4,
+    });
+    expect(() => normalizeMock({ status: 'planned' }, T, stored)).toThrow(/no scores yet/);
+    expect(normalizeMock({ status: 'planned', scores: null }, T, stored)).toMatchObject({
+      status: 'planned',
+      scores: null,
+    });
+    expect(() => normalizeMock('x', T, null)).toThrow(/object/);
+    expect(() => normalizeMock({ id: 3 }, T, null)).toThrow(/id/);
   });
 });

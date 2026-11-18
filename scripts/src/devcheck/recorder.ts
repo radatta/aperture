@@ -1,6 +1,7 @@
 // Tasks the UI creates get their ids from the server's responses: the browser's POST /api/<create> replies
 // are read here and appended to the ledger, so cleanup can delete them by id like any API-made task. A
-// place, category or recurring series added in the app (upsertPlace / upsertCategory / upsertSeries with no id) is
+// place, category, recurring series or mock added in the app (upsertPlace / upsertCategory / upsertSeries /
+// upsertMock with no id) is
 // recorded the same way; an upsert naming an id is an edit of an existing row and is never recorded — cleanup would
 // delete a row the run didn't make.
 // A push device Settings' Enable subscribed (subscribePush) is recorded by the id the server answered with,
@@ -16,8 +17,9 @@ export const CREATE_METHODS = [
   'subscribePush',
   'createLogEntry',
   'mintScopedToken',
+  'upsertMock',
 ] as const;
-const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries', 'upsertCategory'];
+const UPSERTS: readonly string[] = ['upsertPlace', 'upsertSeries', 'upsertCategory', 'upsertMock'];
 type CreateMethod = (typeof CREATE_METHODS)[number];
 
 const isCreate = (m: string): m is CreateMethod =>

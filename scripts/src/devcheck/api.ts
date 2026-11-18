@@ -438,6 +438,31 @@ export interface DevCoachToday {
   // coach-fixes: ended sittings with no Claude's notes yet, and the day's slot mix.
   unnoted?: { sittingId: string; slug: string; title: string; day: string }[];
   planMode?: DevCoachPlanModeView;
+  mock?: DevMockView; // lc-coach-e: the week's mock line and the planned ones in the next 48 hours
+}
+// A mock interview (packages/shared/src/types.ts Mock) and the day's view of mocks (coach.ts CoachMockView).
+export interface DevMockScores {
+  code: number;
+  solve: number;
+  communicate?: number;
+}
+export interface DevMock {
+  id: string;
+  day: string;
+  status: 'planned' | 'done';
+  kind: string;
+  partner: string | null;
+  sittingId: string | null;
+  problemSlug: string | null;
+  scores: DevMockScores | null;
+  notes: string | null;
+}
+export interface DevMockView {
+  thisWeek: 'done' | 'planned' | 'none';
+  last: { id: string; day: string; scores: DevMockScores | null } | null;
+  doneCount: number;
+  upcoming: { id: string; day: string; kind: string; partner: string | null }[];
+  line: string;
 }
 // The coach's plan mode (packages/shared/src/coach.ts CoachPlanMode, CoachPlanModeView).
 export type DevCoachPlanMode = 'auto' | 'balanced' | 'catch-up';
@@ -571,6 +596,11 @@ export const lcRollLinkId = (run: string): string => `lc-roll-link:${run}`;
 // change left on a past day only moves that day's plan, which nothing reads again).
 export const COACH_ATTEMPT_VIA = 'coach:attempt';
 export const COACH_SLOT_VIA = 'coach:slot';
+// A mock interview (lc-coach-e), recorded by the id its create answered — log_mock's (MCP) or the app's upsertMock
+// with no id (the browser's response, recorder.ts) — and deleted by deleteMock. A write naming an id edits a mock
+// already recorded, so it records nothing.
+export const MOCK_VIA = 'coach:mock';
+export const UI_MOCK_VIA = 'ui:upsertMock';
 export const coachSlotId = (run: string, day: string, slug: string): string =>
   `coach-slot:${run}:${day}:${slug}`;
 // The floor choice and the focus override have no id either: `coach-floor:<run>:<day>` exists while that day is today
@@ -663,7 +693,8 @@ export type LedgerKind =
   | 'coachAttempt'
   | 'coachSlot'
   | 'coachFloor'
-  | 'coachFocus';
+  | 'coachFocus'
+  | 'mock';
 export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   const via = entries.find((e) => e.op === 'created' && e.id === id)?.via;
   if (via === FLUX_SET_VIA) return 'flux';
@@ -681,6 +712,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === COACH_SLOT_VIA) return 'coachSlot';
   if (via === COACH_FLOOR_VIA) return 'coachFloor';
   if (via === COACH_FOCUS_VIA) return 'coachFocus';
+  if (via === MOCK_VIA || via === UI_MOCK_VIA) return 'mock';
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_MARK_VIA) return 'financeMark';
@@ -822,6 +854,7 @@ export function createApiClient({
     listProblemRecords: () => call<DevProblemRecord[]>('listProblemRecords', []),
     getCatalogStatus: () => call<DevCatalogStatus>('getCatalogStatus', []),
     getCoachStats: () => call<DevCoachStats>('getCoachStats', []),
+    listMocks: () => call<DevMock[]>('listMocks', []),
     // The coach's stored attempts, alive (the export's; the test user's are a handful).
     listCoachAttempts: async () =>
       (await call<{ coachAttempts: DevCoachAttempt[] }>('exportData', [])).coachAttempts,
@@ -1320,6 +1353,11 @@ export function createApiClient({
     async deleteCoachAttempt(id: string): Promise<void> {
       assertLedger(id, 'coachAttempt');
       await call<null>('deleteCoachAttempt', [id]);
+    },
+    // Cleanup's removal of a mock the ledger recorded (log_mock's answer, or the app's create).
+    async deleteMock(id: string): Promise<void> {
+      assertLedger(id, 'mock');
+      await call<null>('deleteMock', [id]);
     },
     // Cleanup's removal of a slot change: restore it, today only (coachSlotId).
     async clearCoachFloor(id: string): Promise<void> {

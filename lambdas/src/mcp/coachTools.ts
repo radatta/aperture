@@ -27,6 +27,11 @@ import {
   CLAUDE_NOTES_BATCH_MAX,
   CLAUDE_NOTES_MAX,
   COACH_VOIDS_MAX,
+  MOCK_AHEAD_DAYS,
+  MOCK_BACK_DAYS,
+  MOCK_KINDS,
+  MOCK_NOTES_MAX,
+  MOCK_PARTNER_MAX,
 } from '@aperture/shared';
 import type {
   CatalogStatus,
@@ -36,6 +41,7 @@ import type {
   CoachStats,
   CoachToday,
   LegacyGroup,
+  Mock,
   PatternId,
   ProblemRecord,
   ResolveState,
@@ -47,8 +53,9 @@ import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
 
 // The LeetCode coach for Claude (docs/areas/recruiting/coach.md; docs/areas/mcp → Tools). leetcode_today,
-// list_problems, get_problem, coach_stats, list_stories and catalog_status read; mark_peeked, set_cause_tag,
-// swap_slot, log_attempt, set_focus_pattern, delete_attempt, set_void and set_claude_notes write the user's data,
+// list_problems, get_problem, coach_stats, list_stories, list_mocks and catalog_status read; mark_peeked,
+// set_cause_tag, swap_slot, log_attempt, set_focus_pattern, delete_attempt, set_void, set_claude_notes and log_mock
+// write the user's data,
 // each only on their yes, and import_catalog writes the stage's full problem catalog (stage-wide metadata, no user
 // data), on their yes too.
 
@@ -57,6 +64,28 @@ const ASK_FIRST =
   'Writes to their Aperture data. Before calling, say exactly what you will write and wait for their yes in this conversation; never infer it.';
 
 const iso = (ms: number) => new Date(ms).toISOString();
+const MOCK_ARGS = [
+  'id',
+  'day',
+  'status',
+  'kind',
+  'partner',
+  'sittingId',
+  'problemSlug',
+  'scores',
+  'notes',
+] as const;
+const mockOut = (m: Mock) => ({
+  id: m.id,
+  day: m.day,
+  status: m.status,
+  kind: m.kind,
+  partner: m.partner,
+  problemSlug: m.problemSlug,
+  sittingId: m.sittingId,
+  scores: m.scores,
+  notes: m.notes,
+});
 const now = (ctx: ToolContext) => ctx.now?.() ?? Date.now();
 
 // The coaching rules per slot kind — what live_sitting and leetcode_today hand Claude with each slot.
@@ -74,7 +103,7 @@ export const SLOT_RULES: Record<CoachSlot['kind'] | 'off-plan', string> = {
 const SOLUTION_RULE =
   'Asked for the solution: push back once with the live numbers (passed/total, the failing input — "trace it"). If they still want it, give it, then offer mark_peeked (it schedules the re-solve) and say when it is due.';
 const TODAY_NOTE =
-  'Say "due", never "overdue", and never count missed days or streaks — momentum is "N of the last 7 days". Offer the floor (one problem) when they are short on time or back after a gap. Open slot 1 with its link when they are ready. A new sitting starts from Start on the LeetCode page, never from here. When ai.source is "ai", Opus picked today’s slots: coach from ai.note and each slot’s `why` (its `reason` is the rules’ facts). When ai.notice is set, say it once, plainly, and coach from the rules’ slots. `planMode.line` says the day’s mix (Catch-up fills the slots with re-solves; Balanced is the usual mix): say it once when it is Catch-up. When `unnoted` lists ended sittings, offer once, at the start, to write your notes on all of them from their timelines (get_sitting), then save them in one set_claude_notes call on their yes.';
+  'Say "due", never "overdue", and never count missed days or streaks — momentum is "N of the last 7 days". Offer the floor (one problem) when they are short on time or back after a gap. Open slot 1 with its link when they are ready. A new sitting starts from Start on the LeetCode page, never from here. When ai.source is "ai", Opus picked today’s slots: coach from ai.note and each slot’s `why` (its `reason` is the rules’ facts). When ai.notice is set, say it once, plainly, and coach from the rules’ slots. `planMode.line` says the day’s mix (Catch-up fills the slots with re-solves; Balanced is the usual mix): say it once when it is Catch-up. `mock.line` is the week’s mock interview in one line: when it says none this week, suggest one once (with a person if they can, else with you), never a count of weeks without one. When `unnoted` lists ended sittings, offer once, at the start, to write your notes on all of them from their timelines (get_sitting), then save them in one set_claude_notes call on their yes.';
 const PICKING_NOTE =
   'Opus is still picking today’s problems: say so, call leetcode_today again in about 10 seconds, and don’t coach from a plan until it lands.';
 // leetcode_today waits this long for a pick it started (or found running) before answering `pending`.
@@ -133,6 +162,7 @@ export function todayView(t: CoachToday) {
     unreviewed: t.unreviewed,
     unnoted: t.unnoted,
     planMode: t.planMode,
+    mock: t.mock,
     rules: { ...SLOT_RULES, solution: SOLUTION_RULE },
     note: TODAY_NOTE,
   };
@@ -238,7 +268,7 @@ const problemSitting = (s: Sitting, at: number) => ({
 const pct = (r: Rate) => (r.of >= STATS_PCT_MIN ? Math.round((100 * r.hit) / r.of) : null);
 const rateView = (r: Rate) => ({ ...r, pct: pct(r) });
 const STATS_PCT_MIN = 5; // under this many tries a rate is only a count
-const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried, or any day after a solve from before the coach (log_attempt historical). \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top as of now, whatever the range: the plan's next pick unless it is the pattern just held or they set one. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock scores are not in this yet.`;
+const STATS_NOTE = `Read rates as counts ("3 of 8"); \`pct\` is null under ${STATS_PCT_MIN} tries. A clean first try (accepted on the first submit, no help) is the number that matters; a re-solve is any later day on a problem already tried, or any day after a solve from before the coach (log_attempt historical). \`untagged\` counts attempts that went wrong with no cause tag. \`weakest\` is the focus ranking's top as of now, whatever the range: the plan's next pick unless it is the pattern just held or they set one. Compare with their own earlier weeks, never with other people; say "not enough yet" rather than read a trend into one or two weeks. Mock interview scores are apart, in list_mocks: read them beside the first-try rate, as a trend over several mocks, never one.`;
 const statsView = (s: CoachStats) => ({
   from: s.from,
   to: s.to,
@@ -1015,6 +1045,92 @@ export const COACH_TOOLS: Tool[] = [
         day: hit.x.day,
         nextDue: nextDue(after, hit.r.slug),
         stillTried: after.some((r) => r.slug === hit.r.slug),
+      };
+    },
+  },
+  {
+    name: 'log_mock',
+    description: [
+      ASK_FIRST,
+      `Logs a mock interview (its own record, never a task or an attempt: it never moves the plan, the re-solve queue or their estimates). A done one carries the interviewer\u2019s \`scores\` from 1 to 4: \`code\` and \`solve\` required, \`communicate\` optional — their scorecard\u2019s Code and Solve; a planned one has none yet (\`status: "planned"\`, a \`day\` up to ${MOCK_AHEAD_DAYS} days on) and shows on their Today card. \`kind\`: ${MOCK_KINDS.join(', ')} (default human); \`partner\` their own label for who ran it (≤ ${MOCK_PARTNER_MAX} characters — never research the person); \`sittingId\` when it ran as a sitting (its problem fills \`problemSlug\`); \`notes\` ≤ ${MOCK_NOTES_MAX}; \`day\` defaults to today, up to ${MOCK_BACK_DAYS} days back. With \`id\` it changes that mock (mark a planned one done with its scores): a field left out keeps its value, null clears it.`,
+      'Returns the mock as stored and the week\u2019s mock line after — read both back.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'string',
+          description: 'A mock to change (from list_mocks); omit for a new one',
+        },
+        day: { type: 'string', description: 'YYYY-MM-DD, default today' },
+        status: { type: 'string', enum: ['done', 'planned'], description: 'Default done' },
+        kind: { type: 'string', enum: [...MOCK_KINDS] },
+        partner: { type: ['string', 'null'] },
+        sittingId: { type: ['string', 'null'] },
+        problemSlug: { type: ['string', 'null'] },
+        scores: {
+          anyOf: [
+            {
+              type: 'object',
+              properties: {
+                code: { type: 'integer', minimum: 1, maximum: 4 },
+                solve: { type: 'integer', minimum: 1, maximum: 4 },
+                communicate: { type: 'integer', minimum: 1, maximum: 4 },
+              },
+              required: ['code', 'solve'],
+              additionalProperties: false,
+            },
+            { type: 'null' },
+          ],
+        },
+        notes: { type: ['string', 'null'] },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      if (args.id !== undefined && (typeof args.id !== 'string' || !isUlid(args.id)))
+        throw new RpcParamError('"id" must be a mock id — list_mocks lists them');
+      const input: Record<string, unknown> = {};
+      for (const k of MOCK_ARGS) if (args[k] !== undefined) input[k] = args[k];
+      const stored = (await ctx.dispatch('upsertMock', [input])) as Mock;
+      const t = (await ctx.dispatch('getCoachToday', [])) as CoachToday;
+      return { mock: mockOut(stored), week: t.mock.line };
+    },
+  },
+  {
+    name: 'list_mocks',
+    description: `Their mock interviews, newest day first: each one\u2019s day, status (done or planned), kind, partner label, problem, sitting, scores (1–4: code, solve, communicate) and notes. Optional \`from\` / \`to\` (YYYY-MM-DD) and \`limit\` (≤ 100, default 30). Also \`doneCount\` and \`trend\`: the done ones\u2019 Code and Solve, oldest first — read it as a trend over several mocks, never one; single mocks are noisy. Read-only.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: { type: 'string', description: 'YYYY-MM-DD' },
+        to: { type: 'string', description: 'YYYY-MM-DD' },
+        limit: { type: 'integer', minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    async run(args, ctx) {
+      for (const k of ['from', 'to'] as const)
+        if (args[k] !== undefined && (typeof args[k] !== 'string' || !isDayKey(args[k])))
+          throw new RpcParamError(`"${k}" must be YYYY-MM-DD`);
+      const limit = args.limit ?? 30;
+      if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 100)
+        throw new RpcParamError('"limit" must be a whole number from 1 to 100');
+      const from = args.from as string | undefined;
+      const to = args.to as string | undefined;
+      if (from && to && from > to) throw new RpcParamError('"from" must not be after "to"');
+      const all = ((await ctx.dispatch('listMocks', [])) as Mock[]).filter(
+        (m) => (!from || m.day >= from) && (!to || m.day <= to),
+      );
+      const done = all.filter((m) => m.status === 'done' && m.scores);
+      return {
+        mocks: all.slice(0, limit as number).map(mockOut),
+        total: all.length,
+        doneCount: done.length,
+        trend: done
+          .slice()
+          .reverse()
+          .map((m) => ({ day: m.day, code: m.scores!.code, solve: m.scores!.solve })),
       };
     },
   },

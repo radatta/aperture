@@ -161,3 +161,63 @@ describe('helpers', () => {
     expect(withOther.at(-1)).toMatchObject({ pattern: 'other', rank: null });
   });
 });
+
+describe('Patterns tab: mock interviews', () => {
+  const section = () => screen.findByRole('region', { name: 'Mock interviews' });
+
+  it('none yet: one line pointing at the Today card, no chart', async () => {
+    renderApp({ api: freshApi(), path: '/recruiting/patterns' });
+    const s = await section();
+    expect(within(s).getByText(/None logged yet/)).toBeTruthy();
+    expect(within(s).queryByRole('img')).toBeNull();
+  });
+
+  it('each done mock shows its scores beside its week’s first tries; the chart waits for two', async () => {
+    const api = freshApi();
+    await api.logCoachAttempts([
+      { slug: slugs('two-pointers')[0]!, outcome: 'clean', day: ago(0) },
+    ]);
+    await api.upsertMock({ day: ago(0), scores: { code: 3, solve: 2 }, partner: 'Study group' });
+    await api.upsertMock({ status: 'planned', day: addDays(ago(0), 1) }); // planned: not listed here
+    const { unmount } = renderApp({ api, path: '/recruiting/patterns' });
+    let s = await section();
+    expect(await within(s).findByText('Code 3 · Solve 2')).toBeTruthy();
+    expect(within(s).getByText('First try that week 1 of 1')).toBeTruthy();
+    expect(within(s).getByText(/with Study group/)).toBeTruthy();
+    expect(within(s).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(s).queryByRole('img')).toBeNull();
+    unmount();
+    await api.upsertMock({ day: ago(30), scores: { code: 1, solve: 2, communicate: 3 } });
+    renderApp({ api, path: '/recruiting/patterns' });
+    s = await section();
+    const chart = await within(s).findByRole('img');
+    expect(chart.getAttribute('aria-label')).toMatch(/Code 1, Solve 2; .* Code 3, Solve 2$/);
+    expect(within(s).getByText('No first try that week')).toBeTruthy();
+    expect(within(s).getByText('Code 1 · Solve 2 · Communication 3')).toBeTruthy();
+  });
+
+  it('Delete asks once, inline; No keeps it, Yes removes it', async () => {
+    const user = userEvent.setup();
+    const api = freshApi();
+    const m = await api.upsertMock({ day: ago(1), scores: { code: 2, solve: 2 } });
+    renderApp({ api, path: '/recruiting/patterns' });
+    const s = await section();
+    const del = await within(s).findByRole('button', { name: /^Delete the mock on / });
+    await user.click(del);
+    await user.click(within(s).getByRole('button', { name: 'No' }));
+    expect(await api.listMocks()).toEqual([m]);
+    await user.click(within(s).getByRole('button', { name: /^Delete the mock on / }));
+    await user.click(within(s).getByRole('button', { name: /^Yes, delete the mock on / }));
+    await waitFor(() => expect(within(s).getByText(/None logged yet/)).toBeTruthy());
+    expect(await api.listMocks()).toEqual([]);
+  });
+
+  it('a failed read is a LoadError with Retry, and the rest of the tab still shows', async () => {
+    const api = freshApi();
+    const read = vi.spyOn(api, 'listMocks').mockRejectedValue(new Error('offline'));
+    renderApp({ api, path: '/recruiting/patterns' });
+    expect(await screen.findByText('Couldn’t load the mocks.', {}, { timeout: 5000 })).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Weakest first tries first' })).toBeTruthy();
+    read.mockRestore();
+  });
+});

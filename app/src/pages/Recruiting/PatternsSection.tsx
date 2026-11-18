@@ -11,6 +11,7 @@ import { useCoachFocus, useCoachStats, useSetFocusPattern } from '../../data/hoo
 import { isTransientRead } from '../../data/retry';
 import { cx } from '../../lib/cx';
 import { fmtRate, MIN_PCT, patternRows } from './patternsHelpers';
+import { PatternsMocks } from './PatternsMocks';
 
 // The Patterns tab (docs/areas/recruiting/coach.md → The Patterns tab): how practice is going per pattern, in the
 // order the coach ranks them for the focus (weakest first tries first), with the focus marked and "Set as focus" on
@@ -77,6 +78,7 @@ export function PatternsSection() {
           />
         </Text>
       )}
+      <PatternsMocks weeks={s.weeks} />
       <div className="flex flex-col gap-1">
         <Text as="h2" id="patterns-ranking" size="sm" weight="semibold" tone="muted">
           Weakest first tries first

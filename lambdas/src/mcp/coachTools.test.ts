@@ -251,6 +251,7 @@ describe('writes ask first', () => {
       'set_void',
       'set_claude_notes',
       'import_catalog',
+      'log_mock',
     ])
       expect(TOOLS.find((x) => x.name === name)!.description).toMatch(
         /^Writes to their Aperture data\. Before calling, say exactly what you will write and wait for their yes/,
@@ -768,5 +769,77 @@ describe('the full catalog over MCP', () => {
       /part must/,
     );
     expect((await call('catalog_status')).state).toBe('absent');
+  });
+});
+
+describe('log_mock and list_mocks', () => {
+  it('logs a done mock and lists it, with the week line read back; no task is made', async () => {
+    const out = await call('log_mock', {
+      scores: { code: 3, solve: 2, communicate: 4 },
+      partner: 'Study group',
+      notes: 'clarified late',
+    });
+    expect(out).toEqual({
+      mock: {
+        id: expect.any(String),
+        day: TODAY,
+        status: 'done',
+        kind: 'human',
+        partner: 'Study group',
+        problemSlug: null,
+        sittingId: null,
+        scores: { code: 3, solve: 2, communicate: 4 },
+        notes: 'clarified late',
+      },
+      week: 'Mock this week: Code 3 · Solve 2 · Communication 4',
+    });
+    const list = await call('list_mocks');
+    expect(list).toMatchObject({
+      total: 1,
+      doneCount: 1,
+      mocks: [{ id: out.mock.id }],
+      trend: [{ day: TODAY, code: 3, solve: 2 }],
+    });
+    expect(await backend.listTasks()).toEqual([]);
+    expect((await call('leetcode_today')).mock).toMatchObject({ thisWeek: 'done', doneCount: 1 });
+  });
+
+  it('plans one, then marks it done by id, keeping its kind and partner', async () => {
+    const planned = await call('log_mock', {
+      status: 'planned',
+      day: '2026-11-10',
+      kind: 'claude',
+    });
+    expect(planned.week).toBe('Mock planned tomorrow');
+    expect((await call('leetcode_today')).mock.upcoming).toEqual([
+      expect.objectContaining({ id: planned.mock.id, day: '2026-11-10' }),
+    ]);
+    const logged = await call('log_mock', {
+      id: planned.mock.id,
+      status: 'done',
+      day: TODAY,
+      scores: { code: 2, solve: 2 },
+    });
+    expect(logged.mock).toMatchObject({ id: planned.mock.id, kind: 'claude', status: 'done' });
+    expect((await call('list_mocks')).total).toBe(1);
+  });
+
+  it('refuses bad scores and a bad id before writing; list_mocks filters and checks its range', async () => {
+    await expect(call('log_mock', { scores: { code: 5, solve: 2 } })).rejects.toThrow(/1 to 4/);
+    await expect(call('log_mock', { scores: { solve: 2 } })).rejects.toThrow(/code/);
+    await expect(
+      call('log_mock', { id: 'nope', scores: { code: 2, solve: 2 } }),
+    ).rejects.toBeInstanceOf(RpcParamError);
+    expect((await call('list_mocks')).total).toBe(0);
+    await call('log_mock', { day: '2026-11-01', scores: { code: 1, solve: 1 } });
+    await call('log_mock', { scores: { code: 2, solve: 3 } });
+    const narrowed = await call('list_mocks', { from: '2026-11-05' });
+    expect(narrowed.mocks.map((m: { day: string }) => m.day)).toEqual([TODAY]);
+    expect((await call('list_mocks')).trend.map((x: { code: number }) => x.code)).toEqual([1, 2]);
+    expect((await call('list_mocks', { limit: 1 })).mocks).toHaveLength(1);
+    await expect(
+      call('list_mocks', { from: '2026-11-09', to: '2026-11-01' }),
+    ).rejects.toBeInstanceOf(RpcParamError);
+    await expect(call('list_mocks', { limit: 0 })).rejects.toBeInstanceOf(RpcParamError);
   });
 });

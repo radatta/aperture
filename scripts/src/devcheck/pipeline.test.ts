@@ -297,6 +297,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         patterns: [],
       }),
       listCoachAttempts: async () => [],
+      listMocks: async () => [],
       getCoachFocusRow: async () => null,
       getCoachDay: async () => null,
       listCoachVoids: async () => [],
@@ -594,6 +595,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       patchSittingReview: async () => {
+        throw new Error('unused');
+      },
+      deleteMock: async () => {
         throw new Error('unused');
       },
       deleteCoachAttempt: async () => {

@@ -25,6 +25,8 @@ import {
   weekdayOf,
 } from '@aperture/shared';
 import type {
+  Mock,
+  MockScore,
   Area,
   BaseEntity,
   Category,
@@ -987,4 +989,22 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
       }),
     );
   });
+  // Mock interviews (coach.md → Mocks): two done ones in past weeks for the Patterns tab's trend, none this week, so
+  // the Today card shows its muted "No mock this week yet". Synthetic labels and scores.
+  const mockDefs: [number, Mock['kind'], string | null, MockScore, MockScore][] = [
+    [16, 'claude', null, 2, 2],
+    [9, 'human', 'Study group', 3, 2],
+  ];
+  for (const [d, kind, partner, code, solve] of mockDefs)
+    store.mocks.push({
+      ...mk(nowMs - d * DAY),
+      day: dayKey(nowMs - d * DAY, START_HOUR),
+      status: 'done',
+      kind,
+      partner,
+      sittingId: null,
+      problemSlug: null,
+      scores: { code, solve },
+      notes: null,
+    });
 }

@@ -3,7 +3,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_COACH_PICK_KEY } from '../../data/stubClient';
-import { AI_PICK_NOTICE } from '@aperture/shared';
+import { addDays, AI_PICK_NOTICE } from '@aperture/shared';
 import type { CoachAiView, CoachToday } from '@aperture/shared';
 
 beforeEach(() => globalThis.localStorage?.clear());
@@ -38,7 +38,7 @@ describe('the Today card', () => {
     expect(link.getAttribute('target')).toBe('_blank');
     expect(within(c).getByText(/Short on time\? Floor:/)).toBeTruthy();
     // Add Two Numbers is due but not a slot; the next 48 hours' re-solve says when.
-    const queue = within(c).getByRole('region', { name: 'Re-solves coming up' });
+    const queue = within(c).getByRole('region', { name: 'Next 48 hours' });
     expect(within(queue).getByText('Add Two Numbers')).toBeTruthy();
     expect(within(queue).getByText('due')).toBeTruthy();
     expect(within(c).getByText('3 of 7 days practised this week')).toBeTruthy();
@@ -364,3 +364,128 @@ describe('the AI pick on the Today card', () => {
     expect(within(await card()).queryByText(AI_PICK_NOTICE)).toBeNull();
   });
 }, 15_000);
+
+// Mocks (coach.md → Mocks): the week's one line, Log a mock, and a planned one in the next 48 hours.
+describe('the Today card’s mocks', () => {
+  const mockSection = async () =>
+    within(await card()).findByRole('region', { name: 'Mock interviews' });
+
+  it('with none this week: one muted line, never a count of weeks', async () => {
+    renderApp({ api: stub(true), path: '/recruiting' });
+    const m = await mockSection();
+    const line = within(m).getByTestId('mock-line');
+    expect(line.textContent).toBe('No mock this week yet');
+    expect(line.className).toMatch(/text-ink-muted/);
+    expect(within(m).queryByText(/\d+ weeks?/)).toBeNull();
+  });
+
+  it('logs a done mock with its scores; the line shows them and focus returns to Log a mock', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    await user.click(within(m).getByRole('button', { name: 'Log a mock' }));
+    const form = within(m).getByRole('form', { name: 'Log a mock' });
+    await user.click(within(form).getByRole('button', { name: 'Code 3 of 4' }));
+    await user.click(within(form).getByRole('button', { name: 'Solve 2 of 4' }));
+    await user.type(within(form).getByLabelText('Who ran it (optional)'), 'Study group');
+    await user.click(within(form).getByRole('button', { name: 'Save mock' }));
+    await waitFor(() =>
+      expect(within(m).getByTestId('mock-line').textContent).toBe(
+        'Mock this week: Code 3 · Solve 2',
+      ),
+    );
+    expect(within(m).queryByRole('form')).toBeNull();
+    expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' }));
+    const [saved] = await api.listMocks();
+    expect(saved).toMatchObject({
+      status: 'done',
+      partner: 'Study group',
+      scores: { code: 3, solve: 2 },
+    });
+  });
+
+  it('a done mock without Code is refused inline, keeping what was typed; nothing is saved', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    await user.click(within(m).getByRole('button', { name: 'Log a mock' }));
+    const form = within(m).getByRole('form', { name: 'Log a mock' });
+    await user.click(within(form).getByRole('button', { name: 'Solve 4 of 4' }));
+    await user.type(within(form).getByLabelText('Notes (optional)'), 'ran long');
+    const before = (await api.listMocks()).length;
+    await user.click(within(form).getByRole('button', { name: 'Save mock' }));
+    expect(within(form).getByRole('alert').textContent).toMatch(/Code and Solve/);
+    expect((within(form).getByLabelText('Notes (optional)') as HTMLTextAreaElement).value).toBe(
+      'ran long',
+    );
+    expect((await api.listMocks()).length).toBe(before);
+  });
+
+  it('a refused save says why and keeps the form', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    vi.spyOn(api, 'upsertMock').mockRejectedValueOnce(
+      new Error('day must be within the last 365 days'),
+    );
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    await user.click(within(m).getByRole('button', { name: 'Log a mock' }));
+    const form = within(m).getByRole('form', { name: 'Log a mock' });
+    await user.click(within(form).getByRole('button', { name: 'Code 2 of 4' }));
+    await user.click(within(form).getByRole('button', { name: 'Solve 2 of 4' }));
+    await user.click(within(form).getByRole('button', { name: 'Save mock' }));
+    expect((await within(form).findByRole('alert')).textContent).toMatch(/365 days/);
+    expect(within(m).getByRole('form')).toBeTruthy();
+  });
+
+  it('plans one for tomorrow: it shows in the next 48 hours; Cancel removes it', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    await user.click(within(m).getByRole('button', { name: 'Log a mock' }));
+    const form = within(m).getByRole('form', { name: 'Log a mock' });
+    await user.click(within(form).getByRole('button', { name: 'Planned' }));
+    expect(within(form).queryByRole('button', { name: 'Code 1 of 4' })).toBeNull();
+    const day = within(form).getByLabelText('Day') as HTMLInputElement;
+    const tomorrow = addDays((await api.getCoachToday()).day, 1);
+    await user.clear(day);
+    await user.type(day, tomorrow);
+    await user.click(within(form).getByRole('button', { name: 'Plan mock' }));
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    expect(await within(queue).findByText('Mock interview')).toBeTruthy();
+    expect(within(queue).getByText('tomorrow')).toBeTruthy();
+    expect(within(m).getByTestId('mock-line').textContent).toBe('Mock planned tomorrow');
+    // Not yet its day: no Log it.
+    expect(within(queue).queryByRole('button', { name: 'Log it — the planned mock' })).toBeNull();
+    await user.click(within(queue).getByRole('button', { name: 'Cancel the planned mock' }));
+    await waitFor(() => expect(within(queue).queryByText('Mock interview')).toBeNull());
+    expect((await api.listMocks()).some((x) => x.status === 'planned')).toBe(false);
+  });
+
+  it('a planned mock today logs onto the same row with Log it', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    const p = await api.upsertMock({ status: 'planned', day: today, kind: 'claude' });
+    renderApp({ api, path: '/recruiting' });
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Log it — the planned mock' }),
+    );
+    const form = within(await mockSection()).getByRole('form', { name: 'Log the planned mock' });
+    await user.click(within(form).getByRole('button', { name: 'Code 4 of 4' }));
+    await user.click(within(form).getByRole('button', { name: 'Solve 3 of 4' }));
+    await user.click(within(form).getByRole('button', { name: 'Save mock' }));
+    await waitFor(async () =>
+      expect((await api.listMocks()).find((x) => x.id === p.id)).toMatchObject({
+        status: 'done',
+        kind: 'claude',
+        scores: { code: 4, solve: 3 },
+      }),
+    );
+    expect((await api.listMocks()).filter((x) => x.status === 'planned')).toEqual([]);
+  });
+});
