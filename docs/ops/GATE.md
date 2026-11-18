@@ -127,7 +127,7 @@ unclaimed, it runs its package.
   importers' tests; naming the module in a rule's `tests` does that, since `vitest related` runs a module's importers.
   Runtime-only state (the board dir, git, `gh`) needs none.
 
-The completeness test scans tracked and untracked files, so it fails before the first commit until you do.
+**The registry check runs first** (`registry.ts`, under 1 s, in every mode, `--dry-run` too). It exits 1 before any step, naming the file, why and the fix, on: a test-named file that no vitest project includes, or that two include (`PACKAGES[].projects`, which `includes.test.ts` pins to `vitest list`); an unregistered graph-blind test or module; an orphan snapshot; an unclaimed fixtures folder. `rules.test.ts` runs the same check in CI over tracked and untracked files, so a lane's new file fails before its first commit until it's registered.
 
 ## The full suite on GitHub
 

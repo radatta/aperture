@@ -9,17 +9,45 @@ export interface Pkg {
   dir: string; // repo-relative
   name: string; // the pnpm filter
   reaches: string[]; // other package dirs its tests import from: a change there can select its tests
+  projects: Project[]; // its vitest projects, as its vitest config sets them
 }
+
+// A vitest project's test globs, relative to the package dir. registry.ts checks every test-named file against them
+// before the gate starts; includes.test.ts pins them to what `vitest list` finds. vitest's default exclude
+// (node_modules, .git) is left out: the gate lists git files only.
+export interface Project {
+  name?: string; // vitest's projectName; unset for a single-project config
+  include: string[];
+  exclude?: string[];
+}
+const SRC = [{ include: ['src/**/*.test.ts'] }];
 
 // Every workspace package with a vitest suite; rules.test.ts checks this against pnpm-workspace.yaml and checks
 // `reaches` against the packages' actual imports.
 export const PACKAGES: Pkg[] = [
-  { dir: 'app', name: '@aperture/app', reaches: ['packages/shared'] },
-  { dir: 'lambdas', name: '@aperture/lambdas', reaches: ['packages/shared'] },
-  { dir: 'packages/shared', name: '@aperture/shared', reaches: [] },
-  { dir: 'cdk', name: '@aperture/cdk', reaches: ['packages/shared'] },
-  { dir: 'extension', name: '@aperture/extension', reaches: ['packages/shared'] },
-  { dir: 'scripts', name: '@aperture/scripts', reaches: [] },
+  {
+    dir: 'app',
+    name: '@aperture/app',
+    reaches: ['packages/shared'],
+    projects: [
+      {
+        name: 'app',
+        include: ['src/**/*.test.{ts,tsx}', 'pwa/**/*.test.ts'],
+        exclude: ['src/auth/auth.test.tsx'],
+      },
+      { name: 'isolated', include: ['src/auth/auth.test.tsx'] },
+    ],
+  },
+  { dir: 'lambdas', name: '@aperture/lambdas', reaches: ['packages/shared'], projects: SRC },
+  { dir: 'packages/shared', name: '@aperture/shared', reaches: [], projects: SRC },
+  { dir: 'cdk', name: '@aperture/cdk', reaches: ['packages/shared'], projects: SRC },
+  {
+    dir: 'extension',
+    name: '@aperture/extension',
+    reaches: ['packages/shared'],
+    projects: [{ include: ['test/**/*.test.ts'] }],
+  },
+  { dir: 'scripts', name: '@aperture/scripts', reaches: [], projects: SRC },
 ];
 
 export interface FullRule {
@@ -285,6 +313,18 @@ export const INPUT_RULES: InputRule[] = [
     tests: [`scripts/src/${a}/`],
     why: `the ${a} tests spawn its CLIs and read its files`,
   })),
+  {
+    inputs: [
+      'app/vitest.config.ts',
+      'cdk/vitest.config.ts',
+      'extension/vitest.config.mts',
+      'lambdas/vitest.config.ts',
+      'packages/shared/vitest.config.ts',
+      'scripts/vitest.config.ts',
+    ],
+    tests: ['scripts/src/gate/includes.test.ts'],
+    why: 'pins PACKAGES[].projects to the files `vitest list` finds under each config',
+  },
   {
     inputs: ['scripts/usage/'],
     tests: ['scripts/src/usage/statusline-log.test.ts'],
