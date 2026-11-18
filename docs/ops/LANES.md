@@ -46,10 +46,12 @@ It refuses, changing nothing, on any of these:
   `pnpm board sync-main`) held the main-checkout lock past its 120 s wait (below)
 
 **The pace gate.** Before the main-checkout lock, start reads `<board>/pace.json`, which the hub's pace watcher
-(`pace-watch.sh` in the board dir, untracked) rewrites every minute, and `<board>/lane-last-start.json`. It starts
-only when all of these hold, else it refuses with exit 75 and one line naming each reason:
+(`pace-watch.sh` in the board dir, untracked) rewrites every minute, the hub's `<board>/pace-control.json`, and
+`<board>/lane-last-start.json`. It starts only when all of these hold, else it refuses with exit 75 and one line naming
+each reason:
 
-- `state` is `calm`
+- `state` is `calm` in `pace.json`, and in `pace-control.json` when that file is there and readable: the watcher
+  exits on a trip, and its last `pace.json` still says calm until it goes stale, while the hub's file says hot at once
 - the 5-sample averages are under the limits: `avg.cores` < 7.5, `avg.psiCpu` < 40, `avg.anonMiB` < 9000 (`load5`
   isn't judged: it counts I/O-waiting tasks here and sat at 12 or more in a third of calm samples, 2026-11-17)
 - the file is fresh: `heartbeat` at most 180 s old (and at most 60 s ahead)
@@ -100,7 +102,13 @@ Then it runs these steps, each registering an undo:
    is typed, so the session reads the doc itself (CLAUDE.md → _Feature workflow_). **No kickoff text ever reaches an argv**: COI reads every process's argv,
    and a kickoff quoting the safety rules would kill the container. The window starts a shell, not Claude, so
    `tools/coi/tmux-restore.sh save` finds Claude as the shell's child. No permission flag: sessions here start in
-   bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15).
+   bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15). The line starts with
+   `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>`, from `scripts/board/limits.json` → `lanes.autoCompactWindow` (500000,
+   about half a 1M window, so a long lane compacts on its own; 0 drops the prefix; a value outside 100000–1000000 is
+   noted and defaulted). A 2026-11-17 probe on 2.1.327 (`claude -p`, 100k window) compacted at the window less about
+   20k, `trigger: "auto"`, so the PreCompact handoff (`docs/ops/COMPACTION-HANDOFF.md`) runs then as on any auto
+   compaction; `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` fired too, but the docs steer to the token window. A session that
+   `tmux-restore.sh` relaunches after a restart doesn't get the prefix back.
 9. Writes the board lane: phase `plan`, step `kickoff sent`, after clearing a past same-name file (`writeLane` would
    carry its PR number on).
 10. Waits up to 20 s for Claude's own registry (`~/.claude/sessions/<pid>.json`, never the `.key` files) to show a

@@ -12,8 +12,12 @@ import {
 } from './pace.ts';
 
 const NOW = Date.parse('2026-11-17T18:00:00Z');
-const keys = (p: string | null, last: string | null = null, now = NOW) =>
-  paceReasons(p, last, now, PACE_DEFAULTS, '/board').map((r) => r.key);
+const keys = (
+  p: string | null,
+  last: string | null = null,
+  now = NOW,
+  control: string | null = null,
+) => paceReasons(p, control, last, now, PACE_DEFAULTS, '/board').map((r) => r.key);
 const avg = (o: object) => ({ avg: { anonMiB: 8000, cores: 4, psiCpu: 10, ...o } });
 
 describe('paceReasons', () => {
@@ -67,12 +71,19 @@ describe('paceReasons', () => {
   });
 
   it('missing fails closed, naming the watcher', () => {
-    expect(paceReasons(null, null, NOW, PACE_DEFAULTS, '/b')).toEqual([
+    expect(paceReasons(null, null, null, NOW, PACE_DEFAULTS, '/b')).toEqual([
       {
         key: 'missing',
         text: 'no pace.json in /b: the watcher is not running, restart /b/pace-watch.sh',
       },
     ]);
+  });
+
+  it("the hub's pace-control state refuses when not calm, even while pace.json still says calm", () => {
+    expect(keys(pace(NOW), null, NOW, '{"state":"hot","since":1,"held":[]}')).toEqual(['control']);
+    expect(keys(pace(NOW), null, NOW, '{"state":"calm","since":0}')).toEqual([]);
+    for (const junk of ['', '{', 'null', '{"since":1}', '{"state":3}'])
+      expect(keys(pace(NOW), null, NOW, junk), junk).toEqual([]);
   });
 
   it('spacing: inside spacingSec refuses, at it passes', () => {

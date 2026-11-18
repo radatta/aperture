@@ -27,6 +27,8 @@ export const WAIT_POLL_MS = 30_000;
 const FUTURE_SKEW_SEC = 60; // a heartbeat further ahead than this is not the watcher's
 
 export const paceFile = (e: Env) => `${e.boardDir}/pace.json`;
+// The hub's own state file: a trip lands here at once, while the exiting watcher's last pace.json still says calm.
+export const paceControlFile = (e: Env) => `${e.boardDir}/pace-control.json`;
 export const lastStartFile = (e: Env) => `${e.boardDir}/lane-last-start.json`;
 export const lastStartText = (b: string, nowMs: number) =>
   JSON.stringify({ v: 1, at: Math.floor(nowMs / 1000), branch: b }) + '\n';
@@ -56,6 +58,7 @@ export function paceLimits(d: Deps): PaceLimits {
 // Each reason a start must wait, keyed so a wait logs only when the set changes; [] is clear.
 export function paceReasons(
   pace: string | null,
+  control: string | null,
   last: string | null,
   nowMs: number,
   lim: PaceLimits,
@@ -114,6 +117,10 @@ export function paceReasons(
         text: `anon avg ${Math.round(anon)} MiB, wants under ${lim.anonMiBBelow}`,
       });
   }
+  // Absent or junk control is no signal (pace.json still judges); a non-calm state refuses.
+  const c = parse(control) as { state?: unknown } | null | undefined;
+  if (c && typeof c === 'object' && typeof c.state === 'string' && c.state !== 'calm')
+    out.push({ key: 'control', text: `the hub marked the box ${c.state} (pace-control.json)` });
   // A junk or future stamp is ignored: spacing must never block for good.
   const s = parse(last) as { at?: unknown; branch?: unknown } | null | undefined;
   if (s && typeof s === 'object' && num(s.at)) {
@@ -130,6 +137,7 @@ export function paceReasons(
 const reasonsNow = (d: Deps) =>
   paceReasons(
     d.fs.read(paceFile(d.env)),
+    d.fs.read(paceControlFile(d.env)),
     d.fs.read(lastStartFile(d.env)),
     d.clock.now(),
     paceLimits(d),

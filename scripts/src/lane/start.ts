@@ -4,6 +4,7 @@
 import {
   EXIT,
   activeLanes,
+  compactWindow,
   describeActive,
   macRead,
   expectedGitdir,
@@ -44,9 +45,11 @@ const refuse = (d: Deps, msg: string, code: number = EXIT.refused) => {
   return code;
 };
 
-// The shell line typed into the new window: only the validated branch varies.
-export const claudeLine = (b: string, kickoff: boolean) =>
-  `claude -n ${b}` + (kickoff ? ` '${KICKOFF_PROMPT}'` : '');
+// The shell line typed into the new window: only the validated branch and the integer window vary.
+export const claudeLine = (b: string, kickoff: boolean, window: number | null = null) =>
+  (window === null ? '' : `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${window} `) +
+  `claude -n ${b}` +
+  (kickoff ? ` '${KICKOFF_PROMPT}'` : '');
 
 export async function start(d: Deps, a: StartArgs): Promise<number> {
   const e = d.env;
@@ -349,7 +352,8 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
   }
 
   try {
-    d.run('tmux', ['send-keys', '-t', paneId, '-l', '--', claudeLine(b, kickoff !== null)]);
+    const line = claudeLine(b, kickoff !== null, compactWindow(d));
+    d.run('tmux', ['send-keys', '-t', paneId, '-l', '--', line]);
     d.run('tmux', ['send-keys', '-t', paneId, 'Enter']);
   } catch (err) {
     return rollback(`tmux send-keys failed: ${(err as Error).message}`);

@@ -253,7 +253,7 @@ describe('lane start: the nominal run', () => {
       `git worktree add --no-track -b ${B} .claude/worktrees/${B} ${SHA}`,
       'pnpm install',
       `tmux new-window -d -P -F #{window_id}\t#{pane_id} -t $0: -n ${B} -c ${wt}`,
-      `tmux send-keys -t %9 -l -- claude -n ${B} '${KICKOFF_PROMPT}'`,
+      `tmux send-keys -t %9 -l -- CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 claude -n ${B} '${KICKOFF_PROMPT}'`,
       'tmux send-keys -t %9 Enter',
     ]);
     const install = t.calls.find((c) => c.line === 'pnpm install')!;
@@ -296,7 +296,7 @@ describe('lane start: the nominal run', () => {
     expect(await start(t.d, args())).toBe(0);
     expect(mutated(t.calls)[0]).toBe(`git switch --detach ${SHA}`);
     expect(t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1)).toBe(
-      `claude -n ${B}`,
+      `CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 claude -n ${B}`,
     );
   });
 
@@ -347,6 +347,9 @@ describe('lane start: the nominal run', () => {
   it('the claude line varies only by the validated branch', () => {
     expect(claudeLine('x', false)).toBe('claude -n x');
     expect(claudeLine('x', true)).toBe(`claude -n x '${KICKOFF_PROMPT}'`);
+    expect(claudeLine('x', false, 250000)).toBe(
+      'CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000 claude -n x',
+    );
     expect(KICKOFF_PROMPT).not.toMatch(/'/);
     // The workflow doc isn't loaded on its own (CLAUDE.md → _Feature workflow_): every lane opens it first.
     expect(KICKOFF_PROMPT).toMatch(/^Read docs\/ops\/FEATURE-WORKFLOW\.md first/);
@@ -645,10 +648,13 @@ describe('lane start: the pace gate', () => {
       { avg: { anonMiB: 9000, cores: 1, psiCpu: 1 } },
       /anon avg 9000 MiB, wants under 9000/,
     ],
+    ['a hot pace-control', {}, /the hub marked the box hot \(pace-control.json\)/],
     ['a stale pace file', { heartbeat: T0 / 1000 - 181 }, /pace.json is 181 s old \(over 180\)/],
-  ])('refuses on %s with 75 before the lock, nothing changed', async (_, over, msg) => {
+  ])('refuses on %s with 75 before the lock, nothing changed', async (name, over, msg) => {
     const w = world();
     paceAt(w, over);
+    if (name === 'a hot pace-control')
+      writeFileSync(join(w.board, 'pace-control.json'), '{"state":"hot","since":1,"held":[]}');
     const t = deps(w, script(w));
     expect(await start(t.d, args())).toBe(75);
     expect(t.out()).toMatch(msg);
@@ -797,5 +803,43 @@ describe('lane start: the pace gate', () => {
     expect(await start(t.d, args())).toBe(1);
     expect(t.out()).toMatch(/rolled back: nothing left behind/);
     expect(JSON.parse(readFileSync(join(w.board, 'lane-last-start.json'), 'utf8')).branch).toBe(B);
+  });
+});
+
+describe('lane start: the auto-compact window', () => {
+  const sent = async (lanes: object | null) => {
+    const w = world();
+    claudeSession(w);
+    if (lanes) writeFileSync(join(w.main, 'scripts/board/limits.json'), JSON.stringify({ lanes }));
+    const t = deps(w, script(w));
+    expect(await start(t.d, args())).toBe(0);
+    return {
+      line: t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1),
+      out: t.out(),
+    };
+  };
+
+  it('limits.json sets it, 0 turns it off, absent is 500000', async () => {
+    expect((await sent({ autoCompactWindow: 300000 })).line).toBe(
+      `CLAUDE_CODE_AUTO_COMPACT_WINDOW=300000 claude -n ${B}`,
+    );
+    expect((await sent({ autoCompactWindow: 0 })).line).toBe(`claude -n ${B}`);
+    expect((await sent(null)).line).toBe(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 claude -n ${B}`);
+  });
+
+  it.each([[99999], [1000001], [250000.5], ['500k'], ['1; rm x'], [null]])(
+    'a bad value %j is noted and defaulted, never typed',
+    async (v) => {
+      const r = await sent({ autoCompactWindow: v });
+      expect(r.line).toBe(`CLAUDE_CODE_AUTO_COMPACT_WINDOW=500000 claude -n ${B}`);
+      expect(r.out).toMatch(
+        /note: limits.json lanes.autoCompactWindow .* is not 0 or 100000-1000000 tokens; using 500000/,
+      );
+    },
+  );
+
+  it('the tracked limits.json sets 500000', () => {
+    const l = JSON.parse(readFileSync(new URL('../../board/limits.json', import.meta.url), 'utf8'));
+    expect(l.lanes.autoCompactWindow).toBe(500000);
   });
 });
