@@ -18,18 +18,21 @@ the `[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
 
 The user names the mode; collaborative is the default.
 
-- **Collaborative.** Claude stops at decision points: Plan's model, Plan's questions, the execute and n, review
-  findings that need a product call or add scope, and the dev all-clear. Each is one `[ask-maintainer]` (findings as
-  a list), and the lane waits for the hub's `[relay]`.
+- **Collaborative.** Claude stops at decision points: Plan's model, Plan's questions, the execute, review findings
+  that need a product call or add scope, a review still finding serious bugs at its round cap, a review item only
+  live state can settle or a lens that couldn't run, an effort above `high`, and the dev all-clear.
+  Each is one `[ask-maintainer]` (findings as a list), and the lane waits for the hub's `[relay]`.
 - **Autonomous (only when the user says so).** Claude makes every decision itself — it never stops or hands
-  one back. Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
+  one back, bar the review's round cap, a review item only live state can settle or a lens that couldn't run, and an effort
+  above `high` (each an `[ask-maintainer]`: `docs/ops/REVIEW.md` → _Round 2 and later_, _Merge_, _Launching_). Make the best call from `PRODUCT.md`, the plan, and real day-to-day use
   (`docs/product/EvaluatingChanges.md`), then act; for new scope that may be building it or deciding "not now" as a
   noted follow-up. Log **every** decision — Plan answers included — in the worktree's `localNotes/decisions.md`: what
   came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body
   summarises it. Parking is only allowed _as_ a logged decision, never a quiet "ask later".
-  - **"Build it, autonomous" is the execute.** Rounds come from Plan's file count — under 10 files → 1, 10–30 → 2,
-    over 30 → 3. Risk overrides size: auth, IAM/cdk, finance, migrations or external-service writes → at least 2. If
-    the last planned round still finds real bugs, one extra round, logged, never more. A number in the kickoff wins.
+  - **"Build it, autonomous" is the execute.** The review takes no round count: its lenses come from what the diff
+    touches and its rechecks from what it finds (phase 6). Risk classes — auth, IAM/cdk, finance, migrations,
+    external-service writes — add the infra lens and get the fix-diff recheck whenever round 1 led to a code fix.
+    Lenses or a recheck named in the kickoff are added, never taken away.
   - **Every plan opens with _Operator steps_** — the exact one-line Mac commands, in order, each marked before Build
     / at dev test / at PR / at Cleanup (a `.github/workflows/` branch's push, which the bot can't do, and a
     `.github/` branch's admission to the `dev` environment, only when Claude asks for them — phase 8; its removal at
@@ -43,7 +46,8 @@ The user names the mode; collaborative is the default.
     A green full run with zero leftovers, every _Feature coverage_ row `pass`, `off dev`, `needs you` or `deferred`
     (under _This feature_ and _Other scenarios_ alike), `pnpm gate:ci` green on the head sha, plus that review is the
     all-clear (phase 9). On
-    `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate, `pnpm bot push --after-rebase` (a
+    `DEV_CHANGED_MID_RUN`, main won: read the merged PRs, rebase, gate (a rebase that resolved conflicts also gets
+    the recheck: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_), `pnpm bot push --after-rebase` (a
     `.github/workflows/` branch: the user's push), `pnpm bot deploy-dev` again, rerun.
   - **Finished:** `[pr-open]` to the hub — or `[pr-ready]` when the mailroom was unreachable, then the hand-off line
     in its own `[ask-maintainer]` — in the shape `docs/ops/HUB.md` → _Checkpoints_ gives, and the report below.
@@ -82,7 +86,7 @@ hub message (the checkpoints stay).
    (`docs/ops/DEV-CHECK.md` → _Rows_). A UI change also lists the iOS plan probe points (`near`/`scan`) inside the
    changed area and moves them in the same PR, regenerating `tools/mailroom/bench/plans.json` with
    `pnpm sim-bench:plans`; `pnpm ios-probe` is the backstop, the Simulator the proof (`docs/ops/IOS-CHECK.md` →
-   _Probe check_). The plan also carries a **step plan**: build, each review round, dev test and PR, each with an
+   _Probe check_). The plan also carries a **step plan**: build, the review (round 1 with its lenses, plus a recheck when serious findings are likely), dev test and PR, each with an
    **ETA range** derived from measured history — the board history's `heavy.sh` records (gate steps, devcheck runs)
    and archived lanes' estimate-vs-actual records — scaled by the file count, never a guess (guessed ETAs ran 2–4×
    long, 2026-11-14); a step with no history says so and gets a wide range. Right after Plan, the lane writes the
@@ -90,33 +94,36 @@ hub message (the checkpoints stay).
    questions, mode, the step plan.
 3. **Questions** — collaborative: `[ask-maintainer]` with each question's options and a pick. Autonomous: answer and
    log them.
-4. **Build** — only on the user's "execute" plus a number of review rounds (n). When asking for n, give a rough
-   estimate of how many files the change will touch — a gauge of size, not a commitment. While building, after each
-   section run the touched files' tests (`vitest run <file>`) and a typecheck. Autonomous: n per the sizing rule
-   above, logged.
+4. **Build** — only on the user's "execute". When asking for it, give a rough estimate of how many files the change
+   will touch — a gauge of size, not a commitment — and the lenses the review will run. While building, after each
+   section run the touched files' tests (`vitest run <file>`) and a typecheck.
 5. **Gate** — `pnpm gate:fast` (`docs/ops/GATE.md`): full typecheck and lint, then the tests the branch's diff can
    reach, each step under `heavy.sh` by itself; it runs a package's whole suite, or all of them, when its rules say so,
    and prints why. Its exit code is real (`pipefail` if piped). The full suite runs on GitHub on every push (phase 8);
    `pnpm gate:fast --full` locally only to reproduce a red Branch run a single file can't, or when GitHub is
    unreachable. Nothing goes to a subagent on a red gate.
-6. **Review round** — the read-only `code-reviewer` (no tests, no servers) in parallel with whatever each touched
-   package adds:
+6. **Review** — read `docs/ops/REVIEW.md` first: the lens map, the merge, the finding shape and the escalation
+   rules live there.
+   - **Round 1, parallel.** On the committed, gate-green diff, launch together the read-only lens reviewers its
+     paths call for (`docs/ops/REVIEW.md` → _Lens map_, _Picking lenses_).
+   - **One list, one pass, one gate.** Merge every lens's findings into one deduped list ranked S1–S3
+     (`localNotes/review/round-<n>.md`), trace each suspected serious one, fix real bugs and convention breaks in one
+     pass, run the gate once, commit. Findings that need a product call or add scope: collaborative → one
+     `[ask-maintainer]` with the list; autonomous → decide and log.
+   - **Round 2 and later** recheck only the fix diff, and run while a round finds something serious or leaves an
+     S1/S2 unfixed, and once after a risk class's code fix (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again →
+     fix, gate, commit, next round on that fix. Minor only → fix, gate, commit, done.
+   - **Stop** when a round has no serious finding. After four rounds, or a round from the third on that finds no
+     fewer serious bugs than the one before, stop and send `[ask-maintainer]` with the list — in either mode.
+   - A serious finding in round 2 or later that the fixes didn't cause is a **lens gap**: recorded in the report and
+     sent to the hub (`docs/ops/REVIEW.md` → _Lens gaps_).
 
-   | Touched           | Adds                                                                                                                                                                                                                                                  |
-   | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | `app/`            | Headless UI agent (`run-app` skill, stub + auth bypass) driving a concrete checklist from the plan, at phone width in light and dark. Screenshots → the worktree's `localNotes/screenshots/round-<n>/`.                                               |
-   | `lambdas/`        | No second agent — the node-env handler tests are the runtime proof and the gate ran them. The reviewer gets a backend checklist: writes only via the handler's `writes` object, external calls only via gated gateways, JWT + origin-secret handling. |
-   | `cdk/`            | Synth pass: `cdk synth`, diff the template against `origin/main`'s, report changed resources, IAM grants, cdk-nag findings. No creds needed; never alongside tests.                                                                                   |
-   | `packages/shared` | The contract both sides build on — the `app/` and `lambdas/` rows both apply, and the reviewer checks both callers.                                                                                                                                   |
-
-   When the round is back, fix real bugs and convention breaks. Findings that need a product call or add scope:
-   collaborative → one `[ask-maintainer]` with the list; autonomous → decide and log. Then the gate runs again, which
-   also starts the next round.
-
-7. **Ready for dev** — after n rounds: committed on the feature branch (one commit after the build, one per round's
-   fixes), `gate:fast` green, PR body current.
+7. **Ready for dev** — once the review has stopped with no serious finding open (or the round cap's ask is answered),
+   every picked lens ran, and nothing is held open (`docs/ops/REVIEW.md` → _Merge_ 1 and 5): committed on the feature branch (one commit after the build, one
+   per round's fixes), `gate:fast` green, PR body current.
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
-   rebase (CLAUDE.md → _Claude behavior_), then re-run the gate. Then a green
+   rebase (CLAUDE.md → _Claude behavior_), then re-run the gate (and the recheck, after a rebase that resolved
+   conflicts: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_). Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
    the lock, a green one proves nothing about dev.
    - **Before the first `pnpm bot push`, scan for publication.** The repo is public, so a push publishes; an amend
@@ -124,7 +131,8 @@ hub message (the checkpoints stay).
      `origin/main` against `docs/ops/PUBLIC-CONTENT.md` — the judgment half; the identifier and identity checks are
      `pnpm bot push`'s own. Phase 10 scans the PR text again.
    - Then `pnpm bot push` — every push starts the full suite on GitHub (the `Branch` workflow; GATE.md); start
-     `pnpm gate:ci --wait` in the background beside the dev steps. A red one is a gate failure: fix, `gate:fast`, push.
+     `pnpm gate:ci --wait` in the background beside the dev steps. A red one is a gate failure: fix, `gate:fast`, the recheck
+     (`docs/ops/REVIEW.md` → _After a dev fix or a rebase_), push.
      A branch with no dev deploy (nothing deployed changes) waits for it here.
    - `pnpm bot deploy-dev`: it takes a dev slot's lock (slot A only when the branch touches
      iOS paths), which stays held through dev testing — `pnpm bot lock renew` before it runs out (**→ hub:** `[lock]`
@@ -160,7 +168,7 @@ hub message (the checkpoints stay).
    — the headless agent's oddity, the user's repro, a devcheck row — is a bug to fix:** "pre-existing" decides
    only where (this branch when it's the same surface, else its own small PR), never whether; triage by reading the
    code path or reproducing, never "automation artifact" or "by design" unverified. Fixes go back through the gate
-   (plus a review round if non-trivial), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
+   (plus the fix-diff recheck: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_), then back to dev (phase 8). Repeat until the all-clear. The all-clear needs
    `pnpm gate:ci` green on the head sha (the full suite), every row of the feature's matrix proven on dev, covered off dev, or listed under _Needs you_, and every other
    scenario's row likewise (_Other scenarios (regression)_) — a row the report shows `fail` or `skipped` is untested
    (a `deferred` slow row counts like off dev, with `ios-standalone`'s caveat: `docs/ops/DEV-CHECK.md` → _Slow
@@ -187,7 +195,8 @@ hub message (the checkpoints stay).
 
 **Every feature ends with `localNotes/report-<branch>.md`**, either mode, written even when the run never reached a
 PR (a run that stops before phase 10 releases its dev lock first): status first (PR ready / blocked / failed, and
-why), what the feature is, what happened (build, rounds, dev check, decisions), a short happy-path test the
+why), what the feature is, what happened (build, the review's round record and `## Lens gaps` —
+`docs/ops/REVIEW.md` → _The round record_, _Lens gaps_ — dev check, decisions), a short happy-path test the
 user can run unaided, the devcheck report's _This feature_ lists, _You don't need to test_ and _Needs you_
 (what still needs the user, and why; "no feature rows" for a branch with no scenario of its own), key
 screenshots (relative links into `localNotes/`), and **each step's estimate against its actual**, which
@@ -195,5 +204,5 @@ also go into `decisions.md` and the lane file, so the next plan's ranges calibra
 `docs/ops/PUBLIC-CONTENT.md` like the PR body — scan both before `open-pr`. The last message in the pane links it
 (Mac path); the `[pr-open]` points the hub at it.
 
-Page-first still holds: a backend half usually follows a frontend that already passed its rounds, so the plan says
-which half this is, and the reviewer checks the lambda against the contract the stub set.
+Page-first still holds: a backend half usually follows a frontend that already passed its review
+(`docs/ops/REVIEW.md` → _Lens map_, `lambdas/`).

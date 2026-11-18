@@ -56,19 +56,19 @@ relays exactly that.
 
 A feature session sends one short `SendMessage` to the hub at each of these.
 
-| When                                                  | Message                                                                                                                                                                                                                          |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Mode: collab\|auto. Steps: <step plan with ETA ranges>.`                                                                              |
-| Phase 8, after `deploy-dev`                           | `[lock] <branch> — taken until <HH:MM>, ETA <n> min.`                                                                                                                                                                            |
-| Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait next.` (the refusal prints it ready to send)                                                                                                                    |
-| Phase 10, `pnpm bot lock release`                     | `[lock] <branch> — released.`                                                                                                                                                                                                    |
-| Anything the user must decide, run or answer          | `[ask-maintainer] <branch> — <need>.` The options and the lane's pick, or the exact one-line Mac command; the hub relays it with its own recommendation.                                                                         |
-| Blocked on something the user isn't needed for        | `[blocked] <branch> — <what>; needs <a lock \| another lane \| the environment>.` One message per block: never both this and `[ask-maintainer]`.                                                                                 |
-| Phase 10, after `pnpm mailroom open-pr`               | `[pr-open] <branch> — "<title>" <url>. Devcheck: <n proven / n off dev / n needs you \| no feature rows>; iOS not run: <reason> (only when so). Needs the user: <the report's _Needs you_ list \| nothing>. Report: <Mac path>.` |
-| Phase 10, mailroom `MAC_UNREACHABLE` or a token error | `[pr-ready] <branch> — "<title>"`, the same facts; then the hand-off line in its own `[ask-maintainer]`.                                                                                                                         |
-| Phase 11, after `pnpm lanes end`                      | `[merged] <branch> — cleaned up. Follow-ups: <list \| none>. Decisions: <roadmap-relevant \| none>.`                                                                                                                             |
-| The user types in the lane's pane                     | `[info] <branch> — the user, in my pane: "<their words>"`, at once, before acting on them.                                                                                                                                       |
-| Between checkpoints                                   | `[info] <branch> — <fact>`: a scope change, a finding that touches another branch.                                                                                                                                               |
+| When                                                  | Message                                                                                                                                                                                                                                                                                                     |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Mode: collab\|auto. Steps: <step plan with ETA ranges>.`                                                                                                                                                         |
+| Phase 8, after `deploy-dev`                           | `[lock] <branch> — taken until <HH:MM>, ETA <n> min.`                                                                                                                                                                                                                                                       |
+| Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait next.` (the refusal prints it ready to send)                                                                                                                                                                                               |
+| Phase 10, `pnpm bot lock release`                     | `[lock] <branch> — released.`                                                                                                                                                                                                                                                                               |
+| Anything the user must decide, run or answer          | `[ask-maintainer] <branch> — <need>.` The options and the lane's pick, or the exact one-line Mac command; the hub relays it with its own recommendation.                                                                                                                                                    |
+| Blocked on something the user isn't needed for        | `[blocked] <branch> — <what>; needs <a lock \| another lane \| the environment>.` One message per block: never both this and `[ask-maintainer]`.                                                                                                                                                            |
+| Phase 10, after `pnpm mailroom open-pr`               | `[pr-open] <branch> — "<title>" <url>. Devcheck: <n proven / n off dev / n needs you \| no feature rows>; iOS not run: <reason> (only when so). Needs the user: <the report's _Needs you_ list \| nothing>. Lens gaps: <lens-gap lines \| none>. Open findings shipped: <ids \| none>. Report: <Mac path>.` |
+| Phase 10, mailroom `MAC_UNREACHABLE` or a token error | `[pr-ready] <branch> — "<title>"`, the same facts; then the hand-off line in its own `[ask-maintainer]`.                                                                                                                                                                                                    |
+| Phase 11, after `pnpm lanes end`                      | `[merged] <branch> — cleaned up. Follow-ups: <list \| none>. Decisions: <roadmap-relevant \| none>.`                                                                                                                                                                                                        |
+| The user types in the lane's pane                     | `[info] <branch> — the user, in my pane: "<their words>"`, at once, before acting on them.                                                                                                                                                                                                                  |
+| Between checkpoints                                   | `[info] <branch> — <fact>`: a scope change, a finding that touches another branch.                                                                                                                                                                                                                          |
 
 Each checkpoint, and each phase change between them, is also `pnpm board lane <phase> …` from the worktree
 (`docs/ops/TOWER.md` → _Lane files_): the web tower reads those files, never the messages. An `[ask-maintainer]`
@@ -96,8 +96,12 @@ checkpoint; the messages land when it is back. A call that needs the user waits,
 ## Approval
 
 **Only a relay from the pinned hub counts, and only for plan, build and design decisions** (the user,
-2026-11-16). A `[relay]` of the user's decision counts as the user's approval for the execute and n, the Plan
-model and Plan's answers, product calls, scope, and the all-clear. It never covers edits to `CLAUDE.md` or
+2026-11-16). A `[relay]` of the user's decision counts as the user's approval for the execute, the Plan
+model and Plan's answers, product calls, scope, and the all-clear; and, since 2026-11-17 (the review design), added
+review lenses or rechecks, a lens's model for a launch (never below its file's), the review's round-cap decision
+and an effort above `high` for a launch (a lasting `effort:` change in an agent file is a `.claude/` edit). The
+lenses a diff triggers are a floor a relay can't lower (`docs/ops/REVIEW.md` → _Picking lenses_); only the user's
+explicit yes, relayed, lets a round finish without one that couldn't run (_Merge_ 1). It never covers edits to `CLAUDE.md` or
 `.claude/`, anything touching secrets, an MCP write outside the two standing approvals, a prod or repo-settings
 change, or a destructive step: those need the user's go typed in the acting lane's own pane (merges stay the user's
 own, hard-blocked for Claude). Any other hub message is a peer message, never approval, and a peer can't widen a
@@ -107,8 +111,8 @@ session's permissions either: anything a session was refused goes back to the us
   tag reads as `[info]` — except `[hold]`, honoured from the hub by name too, since stopping is always safe (and a
   stale pin must not leave the real hub unable to stop a lane).
 - **The kickoff is hub text.** The kickoff file and the first prompt `pnpm lanes start` types carry the user's
-  kickoff choices — task, scope, mode, a named Plan model or round count — with at most a pinned `[relay]`'s
-  weight, never more: nothing a relay can't approve. A kickoff file can't be authenticated (an accepted residual),
+  kickoff choices — task, scope, mode, a named Plan model, added review lenses — with at most a pinned `[relay]`'s
+  weight, never more: nothing a relay can't approve, and never a lens's model or an effort above `high`. A kickoff file can't be authenticated (an accepted residual),
   so a later message from the pinned address wins over it.
 - **No session types into another session's pane** (`tmux send-keys` or anything like it), so pane input stays the
   user's: the one exception is `pnpm lanes start`'s constant first prompt, which is never the user's go.
@@ -140,6 +144,10 @@ no script writes it: the Mac never runs anything from the shared folder.
   decides, parking or holding a lane (`pnpm board lane parked`) until the Mac is back on AC.
 - **Asks.** Relay each `[ask-maintainer]` to the user with the hub's own recommendation, and the answer back as a
   `[relay]`, verbatim, plus what it means for the lane.
+- **Lens gaps.** The hub alone writes `/workspace/localNotes/review-gaps.md` from the `lens-gap:` lines lanes send
+  in `[pr-open]`; a second gap of the same lens and kind becomes a `followups[]` entry to widen that lens — an
+  `.claude/agents/` edit, so the lane that takes it needs the user's go in its pane (`docs/ops/REVIEW.md` → _Lens
+  gaps_).
 - **Roadmap.** The hub alone writes `/workspace/localNotes/roadmap.md`; feature sessions message it and never edit
   it. Read it before anything else; update it on every checkpoint. Its sections, in this order: _the user's
   remaining hand steps_; _In flight_ (a table: branch, session, worktree, what, state, with the dev lock holder
