@@ -138,13 +138,17 @@ def decision_for(
     payload = {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input, **(extra or {})}
     if cwd:
         payload["cwd"] = cwd
-    proc = subprocess.run(
-        ["bash", str(hook)],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        env=env,
-    )
+    try:  # a hook that hangs fails its case instead of the run (Claude Code would time it out and run the tool)
+        proc = subprocess.run(
+            ["bash", str(hook)],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return "ERROR(timeout 30 s)", ""
     if proc.returncode != 0:
         return f"ERROR(rc={proc.returncode}): {proc.stderr.strip()[:120]}", ""
     out = proc.stdout.strip()
@@ -264,6 +268,7 @@ SECRET_DIRS = {
     # only under trees the deep walk prunes, each past the shallow walk's depth 2
     "{DECOY_DIR}": {"node_modules/x/.secrets": ("a.env",), ".git/x/.secrets": ("a.env",),
                     "dist/x/.secrets": ("a.env",), "cdk.out/x/.secrets": ("a.env",)},
+    "{FILE_DIR}": {"": (".secrets",)},  # a FILE named .secrets at depth 1, no dir: the walks look for dirs
     "{PLAIN_DIR}": {},
 }
 

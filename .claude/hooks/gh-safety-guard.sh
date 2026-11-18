@@ -62,11 +62,11 @@ fi
 if grep -qE '(\bpnpm[[:space:]]+(run[[:space:]]+)?bot|bot/cli\.ts)\b' <<<"$COMMAND"; then
   BOT_ARGS=$({ grep -oE '(\bpnpm[[:space:]]+(run[[:space:]]+)?bot|bot/cli\.ts)\b[^|;&]*' <<<"$COMMAND" || true; } | head -1)
   # Only `push` takes a target; a `logs --filter` value may say "dev" freely.
-  if echo "$BOT_ARGS" | grep -qE '(bot|cli\.ts)[[:space:]]+push\b' \
-    && echo "$BOT_ARGS" | grep -qE '[[:space:]:/+"'\''](main|master|dev)([^[:alnum:]_./-]|$)'; then
+  if grep -qE '(bot|cli\.ts)[[:space:]]+push\b' <<<"$BOT_ARGS" \
+    && grep -qE '[[:space:]:/+"'\''](main|master|dev)([^[:alnum:]_./-]|$)' <<<"$BOT_ARGS"; then
     deny "\`pnpm bot\` aimed at \`main\`/\`master\`/\`dev\` is blocked — the bot pushes feature branches only; dev deploys go through \`pnpm bot deploy-dev\`."
   fi
-  if echo "$BOT_ARGS" | grep -qE '[[:space:]](-f|--force|--force-with-lease)\b'; then
+  if grep -qE '[[:space:]](-f|--force|--force-with-lease)\b' <<<"$BOT_ARGS"; then
     deny "Force flags on \`pnpm bot\` are blocked — after a rebase use \`pnpm bot push --after-rebase\` (a lease on the last pushed sha)."
   fi
 fi

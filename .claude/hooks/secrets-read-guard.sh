@@ -68,9 +68,11 @@ hit_piece() { # one `--glob` as the tool passes it
   case $p in *'{'* | *'}'*) HIT=1; return 0 ;; esac
   seg=${p##*/}
   shopt -s nocasematch
+  # `case`, never `[[ == $seg ]]`: bash 5.2 turns extglob on for a pattern inside [[ ]], and a 15-character
+  # `*(?|?|?|?)z` then backtracks past the hook timeout (a timeout runs the tool). `case` keeps extglob off.
   for name in .secrets private-key.pem app.env; do
-    # shellcheck disable=SC2053 # seg is a glob on purpose
-    if [[ $name == $seg ]]; then HIT=1; fi
+    # shellcheck disable=SC2254 # seg is a glob on purpose
+    case $name in $seg) HIT=1 ;; esac
   done
   shopt -u nocasematch
 }
