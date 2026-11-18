@@ -427,3 +427,18 @@ describe('cachedState', () => {
       expect(seen.join('\n')).not.toContain(secret);
   });
 });
+
+describe('the callers open their browser through launchCached', () => {
+  // Both entry points must renew before launch; a bare launch(pw, statePath) would load the cache unrenewed.
+  it.each([
+    ['devcheck/run.ts', /launchCached\(\s*pw,\s*statePath\(main\)/],
+    [
+      'mailroom/sim-bench-seed.ts',
+      /launchCached\(\s*loadPlaywright\(\),\s*statePath\(main, 'dev'\)/,
+    ],
+  ])('%s', (file, call) => {
+    const src = readFileSync(join(import.meta.dirname, '..', file), 'utf8');
+    expect(src).toMatch(call);
+    expect(src).not.toMatch(/\blaunch\(/);
+  });
+});

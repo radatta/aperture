@@ -122,6 +122,14 @@ describe('grantTokens', () => {
   });
 });
 
+describe('assertTestUser on a torn access token', () => {
+  it('is WRONG_USER without quoting the claims', () => {
+    const torn = { accessToken: 'h.eyJzdWIiOiJTRUNSRVQ.sig', expiresAt: 0, email: '', sub: 's1' };
+    expect(() => assertTestUser(torn, 's1')).toThrow(/WRONG_USER.*unreadable access token/);
+    expect(() => assertTestUser(torn, 's1')).not.toThrow(/SECRET/);
+  });
+});
+
 describe('sessionFromStorage on a torn record', () => {
   it('throws without quoting it', () => {
     expect(() => sessionFromStorage({ [KEY]: '{"access_token":"AT-SECRET"' }, KEY)).toThrow(

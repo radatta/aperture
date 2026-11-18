@@ -170,7 +170,7 @@ export async function cachedState(
       ),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
-          abort.abort(); // cancelled, not abandoned: a late grant could rotate the token under the page
+          abort.abort(); // frees the request; one Cognito already took can't be recalled (rotation is off)
           reject(new Error(`the token endpoint took over ${LAUNCH_RENEW_TIMEOUT_MS / 1000} s`));
         }, LAUNCH_RENEW_TIMEOUT_MS);
       }),

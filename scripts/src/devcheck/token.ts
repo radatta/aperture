@@ -55,7 +55,13 @@ export function sessionFromStorage(storage: Record<string, string>, key: string)
 }
 
 export function assertTestUser(session: Session, expectedSub: string): void {
-  const accessSub = decodeJwtPayload(session.accessToken).sub;
+  let accessSub: unknown;
+  try {
+    accessSub = decodeJwtPayload(session.accessToken).sub;
+  } catch {
+    // never the parser's message: it quotes the decoded claims
+    throw new DevcheckError('WRONG_USER', 'unreadable access token — no writes made');
+  }
   if (session.email !== TEST_USER_EMAIL || session.sub !== expectedSub || accessSub !== expectedSub)
     throw new DevcheckError(
       'WRONG_USER',
