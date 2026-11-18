@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from './api';
-import { CLAUDE_CALLBACK, TEST_USER_EMAIL, type DevcheckEnv } from './config';
+import { CLAUDE_CALLBACK, TEST_USER_EMAIL, TEST_USERS, type DevcheckEnv } from './config';
 import {
   assertMcpTestUser,
   authorizeUrl,
@@ -175,6 +175,22 @@ describe('the MCP session', () => {
     expect(() =>
       assertMcpTestUser({ ...session(), accessToken: tokens({ use: 'id' }).access_token }, env),
     ).toThrow(/MCP_AUTH_FAILED/);
+  });
+
+  it('under the browser user’s env: that user passes, the Simulator’s user is WRONG_USER', () => {
+    const wenv = { ...env, DEVCHECK_EMAIL: TEST_USERS.web, DEVCHECK_SUB: 'sub-w' };
+    const web = {
+      ...session({ sub: 'sub-w', email: TEST_USERS.web }),
+      email: TEST_USERS.web,
+      sub: 'sub-w',
+    };
+    expect(() => assertMcpTestUser(web, wenv)).not.toThrow();
+    expect(() => assertMcpTestUser(session(), wenv)).toThrow(/WRONG_USER/); // same pool, the other test user
+    expect(() =>
+      assertMcpTestUser({ ...web, sub: 'sub-1' }, { ...wenv, DEVCHECK_SUB: 'sub-1' }),
+    ).toThrow(
+      /WRONG_USER/, // the right sub can't carry the other user's email
+    );
   });
 
   it('the token getter refuses a token within the shared margin (60 s)', () => {

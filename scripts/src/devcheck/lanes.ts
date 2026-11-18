@@ -5,7 +5,9 @@
 // its own sign-in, sweep, ledger, cleanup and leak check, all per user — and the two results merge into one report.
 // Pure: run.ts does the wiring.
 import type { Slot } from './config';
+import { DevcheckError } from './errors';
 import { coverageOf } from './matrix';
+import { deferral, type PipelineDeps } from './pipeline';
 import type { CreatedRecord, RunResult, StepResult } from './report';
 import type { Scenario, Step } from './scenario';
 
@@ -16,20 +18,27 @@ export type LaneMode = 'one-user' | 'serial' | 'parallel';
 export const LANES_ENV = 'DEVCHECK_LANES';
 const MODES: readonly string[] = ['one-user', 'serial', 'parallel'];
 
+// An explicit serial or parallel that can't be honoured (no browser user, or devb) refuses: a timing run must never
+// quietly measure one user. Unset falls back to one-user with the reason logged.
 export function laneMode(o: { slot: Slot; webEnv: boolean; env?: string }): {
   mode: LaneMode;
   why: string;
 } {
   const v = o.env?.trim() || undefined;
   if (v && !MODES.includes(v))
-    throw new Error(`${LANES_ENV}=${v} — one of ${MODES.join(', ')}, or unset`);
+    throw new DevcheckError(
+      'LANES_REFUSED',
+      `${LANES_ENV}=${v} — one of ${MODES.join(', ')}, or unset`,
+    );
   if (v === 'one-user') return { mode: 'one-user', why: `${LANES_ENV}=one-user` };
-  if (o.slot !== 'dev') return { mode: 'one-user', why: `${o.slot} has no Simulator` };
-  if (!o.webEnv)
-    return {
-      mode: 'one-user',
-      why: 'no browser-user env file yet (DEV-CHECK.md → One-time setup, step 1b)',
-    };
+  const no =
+    o.slot !== 'dev'
+      ? `${o.slot} has no Simulator`
+      : !o.webEnv
+        ? 'no browser-user env file yet (DEV-CHECK.md → One-time setup, step 1b)'
+        : null;
+  if (no && v) throw new DevcheckError('LANES_REFUSED', `${LANES_ENV}=${v}, but ${no}`);
+  if (no) return { mode: 'one-user', why: no };
   if (v === 'serial') return { mode: 'serial', why: `${LANES_ENV}=serial` };
   return { mode: 'parallel', why: 'two users, side by side' };
 }
@@ -45,6 +54,30 @@ export function splitLanes(
   if (!iphone.some((sc) => sc.steps.some((st) => runs(sc, st))))
     return { browser: scenarios, iphone: [] };
   return { browser: scenarios.filter((s) => s.user !== 'iphone'), iphone };
+}
+
+// A two-user run's plan (run.ts wires it): the split by the pipeline's own deferral rule; an idle iPhone lane still
+// runs, steps-less, when its user's ledger holds an earlier run's leftovers (pending ids or orphan intents): its sweep
+// is the only one with that user's token. The Simulator client rides with whichever lane has the iPhone scenarios.
+export function planLanes(o: {
+  scenarios: Scenario[];
+  defer: Pick<PipelineDeps, 'skip' | 'slow'>;
+  mainLeftovers: boolean;
+}): {
+  browser: Scenario[];
+  iphone: Scenario[];
+  iphoneRuns: boolean;
+  sweepOnly: boolean;
+  browserGetsIos: boolean;
+} {
+  const split = splitLanes(o.scenarios, (sc, st) => deferral(o.defer, sc.id, st) === null);
+  const sweepOnly = !split.iphone.length && o.mainLeftovers;
+  return {
+    ...split,
+    iphoneRuns: split.iphone.length > 0 || sweepOnly,
+    sweepOnly,
+    browserGetsIos: !split.iphone.length,
+  };
 }
 
 export type Lane = 'browser' | 'iphone';
@@ -76,6 +109,9 @@ export function mergeRuns(
   const line = (lane: Lane, s: string) => (lane === 'iphone' ? `${IPHONE_TAG}${s}` : s);
   const shot = (lane: Lane, s: string) => (lane === 'iphone' ? `${IPHONE_SHOTS}/${s}` : s);
   const lines = (pick: (r: RunResult) => string[] | undefined) => all(pick, line);
+  // bare ids, joined with ", " in the report: each says whose it is after it
+  const ids = (pick: (r: RunResult) => string[] | undefined) =>
+    all(pick, (lane, id) => (lane === 'iphone' ? `${id} (iPhone user)` : id));
   const worst = parts.reduce<RunResult['status']>(
     (w, { r }) => (STATUS_RANK[r.status] > STATUS_RANK[w] ? r.status : w),
     'PASS',
@@ -101,9 +137,9 @@ export function mergeRuns(
       (r) => r.created,
       (lane, c): CreatedRecord => (lane === 'iphone' ? { ...c, lane } : c),
     ),
-    swept: lines((r) => r.swept),
-    unrecorded: lines((r) => r.unrecorded),
-    appeared: lines((r) => r.appeared),
+    swept: ids((r) => r.swept),
+    unrecorded: ids((r) => r.unrecorded),
+    appeared: ids((r) => r.appeared),
     orphanIntents: lines((r) => r.orphanIntents),
     blockedDeletes: lines((r) => r.blockedDeletes),
     failedDeletes: lines((r) => r.failedDeletes),
@@ -127,6 +163,11 @@ export function mergeRuns(
   };
   if (crashes.length) merged.crash = crashes.join('\n');
   else delete merged.crash;
+  const unknown = parts
+    .filter(({ r }) => r.leftoversUnknown)
+    .map(({ lane, r }) => line(lane, r.leftoversUnknown!));
+  if (unknown.length) merged.leftoversUnknown = unknown.join('; ');
+  else delete merged.leftoversUnknown;
   return merged;
 }
 
@@ -186,5 +227,7 @@ export function crashed(
     injected: [],
     shots: [],
     durationMs: 0,
+    leftoversUnknown:
+      'the lane crashed before its cleanup — its ledger keeps its ids, so the next run sweeps them',
   };
 }

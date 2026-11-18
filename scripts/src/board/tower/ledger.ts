@@ -1,4 +1,4 @@
-// Devcheck runs from each dev slot's ledger (scripts/src/devcheck/ledger.ts writes it): `run-start` / `run-end`
+// Devcheck runs from each dev slot's ledgers (scripts/src/devcheck/ledger.ts writes them; slot A has one per test user): `run-start` / `run-end`
 // pairs by run id, and the dead-row TTL proof's count (queue.json → proofs.deadRows).
 import { clean, parseTime } from './fmt.ts';
 
@@ -8,10 +8,17 @@ export type Run = {
   end: number | null;
   status: string | null;
   full: boolean;
-  slot: 'dev' | 'devb'; // which dev slot's ledger it came from (ledger.<slot>.jsonl)
+  slot: 'dev' | 'devb'; // which dev slot's ledger it came from (ledger.<slot>.jsonl, and slot A's ledger.dev.web.jsonl)
 };
 
-// Folds one slot's ledger records into `runs` (keyed slot:id, kept in start order); other ops are ignored.
+// Slot A's run has a line pair per lane (one ledger per test user: scripts/src/devcheck/lanes.ts), under one id: it's
+// in flight while any lane is, ends with the last lane's end, and reads the worst lane's status.
+const lanesOf = new WeakMap<Run, { open: number; end: number | null }>();
+const RANK: Record<string, number> = { PASS: 0, FAIL: 1, CRASH: 2 }; // anything else reads worse than a crash
+const worse = (a: string | null, b: string | null) =>
+  a === null ? b : b === null ? a : (RANK[b] ?? 3) > (RANK[a] ?? 3) ? b : a;
+
+// Folds one ledger's records into `runs` (keyed slot:id, kept in start order); other ops are ignored.
 export function foldRuns(
   runs: Map<string, Run>,
   records: unknown[],
@@ -28,11 +35,17 @@ export function foldRuns(
       run = { run: id, start: null, end: null, status: null, full: id.endsWith('-full'), slot };
       runs.set(key, run);
     }
-    if (r.op === 'run-start') run.start = t;
-    else {
-      run.end = t;
-      run.status = typeof r.status === 'string' ? clean(r.status) : null;
+    const l = lanesOf.get(run) ?? { open: 0, end: null };
+    lanesOf.set(run, l);
+    if (r.op === 'run-start') {
+      l.open++;
+      run.start = run.start === null || t === null ? (run.start ?? t) : Math.min(run.start, t);
+    } else {
+      l.open = Math.max(0, l.open - 1);
+      l.end = l.end === null || t === null ? (l.end ?? t) : Math.max(l.end, t);
+      run.status = worse(run.status, typeof r.status === 'string' ? clean(r.status) : null);
     }
+    run.end = l.open > 0 ? null : l.end;
   }
 }
 

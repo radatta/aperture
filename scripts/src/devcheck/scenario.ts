@@ -59,7 +59,7 @@ export interface Scenario {
   order?: number;
   // 'iphone': the scenario drives the Simulator, so on slot A it runs in the iPhone lane as the Simulator's own user,
   // alongside the browser lane's scenarios rather than before them (lanes.ts, DEV-CHECK.md → Two users). Unset: the
-  // browser lane. A one-user run (devb, no browser-user env file, DEVCHECK_LANES=legacy) runs everything as one.
+  // browser lane. A one-user run (devb, no browser-user env file, DEVCHECK_LANES=one-user) runs everything as one.
   user?: 'iphone';
 }
 

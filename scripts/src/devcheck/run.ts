@@ -1,6 +1,8 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
 //   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full|all [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
+//   DEVCHECK_LANES=one-user|serial|parallel — slot A's two users (DEV-CHECK.md → Two users); unset: parallel when the
+//   browser user's env file exists, else one-user
 // Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per slot: the
 // sweep of earlier runs' leftovers would otherwise race a live run on the same slot. Each slot sweeps its own ledger
 // and table, so another session's run on the other slot may overlap.
@@ -40,8 +42,8 @@ import {
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { DevcheckError } from './errors';
-import { openLedger, pendingIds } from './ledger';
-import { IPHONE_SHOTS, LANES_ENV, laneMode, runLanes, splitLanes } from './lanes';
+import { earlierOrphans, openLedger, pendingIds } from './ledger';
+import { IPHONE_SHOTS, LANES_ENV, laneMode, planLanes, runLanes } from './lanes';
 import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
@@ -275,7 +277,8 @@ async function main(): Promise<number> {
     sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
   };
   const skip = probeSkip(slow);
-  // One deploy wait, shared: the iPhone lane sends no sim job before the browser lane's wait confirmed the build.
+  // One deploy wait, shared by the lanes — whichever asks first waits (in serial, the iPhone lane), and neither sends a
+  // step before it confirmed the build.
   let deployed: Promise<DeployRun> | undefined;
   const waitOnce = args.deployWait
     ? () =>
@@ -365,10 +368,11 @@ async function main(): Promise<number> {
     let result: RunResult;
     if (lanes.mode === 'one-user') {
       log(`one test user (${lanes.why})`);
-      const waiting = pendingIds(ledgers.web.read()).length;
+      const web = ledgers.web.read();
+      const waiting = pendingIds(web).length + earlierOrphans(web, runId).length;
       if (waiting)
         log(
-          `the browser user's ledger has ${waiting} pending id(s): the next two-user run sweeps them`,
+          `the browser user's ledger has ${waiting} leftover(s) (pending ids, orphan intents): the next two-user run sweeps or lists them`,
         );
       result = await lane({
         user: 'main',
@@ -379,13 +383,14 @@ async function main(): Promise<number> {
       });
       result.lanes = { mode: 'one-user' };
     } else {
-      const split = splitLanes(
+      const mainLedger = ledgers.main.read();
+      const split = planLanes({
         scenarios,
-        (sc, st) => skip(sc.id) === null && !(st.cost === 'slow' && !slow.includes(sc.id)),
-      );
-      // An idle iPhone lane still runs when its ledger holds an earlier run's leftovers: its sweep is the one that can.
-      const sweepOnly = !split.iphone.length && pendingIds(ledgers.main.read()).length > 0;
-      const iphoneRuns = split.iphone.length > 0 || sweepOnly;
+        defer: { skip, slow },
+        mainLeftovers:
+          pendingIds(mainLedger).length > 0 || earlierOrphans(mainLedger, runId).length > 0,
+      });
+      const iphoneRuns = split.iphoneRuns;
       const ilog = (msg: string) => log(`iPhone · ${msg}`);
       const iDir = join(shotsDir, IPHONE_SHOTS);
       log(
@@ -400,7 +405,7 @@ async function main(): Promise<number> {
           scenarios: split.browser,
           dir: shotsDir,
           // An idle iPhone lane's scenarios ride here, every step deferred: their client sends nothing.
-          ...(split.iphone.length ? {} : { ios: iosFor(shotsDir, log) }),
+          ...(split.browserGetsIos ? { ios: iosFor(shotsDir, log) } : {}),
           log,
         });
       const iphoneLane = () =>
@@ -416,7 +421,14 @@ async function main(): Promise<number> {
         mode: lanes.mode,
         browser: { scenarios: split.browser, run: browserLane },
         ...(iphoneRuns ? { iphone: { scenarios: split.iphone, run: iphoneLane } } : {}),
-        base: { runId, tier: args.tier, feature, expectedSha: sha, scenarioSha },
+        base: {
+          runId,
+          tier: args.tier,
+          feature,
+          expectedSha: sha,
+          scenarioSha,
+          target: `${slot} (${slotOrigin()})`,
+        },
         order: scenarios.map((s) => s.id),
         now: Date.now,
       });

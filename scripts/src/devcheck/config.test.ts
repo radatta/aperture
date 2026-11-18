@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { IDS } from '../identifiers.ts';
 import {
   CLAUDE_CALLBACK,
   DEV_ORIGIN,
@@ -12,6 +13,7 @@ import {
   assertDevOrigin,
   assertPresignedDevUrl,
   isClaudeHost,
+  isTestUserEmail,
   loadEnv,
   parseEnv,
 } from './config';
@@ -87,9 +89,30 @@ describe('parseEnv', () => {
   });
 });
 
+describe('the test users', () => {
+  it('two distinct, non-empty addresses, both on the dev subdomain', () => {
+    const all = Object.values(TEST_USERS);
+    expect(new Set(all).size).toBe(2);
+    for (const e of all)
+      expect(e).toMatch(new RegExp(`^[^@\\s]+@${IDS.domains.dev.replace(/\./g, '\\.')}$`));
+  });
+  it('isTestUserEmail admits only those two: no other address, no empty one', () => {
+    expect(isTestUserEmail(TEST_USERS.main)).toBe(true);
+    expect(isTestUserEmail(TEST_USERS.web)).toBe(true);
+    expect(isTestUserEmail('')).toBe(false);
+    expect(isTestUserEmail(`someone@${IDS.domains.dev}`)).toBe(false);
+    expect(isTestUserEmail(undefined as unknown as string)).toBe(false);
+  });
+});
+
 describe('loadEnv', () => {
   it('fails ENV_MISSING when the file is absent', () => {
     expect(() => loadEnv('/nonexistent/devcheck.dev.env')).toThrow(/ENV_MISSING/);
+  });
+  it('the browser user’s missing file points at its own setup step and the one-user way round', () => {
+    expect(() => loadEnv('/nonexistent/devcheck.dev.web.env', vi.fn(), 'web')).toThrow(
+      /ENV_MISSING: .*step 1b \(meanwhile DEVCHECK_LANES=one-user\)/,
+    );
   });
   it('warns when the file is readable by others', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'devcheck-')), 'env');

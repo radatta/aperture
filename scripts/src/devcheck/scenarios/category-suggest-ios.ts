@@ -76,17 +76,20 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'blur' },
 ];
 
-// This run's Garden history in this lane's partition: category-suggest's seed, when it ran here first.
+// This run's whole Garden history in this lane's partition: category-suggest's seed, when it ran here first and
+// finished — a seed that stopped part-way would leave the chip short of history, so this one seeds afresh.
 // Any Garden: a leftover one from an earlier run (the sweep's to delete) never hides this run's.
 async function seeded(ctx: Ctx): Promise<boolean> {
   const gardens = new Set(
     (await ctx.api.reads.listCategories()).filter((c) => c.label === 'Garden').map((c) => c.id),
   );
   if (!gardens.size) return false;
-  const first = name(ctx, GARDEN[0]!);
-  return (await ctx.api.reads.listTasks()).some(
-    (t) => t.title === first && !!t.categoryId && gardens.has(t.categoryId),
+  const filed = new Set(
+    (await ctx.api.reads.listTasks())
+      .filter((t) => !!t.categoryId && gardens.has(t.categoryId))
+      .map((t) => t.title),
   );
+  return GARDEN.every((g) => filed.has(name(ctx, g)));
 }
 
 export const categorySuggestIos: Scenario = {

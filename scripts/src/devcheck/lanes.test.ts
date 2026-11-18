@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { IPHONE_TAG, crashed, laneMode, mergeRuns, runLanes, splitLanes } from './lanes';
-import { renderReport, type RunResult } from './report';
+import { DEFER_NOTE, deferral } from './pipeline';
+import { IPHONE_TAG, crashed, laneMode, mergeRuns, planLanes, runLanes, splitLanes } from './lanes';
+import { lanesLine, renderReport, type RunResult } from './report';
 import type { Scenario, Step } from './scenario';
 
 const step = (id: string, cost?: 'slow'): Step => ({
@@ -78,15 +79,26 @@ describe('laneMode', () => {
       mode: 'one-user',
       why: 'devb has no Simulator',
     });
-    expect(laneMode({ slot: 'devb', webEnv: true, env: 'serial' }).mode).toBe('one-user');
     expect(laneMode({ slot: 'dev', webEnv: false }).why).toMatch(/no browser-user env file/);
     expect(laneMode({ slot: 'dev', webEnv: true, env: 'one-user' }).mode).toBe('one-user');
   });
 
   it('refuses an unknown DEVCHECK_LANES rather than guessing', () => {
     expect(() => laneMode({ slot: 'dev', webEnv: true, env: 'both' })).toThrow(
-      /DEVCHECK_LANES=both/,
+      /^LANES_REFUSED: DEVCHECK_LANES=both/,
     );
+  });
+
+  it('refuses two users asked for where the run can’t have them: a timing run never quietly measures one', () => {
+    for (const env of ['serial', 'parallel']) {
+      expect(() => laneMode({ slot: 'devb', webEnv: true, env })).toThrow(
+        /^LANES_REFUSED: .*devb has no Simulator/,
+      );
+      expect(() => laneMode({ slot: 'dev', webEnv: false, env })).toThrow(
+        /^LANES_REFUSED: .*no browser-user env file/,
+      );
+    }
+    expect(laneMode({ slot: 'devb', webEnv: false, env: 'one-user' }).mode).toBe('one-user');
   });
 });
 
@@ -109,6 +121,56 @@ describe('splitLanes', () => {
 
   it('a browser scenario’s steps never wake the iPhone lane', () => {
     expect(splitLanes([web], () => true).iphone).toEqual([]);
+  });
+});
+
+describe('planLanes', () => {
+  const sim = sc('ios-standalone', { user: 'iphone', steps: [step('launch', 'slow')] });
+  const all = [sc('smoke'), sim, sc('areas')];
+  const ids = (xs: Scenario[]) => xs.map((s) => s.id);
+
+  it('a branch reaching an iPhone path: the iPhone lane runs its scenarios, with the Simulator client', () => {
+    const p = planLanes({
+      scenarios: all,
+      defer: { slow: ['ios-standalone'] },
+      mainLeftovers: false,
+    });
+    expect([ids(p.browser), ids(p.iphone)]).toEqual([['smoke', 'areas'], ['ios-standalone']]);
+    expect(p).toMatchObject({ iphoneRuns: true, sweepOnly: false, browserGetsIos: false });
+  });
+
+  it('every iPhone step deferred, a clean ledger: no iPhone lane; the browser lane carries them and the client', () => {
+    const p = planLanes({ scenarios: all, defer: { slow: [] }, mainLeftovers: false });
+    expect(ids(p.browser)).toEqual(ids(all));
+    expect(p).toMatchObject({
+      iphone: [],
+      iphoneRuns: false,
+      sweepOnly: false,
+      browserGetsIos: true,
+    });
+  });
+
+  it('every iPhone step deferred but its user’s ledger has leftovers: the iPhone lane runs to sweep, steps-less', () => {
+    const p = planLanes({ scenarios: all, defer: { slow: [] }, mainLeftovers: true });
+    expect(p).toMatchObject({
+      iphone: [],
+      iphoneRuns: true,
+      sweepOnly: true,
+      browserGetsIos: true,
+    });
+  });
+
+  it('a skip (the probe covered by ios-standalone) defers like the pipeline: one rule for both', () => {
+    const probe = sc('ios-probe', { user: 'iphone', steps: [step('probe', 'slow')] });
+    const defer = {
+      slow: ['ios-probe'],
+      skip: (id: string) => (id === 'ios-probe' ? 'covered' : null),
+    };
+    expect(planLanes({ scenarios: [probe], defer, mainLeftovers: false }).iphoneRuns).toBe(false);
+    // the pipeline's own loop reads the same rule: a skip's reason first, then a slow step off the branch's paths
+    expect(deferral(defer, 'ios-probe', probe.steps[0]!)).toBe('covered');
+    expect(deferral({ slow: [] }, 'ios-probe', probe.steps[0]!)).toBe(DEFER_NOTE);
+    expect(deferral({ slow: [] }, 'smoke', step('s'))).toBeNull();
   });
 });
 
@@ -162,7 +224,7 @@ describe('mergeRuns', () => {
     expect(m.failures).toEqual([{ code: 'LEFTOVERS', message: `${IPHONE_TAG}left: i1` }]);
     expect(m.throttled).toEqual([`${IPHONE_TAG}/api/getDay`]);
     expect(m.consoleErrors).toEqual([`${IPHONE_TAG}boom`]);
-    expect(m.swept).toEqual([`${IPHONE_TAG}old1`]);
+    expect(m.swept).toEqual(['old1 (iPhone user)']); // an id list: each id says whose it is
     expect(m.created).toEqual([
       { id: 'w1', via: 'api:createTask', final: 'deleted' },
       { id: 'i1', via: 'mcp:createTask', final: 'left', lane: 'iphone' },
@@ -195,6 +257,45 @@ describe('mergeRuns', () => {
     expect(md).toContain('**Failed:** LEFTOVERS — iPhone user: left: i1');
   });
 
+  it('the Simulator section is the iPhone lane’s when it ran, else the browser lane’s (an idle iPhone lane’s client)', () => {
+    const own = { jobs: [], unavailable: { reason: 'Mac asleep', rows: 2 } };
+    expect(
+      mergeRuns([{ lane: 'browser', r: { ...browser, ios: own } }], {
+        order,
+        mode: 'parallel',
+        wallMs: 1,
+      }).ios,
+    ).toBe(own);
+    expect(
+      mergeRuns(
+        [
+          { lane: 'browser', r: { ...browser, ios: own } },
+          { lane: 'iphone', r: iphone },
+        ],
+        { order, mode: 'parallel', wallMs: 1 },
+      ).ios,
+    ).toBe(iphone.ios);
+  });
+
+  it('Mac unreachable: the iPhone rows read needs-you, the run stays PASS and says why', () => {
+    const away = mergeRuns(
+      [
+        { lane: 'browser', r: browser },
+        {
+          lane: 'iphone',
+          r: result({
+            coverage: [{ ...row('ios-standalone'), status: 'needs-you' }],
+            ios: { jobs: [], unavailable: { reason: 'the Mac is unreachable', rows: 1 } },
+          }),
+        },
+      ],
+      { order, mode: 'parallel', wallMs: 1 },
+    );
+    expect(away.status).toBe('PASS');
+    expect(away.coverage.find((x) => x.scenario === 'ios-standalone')?.status).toBe('needs-you');
+    expect(renderReport(away)).toMatch(/PASS — .*the Mac is unreachable/);
+  });
+
   it('no 429 caveat when only one lane ran', () => {
     const one = mergeRuns([{ lane: 'browser', r: { ...browser, throttled: ['/api/getDay'] } }], {
       order,
@@ -215,6 +316,7 @@ describe('mergeRuns', () => {
     );
     expect(c.status).toBe('CRASH');
     expect(c.crash).toBe(`${IPHONE_TAG}Error: x`);
+    expect(c.leftoversUnknown).toBeUndefined();
     expect(c.coverage.map((x) => x.scenario)).toEqual(order);
     expect(
       mergeRuns([{ lane: 'browser', r: browser }], { order, mode: 'serial', wallMs: 1 }).crash,
@@ -230,6 +332,44 @@ describe('crashed', () => {
     expect(r.coverage).toEqual([
       expect.objectContaining({ scenario: 'ios-standalone', status: 'skipped' }),
     ]);
+  });
+
+  it('as the browser lane (the merge’s base): the header keeps its slot, and leftovers read unknown, not 0', () => {
+    const r = crashed(
+      { ...BASE, target: 'dev (https://dev.example)' },
+      [sc('areas')],
+      new Error('x'),
+    );
+    const m = mergeRuns([{ lane: 'browser', r }], {
+      order: ['areas'],
+      mode: 'parallel',
+      wallMs: 1,
+    });
+    const md = renderReport(m);
+    expect(md).toContain('on dev (https://dev.example)');
+    expect(md).toMatch(
+      /Leftovers: \*\*0\*\* · \*\*unknown\*\* besides: the lane crashed before its cleanup/,
+    );
+    expect(m.crash).not.toContain(IPHONE_TAG); // the browser lane's lines are untagged
+  });
+});
+
+describe('lanesLine', () => {
+  it('parallel side by side; serial the iPhone lane first, as it ran; one lane alone; one-user bare', () => {
+    expect(lanesLine({ mode: 'parallel', browserMs: 2000, iphoneMs: 1000 }, 2100)).toBe(
+      'Lanes: parallel — browser 2.0s ∥ iPhone user 1.0s · wall 2.1s',
+    );
+    expect(lanesLine({ mode: 'serial', browserMs: 2000, iphoneMs: 1000 }, 3000)).toBe(
+      'Lanes: serial — iPhone user 1.0s then browser 2.0s · wall 3.0s',
+    );
+    expect(lanesLine({ mode: 'serial', browserMs: 2000 }, 2000)).toBe(
+      'Lanes: serial — browser 2.0s only · wall 2.0s',
+    );
+    expect(lanesLine({ mode: 'one-user' }, 5000)).toBe('Lanes: one-user · wall 5.0s');
+  });
+
+  it('a result with no lanes (the local check, older reports) has no lanes line', () => {
+    expect(renderReport(result())).not.toMatch(/^Lanes:/m);
   });
 });
 

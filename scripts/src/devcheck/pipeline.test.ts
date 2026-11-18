@@ -849,6 +849,17 @@ describe('runPipeline', () => {
     expect(atStep).toEqual([`${targetOrigin()}/api/health`]);
   });
 
+  it('a failed step on a parked page takes no page shot: the parking page is no evidence', async () => {
+    const w = world();
+    const boom = scenario(async () => {
+      throw new Error('boom');
+    })(w);
+    const r = await runPipeline(deps(w, [boom], memLedger(), { park: '/api/health' }));
+    expect(r.steps[0]).toMatchObject({ status: 'fail', error: 'boom' });
+    expect(r.steps[0]!.shot).toBeUndefined();
+    expect(r.shots.filter((f) => f.includes('-fail-'))).toEqual([]);
+  });
+
   it('no park, no navigation of its own; a failed build check never parks', async () => {
     const w = world();
     await runPipeline(deps(w, [scenario(async () => undefined)(w)]));

@@ -646,7 +646,7 @@ readout column. _Test failures_: the last 7 days of suites (`class: test`, not l
 slot-class jobs (`test ui typecheck lint build dev`) overlapped each one at any point, with the failure rate
 and median wall; a failure is any exit but 0, 130 or 143 (Ctrl-C and TERM are the operator). _Activity_: what
 changed in the last 24 h, not what ran — failed jobs (local only: CI checks need an API the container's token
-can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl` and slot B's `ledger.devb.jsonl`, whose runs read `on devb`; a start only while in flight),
+can't read), devcheck runs that ended (`localNotes/devcheck/ledger.dev.jsonl`, slot A's browser user's `ledger.dev.web.jsonl` — one run, in flight while either lane is, its status the worse lane's (`docs/ops/DEV-CHECK.md` → _Two users_) — and slot B's `ledger.devb.jsonl`, whose runs read `on devb`; a start only while in flight),
 merges, PRs opened (gh `createdAt`), heavy leases that gave up or were denied, and the dev lock taken (a
 `pnpm bot deploy-dev`) as this tower saw it (kept in memory: a viewer writes no history). Passing jobs, the Vite dev server, waits and the lock freed
 stay out (_Machine_ and _Status_ count the suites); `other` and `test-file` jobs take no heavy slot and show

@@ -30,6 +30,7 @@ const HARNESS = [
   'scripts/src/mailroom/sim.ts',
   'scripts/src/devcheck/ios.ts',
   'scripts/src/devcheck/scenarios/ios-standalone.ts',
+  'scripts/src/devcheck/lanes.ts', // the iPhone lane itself: a lane-only change still runs it on slot A
 ];
 
 export const IOS_STANDALONE_PATHS = [...APP, ...HARNESS];

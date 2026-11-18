@@ -89,6 +89,7 @@ export interface RunResult {
   consoleErrors: string[];
   failedLoads: string[]; // every failed load the page saw, in order: `<status|net error> <METHOD> <host/path>` (no query)
   throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
+  leftoversUnknown?: string; // why the run can't say what it left (a lane crashed before its cleanup: lanes.ts crashed)
   injected: string[]; // responses the harness itself served (ctx.intercept): `/api/<method> → <status>|dropped`, `(after the real call)` when forwarded
   shots: string[];
   durationMs: number;
@@ -303,7 +304,7 @@ export function renderReport(r: RunResult): string {
     '',
     `Run \`${r.runId}\` · tier ${r.tier}${r.target ? ` · on ${r.target}` : ''} · ${sec(r.durationMs)}`,
     `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
-    `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
+    `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}${r.leftoversUnknown ? ` · **unknown** besides: ${r.leftoversUnknown}` : ''}`,
   ];
   if (r.lanes) lines.push(lanesLine(r.lanes, r.durationMs));
   if (r.sittingStarts !== undefined) lines.push(budgetLine(r.sittingStarts, r.dayStart));

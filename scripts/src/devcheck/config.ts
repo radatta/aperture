@@ -49,7 +49,11 @@ export const TEST_USERS: Record<TestUser, string> = {
   main: TEST_USER_EMAIL,
   web: IDS.email.devTestUserWeb,
 };
+// A test user is one of the constants, and only on the dev subdomain: an identifiers.json missing a key or holding
+// another address can't widen the guard (token.ts assertTestUser).
 export const isTestUserEmail = (email: string): boolean =>
+  typeof email === 'string' &&
+  email.endsWith(`@${IDS.domains.dev}`) &&
   Object.values(TEST_USERS).includes(email);
 // packages/shared/src/rpc.ts AUTH_HEADER — the BFF reads the JWT here (CloudFront owns Authorization).
 export const AUTH_HEADER = 'x-aperture-authorization';
@@ -208,7 +212,9 @@ export function loadEnv(
   } catch {
     throw new DevcheckError(
       'ENV_MISSING',
-      `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1`,
+      user === 'web'
+        ? `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1b (meanwhile DEVCHECK_LANES=one-user)`
+        : `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1`,
     );
   }
   if ((statSync(path).mode & 0o077) !== 0) warn(`${path} is readable by others — chmod 600 it`);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Ctx } from '../scenario';
-import { GARDEN, KITCHEN, name } from './category-suggest';
+import { GARDEN, KITCHEN, categorySuggest, name } from './category-suggest';
 import { categorySuggestIos } from './category-suggest-ios';
 
 // A partition: categories and tasks, written through the fake API the seed step sees.
@@ -13,6 +13,7 @@ function partition() {
     api: {
       reads: { listCategories: async () => cats, listTasks: async () => tasks },
       writes: {
+        upsertPlace: async () => ({ id: 'p1' }),
         upsertCategory: async ({ label }: { label: string }) => {
           const c = { id: `c${cats.length + 1}`, label };
           cats.push(c);
@@ -43,10 +44,19 @@ describe('category-suggest-ios', () => {
 
   it('skips the seed where category-suggest already seeded this run (a one-user run): one Garden only', async () => {
     const p = partition();
-    await seed.run(p.ctx); // category-suggest's own seed has the same shape and titles
+    await categorySuggest.steps.find((s) => s.id === 'seed')!.run(p.ctx); // the browser scenario's real seed
+    const before = p.tasks.length;
     await seed.run(p.ctx);
     expect(p.cats.map((c) => c.label)).toEqual(['Garden', 'Kitchen']);
-    expect(p.tasks).toHaveLength(GARDEN.length + KITCHEN.length);
+    expect(p.tasks).toHaveLength(before);
+  });
+
+  it('seeds afresh when an earlier seed stopped part-way: a short Garden history isn’t this run’s', async () => {
+    const p = partition();
+    await seed.run(p.ctx);
+    p.tasks.splice(1, GARDEN.length - 1); // only the first Garden task landed
+    await seed.run(p.ctx);
+    expect(p.cats.filter((c) => c.label === 'Garden')).toHaveLength(2);
   });
 
   it('an earlier run’s leftover Garden neither stops this run’s seed nor hides it', async () => {
