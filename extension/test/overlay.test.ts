@@ -2,7 +2,7 @@
 // extension API whose background answers like A1's server: the overlay's Start clicks LeetCode's own reset,
 // confirm and timer; the binding resumes a reload; SPA navigation re-prompts.
 import { createRequire } from 'node:module';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { JSDOM } from 'jsdom';
 import {
   SITTING_ACTIVE_ERROR,
@@ -35,27 +35,37 @@ import {
 // EXT_CRYPTO_JITTER_MS=90 makes every call settle 0–90 real ms late, at random: the stress run that found F242.
 const realSetTimeout = setTimeout;
 const JITTER_MS = Number(process.env.EXT_CRYPTO_JITTER_MS) || 0;
-const late = <T,>(v: T) =>
+const late = <T>(v: T) =>
   new Promise<T>((r) => realSetTimeout(() => r(v), Math.floor(Math.random() * (JITTER_MS + 1))));
 let cryptoInFlight = 0;
-{
-  const subtle = globalThis.crypto.subtle as unknown as Record<
-    string,
-    (...a: unknown[]) => Promise<unknown>
-  >;
-  for (const k of ['importKey', 'sign', 'verify']) {
-    const real = subtle[k]!.bind(subtle);
-    subtle[k] = (...a: unknown[]) => {
-      cryptoInFlight++;
-      const p = JITTER_MS ? real(...a).then(late) : real(...a);
-      return p.finally(() => cryptoInFlight--);
-    };
-  }
+const subtle = globalThis.crypto.subtle as unknown as Record<
+  string,
+  (...a: unknown[]) => Promise<unknown>
+>;
+const realSubtle = new Map<string, unknown>();
+for (const k of ['importKey', 'sign', 'verify']) {
+  const real = subtle[k]!.bind(subtle);
+  realSubtle.set(k, Object.getOwnPropertyDescriptor(subtle, k));
+  subtle[k] = (...a: unknown[]) => {
+    const p = real(...a); // a sync throw goes before the count goes up, so it can't stay up
+    cryptoInFlight++;
+    return (JITTER_MS ? p.then(late) : p).finally(() => cryptoInFlight--);
+  };
 }
+afterAll(() => {
+  for (const [k, d] of realSubtle)
+    if (d) Object.defineProperty(subtle, k, d as PropertyDescriptor);
+    else delete subtle[k]; // back to the prototype's own
+});
 const turn = () => new Promise<void>((r) => realSetTimeout(r, 0));
+// A ceiling in real time, so a call that never settles fails loudly rather than spinning past the test's end.
+const IO_MAX_MS = 10_000;
 const io = async () => {
-  do await turn();
-  while (cryptoInFlight > 0);
+  const t0 = performance.now();
+  do {
+    await turn();
+    if (performance.now() - t0 > IO_MAX_MS) throw new Error('io: crypto still in flight');
+  } while (cryptoInFlight > 0);
 };
 const STEP = 10;
 async function until<T>(fn: () => T | null | undefined | false, ms = 3000): Promise<T> {
