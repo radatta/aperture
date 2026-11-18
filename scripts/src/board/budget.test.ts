@@ -106,6 +106,20 @@ describe('powerFactor', () => {
       'thermal',
     ],
     [
+      'a CPU scheduler limit',
+      power({
+        thermal: {
+          warningLevel: null,
+          performanceWarningLevel: null,
+          cpuSpeedLimit: null,
+          cpuSchedulerLimit: 50,
+          cpuAvailableCpus: null,
+        },
+      }),
+      1.5,
+      'thermal',
+    ],
+    [
       'thermal wins over battery',
       power({
         source: 'battery',
@@ -293,7 +307,7 @@ describe('budgetLine and lastSample', () => {
         { jobs: null, lanes: lanesNow(b, []), sessions: 2 },
         { k: 1.3, why: 'battery' },
       ),
-    ).toBe('budget (log-only): lanes 0.5/3.5 · sessions 2/14 · k 1.3 battery');
+    ).toBe('budget (log-only): lanes 0.5/3.46 · sessions 2/14 · k 1.3 battery');
   });
 
   it('takes the last whole line of a tail, skipping a torn one', () => {
@@ -303,8 +317,10 @@ describe('budgetLine and lastSample', () => {
   });
 });
 
-// Every reader of events-*.jsonl (the plan's consumer sweep): a budget event of either scope changes none of them.
-describe('a budget event is invisible to every other events reader', () => {
+// The numeric readers of events-*.jsonl run with and without budget events. The rest filter on `kind` before reading a
+// field, checked by reading (round 1): tower source.ts's lease feed, usage questions.ts (`kind === 'job'`), bot
+// lock-events.ts (`devlock`), measure/matrix.sh (`kind == "job"`).
+describe('a budget event changes none of the numeric events readers', () => {
   const job = {
     v: 1,
     t: '2026-11-18T11:00:00Z',

@@ -213,7 +213,7 @@ export function laneBudgetNow(d: Deps, active: Active[]) {
   const pf = powerFactor(macRead(d), b.power);
   const live = liveSessions(d).count;
   const lb = laneBudget(b, active, live, pf.k);
-  const lim = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(1));
+  const lim = (x: number) => String(Math.round(x * 100) / 100); // as budgetLine: the value it compares against
   return {
     b,
     pf,

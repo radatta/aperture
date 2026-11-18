@@ -328,7 +328,8 @@ export function main(argv: string[], stdin: () => string): string {
     }
     case 'budget-report': {
       const [historyDir, days = '1'] = args;
-      if (!historyDir) throw new Error('usage: budget-report <historyDir> [days] [--json]');
+      if (!historyDir || !(Number(days) > 0))
+        throw new Error('usage: budget-report <historyDir> [days > 0] [--json]');
       const since = new Date(now.getTime() - Number(days) * 86400_000);
       const limitsPath =
         process.env.APERTURE_LIMITS_JSON ?? resolve(import.meta.dirname, '../../board/limits.json');

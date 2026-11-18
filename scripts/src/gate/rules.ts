@@ -296,6 +296,7 @@ export const INPUT_RULES: InputRule[] = [
     tests: [
       'scripts/src/board/',
       'scripts/src/board/board-cli.test.ts',
+      'scripts/src/board/budget-read.test.ts',
       'scripts/src/board/budget.test.ts',
       'scripts/src/board/lease.test.ts',
       'scripts/src/board/limits.test.ts',

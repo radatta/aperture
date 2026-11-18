@@ -1,5 +1,9 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { budgetReport, formatBudgetReport, JOB_PSI_SEC } from './budget-report.ts';
+import { main } from './cli.ts';
 import type { Sample } from './rollup.ts';
 
 const since = new Date('2026-11-18T00:00:00Z');
@@ -165,5 +169,49 @@ describe('budgetReport', () => {
   it('leaves out events outside the window', () => {
     const r = budgetReport([job('2026-11-17T23:59:00Z', 'wait', false)], [], since, now);
     expect(r.jobs.seen).toBe(0);
+  });
+});
+
+describe('budget-report keys and the CLI', () => {
+  it('a session off a branch (the hub on detached main) is keyed by its name on both sides, so it is seen', () => {
+    const r = budgetReport(
+      [
+        job(at('10:00'), 'admit', false, { branch: null, name: 'dispatch' }),
+        { t: at('10:00'), kind: 'job', branch: '', name: 'dispatch', class: 'typecheck' },
+      ],
+      [],
+      since,
+      now,
+    );
+    expect(r.jobs.unseen).toEqual([]);
+  });
+
+  it('cli.ts budget-report reads a day of history into the text lines; a bad day count is a usage error', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'budget-report-'));
+    mkdirSync(dir, { recursive: true });
+    const t = new Date(Date.now() - 3600_000);
+    const iso = (s: number) => new Date(t.getTime() + s * 1000).toISOString();
+    const day = t.toISOString().slice(0, 10);
+    writeFileSync(
+      join(dir, `events-${day}.jsonl`),
+      [
+        job(iso(0), 'wait', false),
+        job(iso(60), 'admit', false, { unit: { as: 'ui-dev', units: 0.5 } }),
+        lane(iso(120), 'admit', 'refused'),
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n') + '\n',
+    );
+    writeFileSync(join(dir, `samples-${day}.jsonl`), JSON.stringify(sample(iso(30), 55)) + '\n');
+    const out = main(['budget-report', dir, '1'], () => '').split('\n');
+    expect(out[1]).toBe('jobs: 2 admissions logged — test 1 (1 would wait), ui-dev 1');
+    expect(out[2]).toBe(
+      '  would wait: 1 (live rules held 0, ran 1) · would admit: 1 (live rules held 0)',
+    );
+    expect(out[3]).toBe('  CPU PSI ≥ 40 within 120 s: would-wait 1/1 (100%) · would-admit 0/0 (-)');
+    expect(out[5]).toMatch(
+      /^lanes: 1 starts logged · refused by the cap or pace, budget would admit: n-/,
+    );
+    expect(() => main(['budget-report', dir, 'abc'], () => '')).toThrow(/usage: budget-report/);
   });
 });

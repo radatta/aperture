@@ -1581,7 +1581,7 @@ describe('the log-only budget', () => {
     limits({ enforce: true });
     const cap = JSON.parse(readFileSync(join(boardDir, 'limits.json'), 'utf8')).concurrency.test;
     for (let i = 0; i < cap - 1; i++) slotFile('test');
-    const brief = spawnSync('bash', ['-c', 'sleep 1.5 >/dev/null 2>&1 & echo $!'], {
+    const brief = spawnSync('bash', ['-c', 'sleep 5 >/dev/null 2>&1 & echo $!'], {
       encoding: 'utf8',
     });
     slotFile('test', undefined, Number(brief.stdout.trim()));
@@ -1618,11 +1618,20 @@ describe('the log-only budget', () => {
     }
   });
 
-  it('an unwritable events file costs the log line, never the exit code', () => {
+  it('an unwritable events file costs the log line, never the hold: a job past the hard line still waits', () => {
     const day = new Date().toISOString().slice(0, 10);
     mkdirSync(join(tmp, `board/history/events-${day}.jsonl`), { recursive: true }); // a directory: every append fails
-    const r = heavy(['--', 'bash', '-c', 'exit 3'], { HEAVY_CLASS: 'typecheck' });
-    expect(r.code).toBe(3);
+    limits({ enforce: true });
+    cgroup(3700, 2 * GiB);
+    // a throw out of decide-heavy would be lease.sh's fail-open grant: exit 0, not the hold's 75
+    const r = heavy(['--wait', '0', '--', 'true'], { HEAVY_CLASS: 'test' });
+    expect(r.code).toBe(75);
+    expect(r.err).toMatch(/still past the measured edge/);
+  });
+
+  it('a load test’s admission is logged and marked, for the report to leave out', () => {
+    expect(heavy(['--', 'true'], { HEAVY_CLASS: 'lint', HEAVY_LOADTEST: '1' }).code).toBe(0);
+    expect(budgets()).toEqual([expect.objectContaining({ class: 'lint', loadTest: true })]);
   });
 
   it('the guard’s decide-only call and an unslotted run log nothing', () => {
@@ -1650,7 +1659,7 @@ describe('the log-only budget', () => {
     const lines = status();
     const at = lines.findIndex((l) => l.startsWith('heavy: 1 slot(s)'));
     expect(lines[at + 1]).toMatch(
-      /^budget \(log-only\): jobs 3\.5\/5 · lanes 0\.5\/3\.5 · sessions \d+\/14 · k 1\.3 unknown$/,
+      /^budget \(log-only\): jobs 3\.5\/5 · lanes 0\.5\/3\.46 · sessions \d+\/14 · k 1\.3 unknown$/,
     );
     limits({ budget: undefined });
     expect(status().some((l) => l.startsWith('budget'))).toBe(false);

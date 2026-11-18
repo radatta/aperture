@@ -70,14 +70,17 @@ export function parseBudget(raw: unknown): Budget | null {
 export type KWhy = 'ac' | 'battery' | 'lpm' | 'low' | 'thermal' | 'unknown';
 
 // k divides both budgets: a slow Mac (battery, Low Power Mode, low charge) does the same work with fewer cores.
-// A read up to 5 min old still counts, as powerSummary's: power changes slowly. No read is the slow guess.
+// A read up to 5 min old still counts, as powerSummary's: power changes slowly. No read is the slow guess. A CPU
+// speed or scheduler limit under 100 % is thermal.
 export function powerFactor(read: MacRead, pw: Budget['power']): { k: number; why: KWhy } {
   const p = read.state === 'ok' || read.state === 'stale' ? read.stats?.power : undefined;
   if (!p) return { k: pw.unknown, why: 'unknown' };
-  const lim = p.thermal?.cpuSpeedLimit;
-  if (lim !== null && lim !== undefined && lim < 100) return { k: pw.thermal, why: 'thermal' };
+  const under = (x: number | null | undefined) => x !== null && x !== undefined && x < 100;
+  if (under(p.thermal?.cpuSpeedLimit) || under(p.thermal?.cpuSchedulerLimit))
+    return { k: pw.thermal, why: 'thermal' };
   if (p.source === 'battery') return { k: pw.slow, why: 'battery' };
   if (p.lowPowerMode) return { k: pw.slow, why: 'lpm' };
+  // the spec's "charge under 30%", literal: on battery the line above already said so, so `low` is AC charging below it
   if (p.batteryPct !== null && p.batteryPct < pw.batteryPctBelow) return { k: pw.slow, why: 'low' };
   return { k: 1, why: 'ac' };
 }
@@ -198,7 +201,7 @@ export function laneBudget(
 }
 
 const f1 = (x: number) => (Math.round(x * 10) / 10).toFixed(1);
-const lim = (x: number) => (Number.isInteger(x) ? String(x) : f1(x));
+const lim = (x: number) => String(Math.round(x * 100) / 100); // the value `would` compares against: 3.46, not 3.5
 
 // The one status line (board.sh status, pnpm lanes status): what is committed now against each scaled limit.
 export function budgetLine(

@@ -119,8 +119,11 @@ board_json() {
   bar=$(node "$SB_REPO/scripts/src/board/cli.ts" barriers "$BOARD_DIR/history" 7 2>/dev/null)  # none on a Mac without node
   # the Mac's power and the slowdown ratio (F120, docs/ops/HUB.md → lanes on battery); null without node
   mach=$(node "$SB_REPO/scripts/src/board/cli.ts" machine "$BOARD_DIR" --json 2>/dev/null)
-  # the log-only budget's units now (SESSION-BOARD.md → Budget); null without node or a budget block
-  budget=$(APERTURE_LIMITS_JSON="$LIMITS_JSON" node "$SB_REPO/scripts/src/board/cli.ts" budget "$BOARD_DIR" --json 2>/dev/null)
+  # the log-only budget's units now (SESSION-BOARD.md → Budget); null without node or a budget block, and on the Mac:
+  # it judges slots and sessions alive from /proc, which only the container has
+  budget=
+  [ -r "$CG/memory.stat" ] &&
+    budget=$(APERTURE_LIMITS_JSON="$LIMITS_JSON" node "$SB_REPO/scripts/src/board/cli.ts" budget "$BOARD_DIR" --json 2>/dev/null)
   jq -n --argjson s "${sample:-null}" --argjson heavy "$leases" --arg bar "$bar" --arg cap "$(sb_limit '.concurrency.test')" \
     --arg mach "$mach" --arg budget "$budget" \
     --slurpfile dev <( [ -f "$BOARD_DIR/devlock.json" ] && cat "$BOARD_DIR/devlock.json" ) \

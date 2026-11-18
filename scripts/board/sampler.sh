@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Background usage sampler: one tick every SAMPLER_INTERVAL s (30) → board/history/samples-<date>.jsonl,
 # plus board/status.line. One per container (flock, waited for up to 5 s: status/json probes hold it for
-# microseconds); started by `board.sh sampler start`, dies with the container. Pure bash + one awk per tick; reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).
+# microseconds); started by `board.sh sampler start`, dies with the container. Bash, one awk and a few jq per tick
+# (sessions, slots, lane phases); reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).
 #   sampler.sh          run forever
 #   sampler.sh --once   one tick, no lock (tests, probe)
 #   sampler.sh --print  compute a tick to stdout; writes nothing (board.sh status/json)
@@ -30,10 +31,13 @@ tick() {  # $1 = print → stdout only, nothing written
   compgen -G "$BOARD_DIR/sessions/*.json" >/dev/null &&
     jq -r '[.pid, .sid // "", .name // "", .branch // "", (if .lastPromptAt or .lastStopAt then .state // "" else "" end)] | @tsv' "$BOARD_DIR"/sessions/*.json >"$sess" 2>/dev/null
   # Each lane's phase (`pnpm board lane`), so the budget's phase units can be re-measured (SESSION-BOARD.md →
-  # Budget). One jq per file: one half-written file in a single jq would drop every file after it.
-  for f in "$BOARD_DIR"/lanes/*.json; do
-    [ -e "$f" ] && jq -r 'select(.branch and .phase) | [.branch, .phase] | @tsv' "$f" 2>/dev/null
-  done >"$lanes"
+  # Budget). One jq over them all; a half-written file stops that jq there, dropping the rest, so then one per file.
+  if compgen -G "$BOARD_DIR/lanes/*.json" >/dev/null &&
+    ! jq -r 'select(.branch and .phase) | [.branch, .phase] | @tsv' "$BOARD_DIR"/lanes/*.json >"$lanes" 2>/dev/null; then
+    for f in "$BOARD_DIR"/lanes/*.json; do
+      jq -r 'select(.branch and .phase) | [.branch, .phase] | @tsv' "$f" 2>/dev/null
+    done >"$lanes"
+  fi
   mapfile -t live < <(sb_live_slots)  # a dead wrapper's slot is not a running job (lib.sh)
   [ "${#live[@]}" -eq 0 ] ||
     jq -r '[.pid, .label // .class] | @tsv' "${live[@]}" >"$slots" 2>/dev/null

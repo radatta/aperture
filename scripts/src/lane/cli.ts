@@ -112,11 +112,15 @@ export function status(d: Deps): number {
     `${active.length} of ${laneCap(d)} lanes active${active.length ? `: ${describeActive(active)}` : ''}`,
   );
   d.log(macLine(macRead(d))); // battery / Low Power Mode / thermal, with the ≤ 3 lanes advice (docs/ops/HUB.md)
-  const bud = laneBudgetNow(d, active); // the log-only budget, beside the cap (docs/ops/SESSION-BOARD.md → Budget)
-  if (bud)
-    d.log(
-      budgetLine(bud.b, { jobs: null, lanes: bud.now, sessions: bud.lb.sessions.live }, bud.pf),
-    );
+  try {
+    const bud = laneBudgetNow(d, active); // the log-only budget, beside the cap (docs/ops/SESSION-BOARD.md → Budget)
+    if (bud)
+      d.log(
+        budgetLine(bud.b, { jobs: null, lanes: bud.now, sessions: bud.lb.sessions.live }, bud.pf),
+      );
+  } catch {
+    // a budget error costs its line, never the status
+  }
   for (const a of active) {
     const r = readLifecycle(d, a.branch);
     d.log(

@@ -263,8 +263,10 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
 
         // The authoritative pace check: another start may have stamped, or the box turned hot, since the one above.
         const pace = paceBlock(d);
-        // a lost race with wait time left waits again and logs on its next pass
-        const raced = !!pace && a.overPace === null && until !== null && d.clock.now() < until;
+        // a lost race with wait time left waits again and logs on its next pass (one clock read for both: the log and
+        // the return agree); one that then times out before the lock logs nothing, like every pre-lock pace refusal
+        const t = d.clock.now();
+        const raced = !!pace && a.overPace === null && until !== null && t < until;
         if (!raced)
           budgetLog(capResult, !pace ? 'ok' : a.overPace === null ? 'blocked' : 'over-pace');
         if (pace && a.overPace === null) {
@@ -274,7 +276,7 @@ export async function start(d: Deps, a: StartArgs): Promise<number> {
               `pace: turned busy during the start (${pace}); nothing changed, rerun with --wait`,
               EXIT.later,
             );
-          return d.clock.now() < until ? RACED : stillBusy(pace);
+          return t < until ? RACED : stillBusy(pace);
         }
         if (pace) d.log(`over the pace gate (${pace}): ${a.overPace}`);
 

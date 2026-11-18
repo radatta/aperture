@@ -251,7 +251,9 @@ or start changes; the live rules stay the cap, the hard line and `lanes.maxActiv
   `lightKnown: false`) holding no slot, the requester excluded. It would admit while `committed + job ≤ jobUnits / k`
   (6.5). Units: `test` (a wide gate or a suite) 3.0, `test-fast` (narrow gate) 2.5, `ui` split by its command —
   `devcheck:local` 1.5, a deployed `devcheck` 0.5, a capture 1.0 (a slot from an older `lease.sh`, with no `cmd`,
-  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, anything else 1.0. Written by
+  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, anything else 1.0. `test-file`
+  0.5 and `other` are in the block but reached by no admission yet: those runs take no slot, so they count only as
+  their session's light 0.3. Written by
   `cli.ts decide-heavy` after its decision string is built, so its output is byte-identical with or without it; any
   error is swallowed. Each worktree runs its own `lease.sh`, so a lane cut before this merged logs no job events until
   it rebases.
@@ -261,10 +263,11 @@ or start changes; the live rules stay the cap, the hard line and `lanes.maxActiv
   (4.5), and the live registered sessions, the hub's included, + 1 against `sessionsMax` (14: about 0.31 GiB anon
   each, the binding limit since the parallel gate). The phase units rest on 1–2 lanes each: the sampler's `phase`
   field exists to re-measure them.
-- **k**, the power factor (`mac-stats.json` `.power`, a read up to 5 min old): a CPU speed limit under 100 % → 1.5
-  (a guess: no thermal sample exists), on battery, Low Power Mode or charge under 30 % (`batteryPctBelow`, AC
-  included) → 1.3 (confounded with daytime in the report), else 1.0; no read → 1.3 (`unknown`). Both budgets divide
-  by it: 5.0 job and 3.5 lane units at 1.3.
+- **k**, the power factor (`mac-stats.json` `.power`, a read up to 5 min old): a CPU speed or scheduler limit under
+  100 % → 1.5 (`thermal`, a guess: no thermal sample exists); on battery (`battery`), Low Power Mode (`lpm`) or charge
+  under 30 % (`low`: the spec's words, literal, so on AC while charging, since battery is checked first) → 1.3
+  (confounded with daytime in the report); else 1.0 (`ac`); no read → 1.3 (`unknown`). Both budgets divide by it:
+  5 job and 3.46 lane units at 1.3, printed to two places as compared.
 - **Not yet**: one iOS Simulator job at a time (`macSimSlots` 1) — no lease marks a Simulator job, so events carry
   `sim: null`. Tokens: the budget admits more light lanes, which cost little CPU and full price in tokens; the hub's
   usage lines govern that (`docs/ops/HUB.md`).
@@ -278,7 +281,8 @@ Events (`history/events-<date>.jsonl`, UTC day):
 
 **Reading it.** `board.sh status` prints `budget (log-only): jobs 4.0/6.5 · lanes 3.3/4.5 · sessions 12/14 · k 1 ac`
 under its `heavy:` line (`cli.ts budget <boardDir> [--json]`, from the board dir only: its lanes are the lane files
-with a live session or a lifecycle record, without `lanes status`'s worktree check). `cli.ts budget-report
+with a live session or a lifecycle record, without `lanes status`'s worktree check, so a lane with no lane file yet
+is left out there; a Mac with no `/proc` prints no line). `cli.ts budget-report
 <historyDir> [days]` answers the rollout question after a day of logs: admissions by unit, would-wait against what the
 live rules held, how often CPU PSI reached the pace line (`pace.psiCpuBelow`, 40) within 120 s of a would-wait and of a
 would-admit, starts the cap refused that the budget would admit (and the reverse), PSI in the 10 min after a start,

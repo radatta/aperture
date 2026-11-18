@@ -93,12 +93,14 @@ export function budgetReport(
   }
 
   // Coverage: a branch running slotted jobs with no budget event is a worktree older than the budget's merge.
-  const logged = new Set(jobs.map((e) => e.branch));
+  // both sides keyed as a job event names its session: the branch, else the session name (the hub on detached main)
+  const key = (e: Ev) => String(e.branch || e.name || '?');
+  const logged = new Set(jobs.map(key));
   const unseenMap = new Map<string, number>();
   for (const e of evs) {
     if (e.kind !== 'job' || e.loadTest || e.class === 'test-file' || e.class === 'other') continue;
     if (/^gate-(typecheck|lint|test)/.test(String(e.class))) continue; // steps inside a gate's one slot
-    const b = String(e.branch || e.name || '?');
+    const b = key(e);
     if (!logged.has(b)) unseenMap.set(b, (unseenMap.get(b) ?? 0) + 1);
   }
 

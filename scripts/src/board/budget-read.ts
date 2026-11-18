@@ -53,7 +53,7 @@ export function alive(procDir: string, pid: unknown, start: unknown): boolean {
     return false;
   }
   if (!s || s.state === 'Z' || s.state === 'X') return false;
-  return typeof start !== 'string' || start === '' || s.startTime === start;
+  return typeof start !== 'string' || s.startTime === start; // as lane/state.ts alive: '' is a start that never matches
 }
 
 // The last `bytes` of a file, '' when unreadable: the samples file is ~3 MB a day, its last line is all we need.
@@ -166,8 +166,9 @@ export function liveSessions(boardDir: string, procDir: string) {
   return out;
 }
 
-// The board's view of active lanes: a lane file not parked whose branch has a live session or a lifecycle record.
-// `pnpm lanes status` also checks the worktree, and is the one `lanes start` logs (docs/ops/LANES.md).
+// The board's view of active lanes: a lane file not parked whose branch has a live session or a lifecycle record. A
+// lane with no lane file yet isn't counted here (`pnpm lanes status`, from the worktrees, counts it as build), and
+// `lanes status` also checks the worktree: it is the one `lanes start` logs (docs/ops/LANES.md).
 export function boardLanes(boardDir: string, liveBranches: Set<string>) {
   const dir = join(boardDir, 'lanes');
   return list(dir).flatMap((f) => {
