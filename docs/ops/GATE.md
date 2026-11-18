@@ -20,20 +20,35 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>]
 2. **The plan** (`scripts/src/gate/plan.ts`, pure): for each package, its **whole suite**, a **fast** run, or
    **skip**. A fast run is `vitest related` on the changed modules plus the test files a rule names. The plan is
    printed with the reason for each choice, so a skip is never silent.
-3. **The steps**, in order, each under `scripts/board/heavy.sh`, so the board sees them, budgets them and logs their
-   peaks (SESSION-BOARD.md → _Heavy wrapper_):
+3. **The steps, at once.** The gate re-runs itself under one outer `scripts/board/heavy.sh` slot, then starts every
+   step inside it, each under its own `heavy.sh` with `HEAVY_NOSLOT=1`: measured and logged, but taking no slot
+   (SESSION-BOARD.md → _Heavy wrapper_).
+   - **Wide** means 3+ packages' tests, or any whole suite. A wide gate counts as a full suite: its slot is a `test`
+     one, so it takes one of the 2 full-suite places, with the same wait and exit 75. It logs as `gate-wide`.
+   - **Narrow** holds an uncapped `test-fast` slot and logs as `gate-narrow`.
 
-   | Step                                                                       | Class                                           |
-   | -------------------------------------------------------------------------- | ----------------------------------------------- |
-   | `pnpm typecheck`                                                           | `typecheck`                                     |
-   | `pnpm lint`                                                                | `lint`                                          |
-   | Per fast package: `pnpm --filter <pkg> exec vitest related --run …`        | `test-fast` (a slot, not under the 2-suite cap) |
-   | Per full package: `pnpm --filter <pkg> test` (the whole repo: `pnpm test`) | `test` (the cap applies)                        |
-
-   The exit code is the first failing step's; later steps still run. 75 means `heavy.sh` gave up on the cap, which is
-   a failure, never a pass. A fast run that names tests fails if it selects no file at all (a path or include drift,
-   since a named test always matches itself). The caller's `VITEST_MAX_WORKERS` is dropped: `heavy.sh` sets the
-   container cap, and scripts pins its own 2.
+   | Step                                                                | Class (event)    | Workers: wide · narrow |
+   | ------------------------------------------------------------------- | ---------------- | ---------------------- |
+   | `pnpm typecheck`                                                    | `gate-typecheck` | — (one core)           |
+   | `pnpm lint`                                                         | `gate-lint`      | — (one core)           |
+   | Per fast package: `pnpm --filter <pkg> exec vitest related --run …` | `test-fast`      | see below · 4          |
+   | Per full package: `pnpm --filter <pkg> test`                        | `test`           | see below · 4          |
+   | The whole repo: `pnpm test`, after typecheck and lint, alone        | `test`           | heavy.sh's 4 a package |
+   - **The budget** (`BUDGET`, 10 tokens) bounds what runs at once. A test step costs its workers; typecheck and lint
+     cost 1 each, since `tsc -b` and eslint are single-threaded.
+   - **Start order:** longest first, a smaller step filling any gap. The order is app, extension, typecheck, scripts,
+     lint, cdk, lambdas, shared.
+   - **Wide workers** (`WIDE_WORKERS`): app 4; extension, lambdas, cdk and scripts 2; shared 1. Scripts always pins 2,
+     as its own test script does.
+   - **The whole suite** costs the full budget, so it runs alone once typecheck and lint are done.
+   - Each step's output is held and printed as one block when it finishes, under `── <step> · ok|exit n · s ──`;
+     `▶ <step>` marks its start.
+   - **The exit code** is the first failing step's in the printed order (typecheck, lint, then the packages), not in
+     finishing order. Every step still runs. 75 means `heavy.sh` gave up on the cap, which is a failure, never a pass.
+     INT, TERM or HUP stops every step, and the gate exits 128+n.
+   - A fast run that names tests fails if it selects no file at all (a path or include drift, since a named test
+     always matches itself).
+   - The caller's `VITEST_MAX_WORKERS` and `HEAVY_*` never reach a step.
 
 `--full` runs the whole suite, e.g. to reproduce a red Branch run. `--dry-run` prints the plan and runs nothing.
 

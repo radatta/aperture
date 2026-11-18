@@ -719,6 +719,28 @@ describe('heavy.sh', () => {
     expect(run('coi-test')).toBe(''); // read from the file, not built in
   });
 
+  it('a HEAVY_NOSLOT suite keeps its caller’s VITEST_MAX_WORKERS; a slotted suite takes the tuning', () => {
+    const seen = join(tmp, 'workers');
+    const bin = join(tmp, 'bin-coi');
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'hostname'), '#!/bin/sh\necho coi-test\n', { mode: 0o755 });
+    limits({});
+    const shipped = JSON.parse(readFileSync(join(tmp, 'limits.json'), 'utf8')).tuning.test
+      .maxWorkers;
+    const run = (extra: NodeJS.ProcessEnv) => {
+      const r = heavy(['--', 'bash', '-c', `printf %s "$VITEST_MAX_WORKERS" >${seen}`], {
+        HEAVY_CLASS: 'test',
+        PATH: `${bin}:${env.PATH}`,
+        VITEST_MAX_WORKERS: '7',
+        ...extra,
+      });
+      expect(r.code).toBe(0);
+      return readFileSync(seen, 'utf8');
+    };
+    expect(run({ HEAVY_NOSLOT: '1' })).toBe('7');
+    expect(run({})).toBe(String(shipped));
+  });
+
   it('never takes a slot or waits for a single-file test run', () => {
     cgroup(3700, 2 * GiB);
     limits({ enforce: true });
@@ -831,6 +853,62 @@ describe('heavy.sh test cap', () => {
     const r = heavy(['--', 'true'], { HEAVY_CLASS: 'test' });
     expect(r.code).toBe(0);
     expect(r.err).not.toMatch(/cap/);
+    expect(leases()).toEqual([]);
+  });
+
+  it('HEAVY_SLOT_CLASS: the slot and the cap take its class, the job event keeps HEAVY_CLASS', () => {
+    limits({ enforce: true });
+    const seen = join(tmp, 'slot.json');
+    const dir = join(tmp, 'board/leases/heavy');
+    const r = heavy(['--', 'bash', '-c', `cat ${dir}/*.json >${seen}`], {
+      HEAVY_CLASS: 'gate-wide',
+      HEAVY_SLOT_CLASS: 'test',
+      HEAVY_LABEL: 'gate:wide',
+    });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(seen, 'utf8'))).toMatchObject({
+      class: 'test',
+      label: 'gate:wide',
+    });
+    expect(events().find((e) => e.kind === 'job')).toMatchObject({
+      class: 'gate-wide',
+      label: 'gate:wide',
+    });
+    expect(slotFiles()).toEqual([]);
+    testSlots(cap);
+    const held = heavy(['--wait', '0', '--', 'true'], {
+      HEAVY_CLASS: 'gate-wide',
+      HEAVY_SLOT_CLASS: 'test',
+      HEAVY_LABEL: 'gate:wide',
+    });
+    expect(held.code).toBe(75);
+    expect(leases()).toEqual([
+      expect.objectContaining({
+        action: 'gaveUp',
+        reason: 'cap',
+        class: 'test',
+        label: 'gate:wide',
+      }),
+    ]);
+  });
+
+  it('HEAVY_NOSLOT: a suite past a full cap runs without a slot, measured and logged', () => {
+    limits({ enforce: true });
+    testSlots(cap);
+    const seen = join(tmp, 'slots');
+    const dir = join(tmp, 'board/leases/heavy');
+    const r = heavy(['--wait', '0', '--', 'bash', '-c', `ls ${dir} | wc -l >${seen}`], {
+      HEAVY_CLASS: 'test',
+      HEAVY_LABEL: 'test:app',
+      HEAVY_NOSLOT: '1',
+    });
+    expect(r.code).toBe(0);
+    expect(readFileSync(seen, 'utf8').trim()).toBe(String(cap)); // none of its own
+    expect(events().find((e) => e.kind === 'job')).toMatchObject({
+      class: 'test',
+      label: 'test:app',
+      exit: 0,
+    });
     expect(leases()).toEqual([]);
   });
 

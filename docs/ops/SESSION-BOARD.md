@@ -137,9 +137,15 @@ typecheck ×1.8, lint ×2, test ×1.2.
 - **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
   measured, no slot), `typecheck`, `lint`, `build`, `dev`, `ui`, `other` (no slot). `HEAVY_CLASS` overrides;
   `HEAVY_LABEL` names the run — **never on argv** (a `pkill -f <label>` once killed the wrong process).
-  `pnpm gate:fast` sets `test-fast` on its per-package `vitest related` runs (`docs/ops/GATE.md`): a slot and the
-  `tuning.test` worker cap (unless the caller set `VITEST_MAX_WORKERS`, as it does for scripts' 2), but not the 2-suite
+  `pnpm gate:fast` sets `test-fast` on its per-package `vitest related` runs (`docs/ops/GATE.md`): the
+  `tuning.test` worker cap unless the caller set `VITEST_MAX_WORKERS` (the gate sets every one), but not the 2-suite
   cap, and not a slowdown class (its runs differ too much in size to compare).
+- **One slot for many steps** (`pnpm gate:fast`, since gate-parallel): `HEAVY_SLOT_CLASS` gives the slot (and the cap)
+  a class other than the event's — the gate's outer run logs `gate-wide` / `gate-narrow` but holds a `test` /
+  `test-fast` slot, so a wide gate counts against the 2-suite cap while the `test` history stays the suite's.
+  `HEAVY_NOSLOT=1` marks a step inside such a run: measured and logged under its own class, no slot (else the steps'
+  young-slot costs would stack in the prediction and the gate could wait on itself), and its caller's
+  `VITEST_MAX_WORKERS` wins even for class `test`.
 - Takes a **heavy slot** (below), runs the command in the background, and samples at 1 Hz: container
   pids / anon / current / PSI / cores, and the command's own process subtree (threads, RSS). Renews the slot
   every 30 s.
@@ -171,8 +177,8 @@ GitHub, below. History keeps its old `lease: "dev"` events for their 90 days, an
 **`heavy`** — a counting budget, one slot per running heavy job (`leases/heavy/<claudePid>-<wrapperPid>.json`).
 The decision (`lease.ts` `decideHeavy`): predicted = live pids / anon + the cost of slots younger than 20 s
 (not ramped up yet, so not in the live numbers) + this job's class cost. Under soft → run. Over soft → run,
-with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job finding 2 `test` slots already
-held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
+with a one-line note. **Cap** (`concurrency` in `limits.json`): a `test` job — a suite, or a wide `pnpm gate:fast`
+(`HEAVY_SLOT_CLASS=test`) — finding 2 `test` slots already held is `cap-full` — every slot counts however young (a 5 s-old suite is about to take 8 cores), the cap wins
 over the hard line when both apply (it names the holders), other classes and `test-file` runs are never
 capped, and load tests (`HEAVY_GUARD=1` / `HEAVY_LOADTEST=1`) bypass it — and the hard-line wait too: they probe the
 edge on purpose and stop themselves, so a hold would only record a false edge. Past

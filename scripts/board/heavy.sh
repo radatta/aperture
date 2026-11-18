@@ -9,6 +9,9 @@
 #      HEAVY_GUARD=1 (enforce the stop conditions — load tests only), HEAVY_LOADTEST=1 (a load-test run
 #      that manages its own stops, e.g. edge.sh). Either marks the event loadTest:true, which report and
 #      staleness leave out of the per-class costs.
+#      HEAVY_SLOT_CLASS (the slot's class when it differs from the event's: pnpm gate:fast's outer run logs
+#      gate-wide but holds a `test` slot), HEAVY_NOSLOT=1 (measured and logged, takes no slot: a step inside an
+#      outer run that already holds one; its caller's VITEST_MAX_WORKERS wins even for a suite).
 set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 . "$SB_SCRIPTS/lease.sh"
@@ -37,15 +40,17 @@ eval "$(sb_thresholds)"
 # test-fast (pnpm gate:fast's per-package related runs) takes the same cap, unless its caller set one (scripts: 2).
 if { [ "$class" = test ] || [ "$class" = test-fast ]; } && sb_in_container; then
   wc=$(sb_limit '.tuning.test.workspaceConcurrency'); mw=$(sb_limit '.tuning.test.maxWorkers')
-  if [ -n "$mw" ] && { [ "$class" = test ] || [ -z "${VITEST_MAX_WORKERS:-}" ]; }; then export VITEST_MAX_WORKERS="$mw"; fi
+  if [ -n "$mw" ] && { { [ "$class" = test ] && [ "${HEAVY_NOSLOT:-0}" != 1 ]; } || [ -z "${VITEST_MAX_WORKERS:-}" ]; }; then
+    export VITEST_MAX_WORKERS="$mw"
+  fi
   if [ -n "$wc" ] && [ "$cmd" = "pnpm test" ]; then set -- pnpm -r --workspace-concurrency="$wc" test; cmd="$*"; fi
 fi
 
-# Slot: test-file and other are measured but take none.
-slot=
-if [ "$class" != test-file ] && [ "$class" != other ]; then
+# Slot: test-file and other are measured but take none, nor does a HEAVY_NOSLOT step (its outer run holds one).
+slot= slot_class="${HEAVY_SLOT_CLASS:-$class}"
+if [ "$slot_class" != test-file ] && [ "$slot_class" != other ] && [ "${HEAVY_NOSLOT:-0}" != 1 ]; then
   slot="$BOARD_DIR/leases/heavy/$owner-$me.json"
-  lease_heavy_acquire "$slot" "$owner" "$class" "$label" "$cmd" "$me" "$me_start" "${wait_sec:-}" || exit $?
+  lease_heavy_acquire "$slot" "$owner" "$slot_class" "$label" "$cmd" "$me" "$me_start" "${wait_sec:-}" || exit $?
 fi
 
 # Descendants of the PIDs in $1 (space-separated, inclusive) with their threads/rss — one awk over one /proc pass.
