@@ -10,7 +10,6 @@ import {
   reminderTag,
   SETTING_OF_KIND,
   taskFireAt,
-  timeDecidesDay,
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
@@ -28,7 +27,7 @@ import { PushRegistry } from '../ddb/pushRegistry';
 import type { PushRegistryUser } from '../ddb/pushRegistry';
 import type { Writes } from '../ddb/writes';
 import type { PushGateway, PushReadiness } from './gateway';
-import { Deliverer, guardMessage, MISS_KEEP_MS, missable } from './deliver';
+import { Deliverer, guardMessage, MISS_KEEP_MS, missable, plannable } from './deliver';
 import { ritualSource } from './rituals';
 
 // One poller tick (reminders.md → D2–D4, D10): every minute, for each user in the push registry, find what
@@ -145,9 +144,8 @@ export const planSource: CandidateSource = async ({ repo, rows, settings, notBef
     if (armedAt > row.fireAt || notBefore('planned') > row.fireAt) continue; // planned after 9:00
     const task = await repo.getTask(plan.taskId, { consistent: true });
     // A timed task is never planned (lenses.md D13) — bar a series deadline occurrence (recurring.md D8),
-    // which is planned on its work day like an untimed task, so it gets this ping too.
-    if (!task || task.status === 'done' || task.status === 'cancelled' || timeDecidesDay(task))
-      continue;
+    // which is planned on its work day like an untimed task, so it gets this ping too (plannable).
+    if (!task || !plannable(task)) continue;
     out.push({
       kind: 'planned',
       fireAt: row.fireAt,
@@ -247,10 +245,11 @@ export async function runPushTick(
   const faults: unknown[] = [];
   const prev = await registry.getPoller();
   // No tick the stage could check for longer than the window — an outage, a stalled schedule, a stage
-  // that couldn't sign, a registry it couldn't read: what fell due in between, up to MISS_KEEP_MS back, is
-  // caught up once instead of lost. A user's own tick that throws, or a deadline that stops the loop,
-  // doesn't hold it back: the rotation below still reaches every user, a throwing tick fires the Errors
-  // alarm, and a held cursor would re-run the 12 h pass for every user, every tick, while it lasts.
+  // that couldn't sign, a registry it couldn't read, a deadline before the first user: what fell due in
+  // between, up to MISS_KEEP_MS back, is caught up once instead of lost. A user's own tick that throws,
+  // or a deadline that stops the loop after a user started, doesn't hold it back (a held cursor re-ran the
+  // 12 h pass for every user, every tick): that tick's gap is then lost for the users it didn't finish —
+  // the accepted trade (reminders.md §3), seen on prod by the Errors alarm when a tick throws.
   const checked = prev?.lastCheckedAt ?? prev?.lastRunAt ?? null;
   const gapFrom =
     checked !== null && started - checked > REMINDER_WINDOW_MS
@@ -378,7 +377,7 @@ export async function runPushTick(
       // Rotated a place each minute: a device that keeps timing out can hold the first users' ticks to
       // the deadline, and the rest must not wait behind them every minute.
       const users = await registry.listUsers();
-      stageChecked = true;
+      if (users.length === 0) stageChecked = true;
       const at = users.length > 0 ? Math.floor(started / 60_000) % users.length : 0;
       for (const user of [...users.slice(at), ...users.slice(0, at)]) {
         if (past()) {
@@ -386,6 +385,7 @@ export async function runPushTick(
           log(JSON.stringify({ event: 'push_deadline' }));
           break;
         }
+        stageChecked = true; // a user's tick started: the gap pass ran for at least one
         try {
           await tickUser(user);
         } catch (err) {

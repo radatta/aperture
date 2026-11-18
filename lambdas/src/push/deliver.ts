@@ -9,10 +9,11 @@ import {
   PUSH_TTL_S,
   reminderPayload,
   taskFireAt,
+  timeDecidesDay,
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
-import type { PushSub, ReminderCandidate, ReminderKind, TaskPlan } from '@aperture/shared';
+import type { PushSub, ReminderCandidate, ReminderKind, Task, TaskPlan } from '@aperture/shared';
 import type { PushMissRow, PushRetryRow, Repo } from '../ddb/repo';
 import type { PushGateway, PushResult } from './gateway';
 
@@ -79,6 +80,11 @@ const stored = ({ kind, fireAt, taskId, title, dueTime, body, key }: StoredCandi
   key,
 });
 // A ritual or a test is never "missed": a late nudge is noise, a test is asked for now.
+// A planned ping is for an open task its time doesn't place — a timed one pings at its time, bar a series
+// deadline occurrence, planned on its work day (recurring.md D8; planSource, stillDue).
+export const plannable = (task: Task): boolean =>
+  task.status !== 'done' && task.status !== 'cancelled' && !timeDecidesDay(task);
+
 export const missable = (c: Pick<ReminderCandidate, 'kind'>) =>
   c.kind !== 'test' && !isRitual(c.kind);
 
@@ -123,7 +129,7 @@ export class Deliverer {
   // goes to their (slow) device last.
   private readonly pending = new Set<string>();
   private readonly queued: PushMissRow[] = []; // misses this tick wrote (a run-out, a gap)
-  // Devices that refused or timed out lately (a retry row with a try spent): sent to, and retried, last.
+  // Devices that failed lately (see the constructor): sent to, and retried, last.
   private readonly slow = new Set<string>();
 
   constructor(
@@ -132,6 +138,10 @@ export class Deliverer {
     retries: readonly PushRetryRow[],
   ) {
     this.subs = new Map(subs.map((s) => [s.id, s]));
+    // Slow: its last attempt failed (the stamp the tick read), or a retry of it has a try spent.
+    for (const s of subs)
+      if (s.lastErrorAt !== null && (s.lastOkAt === null || s.lastErrorAt > s.lastOkAt))
+        this.slow.add(s.id);
     for (const r of retries) {
       this.pending.add(`${r.subId}#${r.topic}`);
       if (r.tries >= 1) this.slow.add(r.subId);
@@ -147,9 +157,10 @@ export class Deliverer {
   private hasPending = (subId: string) => [...this.pending].some((k) => k.startsWith(`${subId}#`));
   private slowFirst = (subId: string) => Number(this.slow.has(subId)); // sorts slow devices last
 
-  // A fresh notification to every device, the slow ones (a try spent on a retry still pending) last, so
-  // one that times out again doesn't use up the tick before the rest. A transient refusal, or a device the
-  // tick's deadline skipped, leaves a retry row.
+  // A fresh notification to every device, the slow ones last, so one that times out again doesn't use up
+  // the tick before the rest. A transient refusal, or a device the tick's deadline skipped, leaves a retry
+  // row. (A fresh batch still goes before the earlier ticks' retries: a slow device's 10 s here can push
+  // a skipped device's older retry to the next tick, within the 5-minute expiry.)
   async sendBatch(cands: readonly StoredCandidate[], topic: string): Promise<void> {
     this.attempted = true;
     const payload = JSON.stringify(reminderPayload(cands, this.d.appUrl, topic));
@@ -335,9 +346,11 @@ export class Deliverer {
         if (now && now.deletedAt === null) this.subs.set(sub.id, now);
         else this.subs.delete(sub.id);
       }
-      this.fail(
-        `${sub.label} stopped accepting reminders (${why}) — turn them on again on that device`,
-      );
+      // A revived device is retried (its caller re-queues it); that outcome speaks next tick.
+      if (!this.subs.has(sub.id))
+        this.fail(
+          `${sub.label} stopped accepting reminders (${why}) — turn them on again on that device`,
+        );
       return { outcome, why };
     }
     this.d.log(JSON.stringify(line));
@@ -406,7 +419,7 @@ export class Deliverer {
       const task = await this.d.repo.getTask(c.taskId, { consistent: true });
       if (!task || task.status === 'done' || task.status === 'cancelled') continue;
       if (c.kind === 'planned') {
-        if (task.dueTime) continue; // a timed task is never planned (planSource's check)
+        if (!plannable(task)) continue;
         const day = dayKeyInZone(c.fireAt, USER_TIME_ZONE, 0);
         if (!plans.has(day))
           plans.set(day, await this.d.repo.listPlansFrom(day, { consistent: true }));

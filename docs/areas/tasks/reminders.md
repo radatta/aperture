@@ -109,32 +109,40 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
   removal of the user's row (the last device removed, or deleted by the poller after a 404/410) then re-reads
   their devices strongly and puts the row back, keeping its `createdAt`, if one is alive. `getPushStatus` also
   re-adds it when a live device exists. The poller's 404/410 delete is conditional on the version it read, so a
-  removal (tombstone) or a re-subscribe that lands mid-send stands.
+  removal (tombstone) or a re-subscribe that lands mid-send stands, and the reminder that 404'd is retried to
+  the re-subscribed device on the next tick.
 - **Fail-closed dedup:** dedup and guard rows are written before the send and never refunded, so no reminder
   is ever found twice.
 - **Retry and catch-up** (`push/deliver.ts`, D17–D22). Each device's answer is classified:
   - delivered (2xx); gone (404, 410, unusable keys — the device is dropped, as before);
   - **transient** — a timeout, a network failure, 429, 500, 503 (RFC 8030, Apple's and FCM's status
-    tables), and 502/504, a gateway's fault of the same kind (inference): a retry row `pq#r#<subId>#<topic>` holds the notification's candidates, and the next
+    tables; a 429's `Retry-After` isn't read — the next tick is the retry), and 502/504, a gateway's fault of
+    the same kind (inference): a retry row `pq#r#<subId>#<topic>` holds the notification's candidates, and the next
     `RETRY_MAX` = 3 ticks retry that device only, under the same Topic, so a first copy the service took but
     never answered for is replaced while still undelivered (RFC 8030 §5.4). The device reads "… — retrying".
     Each retry re-reads its tasks: one finished, deleted, re-dated or taken off that day's plan since stays
     quiet. Retries take no guard unit. Each try is claimed (counted, on the version read) before its POST. A
-    device the tick's deadline skipped gets a retry row too, with no try spent, and goes first among the
-    retries; a device with a retry pending goes last in a fresh batch, so one that keeps timing out (10 s)
-    can't use up a tick before the rest. A new failure under a Topic still retrying replaces that row;
+    device the tick's deadline skipped gets a retry row too, with no try spent. A slow device — its last
+    attempt failed, or a retry of it has a try spent — goes last in a fresh batch, and all its retries after
+    the rest's, so one that keeps timing out (10 s) can't use up a tick before the others; a fresh batch
+    still goes before earlier ticks' retries, so a skipped device's older one can wait a tick more (within
+    the 5-minute expiry). A new failure under a Topic still retrying replaces that row;
   - final — anything else (400, 403, 413, a fault of ours): the device's error, as before.
 
   Retries that run out (or a retry older than 5 minutes: the poller stalled) leave the device "… after N
-  tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick that could
-  check every user (the poller's `lastCheckedAt`: the stage could sign and no user's tick threw) for longer
-  than the window — leaves misses too, for every device: what fell due in it, up to 12 h back, armed, enabled
+  tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick the stage
+  could check (the poller's `lastCheckedAt`: it could sign, read the registry and start a user's tick) for
+  longer than the window — leaves misses too, for every device: what fell due in it, up to 12 h back, armed, enabled
   and still open, deduped by its `psent#` row and queued before any send of that tick. A device's misses go out once, as "N reminders didn't reach you" with their
   titles (opening Today), when all of them have settled (5 minutes after a run-out; at once after a gap) and
   no retry is pending for it. The rows are claimed before the guard and the send; each device's catch-up is its
   own notification against the guard (one refused is dropped and said, as a reminder past the guard is),
   tried once, its failure on the device and the health line; one that lands clears the device's error like
-  any delivery. Tests and nudges are never missed. Queue rows of a device removed later are swept by the
+  any delivery. Tests and nudges are never missed. The gap pass runs on the one tick that
+  reads the old cursor; a user that tick doesn't finish (their own tick throws, or the deadline stops the loop
+  before them) loses that gap's catch-up, and a user whose tick keeps throwing past the window loses what fell
+  due meanwhile. That is the trade the maintainer chose (2026-11-18) over holding the cursor for every user;
+  a throwing tick fires prod's Errors alarm (dev has none), a deadline skip only logs `push_deadline`. Queue rows of a device removed later are swept by the
   user's next tick; a user who leaves the registry leaves them behind, small and inert.
   A rare duplicate is possible: a timed-out POST the service accepted and delivered before its retry arrived
   shows twice (iOS doesn't replace by tag — WebKit bug 258922); a missed deadline was judged worse.
@@ -207,9 +215,9 @@ proves the whole chain. The BFF never holds the private key.
     sweeps guard counters every 10 minutes: fewer requests than before the queue existed (2026-11-18: 3 Queries
     and 2 Gets per user per quiet tick, against 5 and 2). In read units that holds while the 48 h of dedup rows
     stay under ~8 KB (the range is a consistent read; the sweep's `psent#` read wasn't), past which it's under a
-    cent a month more. While a fault persists past the window (every tick failing), each tick re-runs the gap
-    pass — its candidates already deduped, so only reads and refused conditional puts, cents a day and inside
-    the stuck-tick bound below, with the Errors alarm already firing. Users are taken in an order rotated each
+    cent a month more. The gap pass re-runs only while the heartbeat itself doesn't land (a tick killed before
+    its poller write) — its candidates already deduped, so only reads and refused conditional puts, inside the
+    stuck-tick bound below. Users are taken in an order rotated each
     minute, so one whose device keeps timing out can't delay the others every tick. The nudges add a plan read twice a day. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
     per stage, against CloudWatch's free 5 GB.
   - Worst case is a tick stuck at the 20 s timeout every minute: 1,440 × 20 s × 0.25 GB = 7,200 GB-s, about

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PUSH_DAILY_GUARD, PUSH_TITLE_MAX, userDueEpoch } from '@aperture/shared';
 import type { PushSub, Settings, Task, TaskPlan } from '@aperture/shared';
 import { InMemoryDoc, SK_END } from '../ddb/DocClient';
@@ -973,11 +973,12 @@ describe('push dispatch — retry and catch-up', () => {
     ]);
   });
 
-  it('the deadline-skipped device is retried before the device that timed out', async () => {
+  it('the deadline-skipped device goes before the one that timed out, fresh batch and retries', async () => {
     const w = world();
     await w.device('S1');
     await w.device('S2');
     await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    await w.repo().putTask(task({ id: 'B', dueDay: TODAY, dueTime: '14:01' }));
     w.push.status = (t) => {
       if (t.endpoint.endsWith('S1')) {
         w.set(TWO_PM + 10_000); // the timeout ate the budget
@@ -990,13 +991,81 @@ describe('push dispatch — retry and catch-up', () => {
       ['S1', 1],
       ['S2', 0],
     ]);
+    // Both have a retry pending; only S1 is slow, so S2 goes first in B's batch and in the retries.
     w.push.sends.length = 0;
+    w.push.status = 201;
     w.set(TWO_PM + MIN);
     await w.tick();
-    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S2', 'S1']);
+    expect(w.push.sends.map((x) => [x.target.endpoint.slice(-2), x.opts.topic])).toEqual([
+      ['S2', 'B'],
+      ['S1', 'B'],
+      ['S2', 'T1'],
+      ['S1', 'T1'],
+    ]);
   });
 
-  it('a new failure under a Topic still retrying replaces that retry, and its run-out leaves it be', async () => {
+  it('every retry of a slow device goes after the rest’s, its untried ones too', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    for (const id of ['X', 'Y', 'Z'])
+      await w.repo().putTask(task({ id, title: id, dueDay: TODAY, dueTime: '14:00' }));
+    await w.tick(); // delivered and deduped; the rows below stand in for earlier failures
+    w.push.sends.length = 0;
+    const row = (subId: string, id: string, tries: number, firstAt: number) => ({
+      subId,
+      topic: id,
+      cands: [
+        {
+          kind: 'timed' as const,
+          fireAt: TWO_PM,
+          taskId: id,
+          title: id,
+          dueTime: '14:00',
+          key: id,
+        },
+      ],
+      tries,
+      retries: tries,
+      firstAt,
+      why: 'HTTP 503',
+      updatedAt: firstAt,
+    });
+    await w.repo().putPushRetry(row('S1', 'X', 1, TWO_PM + 30_000));
+    await w.repo().putPushRetry(row('S1', 'Y', 0, TWO_PM)); // oldest and untried, but S1 is slow
+    await w.repo().putPushRetry(row('S2', 'Z', 0, TWO_PM + 10_000));
+    w.set(TWO_PM + 2 * MIN);
+    await w.tick();
+    expect(w.push.sends.map((x) => [x.target.endpoint.slice(-2), x.opts.topic])).toEqual([
+      ['S2', 'Z'],
+      ['S1', 'Y'],
+      ['S1', 'X'],
+    ]);
+  });
+
+  it('the user order rotates each minute: one device eating the tick doesn’t hold the next user back', async () => {
+    const w = world();
+    await w.device('S1', U);
+    await w.device('S2', 'u2');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    await w.repo('u2').putTask(task({ id: 'V', dueDay: TODAY, dueTime: '14:00' }));
+    // Start on the minute whose rotation puts U first.
+    const idx = (await w.registry.listUsers()).findIndex((u) => u.userId === U);
+    const start = TWO_PM + ((idx - ((TWO_PM / MIN) % 2) + 2) % 2) * MIN;
+    w.push.status = (t) => {
+      w.set(w.now() + 10_000); // every send eats the budget
+      return t.endpoint.endsWith('S1') ? { status: 0, reason: 'timeout' } : 201;
+    };
+    w.set(start);
+    await w.tick({ deadline: start + 5_000 });
+    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S1']);
+    w.push.sends.length = 0;
+    w.set(start + MIN);
+    await w.tick({ deadline: start + MIN + 5_000 });
+    expect(w.push.sends.map((x) => x.target.endpoint.slice(-2))).toEqual(['S2']);
+  });
+
+  it('a new failure under a Topic still retrying replaces that retry', async () => {
     const w = world();
     await w.device('S1');
     await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
@@ -1021,9 +1090,9 @@ describe('push dispatch — retry and catch-up', () => {
     await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:06', updatedAt: 1 }));
     w.set(TWO_PM + 6 * MIN);
     await w.tick();
-    expect((await w.repo().listPushQueue()).retries).toMatchObject([
-      { topic: 'T1', firstAt: TWO_PM + 6 * MIN },
-    ]);
+    const q = await w.repo().listPushQueue();
+    expect(q.retries).toMatchObject([{ topic: 'T1', firstAt: TWO_PM + 6 * MIN }]);
+    expect(q.misses).toEqual([]); // the stale row's run-out didn't run: nothing to catch up
   });
 
   it('gap misses are queued before any send: a fault later in the tick still leaves them', async () => {
@@ -1074,6 +1143,86 @@ describe('push dispatch — retry and catch-up', () => {
     });
   });
 
+  it('a registry read that fails, or a deadline before the first user, holds the gap cursor', async () => {
+    const w = world();
+    await w.device('S1');
+    const poller = {
+      lastRunAt: TWO_PM - MIN,
+      lastCheckedAt: TWO_PM - MIN,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    };
+    await w.registry.putPoller(poller);
+    vi.spyOn(PushRegistry.prototype, 'listUsers').mockRejectedValueOnce(
+      new Error('ThrottlingException'),
+    );
+    await expect(w.tick()).rejects.toThrow('ThrottlingException');
+    expect((await w.registry.getPoller())?.lastCheckedAt).toBe(TWO_PM - MIN);
+    w.set(TWO_PM + MIN);
+    await w.tick({ deadline: TWO_PM + MIN }); // out of time before any user
+    expect(await w.registry.getPoller()).toMatchObject({
+      lastRunAt: TWO_PM + MIN,
+      lastCheckedAt: TWO_PM - MIN,
+    });
+  });
+
+  it('a device that 404s after its gap misses were queued has them swept', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.device('S2');
+    await w.registry.putPoller({
+      lastRunAt: TWO_PM - 3600_000,
+      lastError: null,
+      lastErrorAt: null,
+      updatedAt: 1,
+    });
+    await w.repo().putTask(task({ id: 'A', title: 'Gap', dueDay: TODAY, dueTime: '13:15' }));
+    await w.repo().putTask(task({ id: 'B', title: 'Now', dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = (t) => (t.endpoint.endsWith('S1') ? 410 : 201);
+    await w.tick();
+    expect(await w.repo().getPushSub('S1')).toBeNull();
+    expect((await w.repo().listPushQueue()).misses).toEqual([]);
+  });
+
+  it('a planned task that got a clock time before its retry stays quiet', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ id: 'P', title: 'Planned' }));
+    await w.repo().putPlan(plan({ taskId: 'P' }));
+    w.set(NINE_AM);
+    w.push.status = 503;
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+    await w
+      .repo()
+      .putTask(task({ id: 'P', title: 'Planned', dueDay: TODAY, dueTime: '18:00', updatedAt: 2 }));
+    w.push.status = 201;
+    w.set(NINE_AM + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1);
+  });
+
+  it('a retry whose 404 lost to a revive is tried again on the revived device', async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = 503;
+    await w.tick();
+    w.push.status = () => {
+      w.mem.putNow(entityItem(U, sk.pushSub('S1'), sub('S1', { updatedAt: 50 })));
+      return 404;
+    };
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect((await w.repo().getPushUserHealth())?.lastError ?? '').not.toMatch(/stopped accepting/);
+    w.push.status = 201;
+    w.set(TWO_PM + 2 * MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(3);
+    expect(await w.repo().getPushSub('S1')).toMatchObject({ lastOkAt: TWO_PM + 2 * MIN });
+  });
+
   it('a device revived mid-send keeps its reminder: the 404 that lost to the revive is retried', async () => {
     const w = world();
     await w.device('S1');
@@ -1084,7 +1233,7 @@ describe('push dispatch — retry and catch-up', () => {
         entityItem(
           U,
           sk.pushSub('S1'),
-          sub('S1', { updatedAt: 50, endpoint: 'https://web.push.apple.com/fresh-S1' }),
+          sub('S1', { updatedAt: 50 }), // the same subscription again: an id is its endpoint's hash
         ),
       );
       return 410;
@@ -1092,10 +1241,12 @@ describe('push dispatch — retry and catch-up', () => {
     await w.tick();
     expect(await w.repo().getPushSub('S1')).toMatchObject({ updatedAt: 50 });
     expect((await w.repo().listPushQueue()).retries).toHaveLength(1);
+    expect((await w.repo().getPushUserHealth())?.lastError ?? '').not.toMatch(/stopped accepting/);
     w.push.status = 201;
     w.set(TWO_PM + MIN);
     await w.tick();
-    expect(w.push.sends.at(-1)!.target.endpoint).toBe('https://web.push.apple.com/fresh-S1');
+    expect(w.push.sends).toHaveLength(2);
+    expect(await w.repo().getPushSub('S1')).toMatchObject({ lastOkAt: TWO_PM + MIN });
   });
 
   it('stores titles clipped as the notification clips them', async () => {

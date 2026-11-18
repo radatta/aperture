@@ -138,7 +138,13 @@ describe('the poller’s one range read', () => {
     const from = sk.pushQueuePrefix();
     const to = `${sk.pushTestPrefix()}${SK_END}`;
     const samples: string[] = [];
-    for (const fn of Object.values(sk) as ((...a: unknown[]) => string)[])
+    for (const v of Object.values(sk) as unknown[]) {
+      if (typeof v === 'string') {
+        samples.push(v);
+        continue;
+      }
+      const fn = v as (...a: unknown[]) => unknown;
+      const before = samples.length;
       for (const args of [
         ['2026-11-04', 1, 'id', 'x'],
         [1_800_000_000_000, 'id', 'x'],
@@ -151,6 +157,10 @@ describe('the poller’s one range read', () => {
           // a shape these args don't fit
         }
       }
+      expect(samples.length, `sk.${fn.name}: no args shape fits it — add one`).toBeGreaterThan(
+        before,
+      );
+    }
     const inside = samples.filter((k) => k >= from && k <= to);
     expect(inside.length).toBeGreaterThan(0);
     for (const k of inside) expect(k).toMatch(/^(pq#|psent#|ptest#)/);
