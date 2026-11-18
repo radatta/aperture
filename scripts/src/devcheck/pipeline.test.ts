@@ -390,6 +390,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       createTask: async () => {
         throw new Error('unused');
       },
+      createSeriesExpectingRefusal: async () => {
+        throw new Error('unused');
+      },
       createTaskExpectingRefusal: async () => {
         throw new Error('unused');
       },
