@@ -255,7 +255,7 @@ or start changes; the live rules stay the cap, the hard line and `lanes.maxActiv
   `lightKnown: false`) holding no slot, the requester excluded. It would admit while `committed + job ≤ jobUnits / k`
   (6.5). Units: `test` (a wide gate or a suite) 3.0, `test-fast` (narrow gate) 2.5, `ui` split by its command —
   `devcheck:local` 1.5, a deployed `devcheck` 0.5, a capture 1.0 (a slot from an older `lease.sh`, with no `cmd`,
-  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, anything else 1.0. `test-file`
+  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, `warm` (`lanes start`'s cache warm: tsc, then eslint) 1.0, anything else 1.0. `test-file`
   0.5 and `other` are in the block but reached by no admission yet: those runs take no slot, so they count only as
   their session's light 0.3. Written by
   `cli.ts decide-heavy` after its decision string is built, so its output is byte-identical with or without it; any

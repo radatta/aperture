@@ -24,6 +24,7 @@
       "lint": 1.0,
       "test-file": 0.5,
       "build": 1.5,
+      "warm": 1.0,
       "other": 1.0
     },
     "phases": {

@@ -155,6 +155,7 @@ describe('unitKey', () => {
     ['test-fast', 'pnpm gate:fast', 'test-fast'],
     ['typecheck', 'pnpm typecheck', 'typecheck'],
     ['dev', 'pnpm dev', 'dev'],
+    ['warm', 'bash scripts/board/warm.sh --steps', 'warm'], // lanes start's cache warm: its own weight, not other
     ['ui', 'pnpm devcheck:local --tier full --feature x', 'ui-local'],
     ['ui', 'pnpm devcheck --local --tier full', 'ui-local'],
     ['ui', 'pnpm devcheck --tier full --feature x', 'ui-dev'],

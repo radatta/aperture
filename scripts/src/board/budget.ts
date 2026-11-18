@@ -29,6 +29,7 @@ export const UNIT_KEYS = [
   'lint',
   'test-file',
   'build',
+  'warm', // lanes start's cache warm (scripts/board/warm.sh): tsc then eslint, one core
   'other',
 ] as const;
 export type UnitKey = (typeof UNIT_KEYS)[number];
@@ -85,7 +86,16 @@ export function powerFactor(read: MacRead, pw: Budget['power']): { k: number; wh
   return { k: 1, why: 'ac' };
 }
 
-const PLAIN = new Set(['test', 'test-fast', 'typecheck', 'lint', 'dev', 'build', 'test-file']);
+const PLAIN = new Set([
+  'test',
+  'test-fast',
+  'typecheck',
+  'lint',
+  'dev',
+  'build',
+  'test-file',
+  'warm',
+]);
 
 // A slot's budget key. `ui` covers three loads (a local dev check, one against deployed dev, a short capture), told
 // apart by the command; a ui slot from an older lease.sh carries none and counts as the heaviest.
