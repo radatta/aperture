@@ -6,6 +6,7 @@
 //   --once            print one View as JSON and exit (no socket)
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { BRIEF_FILE, briefText, type BriefView } from '../brief.ts';
+import { budgetNow } from '../../budget-read.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -389,6 +390,17 @@ export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }
   put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null, v.ctx, load));
 }
 
+// The log-only budget's line for the brief, from main's limits.json (SESSION-BOARD.md → Budget); null on any error:
+// a budget read never costs the brief.
+function budgetLine(boardDir: string): string | null {
+  try {
+    const limits = JSON.parse(readFileSync(join(REPO, 'scripts/board/limits.json'), 'utf8'));
+    return budgetNow(boardDir, limits, '/proc', Date.now())?.line ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // brief.txt (brief.ts): `pnpm board brief` prints it. Its own writer, beside writeDerived's two files.
 export function writeBrief(dir: string, v: BriefView) {
   const tmp = join(dir, `.${BRIEF_FILE}.tmp.${process.pid}`);
@@ -445,7 +457,8 @@ async function run(a: Args) {
       try {
         const v = t.view(false);
         try {
-          writeBrief(t.paths.boardDir, v); // its own try: a failed board.line must not age the brief into TOWER DOWN
+          // its own try: a failed board.line must not age the brief into TOWER DOWN
+          writeBrief(t.paths.boardDir, { ...v, budget: budgetLine(t.paths.boardDir) });
         } catch (e) {
           process.stderr.write(`tower-web: brief.txt: ${(e as Error).message}\n`);
         }

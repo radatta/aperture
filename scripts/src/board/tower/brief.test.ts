@@ -21,6 +21,7 @@ const HEADS = [
   'USAGE',
   'MAC',
   'VM',
+  'BUDGET',
   'CTX',
 ];
 const heads = (text: string) =>
@@ -70,6 +71,16 @@ describe('briefText on the fixture board', () => {
     expect(b).toMatch(/^NEEDS 3 · india-branch: admit the branch to dev \(\+2\)$/m);
     expect(b).toMatch(/^MERGE 0 · 1 on hold$/m);
     expect(b).toMatch(/^ {2}HOLD PR 41 charlie-branch ".*": dev: bravo-branch is testing/m);
+  });
+});
+
+describe('the BUDGET line', () => {
+  it('carries the log-only budget’s units when the tower read them, and says unknown when it could not', () => {
+    const line = 'budget (log-only): jobs 3.8/6.5 · lanes 2.6/4.5 · sessions 12/14 · k 1 ac';
+    expect(briefText({ ...fx, budget: line }, utc)).toMatch(
+      /^BUDGET jobs 3\.8\/6\.5 · lanes 2\.6\/4\.5 · sessions 12\/14 · k 1 ac \(log-only\)$/m,
+    );
+    expect(briefText({ ...fx, budget: null }, utc)).toMatch(/^BUDGET unknown$/m);
   });
 });
 
