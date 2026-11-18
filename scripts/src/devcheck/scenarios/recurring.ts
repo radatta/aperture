@@ -52,6 +52,9 @@ async function todaySearched(ctx: Ctx, title: string) {
   await ctx.page.getByLabel('Search tasks').fill(title);
   await ctx.ui.settle();
 }
+// The form's Due select. Its wrapping <label> names it with its option text too ("Due No due date …"), so
+// an exact label never matches; by role, excluding the Due time field beside it.
+const dueSelect = (ctx: Ctx) => ctx.page.getByRole('combobox', { name: /^Due(?! time)/ });
 const rowOf = (ctx: Ctx, title: string) =>
   ctx.page.getByRole('button', { name: title, exact: true });
 
@@ -73,7 +76,7 @@ async function addSeries(
   await ctx.page.getByLabel('Title').fill(title);
   await ctx.page.getByLabel('Repeats').selectOption({ label: opts.repeats });
   if (opts.estimate) await ctx.page.getByLabel('Estimate (min)').fill(opts.estimate);
-  if (opts.due) await ctx.page.getByLabel('Due', { exact: true }).selectOption({ label: opts.due });
+  if (opts.due) await dueSelect(ctx).selectOption({ label: opts.due });
   if (opts.dueTime) await ctx.page.getByLabel('Due time').fill(opts.dueTime);
   if (opts.until) await ctx.page.getByLabel('Until').fill(opts.until);
   await ctx.page.getByRole('button', { name: 'Add series' }).click();
@@ -475,7 +478,7 @@ export const recurring: Scenario = {
         const open = ctx.page.getByRole('button', { name: 'New recurring task' });
         await open.click();
         await ctx.page.getByLabel('Title').fill(name(ctx, 'cancelled'));
-        const due = ctx.page.getByLabel('Due', { exact: true });
+        const due = dueSelect(ctx);
         const time = ctx.page.getByLabel('Due time');
         if ((await time.count()) !== 0) throw new Error('Due time shows before a Due is picked');
         await due.selectOption({ label: 'Next day' });
