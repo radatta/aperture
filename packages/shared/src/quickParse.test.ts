@@ -438,9 +438,14 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     );
   });
 
-  it("a clock the grammar can't read is the model's, rolled forward; an invented one is dropped", () => {
-    // 06:00 now: "quarter past five" — the model's 05:15 has passed, so it rolls to tomorrow.
+  it("a clock the grammar can't read is the model's, placed by the rules; an invented one is dropped", () => {
+    // 06:00 now: "quarter past five" says no half of the day, so it's a bare hour (rule 1): the next 5:15 is the
+    // evening's (2026-11-17, Sonnet; before, the model's 05:15 was taken as stated and rolled to tomorrow).
     expect(voice('call mum at quarter past five', { dueTime: '05:15' }).input).toMatchObject({
+      dueDay: '2026-11-16',
+      dueTime: '17:15',
+    });
+    expect(voice('call mum at quarter past five am', { dueTime: '05:15' }).input).toMatchObject({
       dueDay: '2026-11-17',
       dueTime: '05:15',
     });
@@ -856,7 +861,10 @@ describe('spokenFallbackDue (a spoken line saved without the model)', () => {
   // Monday 2026-11-16, 14:00 in LA.
   const c = { now: Date.UTC(2026, 10, 16, 22, 0), today: '2026-11-16' };
   it("places the words' own time by the voice rules", () => {
-    expect(spokenFallbackDue('call mum at 5', c)).toEqual({ dueDay: '2026-11-16', dueTime: '17:00' });
+    expect(spokenFallbackDue('call mum at 5', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '17:00',
+    });
     expect(spokenFallbackDue('call mum at 9 am', c)).toEqual({
       dueDay: '2026-11-17',
       dueTime: '09:00',
@@ -865,7 +873,10 @@ describe('spokenFallbackDue (a spoken line saved without the model)', () => {
       dueDay: '2026-11-16',
       dueTime: '14:20',
     });
-    expect(spokenFallbackDue('call mum tonight', c)).toEqual({ dueDay: '2026-11-16', dueTime: '20:00' });
+    expect(spokenFallbackDue('call mum tonight', c)).toEqual({
+      dueDay: '2026-11-16',
+      dueTime: '20:00',
+    });
     expect(spokenFallbackDue('call mum today at 5', c)).toEqual({
       dueDay: '2026-11-16',
       dueTime: '17:00',

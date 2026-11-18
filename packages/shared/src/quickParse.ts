@@ -113,7 +113,10 @@ function placeModelClock(hhmm: string, spoken: SpokenTime | null, line: string):
     spoken?.kind === 'clock'
       ? spoken.hhmm === hhmm
       : spoken?.kind === 'bare'
-        ? spoken.hour % 12 === h % 12 && spoken.minute === m
+        ? spoken.hour % 12 === h % 12 &&
+          spoken.minute === m &&
+          // a bare hour where the line says its half ("at 5 in the evening") is the grammar missing it
+          (spoken.part !== null || !HALF_SAID.test(line))
         : spoken?.kind === 'part'
           ? DAY_PART_TIME[spoken.part] === hhmm
           : false;
@@ -554,10 +557,9 @@ export function spokenFallbackDue(
   const spoken = spokenTimeIn(line);
   if (!spoken) return null;
   const tomorrow = spoken.kind !== 'relative' && TOMORROW_WORD.test(line);
-  const rest = line.replace(new RegExp(TODAY_WORD.source, 'gi'), ' ').replace(
-    new RegExp(TOMORROW_WORD.source, 'gi'),
-    ' ',
-  );
+  const rest = line
+    .replace(new RegExp(TODAY_WORD.source, 'gi'), ' ')
+    .replace(new RegExp(TOMORROW_WORD.source, 'gi'), ' ');
   if (spoken.kind !== 'relative' && DAY_WORD.test(rest)) return null;
   const calToday = zonedDayTime(ctx.now, USER_TIME_ZONE).day;
   const r = resolveSpoken(spoken, tomorrow ? addDays(calToday, 1) : null, {

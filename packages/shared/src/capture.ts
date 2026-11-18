@@ -47,11 +47,12 @@ export function scopedTokenNameError(
 }
 
 // --- The capture route -----------------------------------------------------
-// Hidden guards, per token per UTC day (capture.md → Caps): past CAPTURE_DAILY_CAP the route answers 429
-// and writes nothing; past CAPTURE_PARSE_DAILY_CAP it still captures but saves the line as typed, so a
-// leaked token's model spend stays near $0.45 a month.
+// Hidden guards per UTC day (capture.md → Caps): past CAPTURE_DAILY_CAP (per token) the route answers 429 and
+// writes nothing; past CAPTURE_PARSE_DAILY_CAP (per user, across all their capture tokens — the maintainer,
+// 2026-11-17) it still captures but saves without the model, so however many tokens leak, the model spend stays
+// flat (~40 × $0.003–0.006 a day, inside the API credit). The app's own parse (Cognito) isn't counted.
 export const CAPTURE_DAILY_CAP = 200;
-export const CAPTURE_PARSE_DAILY_CAP = 50;
+export const CAPTURE_PARSE_DAILY_CAP = 40;
 // The same line again within this window is the first capture answered again, not a second task.
 export const CAPTURE_DUPLICATE_MS = 60_000;
 // A first capture still unsaved after this long died (the Lambda's 15 s timeout, plus margin): the same line

@@ -75,9 +75,11 @@ import {
   placeError,
   scopedTokenNameError,
   CAPTURE_PARSE_DEADLINE_MS,
+  CAPTURE_PARSE_MAX_TOKENS,
+  CAPTURE_PARSE_TEXT_MAX,
   CAPTURE_SAY,
   captureSay,
-  spokenTimeIn,
+  spokenFallbackDue,
   fmtDueDay,
   fmtDuration,
   parseFailText,
@@ -442,6 +444,12 @@ const REMINDER_KEYS: readonly string[] = Object.keys(REMINDER_SETTINGS_DEFAULTS)
 // Every hash a new pointer must retire: the live one it replaces, plus any a cut-short delete left.
 const retiringOf = (prev: PlaceTokenPointer | null): string[] =>
   prev ? [...new Set([...(prev.hash ? [prev.hash] : []), ...prev.retiring])] : [];
+
+// What the route's log line carries beside the answer, never sent: the parse's time and why it fell back.
+export interface CaptureTiming {
+  parseMs: number;
+  fallback: string | null;
+}
 
 // A capture that made nothing (an in-flight duplicate): the rest of its answer.
 const NO_CAPTURE: CaptureResult = {
@@ -3089,7 +3097,11 @@ export class BackendClient implements ApiClient {
   // typed) → createTask → remember the task for the duplicate guard. A failed parse saves the line as
   // typed and says so; a failed create forgets the line, so a retry isn't mistaken for a duplicate. The
   // text is never logged.
-  async captureForToken(text: string, voice: boolean, auth: ScopedAuth): Promise<CaptureResult> {
+  async captureForToken(
+    text: string,
+    voice: boolean,
+    auth: ScopedAuth,
+  ): Promise<CaptureResult & { timing?: CaptureTiming }> {
     if (auth.userId !== this.userId) throw new Error('Unauthorized: token is for another user');
     const now = this.now();
     const line = text.trim();
@@ -3131,22 +3143,28 @@ export class BackendClient implements ApiClient {
         now,
         voice,
       };
+      const parseStarted = Date.now();
       const parsed = await runQuickParse(line, ctx, async (l) => {
+        // A line longer than a spoken one never reaches the model: it saves as typed (capture.md → Caps).
+        if (l.length > CAPTURE_PARSE_TEXT_MAX)
+          return { ok: false, reason: 'unavailable', detail: 'too long for the model' };
         if (!(await claimParse(this.scopedTokens, auth, now)))
           return { ok: false, reason: 'unavailable', detail: 'daily parse limit reached' };
         const timeoutMs = Math.min(parseBudgetMs(l), CAPTURE_PARSE_DEADLINE_MS);
-        // The voice prompt (time words out, no dueTime) only when the grammar can read the time back;
-        // otherwise the typed prompt, so a clock it can't read ("quarter past five") isn't lost.
-        const spoken = voice && spokenTimeIn(l) !== null;
         return this.anthropic.parseTask({
           text: l,
           today: appToday,
           categories,
           timeoutMs,
-          voice: spoken,
+          voice,
+          maxTokens: CAPTURE_PARSE_MAX_TOKENS,
         });
       });
-      const task = await this.createTask(parsed.ok ? parsed.input : { title: line });
+      const parseMs = Date.now() - parseStarted;
+      // Without the model, a spoken line still keeps the time its own words say (the grammar is the fallback).
+      const fallback =
+        !parsed.ok && voice ? spokenFallbackDue(line, { now, today: appToday }) : null;
+      const task = await this.createTask(parsed.ok ? parsed.input : { title: line, ...fallback });
       try {
         await recordCaptureTask(this.scopedTokens, auth, textHash, task.id, this.now());
       } catch (err) {
@@ -3171,6 +3189,7 @@ export class BackendClient implements ApiClient {
         raw: !parsed.ok,
         duplicate: false,
         due,
+        timing: { parseMs, fallback: parsed.ok ? null : parsed.reason },
       };
     } catch (err) {
       await forgetCapture(this.scopedTokens, auth, textHash, this.now()).catch(() => {});

@@ -55,7 +55,7 @@ import { PlaceTokenStore } from './ddb/placeTokens';
 import { ScopedTokenStore } from './ddb/scopedTokens';
 import { BackendClient } from './backend';
 import { hashPlaceToken } from './auth/placeToken';
-import { placeTokenPk, PLACE_TOKEN_SK } from './ddb/keys';
+import { pk, placeTokenPk, PLACE_TOKEN_SK, sk } from './ddb/keys';
 
 afterAll(() => {
   delete process.env.USER_POOL_ID;
@@ -885,6 +885,27 @@ describe('handler capture route', () => {
       say: CAPTURE_SAY.cap,
     });
     expect(await backend.listTasks()).toEqual([]);
+  });
+
+  it('409s with a spoken "say it again" when every retry of the token row lost a race (F224)', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    const token = await mint();
+    const [info] = await backend.listScopedTokens('capture');
+    const key = [pk('u1'), sk.stoken(info!.id)] as const;
+    const rival = () => {
+      const row = doc.snapshot().find((i) => i.PK === key[0] && i.SK === key[1])!;
+      doc.putNow({ ...row, updatedAt: (row.updatedAt as number) + 1 });
+      doc.interceptNextPutIf(...key, rival);
+    };
+    doc.interceptNextPutIf(...key, rival);
+    const res = await post(bearer(token), { text: 'milk | ~5' });
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body)).toEqual({ error: 'Capture token busy', say: CAPTURE_SAY.busy });
+    expect(await backend.listTasks()).toEqual([]);
+    const line = logs
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .find((l) => l.event === 'capture');
+    expect(line).toMatchObject({ ok: false, reason: 'busy' });
   });
 
   it('never logs the text, the token or its hash — the outcome only', async () => {

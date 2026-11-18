@@ -77,7 +77,7 @@ describe('captureSay', () => {
     expect(captureSay({ ...base, duplicate: true, raw: true })).toBe('Already added: call mum.');
   });
 
-  it('a raw save with its own words\' time says it was added without AI, and when', () => {
+  it("a raw save with its own words' time says it was added without AI, and when", () => {
     expect(
       captureSay({
         ...base,
