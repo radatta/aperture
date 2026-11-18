@@ -555,8 +555,7 @@ the PR's files change, as a lane's edits do) and runs them again. Arm order alte
   no-change repeat is 1.2 s. Lanes' history (since 11-17) has first runs at a median 27.5 s / 18.5 s and repeats at
   5.3 / 5.6 (n = 42 / 52), so live first runs sit nearer the cold arm than the warm one.
 - **Added CPU:** median +41 % of the cold run (+19 CPU-s), almost all typecheck (+44 %; lint +18 %). The bad case is
-  an edit to `packages/shared`: 4–5 projects recheck after the warm anyway. The pre-set bar was +20 %; it shipped
-  past it because the extra runs niced and only on a box judged calm (warm-caches `decisions.md` 15).
+  an edit to `packages/shared`: 4–5 projects recheck after the warm anyway. The pre-set bar was +20 %; going past it was the maintainer's call, since the extra runs niced and only on a box judged calm (warm-caches `decisions.md` 15).
 - **After a rebase** onto a moved main (7 real ones): tc + lint median 20.8 s against ~4 s for a repeat, so a rebase
   costs ~16 s whether or not the lane was warmed. No re-warm: the gate follows the rebase at once.
 - **Safety probes**: two `tsc -b` or two `eslint --cache` at once in one checkout both exit 0, and the next run still
