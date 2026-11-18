@@ -103,17 +103,18 @@ export function check(input: Input, run: GitRun, old: Cache, clock = Date.now): 
   const landed: string[] = [];
   const mainHit = new Map<string, Merge>();
 
-  // A stale lane is still checked for having landed — that's the cleanup hint — but never counts as pending, and
-  // goes after the live ones, so it never spends their budget.
-  const byLive = [...input.heads].sort((x, y) => Number(isStale(x)) - Number(isStale(y)));
-  for (const h of byLive) {
+  // A head's merge with main and its landed walk.
+  const vsMainOf = (h: Head) => {
     const vsMain = merge(h.sha, main.sha);
     const l = vsMain
       ? landedAt(h, vsMain, main, run, merge, old.landed[h.sha], () => clock() >= deadline)
       : null;
     if (l?.record) cache.landed[h.sha] = l.record;
+    return { vsMain, l };
+  };
+  for (const h of input.heads.filter((x) => !isStale(x))) {
+    const { vsMain, l } = vsMainOf(h);
     if (l?.state === 'landed') landed.push(h.branch);
-    else if (isStale(h)) stale.push(h.branch);
     else if (!l || l.state === 'unknown') pending++;
     else {
       live.push(h);
@@ -143,6 +144,11 @@ export function check(input: Input, run: GitRun, old: Cache, clock = Date.now): 
       if (files.length) conflicts.push({ a: a.branch, b: b.branch, files });
       else if (!m.files.length) clean.push([a.branch, b.branch]);
     }
+
+  // A stale lane is still checked for having landed — that's the cleanup hint — on what budget the live lanes left:
+  // never pending, and never before them.
+  for (const h of input.heads.filter(isStale))
+    (vsMainOf(h).l?.state === 'landed' ? landed : stale).push(h.branch);
 
   // Eviction: what this run used, plus what it didn't reach whose shas are all still current (a lane left
   // pending keeps its entries); a sha that is no longer a head or main drops out.

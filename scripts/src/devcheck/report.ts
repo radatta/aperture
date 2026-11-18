@@ -60,6 +60,7 @@ export interface RunResult {
   startSha?: string;
   endSha?: string;
   sittingStarts?: number; // the ledger's estimate of today's sitting Starts on this slot, at the run's start (budget.ts)
+  dayStart?: number; // the test user's day start the estimate was counted over (absent: budget.ts's default)
   deployUrl?: string;
   status: 'PASS' | 'FAIL' | 'CRASH';
   codes: ReasonCode[];
@@ -278,7 +279,7 @@ export function renderReport(r: RunResult): string {
     `Build: expected \`${r.expectedSha.slice(0, 7)}\`, start \`${r.startSha?.slice(0, 7) ?? '—'}\`, end \`${r.endSha?.slice(0, 7) ?? '—'}\`${r.deployUrl ? ` · [deploy run](${r.deployUrl})` : ''}${r.scenarioSha && r.scenarioSha !== r.expectedSha ? ` · scenarios from \`${r.scenarioSha.slice(0, 7)}${r.scenarioSha.endsWith('-dirty') ? '-dirty' : ''}\`` : ''}`,
     `Leftovers: **${left.length}**${left.length ? ` (${left.map((c) => c.id).join(', ')})` : ''}`,
   ];
-  if (r.sittingStarts !== undefined) lines.push(budgetLine(r.sittingStarts));
+  if (r.sittingStarts !== undefined) lines.push(budgetLine(r.sittingStarts, r.dayStart));
   if (r.failures.length)
     lines.push('', ...r.failures.map((f) => `**Failed:** ${f.code} — ${f.message}`));
   if (r.crash) lines.push('', `**Crash:** ${r.crash}`);

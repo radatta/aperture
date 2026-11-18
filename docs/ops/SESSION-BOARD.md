@@ -285,8 +285,8 @@ list but for their uncommitted files, which still overlap (a parked lane picked 
 - **landed** — squash-merged, worktree not cleaned up: merging its head into main changes nothing, or into the
   first-parent main commit that squashed it gives that commit's tree (it would otherwise read as conflicting with
   its own squash once main moves over the same lines);
-- **stale** — no commit in 7 days (`STALE_DAYS`), and not landed (a stale lane is still checked for that, after the
-  live ones).
+- **stale** — no commit in 7 days (`STALE_DAYS`), and not landed (a stale lane is still checked for that, on the budget the
+  live lanes and their pairs left).
 
 Cost: one merge is 26–112 ms here (2026-11-17), so every merge is cached by its two shas in
 `board/conflicts-cache.json` — a run merges only what moved (a lane's commit: N merges; main moving: one per lane);
@@ -299,7 +299,7 @@ is added to the shared store (git may touch an existing object's mtime). A faile
 SessionStart injects this branch's lines, conflicts first: "merge conflict with main on 1 file: … — rebase onto
 origin/main now.", "flux will conflict with you on 2 files: … (git merge-tree) — SendMessage session `flux`; whichever
 merges second rebases.", then unchecked overlaps ("flux also touches 2 of your files: …; expect a rebase conflict
-whichever merges second."), then clean ones ("… git merges both heads cleanly today; recheck after either
+whichever merges second.", with "(uncommitted: git can’t check it yet)" after the files when that's why), then clean ones ("… git merges both heads cleanly today; recheck after either
 commits."). `board.sh status` prints `conflicts:` above `overlaps:` (a clean pair ends `— merges clean`), then the
 landed and stale lines.
 

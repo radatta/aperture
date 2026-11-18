@@ -54,12 +54,17 @@ export const budgetLine = (counted: number, dayStart = DAY_START_HOUR) =>
 
 // A starts refusal is believed only when the ledger's count makes it plausible: well under the cap, it reads as a
 // counter bug (or another writer on the test user), and the step stays a failure. The attempts gate also counts
-// resumes and refused Starts, which the ledger never sees, so no count can check that one: it's believed as said.
+// resumes and refused Starts, which the ledger never sees, so no count can size that one: it's believed unless the
+// ledger has no Start at all today.
 export function budgetReason(
   kind: Refusal,
   counted: number,
   dayStart = DAY_START_HOUR,
 ): { needsYou: string } | { fail: string } {
+  if (kind === 'attempts' && counted === 0)
+    return {
+      fail: `the BFF refused a Start for its daily cap of ${DEV_START_ATTEMPTS_PER_DAY} Start attempts with no sitting counted today — check the gate counter`,
+    };
   if (kind === 'attempts')
     return {
       needsYou: `the test user's ${DEV_START_ATTEMPTS_PER_DAY} Start attempts for today are spent (~${counted} sittings counted; resumes and refused Starts aren't in the ledger); rerun after ${resets(dayStart)}`,

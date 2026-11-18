@@ -99,7 +99,7 @@ export function overlaps(
             `${other} also touches ${list(real)} — git merges both heads cleanly today; recheck after either commits.`,
             2,
           );
-        else if (real.length) say(me, message(other, real, names[other]), 1);
+        else if (real.length) say(me, message(other, real, names[other], dirty), 1);
         if (common.length && !hard)
           say(
             me,
@@ -138,13 +138,15 @@ function conflictLine(other: string, files: string[], session?: string): string 
   return `${other} will conflict with you on ${list(files)} (git merge-tree) — ${who}; whichever merges second rebases.`;
 }
 
-function message(other: string, files: string[], session?: string): string {
+// `dirty`: a shared file is uncommitted on one side, so git hasn't merged it yet.
+function message(other: string, files: string[], session?: string, dirty = false): string {
   const list =
     files.slice(0, SHOWN).join(', ') +
     (files.length > SHOWN ? `, +${files.length - SHOWN} more` : '');
   const who = session ? `SendMessage session \`${session}\`` : `read its plan`;
   return (
-    `${other} also touches ${files.length === 1 ? '1 of your files' : `${files.length} of your files`}: ${list} — ` +
+    `${other} also touches ${files.length === 1 ? '1 of your files' : `${files.length} of your files`}: ${list}` +
+    `${dirty ? ' (uncommitted: git can’t check it yet)' : ''} — ` +
     `${who}; expect a rebase conflict whichever merges second.`
   );
 }

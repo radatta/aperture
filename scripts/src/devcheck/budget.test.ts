@@ -75,7 +75,7 @@ describe('budget', () => {
     expect(startsToday(entries, now)).toBe(2);
   });
 
-  it('believes a starts refusal only at a plausible count, half the cap or more; an attempts one always', () => {
+  it('believes a starts refusal only at a plausible count, half the cap or more; an attempts one past any Start', () => {
     expect(budgetReason('starts', 500)).toEqual({
       needsYou:
         "the test user's 1000 sitting starts for today are spent (~500 counted); rerun after 04:00 PT",
@@ -83,6 +83,7 @@ describe('budget', () => {
     expect(budgetReason('starts', 499)).toEqual({
       fail: 'the BFF refused a Start for its daily cap of 1000 sitting starts at ~499 counted — check the gate counter',
     });
+    expect(budgetReason('attempts', 0)).toHaveProperty('fail'); // no Start today: a counter, not a budget
     expect(budgetReason('attempts', 3, 6)).toEqual({
       needsYou:
         "the test user's 4000 Start attempts for today are spent (~3 sittings counted; resumes and refused Starts aren't in the ledger); rerun after 06:00 PT",

@@ -12,7 +12,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { main as cli } from './cli.ts';
+import { main as cli, treeOf } from './cli.ts';
 import { check, emptyCache, mergeTree, parseCache, type GitRun, type Head } from './conflicts.ts';
 
 const hex = (s: string) => createHash('sha1').update(s).digest('hex');
@@ -236,11 +236,43 @@ describe('check', () => {
     expect(g.calls.filter((x) => x.includes(sha('a')) && x.includes(sha('b')))).toEqual([]);
   });
 
+  it('a stale lane spends only what the live lanes and their pair left', () => {
+    let t = 0;
+    const g = fake(
+      {
+        [k('a', 'm')]: { tree: T('1') },
+        [k('b', 'm')]: { tree: T('2') },
+        [k('a', 'b')]: { tree: T('3'), files: ['x.ts'] },
+        [k('s', 'm')]: { tree: main.tree },
+      },
+      { [`${sha('0')}..${sha('m')}`]: '' },
+    );
+    const slow: GitRun = (args, ms) => {
+      if (args[0] === 'merge-tree') t += 300;
+      return g.run(args, ms);
+    };
+    const old = { ...head('s', 's'), at: NOW - 30 * 86400_000 };
+    const heads = [old, head('a', 'a'), head('b', 'b')]; // the stale lane first on disk
+    const c = check({ heads, main, now: NOW, budgetMs: 800 }, slow, emptyCache(), () => t);
+    expect(c.conflicts).toEqual([{ a: 'a', b: 'b', files: ['x.ts'] }]); // the live pair merged
+    expect(c).toMatchObject({ stale: ['s'], landed: [], pending: 0 }); // no budget left for s: stale, not pending
+  });
+
   it('a stale lane that squash-landed reads landed, so the cleanup hint is kept', () => {
     const g = fake({ [k('a', 'm')]: { tree: main.tree } });
     const old = { ...head('a', 'a'), at: NOW - 30 * 86400_000 };
     const c = check({ heads: [old], main, now: NOW }, g.run, emptyCache());
     expect(c).toMatchObject({ stale: [], landed: ['a'], pending: 0 });
+  });
+
+  it('walks main unfiltered for a lane with more files than an argv should carry', () => {
+    const many = Array.from({ length: 501 }, (_, i) => `f${i}.ts`);
+    const g = fake({ [k('a', 'm')]: { tree: T('1') } });
+    check({ heads: [head('a', 'a', many)], main, now: NOW }, g.run, emptyCache());
+    expect(g.calls.find((x) => x[0] === 'log')).not.toContain('--');
+    const few = fake({ [k('a', 'm')]: { tree: T('1') } });
+    check({ heads: [head('a', 'a', ['x.ts'])], main, now: NOW }, few.run, emptyCache());
+    expect(few.calls.find((x) => x[0] === 'log')!.slice(-2)).toEqual(['--', 'x.ts']);
   });
 
   it('a lane is pending, not live, its walk has more main commits than a run tries', () => {
@@ -322,7 +354,11 @@ function realGit(dir: string) {
   write('a.txt', 'one\nMAIN\nthree\n');
   const m = commit('main edit');
   const run: GitRun = (args, ms) => {
-    const r = spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', timeout: ms });
+    const r = spawnSync('git', ['-C', dir, ...args], {
+      encoding: 'utf8',
+      timeout: ms,
+      env: cleanEnv(),
+    });
     return { code: r.status, stdout: r.stdout };
   };
   const at = Date.now();
@@ -348,7 +384,7 @@ function realGit(dir: string) {
 describe('cli.ts overlap against git', () => {
   it('writes the conflict and the cache, and adds nothing to the shared object store', () => {
     const dir = mkdtempSync(join(tmpdir(), 'conflicts-cli-'));
-    const was = process.env.TMPDIR;
+    const saved = { ...process.env };
     try {
       const env = {
         ...cleanEnv(),
@@ -384,6 +420,8 @@ describe('cli.ts overlap against git', () => {
       const objects = () => g(repo, 'count-objects', '-v');
       const before = objects();
 
+      // cli.ts's git reads process.env: no caller's GIT_DIR or GIT_INDEX_FILE may point it elsewhere
+      for (const k of Object.keys(process.env)) if (k.startsWith('GIT_')) delete process.env[k];
       process.env.TMPDIR = scratch;
       expect(cli(['overlap', repo, board], () => '')).toBe('0 overlapping pair(s), 1 conflict(s)');
 
@@ -395,9 +433,27 @@ describe('cli.ts overlap against git', () => {
       expect(readdirSync(scratch)).toEqual([]); // this run's store removed, the killed run's swept
       expect(readdirSync(board).sort()).toEqual(['conflicts-cache.json', 'overlap.json']);
     } finally {
-      if (was === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = was;
+      for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+      Object.assign(process.env, saved);
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('treeOf', () => {
+  it('counts every file uncommitted when git couldn’t read the working tree or the commits', () => {
+    expect(treeOf('a', 'x.ts\n', 'y.ts\n', '')).toEqual({
+      branch: 'a',
+      files: ['x.ts', 'y.ts'],
+      uncommitted: ['y.ts'],
+    });
+    for (const [c, d, u] of [
+      ['x.ts\n', null, ''],
+      ['x.ts\n', '', null],
+      [null, 'y.ts\n', ''],
+    ] as const) {
+      const t = treeOf('a', c, d, u);
+      expect(t.uncommitted).toEqual(t.files);
     }
   });
 });

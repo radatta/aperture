@@ -58,7 +58,9 @@ describe('the clients’ areas', () => {
       for (const f of readdirSync(new URL(`./${dir}/`, import.meta.url)).filter(
         (x) => x !== 'core.ts',
       )) {
-        const mod = (await import(`./${dir}/${f.replace(/\.ts$/, '')}`)) as Record<string, unknown>;
+        const mod = (await import(
+          /* @vite-ignore */ `./${dir}/${f.replace(/\.ts$/, '')}`
+        )) as Record<string, unknown>;
         for (const [k, fn] of Object.entries(mod)) {
           const kind = k.endsWith('Reads') ? 'reads' : k.endsWith('Writes') ? 'writes' : null;
           if (kind && typeof fn === 'function')

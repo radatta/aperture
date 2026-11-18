@@ -116,6 +116,19 @@ const gitOr = (cwd: string, ...a: string[]): string | null => {
 };
 const git = (cwd: string, ...a: string[]) => gitOr(cwd, ...a) ?? '';
 
+// A worktree's files from its three reads, any of which can fail (null). What git couldn't read can't be called
+// committed: then every file counts as uncommitted, so none of its overlaps reads "merges clean".
+export function treeOf(
+  branch: string,
+  committed: string | null,
+  dirty: string | null,
+  untracked: string | null,
+): Tree {
+  const files = branchFiles(committed ?? '', dirty ?? '', untracked ?? '');
+  const unknown = committed === null || dirty === null || untracked === null;
+  return { branch, files, uncommitted: unknown ? files : branchFiles('', dirty, untracked) };
+}
+
 // Every worktree on a branch (the detached main checkout is skipped) with the files its branch touches, and its
 // committed head for the merge-tree check (a branch with no commit of its own has none).
 function worktrees(repo: string): { trees: Tree[]; heads: Head[] } {
@@ -123,25 +136,27 @@ function worktrees(repo: string): { trees: Tree[]; heads: Head[] } {
   const heads: Head[] = [];
   let path = '';
   let sha = '';
-  for (const line of git(repo, 'worktree', 'list', '--porcelain').split('\n')) {
+  const list = gitOr(repo, 'worktree', 'list', '--porcelain');
+  // no list is no news: keep the last overlap.json rather than write an empty one over it
+  if (list === null) throw new Error(`git worktree list failed in ${repo}`);
+  for (const line of list.split('\n')) {
     if (line.startsWith('worktree ')) path = line.slice(9);
     if (line.startsWith('HEAD ')) sha = line.slice(5).trim();
     if (!line.startsWith('branch refs/heads/') || !path) continue;
     const base = git(path, 'merge-base', 'origin/main', 'HEAD').trim();
     if (!base) continue;
     const branch = line.slice('branch refs/heads/'.length);
-    const committed = git(path, 'diff', '--name-only', base, 'HEAD');
-    const dirty = gitOr(path, 'diff', '--name-only', 'HEAD');
-    const untracked = gitOr(path, 'ls-files', '--others', '--exclude-standard');
-    const files = branchFiles(committed, dirty ?? '', untracked ?? '');
-    trees.push({
+    const committed = gitOr(path, 'diff', '--name-only', base, 'HEAD');
+    const tree = treeOf(
       branch,
-      files,
-      // unreadable working tree: every file may be dirty, so none of its overlaps reads "merges clean"
-      uncommitted: dirty === null || untracked === null ? files : branchFiles('', dirty, untracked),
-    });
+      committed,
+      gitOr(path, 'diff', '--name-only', 'HEAD'),
+      gitOr(path, 'ls-files', '--others', '--exclude-standard'),
+    );
+    trees.push(tree);
     const at = Number(git(path, 'log', '-1', '--format=%ct', 'HEAD').trim()) * 1000;
-    if (sha && sha !== base && at)
+    // a head whose committed files are unknown can't be judged (landed or not): left out of the merge check
+    if (committed !== null && sha && sha !== base && at)
       heads.push({ branch, sha, base, files: branchFiles(committed, '', ''), at });
   }
   return { trees, heads };

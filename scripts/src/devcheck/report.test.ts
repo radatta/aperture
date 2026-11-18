@@ -32,6 +32,9 @@ describe('report', () => {
     expect(renderReport({ ...base, sittingStarts: 7 })).toContain(
       '\nSitting starts today (ledger estimate): ~7 of 1000, resets 04:00 PT\n',
     );
+    expect(renderReport({ ...base, sittingStarts: 7, dayStart: 6 })).toContain(
+      'resets 06:00 PT', // the test user's own day start
+    );
     expect(renderReport(base)).not.toContain('Sitting starts today');
   });
 

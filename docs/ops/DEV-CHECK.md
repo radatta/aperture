@@ -84,9 +84,9 @@ and a step that fails on either cap's refusal — thrown, swallowed by the step 
 page's own Start, while that step runs — reads **needs-you** with the reason, as does the rest of its scenario, and
 the run stays green. A starts refusal only when the count is plausible, half the cap or more: under it the step stays
 a failure, "check the gate counter" (a counter bug, or another writer on the test user, isn't a spent budget). An
-attempts refusal always — that gate also counts resumes and refused Starts, which the ledger never sees. Once the
-budget has run out in a run, a later Start refused because a sitting the cut-short scenario opened is still open
-(`Another sitting is still open`) reads needs-you too.
+attempts refusal whenever the ledger has a Start today — that gate also counts resumes and refused Starts, which
+the ledger never sees. Once the budget has run out in a run, a later Start refused because a sitting the cut-short
+scenario opened is still open (`Another sitting is still open`) reads needs-you too.
 
 ## One-time setup
 

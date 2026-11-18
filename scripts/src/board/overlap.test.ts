@@ -104,7 +104,7 @@ describe('overlaps with a merge-tree check', () => {
     expect(o.messages['a']).toEqual([
       'merge conflict with main on 1 file: z.ts (git merge-tree) — rebase onto origin/main now.',
       'b will conflict with you on 1 file: x.ts (git merge-tree) — SendMessage session `bee`; whichever merges second rebases.',
-      'c also touches 1 of your files: y.ts — read its plan; expect a rebase conflict whichever merges second.',
+      'c also touches 1 of your files: y.ts (uncommitted: git can’t check it yet) — read its plan; expect a rebase conflict whichever merges second.',
     ]); // no "small appends" line for b: the conflict line says it
     expect(o.messages['gone']).toBeUndefined();
     expect(o.messages['old']).toBeUndefined();
@@ -134,7 +134,7 @@ describe('overlaps with a merge-tree check', () => {
       { a: 'a', b: 'old', files: ['x.ts'], git: 'unchecked' },
     ]);
     expect(o.messages['gone']).toEqual([
-      'a also touches 1 of your files: y.ts — read its plan; expect a rebase conflict whichever merges second.',
+      'a also touches 1 of your files: y.ts (uncommitted: git can’t check it yet) — read its plan; expect a rebase conflict whichever merges second.',
     ]);
   });
 

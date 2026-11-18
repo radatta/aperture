@@ -217,10 +217,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   let refusal: Refusal | null = null;
   let stepNo = 0;
   let spent: string | null = null;
-  let dayStart: number | undefined; // the test user's, once read; budget.ts's default till then
   const bodyReads: Promise<unknown>[] = [];
   const noteRefusal = (text: string) => (refusal ??= capRefusal(text));
   try {
+    // the default day start's estimate, for a run that ends before the test user's settings are read
+    r.sittingStarts = startsToday(d.ledger.read(), d.now());
     if (d.waitForDeploy) r.deployUrl = (await d.waitForDeploy()).url;
 
     browser = await d.openBrowser();
@@ -314,9 +315,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     // only lc-coach-ai's steps, which turn it on for themselves. LeetCode Premium goes back on (lc-coach's progress
     // step switches it off and back on), and the plan mode back to auto (coach-fixes sets one per step).
     const settings = await api.reads.getSettings();
-    dayStart = settings.dayStartHour ?? DAY_START_HOUR; // the gate's day, as the BFF keys it
-    r.sittingStarts = startsToday(d.ledger.read(), d.now(), dayStart);
-    d.log(budgetLine(r.sittingStarts, dayStart));
+    r.dayStart = settings.dayStartHour ?? DAY_START_HOUR; // the gate's day, as the BFF keys it
+    r.sittingStarts = startsToday(d.ledger.read(), d.now(), r.dayStart);
+    d.log(budgetLine(r.sittingStarts, r.dayStart));
     const base = {
       ...(settings.pomodoroWorkMin !== DEV_WORK_MIN ? { pomodoroWorkMin: DEV_WORK_MIN } : {}),
       ...(settings.coachAiPick !== false ? { coachAiPick: false } : {}),
@@ -430,7 +431,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           await Promise.allSettled(bodyReads);
           const kind = capRefusal(error) ?? refusal;
           const budget = kind
-            ? budgetReason(kind, startsToday(d.ledger.read(), d.now(), dayStart), dayStart)
+            ? budgetReason(kind, startsToday(d.ledger.read(), d.now(), r.dayStart), r.dayStart)
             : null;
           const leftOpen: string | null =
             !kind && spent && error.includes(SITTING_ACTIVE_ERROR) ? leftOpenReason(spent) : null;
