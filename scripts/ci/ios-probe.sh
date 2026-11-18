@@ -15,16 +15,16 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore recon" ;;
-    2) echo "restore recon" ;;
+    1) echo "cold save" ;;
+    2) echo "cold card" ;;
     *) echo "seed card" ;;
   esac
 }
-KEY="ios-probe-dev-26.5-v2" # the cached device; bump to re-save (cache keys are immutable)
+KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
 ORIGIN=https://dev.aperture.rahuldatta.dev # slot A: sim.sh's Cognito host and test user are slot A's
 FALLBACK=https://aperture.rahuldatta.dev # read only, the sign-in card; used only when dev doesn't answer
-DEVICE_TYPE=com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro-Max
-RUNTIME_ID=com.apple.CoreSimulator.SimRuntime.iOS-26-5 # booted on all 15 phase-1 jobs
+DEVICE_TYPE=com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro-Max # sim.sh's SIM_DEVICE_TYPE: the Mac's profile
+RUNTIME_ID=com.apple.CoreSimulator.SimRuntime.iOS-27-2           # the xcode-27 image (phase 1 ran iOS 26.5)
 AXE_VER=1.8.0                                           # the Mac's pin (IOS-CHECK.md → Setup)
 AXE_SHA=7b76340b72e90d0f211bc7c4636f15009076eff07acef2f2b632b175debd8834
 AXE_URL="https://github.com/cameroncooke/AXe/releases/download/v$AXE_VER/AXe-macOS-v$AXE_VER-universal.tar.gz"
@@ -215,7 +215,7 @@ boot_start() {
 }
 s_create() {
   U="$(xcrun simctl create "$SIM_NAME" "$DEVICE_TYPE" "$RUNTIME_ID" 2>>"$OUT/log.txt")" || { note "create failed"; U=""; return 1; }
-  RUNTIME=26.5
+  RUNTIME=27.2
   note "created $U"
   [ "$SRC" != seed ] || seed_webclip || return 1
   boot_start
@@ -247,7 +247,7 @@ s_restore() {
     mv "$DEVICES/$U/data" "$WORK/fresh-data" && mv "$DEVICES/$u/data" "$DEVICES/$U/data" || return 1
     mv "$DEVICES/$u" "$WORK/restored-shell" # its device.plist names aperture-devcheck too: out of the set
   fi
-  RUNTIME=26.5
+  RUNTIME=27.2
   boot_start
 }
 s_boot_wait() {
@@ -388,11 +388,14 @@ PT_A2HS="158 654"
 s_a2hs() {
   local i hit y x
   touch "$WORK/a2hs.marker"
-  # iOS 26 Safari: Share sits in the … menu (AXButton "More", right of the address bar); "Page Menu" is the left one
-  tap_label '^More$' AXButton 3 || return 1
-  sleep 1
-  evidence a2hs-menu tree
-  tap_label '^Share$' AXButton 4 || return 1
+  # iOS 26 Safari keeps Share in the … menu (AXButton "More"); iOS 27 reportedly moved that button to tabs, so a
+  # Share button in the bar is tried first
+  if ! tap_label '^Share$' AXButton 2; then
+    tap_label '^More$' AXButton 3 || return 1
+    sleep 1
+    evidence a2hs-menu tree
+    tap_label '^Share$' AXButton 4 || return 1
+  fi
   for i in $(seq 1 30); do
     late && return 1
     if light 100 800; then break; fi
@@ -533,9 +536,12 @@ run_sim_ci() (
   HELD=lock
   # shellcheck source=/dev/null
   source "$REPO/tools/mailroom/jobs/sim.sh"
-  # shellcheck disable=SC2034
-    SIM_DEVICE_TYPE="$DEVICE_TYPE" # 440×956 points, as the Mac's profile
-  pgrep() { if [ "${1:-}" = -x ] && [ "${2:-}" = DeviceHub ]; then return 0; fi; command pgrep "$@"; }
+  # Xcode 26 has no Device Hub and its device isn't the profile's; on xcode-27 sim.sh runs as on the Mac
+  if [ "$(xcodebuild -version | sed -n 's/^Xcode \([0-9]*\).*/\1/p')" -lt 27 ]; then
+    # shellcheck disable=SC2034
+    SIM_DEVICE_TYPE="$DEVICE_TYPE"
+    pgrep() { if [ "${1:-}" = -x ] && [ "${2:-}" = DeviceHub ]; then return 0; fi; command pgrep "$@"; }
+  fi
   security() {
     if [ "${1:-}" = find-generic-password ]; then
       case " $* " in *" -w "*) printf '%s' "$PW" ;; esac

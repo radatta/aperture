@@ -110,12 +110,14 @@ describe('workflow-fork-guard', () => {
     );
   });
 
-  it('allows the GitHub-hosted macos-26 label exactly', () => {
-    const text = wf(PR, stepsJob(GUARD_STEP)).replace(
-      'runs-on: ubuntu-latest',
-      'runs-on: macos-26',
-    );
-    expect(check({ '.github/workflows/x.yml': text })).toEqual([]);
+  it('allows the GitHub-hosted macos-26 and xcode-27 labels exactly', () => {
+    for (const runsOn of ['macos-26', 'xcode-27']) {
+      const text = wf(PR, stepsJob(GUARD_STEP)).replace(
+        'runs-on: ubuntu-latest',
+        `runs-on: ${runsOn}`,
+      );
+      expect(check({ '.github/workflows/x.yml': text })).toEqual([]);
+    }
   });
 
   it('flags self-hosted, matrix, block and other macOS runs-on', () => {
@@ -125,13 +127,14 @@ describe('workflow-fork-guard', () => {
       '[self-hosted, linux]',
       'macos-latest',
       'macos-26-xlarge', // larger runners bill even on a public repo
+      'xcode-27-xlarge',
     ]) {
       const text = wf(PR, stepsJob(GUARD_STEP)).replace(
         'runs-on: ubuntu-latest',
         `runs-on: ${runsOn}`,
       );
       expect(check({ '.github/workflows/x.yml': text })).toEqual([
-        `.github/workflows/x.yml:8: runs-on "${runsOn}" — only ubuntu-latest or macos-26 (GitHub-hosted)`,
+        `.github/workflows/x.yml:8: runs-on "${runsOn}" — only ubuntu-latest or macos-26 or xcode-27 (GitHub-hosted)`,
       ]);
     }
   });

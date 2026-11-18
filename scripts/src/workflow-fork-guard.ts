@@ -44,8 +44,9 @@ export const ACTIONS = [
   'gitleaks/gitleaks-action',
 ];
 
-// GitHub-hosted runner labels, never self-hosted (a public repo's fork could run code on it). macos-26: the iOS probe.
-const HOSTED = ['ubuntu-latest', 'macos-26'];
+// GitHub-hosted standard runner labels, exact (larger ones bill even on a public repo), never self-hosted (a public
+// repo's fork could run code on it). macos-26 and xcode-27: the iOS probe.
+const HOSTED = ['ubuntu-latest', 'macos-26', 'xcode-27'];
 // A line minus its trailing comment, indentation kept (workflow-permissions' stripComment also trims).
 const code = (l: string) => l.replace(/(^|\s)#.*$/, '');
 // Keys this file reads by line. Any other spelling of one (quoted, `key :`, a flow mapping) is unreadable, not unseen.
