@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +21,7 @@ import {
   isWide,
   main,
   outerEnv,
+  reconcile,
   parseArgs,
   readDiff,
   schedule,
@@ -583,11 +592,48 @@ describe('main', () => {
       HEAVY_CLASS: 'gate-narrow',
       HEAVY_SLOT_CLASS: 'test-fast',
       HEAVY_LABEL: 'gate:narrow',
+      GATE_RESULT: expect.stringMatching(/gate-result-[^/]+\/code$/),
     });
     expect(out.join('\n')).toMatch(/gate:fast — 1 changed path/);
     expect(out.at(-1)).toMatch(
       /no slot in time: run `pnpm gate:fast --wait 600` in the background/,
     );
+  });
+
+  // The inner pass reports its exit code through GATE_RESULT: heavy.sh's 0 alone is never a pass.
+  it.each([
+    ['writes nothing', undefined, 2, /never reported: nothing was checked/],
+    ['reports 0', '0', 0, null],
+    ['reports 1', '1', 1, /heavy.sh exited 0, but the gate’s inner pass exited 1/],
+  ] as const)('heavy.sh exits 0 and the inner pass %s', async (_, wrote, want, msg) => {
+    const out: string[] = [];
+    let file = '';
+    const code = await main([], {
+      run: git(z('M', 'docs/a.md')).run,
+      outer: async (_h, _r, _a, e) => {
+        file = e.GATE_RESULT!;
+        if (wrote !== undefined) writeFileSync(file, wrote);
+        return 0;
+      },
+      log: (l) => out.push(l),
+      env: {},
+    });
+    expect(code).toBe(want);
+    if (msg) expect(out.at(-1)).toMatch(msg);
+    else expect(out.join('\n')).not.toMatch(/heavy.sh exited 0/);
+    expect(existsSync(file)).toBe(false); // the temp dir is gone
+  });
+
+  it('reconcile: heavy.sh’s failure wins; else the report; a missing or garbled one is 2', () => {
+    expect(reconcile(75, () => '0')).toBe(75);
+    expect(reconcile(0, () => '0\n')).toBe(0);
+    expect(reconcile(0, () => '1')).toBe(1);
+    expect(reconcile(0, () => 'x')).toBe(2);
+    expect(
+      reconcile(0, () => {
+        throw new Error('ENOENT');
+      }),
+    ).toBe(2);
   });
 
   it('a wide diff takes a `test` slot; --full too', async () => {
@@ -798,6 +844,18 @@ describe('main', () => {
     expect(env.GATE_WIDE).toBe('1');
     const inner = { ...INNER, GATE_WIDE: '1' };
     expect(await main([], { run, exec, onSignal: noSignal, log: quiet, env: inner })).toBe(0);
+    // the inner pass reports its code where the caller asked
+    const d = mkdtempSync(join(tmpdir(), 'gate-res-'));
+    const res = join(d, 'code');
+    await main([], {
+      run,
+      exec,
+      onSignal: noSignal,
+      log: quiet,
+      env: { ...inner, GATE_RESULT: res },
+    });
+    expect(readFileSync(res, 'utf8')).toBe('0');
+    rmSync(d, { recursive: true, force: true });
     expect(ran.at(-1)!.argv).toEqual(['pnpm', 'test']);
   });
 

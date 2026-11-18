@@ -6,8 +6,9 @@
 // First, the registry check (registry.ts, ~1–2 s): a test file the gate can't pick up fails here, before any step.
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only.
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { constants } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { constants, tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { planWithBase, RULES_PATH } from './base.ts';
 import { modeOf, isTest, type Change, type Plan } from './plan.ts';
@@ -518,7 +519,31 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
       CLI,
       ...argv,
     ];
-    const code = await outer(heavy, root, args, { ...caller, ...outerEnv(wide) });
+    // The inner pass writes its exit code here: a heavy.sh that exits 0 without running it (or passing its code on)
+    // must never read as a green gate.
+    const dir = mkdtempSync(join(tmpdir(), 'gate-result-'));
+    const result = join(dir, 'code');
+    let code: number;
+    try {
+      const got = await outer(heavy, root, args, {
+        ...caller,
+        ...outerEnv(wide),
+        GATE_RESULT: result,
+      });
+      let reported = true;
+      code = reconcile(got, () => {
+        if (!existsSync(result)) reported = false;
+        return readFileSync(result, 'utf8');
+      });
+      if (got === 0 && code !== 0)
+        out(
+          reported
+            ? `gate:fast — heavy.sh exited 0, but the gate’s inner pass exited ${code}: a broken heavy.sh?`
+            : 'gate:fast — heavy.sh exited 0, but the gate’s inner pass never reported: nothing was checked (a broken heavy.sh?)',
+        );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
     if (code === 75)
       out(
         'gate:fast — no slot in time: run `pnpm gate:fast --wait 600` in the background (board.sh status shows who holds them)',
@@ -546,8 +571,26 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
   out(
     `gate:fast — ${todo.map((s, i) => `${s.label} ${results[i]!.code === 0 ? 'ok' : `exit ${results[i]!.code}`}`).join(' · ')} · ${Math.round((Date.now() - t0) / 1000)} s`,
   );
-  if (interrupted) return interrupted;
-  return results.find((r) => r.code !== 0)?.code ?? 0;
+  const code = interrupted || (results.find((r) => r.code !== 0)?.code ?? 0);
+  if (env.GATE_RESULT)
+    try {
+      writeFileSync(env.GATE_RESULT, String(code));
+    } catch {
+      // unwritten reads as never reported: the caller fails the gate
+    }
+  return code;
+}
+
+// The caller's exit: heavy.sh's when it failed, else the inner pass's own report; a 0 with no report is 2.
+export function reconcile(outerCode: number, readResult: () => string): number {
+  if (outerCode !== 0) return outerCode;
+  let text = '';
+  try {
+    text = readResult().trim();
+  } catch {
+    return 2;
+  }
+  return /^\d+$/.test(text) ? Number(text) : 2;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1])
