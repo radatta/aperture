@@ -313,6 +313,7 @@ function open(
       syncs: number;
       resetCloses: boolean;
       resetInert: boolean;
+      submitInert: boolean;
       stickyPopup: boolean;
       timerResetClicks: number;
       toolbar2: boolean;
@@ -1739,7 +1740,7 @@ describe('the debug log’s submit probe', () => {
     expect(a).toMatchObject({ click: 'trusted', key: null, open: true, note: 'no-verdict' });
     expect(b).toMatchObject({ click: 'untrusted', key: null, note: 'shown' });
     expect(c).toMatchObject({ key: 'trusted', mod: 'meta', repeat: false, note: 'shown' });
-    for (const e of [a, b]) expect(e.clickMs).toEqual(expect.any(Number));
+    for (const e of [a, b]) expect(e!.clickMs).toEqual(expect.any(Number));
     expect(c!.keyMs).toEqual(expect.any(Number));
     expect(c!.keyMs as number).toBeLessThan(1000);
     // Flags, fixed words and ms only.

@@ -11,7 +11,7 @@ import { CODE, QID, SLUG, T } from './fixtures/traffic';
 
 const wire = lib('wire');
 const ulid = lib('ulid');
-type Pair = { url: string; reqText: string | null; resText: string };
+type Pair = { url: string; reqText: string | null; resText: string | null };
 const seen = (capture: { observe(x: object): unknown[] }, p: Pair, at = 1000) =>
   capture.observe({
     url: p.url,
