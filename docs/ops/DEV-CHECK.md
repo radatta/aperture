@@ -132,7 +132,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   only a presigned URL the dev BFF just minted, after `assertPresignedDevUrl` checks the host is the dev
   Files bucket (`aperturedata-dev-files…`, so never prod's), the key is under `u/`, and the URL is signed.
   A deleted object answers that GET with 403, not 404 — the roles have no `s3:ListBucket`, so S3 hides
-  `NoSuchKey` — and `isGone` (`api.ts`) counts both as gone.
+  `NoSuchKey` — and `isGone` (`api/core.ts`) counts both as gone.
 - **The test user only.** The env file must name the test user, and before any write the signed-in
   session's email and `sub` (ID claims and access token) must match it — else `WRONG_USER`, no writes. The MCP
   session is held to the same check (below). A step can outlive the hour-long token (an iOS step runs minutes

@@ -470,7 +470,7 @@ describe('Send test rows never go stale', () => {
 });
 
 describe('the device id the dev check derives', () => {
-  // scripts/src/devcheck/api.ts harnessPushId pins the same value: the two derivations can't drift apart.
+  // scripts/src/devcheck/api/core.ts harnessPushId pins the same value: the two derivations can't drift apart.
   it('is a sha256(endpoint) hex prefix — devcheck-e2e is 54c270db2e586463', async () => {
     const d = await env().make().subscribePush(input('https://web.push.apple.com/devcheck-e2e'));
     expect(d.id).toBe('54c270db2e586463');
