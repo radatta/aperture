@@ -57,7 +57,9 @@ each reason:
 - the file is fresh: `heartbeat` at most 180 s old (and at most 60 s ahead)
 - the last start was at least 120 s ago (a junk or future stamp is ignored, so spacing never blocks for good)
 
-The limits are `scripts/board/limits.json` → `pace`, each falling back to that default. A missing, stale or
+The limits are `scripts/board/limits.json` → `pace`, each falling back to that default. The CPU PSI limit matches the
+watcher's own CPU trip (40, lowered from 60 on 2026-11-17); change both together until the watcher reads this block
+(F239). A missing, stale or
 unreadable file **fails closed**: a dead watcher is the silent failure the gate exists for, and `--over-pace` always
 goes past it, so the hub is never stranded; the line names the watcher to restart. The board dir moves with
 `APERTURE_BOARD_DIR`, and no watcher writes anywhere else, so a start against another board dir needs `--over-pace`.
