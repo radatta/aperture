@@ -794,7 +794,18 @@ run_sim_ci() (
   # reads (AUTH_REJECTED, the bar already back on the app's origin). Same checks, more patience: the host check retried
   # for ~30 s (the password is still typed only after it passes, at both checks), each Home read 3 s further apart.
   eval "ci_orig_on_cognito() $(declare -f sim_on_cognito | sed 1d)"
-  sim_on_cognito() { local i; for i in 1 2 3 4 5 6 7 8 9 10; do ci_orig_on_cognito "$@" && return 0; sleep 3; done; return 1; }
+  # only the first check (the sheet loading) retries; the one just before the password stays a single read, so the
+  # proof that focus is in Password can't go stale (review S2); a job out of time stops at once
+  sim_on_cognito() {
+    local i
+    [ $# -lt 2 ] || { ci_orig_on_cognito "$@"; return; }
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      ci_orig_on_cognito "$@" && return 0
+      [ ! -e "$SIM_P.late" ] && [ ! -e "$SIM_P.over" ] || return 1
+      sleep 3
+    done
+    return 1
+  }
   eval "ci_orig_landmark() $(declare -f sim_landmark | sed 1d)"
   sim_landmark() { local r; r="$(ci_orig_landmark)" || return 1; [ "$r" = already ] || sleep 3; printf '%s\n' "$r"; }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
