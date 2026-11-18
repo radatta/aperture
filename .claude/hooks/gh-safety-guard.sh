@@ -11,7 +11,7 @@
 #  - git push to a protected/deploy branch (main/master/dev) — by current branch OR explicit target
 #    (every push check also catches git's global options before `push`: `git -C dir push`, `git -c k=v push`)
 #  - `pnpm bot push` aimed at a protected branch, any `pnpm bot` force flag; `gh pr merge|review` (the human merges)
-#  - any Bash line touching `.secrets/` except a bare ls/stat (the bot key; secrets-read-guard.sh covers Read/Grep/Glob)
+#  - any Bash line touching a `.secrets/` dir (any depth, any case) except a bare ls/stat (secrets-read-guard.sh covers Read/Grep/Glob)
 #  - gh auth login/refresh/token/setup-git (never manage credentials autonomously)
 #  - raw curl/wget against api.github.com (use `gh`)
 #
@@ -74,14 +74,16 @@ if echo "$COMMAND" | grep -qE '\bgh[[:space:]]+pr[[:space:]]+(merge|review)\b|\b
   deny "\`gh pr merge\` / \`gh pr review\` are blocked — reviewing and merging PRs are the user's."
 fi
 
-# The bot's private key. A bare `ls`/`stat` (names and modes, no content) is the only access. `\.secret` as a
-# prefix, so `.secret?/` and `.secret*` globs count too. Not a wall — a recursive grep from a parent dir still
-# walks into it; the CLI and the gitignore are what keep the key out of transcripts.
+# Every `.secrets/` dir, at any depth (the root one: the bot key, the devcheck session; `cdk/.secrets/`: cdk's stage
+# secrets). A bare `ls`/`stat` (names and modes, no content) is the only access. `\.secret` as a prefix, so
+# `.secret?/` and `.secret*` globs count too, in any case (the /workspace mount is case-insensitive). Not a wall — a
+# recursive grep from a parent dir still walks into it; the in-process readers (`pnpm bot`, `pnpm devcheck`, cdk
+# synth) and the gitignore are what keep the values out of transcripts.
 # The exception is matched on the WHOLE command (bash =~, newline excluded) — grep is per line, so
 # `ls .secrets` + a second line would pass.
 LS_ONLY=$'^[[:space:]]*(ls|stat)[[:space:]][^;&|<>`$()\n]*$'
-if echo "$COMMAND" | grep -qE '(^|[^[:alnum:]_])\.secret' && ! [[ $COMMAND =~ $LS_ONLY ]]; then
-  deny "Touching \`.secrets/\` from Bash is blocked — it holds the bot's private key. The bot CLI reads it in-process (\`pnpm bot …\`); to check modes use a bare \`ls -la\` or \`stat\`."
+if echo "$COMMAND" | grep -qiE '(^|[^[:alnum:]_])\.secret' && ! [[ $COMMAND =~ $LS_ONLY ]]; then
+  deny "Touching a \`.secrets/\` directory from Bash is blocked, at any depth (repo root, \`cdk/\`): the bot key, the devcheck session, cdk's stage secrets. The tools that need them read them in-process (\`pnpm bot\`, \`pnpm devcheck\`, cdk synth); to check modes use a bare \`ls -la\` or \`stat\`."
 fi
 
 # `git push`, also behind git's global options (`-C dir`, `-c k=v`, `--no-pager`, …), which used to skip every

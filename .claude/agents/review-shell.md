@@ -1,6 +1,6 @@
 ---
 name: review-shell
-description: Shell and tooling lens of the feature workflow's review round (docs/ops/REVIEW.md) — portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands. Runs when a diff touches *.sh, .claude/, tools/, scripts/board or the lane, board and mailroom CLIs; not for general use.
+description: Shell and tooling lens of the feature workflow's review round (docs/ops/REVIEW.md) — portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands. Runs when a diff touches *.sh, .claude/, CLAUDE.md, tools/, scripts/board or the lane, board, mailroom and gate CLIs (scripts/src/{lane,board,mailroom,gate}/); not for general use.
 tools: Read, Grep, Glob, Bash
 model: opus
 effort: high
