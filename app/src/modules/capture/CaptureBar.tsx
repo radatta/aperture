@@ -82,9 +82,11 @@ const NUDGE_HELD = 'Looks sensitive — Enter again saves it as is';
 // Default Log; Tab cycles the mode; Enter submits; after submit it clears and stays focused, keeping
 // the current mode. It never asks for structure — no estimate/category/due field exists here by design.
 // Task mode is quick add (docs/areas/tasks/quick-add.md): you type it the way you'd say it (`aperture,
-// fix login bug due fri 30m`) and Haiku reads the structure out of it. Enter (Auto) clears at once and
-// saves what the parse returns; Review (✨ / ⌘Enter) shows the parse first and a second press saves exactly
-// that. A failed parse saves the line as typed and says so — never silently, never lost.
+// fix login bug due fri 30m`) and Sonnet reads the structure out of it — review first (the maintainer,
+// 2026-11-17): the first Enter / Send shows the parse (Send outlined), the button fills when it lands, and the
+// second press saves exactly that. ✨ (on by default, one-shot off) skips the model for the next save, and
+// ⌘Enter saves now — the shown parse, or the line as typed. A failed parse keeps the text and says why: Send
+// parses again, or "Save as typed" — never silently, never lost.
 // A line with ' | ' skips the model: it takes one line of the bulk grammar (`memo | ~30 #Admin`), and a red
 // error refuses the submit and keeps the text (docs/areas/tasks/bulk-add.md).
 // Once you've typed `#`, `~`, `@` or `due:` there, chips offer completions; a tap (or Tab) types the literal
@@ -120,6 +122,9 @@ export function CaptureBar({
   // One-shot too: "private" applies to the next log entry only (docs/areas/log). Sticky, it would quietly
   // keep hiding entries from Claude long after the one you meant.
   const [privateNext, setPrivateNext] = useState(false);
+  // One-shot as well, the other way round: ✨ (read with AI) is on for every task, and turning it off lets the
+  // next save skip the model — it's on again after, so the parse can't stay off unnoticed.
+  const [aiNext, setAiNext] = useState(true);
   // The "Make private?" nudge, per draft: × dismisses it, and a sensitive line's first Enter is held once
   // (the nudge says so) — the second saves it as typed. It never marks anything private on its own.
   const [nudge, setNudge] = useState({ dismissed: false, held: false });
@@ -134,7 +139,6 @@ export function CaptureBar({
     parked?: boolean; // a failed save whose text went to the parked list (the field was busy)
     restored?: boolean; // an unsent capture from a closed session was parked
     parsed?: string; // a quick add's readback (savedSummary)
-    unparsed?: string; // why a quick add saved as typed (parseFailText)
     isPrivate?: boolean; // a log saved private
     nudged?: boolean; // a sensitive log's first Enter, held by the nudge
     at: number;
@@ -340,7 +344,7 @@ export function CaptureBar({
   // stays put: it's telling you your text was restored and needs another try.
   useEffect(() => {
     if (!receipt || receipt.failed || receipt.blocked || receipt.restored) return;
-    const ms = receipt.parsed || receipt.unparsed ? PARSED_RECEIPT_MS : RECEIPT_MS;
+    const ms = receipt.parsed ? PARSED_RECEIPT_MS : RECEIPT_MS;
     const id = setTimeout(() => setReceipt(null), ms);
     return () => clearTimeout(id);
   }, [receipt]);
@@ -408,37 +412,34 @@ export function CaptureBar({
     const done = () => setReceipt({ mode: submitted, at: Date.now() });
     if (submitted === 'task' && line) saveTask(toCreateInput(line), goesToday, restore, null, {});
     else if (submitted === 'task') {
-      // Quick add (Auto): saves the shown preview if there is one, else waits on the parse — a Review
-      // still in flight for this text is reused, never asked twice. A failed parse saves the line raw.
-      // Until the create settles the capture is also in the outbox, so closing the app can't lose it.
-      const reviewed = reviewedPreview?.result;
+      // Quick add saves exactly the shown parse — or, with ✨ off, after a failed parse, or on ⌘Enter, the line
+      // as typed. It never parses here: that was the first press (send). The field clears before the create
+      // settles, so until it does the capture is also in the outbox: closing the app can't lose it.
+      const r = reviewedPreview?.result?.ok ? reviewedPreview.result : null;
       const sent = outboxAdd({ text: value, mode: 'task', toToday: goesToday, at: Date.now() });
       ownSent.current.add(sent);
       const settled = () => {
         outboxRemove(sent);
         ownSent.current.delete(sent);
       };
-      void (reviewed ? Promise.resolve(reviewed) : quick.parse(value))
-        .then((r) =>
-          r.ok
-            ? saveTask(r.input, goesToday, restore, settled, {
-                parsed: savedSummary(
-                  r.input,
-                  r.categoryLabel,
-                  r.today,
-                  r.dropped,
-                  dayStartHour,
-                  r.placeName,
-                ),
-              })
-            : saveTask({ title: value }, goesToday, restore, settled, {
-                unparsed: parseFailText(r),
-              }),
-        )
-        .catch(() => {
-          settled();
-          restore();
-        });
+      saveTask(
+        r ? r.input : { title: value },
+        goesToday,
+        restore,
+        settled,
+        r
+          ? {
+              parsed: savedSummary(
+                r.input,
+                r.categoryLabel,
+                r.today,
+                r.dropped,
+                dayStartHour,
+                r.placeName,
+              ),
+            }
+          : {},
+      );
     } else if (submitted === 'log')
       void createLog
         .mutateAsync({ text: value, isPrivate: goesPrivate })
@@ -451,6 +452,7 @@ export function CaptureBar({
     setText('');
     setCaret(0);
     setToToday(false);
+    setAiNext(true);
     // Stay in the current mode after a submit — if you're logging tasks or ideas, the next capture is
     // almost always the same kind, so snapping back to Log every time just made you re-pick it.
     inputRef.current?.focus();
@@ -461,7 +463,7 @@ export function CaptureBar({
     goesToday: boolean,
     restore: () => void,
     settled: (() => void) | null,
-    note: { parsed?: string; unparsed?: string },
+    note: { parsed?: string },
   ) {
     // An errand's receipt names its store: the roster's name, else the slug as typed (never "backlog").
     const placeName = (t: Task) =>
@@ -537,22 +539,29 @@ export function CaptureBar({
     inputRef.current?.focus();
   }
 
-  // Review: the first press parses into a preview; a press while the preview shows saves exactly it, and
-  // a press on a failed one parses again (Enter still saves it as typed). A ' | ' line has no model step —
-  // its grammar preview is already showing — so a press saves it.
-  function review() {
+  // Enter / Send. A task line in natural language, with ✨ on, is review first: the first press parses into a
+  // preview; a press while it shows saves exactly it, and a press on a failed one parses again ("Save as typed"
+  // under it, or ⌘Enter, saves it raw). A press while the parse runs waits for it. Anything else — another mode,
+  // a ' | ' line (no model step: its grammar preview already shows), ✨ off — saves.
+  function send() {
     const value = text.trim();
-    if (mode !== 'task' || !value) return;
+    if (!value) return;
+    if (mode !== 'task' || line || !aiNext) return submit();
     const p = livePreview(value);
-    if (line || p?.result?.ok) submit();
+    if (p?.result?.ok) submit();
     else if (!p || p.result) quick.review(value); // null result = a parse already running: wait for it
     inputRef.current?.focus();
   }
-  const reviewLabel = !preview?.result
-    ? 'Review before saving'
-    : preview.result.ok
-      ? 'Save reviewed task'
-      : 'Retry parse';
+  const reviewing = mode === 'task' && !line && aiNext;
+  const sendLabel = !reviewing
+    ? `Save ${mode}`
+    : !preview?.result
+      ? 'Review before saving'
+      : preview.result.ok
+        ? 'Save reviewed task'
+        : 'Retry parse';
+  // The button fills once there's something to save: a parse that landed, or anything that saves on its press.
+  const sendReady = reviewing ? !!preview?.result?.ok : !!text.trim() && !invalid && !awaiting;
 
   function update(value: string) {
     setText(value);
@@ -591,15 +600,15 @@ export function CaptureBar({
     // without preventDefault so the IME commits.
     const composing = e.nativeEvent.isComposing || e.keyCode === 229;
     // Shift+Enter is a newline — the log takes multi-line entries now that the field can show them.
+    // ⌘/Ctrl+Enter saves now: a task's shown parse, or its line as typed — never a parse first.
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       if (composing) return;
       e.preventDefault();
-      if (mode === 'task') review();
-      else submit();
+      submit();
     } else if (e.key === 'Enter' && !e.shiftKey) {
       if (composing) return;
       e.preventDefault();
-      submit();
+      send();
     } else if (e.key === 'Tab') {
       e.preventDefault();
       // Tab takes the first chip while chips show; Shift+Tab always switches mode (the escape hatch).
@@ -705,8 +714,8 @@ export function CaptureBar({
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
           onKeyDown={onKeyDown}
-          // Relabels the phone's return key (iOS 13.4+); a label only — Enter already saves in every
-          // mode — and static, since iOS ignores runtime changes to it.
+          // Relabels the phone's return key (iOS 13.4+); a label only — Enter sends in every mode (a task's
+          // first one reads it) — and static, since iOS ignores runtime changes to it.
           enterKeyHint="send"
           placeholder={placeholderFor(mode, toToday)}
           aria-label={`Capture ${mode}`}
@@ -717,23 +726,25 @@ export function CaptureBar({
             'placeholder:text-ink-muted',
           )}
         />
-        {/* No ✨ on a ' | ' line: it has no model step (⌘Enter still saves it, like Enter). */}
+        {/* No ✨ on a ' | ' line: it has no model step. On by default; off saves the next task as typed. */}
         {mode === 'task' && !line && (
           <button
             type="button"
             // Keep focus (and the phone keyboard) in the field, like the suggestion chips do.
             onMouseDown={(e) => e.preventDefault()}
-            onClick={review}
-            disabled={!text.trim()}
-            aria-label={reviewLabel}
-            title={`${reviewLabel} (⌘Enter)`}
+            onClick={() => setAiNext((v) => !v)}
+            aria-pressed={aiNext}
+            aria-label="Read with AI"
+            title={
+              aiNext
+                ? 'Read with AI: Send shows the parse first — tap to save the next task as typed'
+                : 'Off: the next task saves as typed — tap to read it with AI'
+            }
             className={cx(
               'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition',
-              preview?.result?.ok
-                ? 'border-teal bg-teal-soft text-teal ring-1 ring-teal'
-                : text.trim()
-                  ? 'border-teal text-teal hover:bg-teal-soft'
-                  : 'border-line text-ink-subtle',
+              aiNext
+                ? 'border-teal bg-teal-soft text-teal'
+                : 'border-line text-ink-subtle hover:text-ink',
             )}
           >
             <SparkleIcon size={16} />
@@ -745,16 +756,19 @@ export function CaptureBar({
           // grow under the finger, and the click would land elsewhere. It's still a plain button for keys.
           // mousedown, not pointerdown: cancelling pointerdown drops the click of a WebKit touch tap.
           onMouseDown={(e) => e.preventDefault()}
-          onClick={submit}
+          onClick={send}
           disabled={!text.trim()}
           // Refused, not disabled: a tap must still say why (a dead button on iPhone is silent).
           aria-disabled={invalid || awaiting || undefined}
-          aria-label={`Save ${mode}`}
+          aria-label={sendLabel}
+          title={reviewing ? `${sendLabel} (⌘Enter saves now)` : undefined}
           className={cx(
-            'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition',
-            text.trim() && !invalid && !awaiting
-              ? 'bg-teal text-surface hover:opacity-90'
-              : 'border border-line text-ink-subtle',
+            'mb-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition',
+            sendReady
+              ? 'border-teal bg-teal text-surface hover:opacity-90'
+              : reviewing && text.trim()
+                ? 'border-teal text-teal hover:bg-teal-soft' // outlined until the parse lands: commit, then push
+                : 'border-line text-ink-subtle',
           )}
         >
           <SendIcon size={16} />
@@ -815,24 +829,28 @@ export function CaptureBar({
               ))}
             </>
           ) : (
-            <Text size="xs" tone="gold" className="break-words">
-              Couldn’t parse ({parseFailText(preview.result)}) — Retry parse, or Enter saves it as
-              typed
-            </Text>
+            <div className="flex flex-wrap items-baseline gap-x-2">
+              <Text size="xs" tone="gold" className="min-w-0 break-words">
+                Couldn’t parse ({parseFailText(preview.result)}) — Send tries again
+              </Text>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={submit}
+                className="min-h-8 shrink-0 rounded-md px-1 text-xs text-teal hover:underline"
+              >
+                Save as typed
+              </button>
+            </div>
           )}
         </div>
       )}
       {/* What a quick add saved, readable on a phone (the receipt above truncates), so it wraps. Hidden
           from screen readers: the receipt's live region already announced the same summary. It gives
           way as soon as you start the next capture or switch modes. */}
-      {!text && mode === 'task' && (shown?.parsed || shown?.unparsed) && (
-        <Text
-          size="xs"
-          tone={shown.parsed ? 'teal' : 'gold'}
-          aria-hidden
-          className="block break-words px-2 pt-1"
-        >
-          {shown.parsed ?? `Saved as typed — couldn’t parse (${shown.unparsed})`}
+      {!text && mode === 'task' && shown?.parsed && (
+        <Text size="xs" tone="teal" aria-hidden className="block break-words px-2 pt-1">
+          {shown.parsed}
         </Text>
       )}
       {/* Not a live region either: the field points here, and a held Enter announces through the receipt. */}
@@ -942,7 +960,7 @@ function Hint({ suggesting, task }: { suggesting: boolean; task: boolean }) {
       {suggesting
         ? 'Tab accepts · Enter saves · Shift+Tab switches'
         : task
-          ? 'Enter saves · ⌘Enter reviews · Tab switches'
+          ? 'Enter reads it, again saves · ⌘Enter saves now'
           : 'Tab switches · Enter saves · Shift+Enter new line'}
     </Text>
   );
@@ -964,7 +982,6 @@ function Receipt({
     parked?: boolean;
     restored?: boolean;
     parsed?: string;
-    unparsed?: string;
     isPrivate?: boolean;
     nudged?: boolean;
   };
@@ -1003,14 +1020,6 @@ function Receipt({
   // On a phone the row leaves the receipt ~115px, so a long one ("due tomorrow 4pm, by its time",
   // "backlog (couldn’t plan it)") takes a second line there, never losing the part that says where.
   const wrap = 'block truncate pr-1 max-sm:line-clamp-2 max-sm:whitespace-normal';
-  // Not a failure — the task is saved — but it isn't what you meant, so it reads gold, not teal.
-  if (receipt.unparsed)
-    return (
-      <Text size="xs" tone="gold" className={wrap}>
-        Saved unparsed → {r.label}
-        <span className="sr-only">: couldn&apos;t parse ({receipt.unparsed}), saved as typed</span>
-      </Text>
-    );
   return (
     <Text size="xs" tone="teal" className={wrap}>
       {r.text} → {r.label}
