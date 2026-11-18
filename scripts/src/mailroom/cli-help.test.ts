@@ -127,6 +127,15 @@ describe('the guard lets real invocations through', () => {
     expect(err[0]).toMatch(/pick one/);
     untouched();
   });
+  it('sim-trial --switcher runs the switcher trial with its tag and round, not the input-gap one', async () => {
+    const trials = await import('./sim-trial.ts');
+    vi.mocked((await import('./submit.ts')).hostjobsDir).mockImplementationOnce(() => '/hj');
+    await expect(main(['sim-trial', '--tag', 'sw', '--round', '1', '--switcher'])).rejects.toThrow(
+      REACHED,
+    );
+    expect(trials.switcherTrial).toHaveBeenCalledWith(expect.anything(), 'sw', undefined, 1);
+    expect(trials.simTrial).not.toHaveBeenCalled();
+  });
   it('sim-trial --switcher with --icon is two trials: exit 2, nothing run', async () => {
     expect(await main(['sim-trial', '--tag', 'x', '--icon', '--switcher'])).toBe(2);
     expect(err[0]).toMatch(/pick one/);

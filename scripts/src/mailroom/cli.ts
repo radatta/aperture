@@ -29,7 +29,7 @@ export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its
                                                  the input-gap trial: first-tap drops per target and way of tapping (~40 min;
                                                  one round ~6); --keys: per keys/erase variant instead (~15 min); --icon: icon
                                                  taps only, 1 s vs 3 s after Home, drops attributed by the sim's log (~22 min);
-                                                 --switcher: 3 × 8 app switcher kills, kills per swipe rung (~15–25 min)`;
+                                                 --switcher: 4 × 6 app switcher kills, kills per swipe rung (~15–25 min)`;
 
 // Every command's allowed flags; anything else refuses before it runs (bot/help.ts).
 export const FLAGS: Record<string, Spec> = {

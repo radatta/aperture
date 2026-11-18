@@ -961,8 +961,13 @@ sim_op_kill() {
   SIM_NOTE="killed by $m; web: $(sim_web_alive && echo alive || echo gone)$SIM_NOTE"
 }
 
-# The standalone web app's process, by name (a backgrounded app is still running; a killed one is gone).
-sim_web_alive() { pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >/dev/null 2>&1; }
+# The standalone web app's process, by name (a backgrounded app is still running; a killed one is gone). Only pgrep's
+# "no match" (1) is gone: an error (2, 3) reads as alive, so a broken check never passes a kill.
+sim_web_alive() {
+  local rc=0
+  pgrep -f 'RuntimeRoot/Applications/Web.app/Web' >/dev/null 2>&1 || rc=$?
+  [ "$rc" != 1 ]
+}
 
 # What one tree read shows in front: SIM_FRONT_APP (the first AXApplication's label) and SIM_FRONT_PAGE (the Home
 # Screen's "Page N of M" pill, or "").
@@ -973,7 +978,7 @@ sim_front() {
   SIM_FRONT_PAGE="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
 }
 
-# The app switcher kill (IOS-CHECK.md -> kill). Double home opens the switcher, a swipe up on Aperture's card kills the
+# The app switcher kill (IOS-CHECK.md -> Switcher kill). Double home opens the switcher, a swipe up on Aperture's card kills the
 # app, a tap on the background leaves (a home press doesn't). Each step is read back, since AXe reports presses and
 # swipes iOS never got (job …192707Z…-relaunch-bd33): swipe only once the switcher is in front (neither the app nor the
 # Home Screen), and tap only once the app's process is gone and the switcher is still in front, so neither lands in a
@@ -1011,7 +1016,7 @@ sim_card() {
   return 0
 }
 
-# The swipe's ladder, one shape per rung, ordered by the trial (IOS-CHECK.md -> kill): name, the start at a share (%)
+# The swipe's ladder, one shape per rung, ordered by the trial (IOS-CHECK.md -> Switcher kill): name, the start at a share (%)
 # of the card's height, duration (s), then AXe's --delta (px between points), --pre-delay and --post-delay ("-": none).
 sim_card_rung() {
   case "$1" in
@@ -1098,11 +1103,14 @@ sim_kill_switcher() {
     [ "$rc" != 1 ] || return 1
     if [ "$rc" = 2 ]; then
       # A swiped card can go after the polls: the process gone too is the kill, late.
-      if [ -n "$swiped" ] && ! sim_web_alive; then sim_switcher_leave "$tel; late$why"; return; fi
+      if [ -n "$swiped" ] && sim_web_gone; then sim_switcher_leave "$tel; late$why"; return; fi
       why="$why; no Aperture card at ${SIM_PT_CARD/ /,} ($SIM_CARD_E)"
-      # leave the switcher so the next press, or op, starts from the Home Screen
-      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-      sleep 1
+      # leave the switcher, read afresh, so the next press, or op, starts from the Home Screen (never a tap in the app)
+      sim_front || return 1
+      if [ "$SIM_FRONT_APP" != Web ] && [ -z "$SIM_FRONT_PAGE" ]; then
+        ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+        sleep 1
+      fi
       insw=""
       continue
     fi
@@ -1122,12 +1130,14 @@ sim_kill_switcher() {
     [ "$w" = sw ] || insw=""
     [ "$rung" -lt 3 ] || break
   done
-  # Out of presses or rungs: leave the switcher only when the last read showed it in front.
+  # Out of presses or rungs. A process that exits only now (after the last rung's polls) is still the kill, late.
+  if [ -n "$swiped" ] && sim_web_gone; then sim_switcher_leave "$tel; late$why"; return; fi
+  # Leave the switcher only when the last read showed it in front.
   [ -z "$insw" ] || ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
   # Every rung swiped the card and the app ran on: the gesture not killing, not a dropped input. Needs you (the
   # maintainer, option a), never a pass.
   if [ "$rung" = 3 ]; then
-    sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app (IOS-CHECK.md -> Failures)$tel$why"
+    sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app$tel$why"
     return 1
   fi
   if [ -z "$swiped" ] && [ "${why#*no Aperture card}" != "$why" ]; then

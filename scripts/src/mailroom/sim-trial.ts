@@ -585,12 +585,13 @@ export async function simTrial(
   return code;
 }
 
-// The switcher trial (`--switcher`, IOS-CHECK.md → kill): a job signs in, then kills the app SWITCHER_KILLS times by the
+// The switcher trial (`--switcher`, IOS-CHECK.md → Switcher kill): a job signs in, then kills the app SWITCHER_KILLS times by the
 // app switcher, each followed by a launch and the signed-in check, as the relaunch row does. Each kill's note records
 // every swipe of sim.sh's ladder ("; s1 flick 339,600 alive>sw; s2 lead 339,600 gone@0.5"); this sums them per rung.
-// A failed kill (or check) ends its job; the next round starts afresh.
-export const SWITCHER_ROUNDS = 3;
-export const SWITCHER_KILLS = 8;
+// A failed kill (or check) ends its job; the next round starts afresh. Six kills keep a round (~3–6 min, a kill that
+// climbs every rung ~35 s plus its launch) well inside the 600 s cap.
+export const SWITCHER_ROUNDS = 4;
+export const SWITCHER_KILLS = 6;
 export function switcherPlan(last: boolean): SimParams {
   const steps: IosOp[] = [{ op: 'launch' }, { op: 'signIn' }];
   for (let k = 0; k < SWITCHER_KILLS; k++)
@@ -622,18 +623,23 @@ export function parseKillNote(note: string): KillSwipe[] {
 export interface SwitcherTally {
   kills: number; // kill ops that ran (passed or failed)
   killed: number;
-  noSwipe: number; // failed before any swipe (presses dropped, no card)
+  noSwipe: number; // failed (ASSERT) before any swipe: presses dropped, no card
+  errored: number; // ended by an error with no swipe in its note (a hung read, the budget, a failed leave)
+  untraced: number; // passed with no swipe in its note: a runner that predates the ladder
   rungs: Record<string, { sent: number; killed: number }>;
 }
 export function tallyKills(results: (SimResult | undefined)[]): SwitcherTally {
-  const t: SwitcherTally = { kills: 0, killed: 0, noSwipe: 0, rungs: {} };
+  const t: SwitcherTally = { kills: 0, killed: 0, noSwipe: 0, errored: 0, untraced: 0, rungs: {} };
   for (const r of results)
     for (const s of r?.steps ?? []) {
       if (s.op !== 'kill' || s.status === 'skipped') continue;
       t.kills++;
       if (s.status === 'pass') t.killed++;
       const sw = parseKillNote(s.note ?? '');
-      if (!sw.length && s.status !== 'pass') t.noSwipe++;
+      if (!sw.length)
+        if (s.status === 'pass') t.untraced++;
+        else if (s.status === 'fail') t.noSwipe++;
+        else t.errored++;
       for (const w of sw) {
         const k = `${w.rung} ${w.name}`;
         const c = (t.rungs[k] ??= { sent: 0, killed: 0 });
@@ -646,7 +652,7 @@ export function tallyKills(results: (SimResult | undefined)[]): SwitcherTally {
 export function switcherTable(tag: string, t: SwitcherTally): string[] {
   const pct = (a: number, b: number) => (b ? `${Math.round((100 * a) / b)}%` : '-');
   return [
-    `switcher trial ${tag}: ${t.killed} of ${t.kills} kills passed (${pct(t.killed, t.kills)}); ${t.noSwipe} failed before any swipe`,
+    `switcher trial ${tag}: ${t.killed} of ${t.kills} kills passed (${pct(t.killed, t.kills)}); ${t.noSwipe} failed before any swipe; ${t.errored} errored`,
     'rung        sent  killed  rate',
     ...Object.keys(t.rungs)
       .sort()
@@ -657,7 +663,8 @@ export function switcherTable(tag: string, t: SwitcherTally): string[] {
   ];
 }
 
-// Exit 0: every round ran all its kills clean; 1: a kill or check failed (its swipes still count); 2: a bad --tag or
+// Exit 0: every round ran all its kills clean; 1: a kill or check failed (its swipes still count), or a passed kill's
+// note had no swipe (a stale runner); 2: a bad --tag or
 // --round; 3: the Mac never answered (the trial stops there; what ran is still tallied).
 export async function switcherTrial(
   d: SimDeps,
@@ -694,7 +701,14 @@ export async function switcherTrial(
       }
     }
   }
-  for (const l of switcherTable(tag, tallyKills(results))) d.log(l);
+  const t = tallyKills(results);
+  for (const l of switcherTable(tag, t)) d.log(l);
+  if (t.untraced) {
+    d.log(
+      `${t.untraced} passed kill(s) with no swipe in the note: the Mac's runner predates the ladder (install --ref <sha>: MAILROOM.md → Install)`,
+    );
+    code = Math.max(code, 1);
+  }
   if (code) d.log('the sim may still be booted: pnpm mailroom sim-shutdown');
   return code;
 }

@@ -185,12 +185,13 @@ Home Screen app fine on the Mac) and `reboot`. Its steps, all in `jobs/sim.sh`:
   app nor the Home Screen; else pressed again (two presses in all). The only AXe-version-specific step (2.0.4: _Setup_);
   the batch's argv stays byte for byte, since ios-ci-probe's CI-side AXe routing keys on it (F209).
 - **Card** (`sim_card`): a point read at `SIM_PT_CARD` must be Aperture's card (`AXGenericElement "Aperture"`, never
-  Safari's), read until its frame holds still over two reads 0.5 s apart (four at most, else `moving`). No card: the
-  background is tapped and the switcher opened again.
+  Safari's), read until its frame holds still over two reads 0.5 s apart (four at most, else `moving`). No card: a
+  fresh tree read, the background tapped only with the switcher in front, and the switcher opened again.
 - **Swipe** (`sim_card_swipe`, `sim_card_rung`): up from the card's own frame, x mid its on-screen part, the start at the
   rung's share of its height (clear of the bottom edge), to `SIM_CARD_END_Y`. Then the process is checked now and up to
-  six more times 0.5 s apart (`sim_web_gone`). Alive: what's in front decides: the switcher takes the next rung, the app
-  or the Home Screen (the swipe left it) is pressed again.
+  six more times 0.5 s apart (`sim_web_gone`; only `pgrep`'s "no match" is gone, an error reads as alive). Alive: what's
+  in front decides: the switcher takes the next rung, the app or the Home Screen (the swipe left it) is pressed again.
+  A process that exits only after its polls, with the card gone or the ladder out, is the kill, noted `late`.
 - **Leave** (`sim_switcher_leave`): the background tap, only with the process gone and the switcher still in front (it
   can close itself with the last card), so it never lands in a live app or on the Home Screen.
 
@@ -213,10 +214,12 @@ relaunch jobs on AXe 1.8.0 since its read-back landed (11-09 to 11-17): 6 on the
 still up after both swipes (not a slow exit), sitting right of centre with its right edge off-screen. A search found no
 documented dismiss threshold, no AXe switcher primitive and no iOS 27 switcher change.
 
-**The trial:** `pnpm mailroom sim-trial --tag <t> --switcher` (`sim-trial.ts` → `switcherPlan`): three jobs, each signs
-in, then eight `kill switcher` + `launch` + `expect signedIn`; a failed kill ends its job. It prints kills passed and,
-per rung, swipes sent, kills and the rate. It drives the dev test user on slot A's sim: take slot A's lock first (`pnpm
-bot lock wait --slot dev`). Rerun it after an AXe bump or a new Xcode, and re-order the ladder by its rates.
+**The trial:** `pnpm mailroom sim-trial --tag <t> --switcher` (`sim-trial.ts` → `switcherPlan`): four jobs, each signs
+in, then six `kill switcher` + `launch` + `expect signedIn`; a failed kill ends its job. It prints kills passed and, per
+rung, swipes sent, kills and the rate; a passed kill whose note has no swipe means the Mac's runner predates the ladder
+(exit 1). It signs in and drives the dev test user on slot A's sim, so, unlike the input-gap trial, it holds slot A's
+lock: `pnpm bot lock wait --slot dev` while another branch holds it, then `pnpm bot lock acquire --slot dev`, and
+`pnpm bot lock release` after. Rerun it after an AXe bump or a new Xcode, and re-order the ladder by its rates.
 
 ## Proving the Mac side (a PR that changes `jobs/sim.sh`)
 

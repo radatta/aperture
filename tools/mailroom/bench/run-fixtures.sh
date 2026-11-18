@@ -85,7 +85,7 @@ trap 'rm -f -- "$TAPE"' EXIT
 jq -n --argjson d "$DONE_I" '{
   "capture@r1": {ms: 3000}, "capture@r2": {ms: 2000, steps: {"3": {note: "focused; tapped again (still there after the first)"}, "5": {note: "typed; retyped once (first read zq)"}}},
   "capture@r3": {ms: 1000, steps: {"4": {note: "erased; deleted more twice, 2 (first read zz)"}}},
-  "relaunch@r2": {steps: {"3": {note: "; the switcher didn'"'"'t open (SpringBoard, Page 1 of 2); web: gone"}}},
+  "relaunch@r2": {steps: {"3": {note: "; card 239,136 306x664 r2; s1 flick 339,600 alive>sw; s2 lead 339,600 gone@0; the switcher didn'"'"'t open (SpringBoard, Page 1 of 2); web: gone"}}},
   "relaunch@r3": {status: "fail", reason: "ASSERT", detail: "SWITCHER_FAILED", steps: {"3": {status: "fail", note: "no Aperture card in the app switcher in two tries; no Aperture card at 220,500 (AXGroup): was the app running? Rerun from a launch"}}},
   "done-form@r1": {status: "fail", reason: "ASSERT", detail: "MISS", steps: {"\($d)": {status: "fail", note: "no Done near 395"}}},
   "launch@r3": {status: "error", reason: "SIM_UNAVAILABLE", detail: "AX_TIMEOUT", steps: {"0": {status: "error", note: "describe-ui timed out eight times; icon tapped 3 times"}}}
@@ -140,7 +140,7 @@ why=""
 # an op over runs 1..3 [3000, 2000, 1000]: nearest-rank p50 2000, p95 3000
 [ -n "$why" ] || jqe '.ops[] | select(.job == "capture" and .i == 0) | .n == 3 and .p50 == 2000 and .p95 == 3000 and .max == 3000 and .min == 1000 and .run1Ms == 3000' "$S" || why="capture op 0"
 [ -n "$why" ] || jqe '.signals.retap == 1 and .signals.retype == 1 and .signals.iconRetap == 2 and .signals.extraDelete == 2
-  and .signals.switcherRetry == 2' "$S" || why="signals $(jq -c .signals "$S")"
+  and .signals.switcherRetry == 3' "$S" || why="signals $(jq -c .signals "$S")"
 # relaunch r3's SWITCHER_FAILED is "no Aperture card … was the app running?": a fail, not a dropped input
 [ -n "$why" ] || jqe '.fails.axTimeout == 1 and .fails.seedMissing == 1 and .fails.dropFails == 0
   and .fails.byReason == {"ASSERT/MISS": 1, "ASSERT/SWITCHER_FAILED": 1, "SIM_UNAVAILABLE/AX_TIMEOUT": 1}' "$S" || why="fails $(jq -c .fails "$S")"
