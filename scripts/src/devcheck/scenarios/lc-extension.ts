@@ -782,6 +782,17 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-nav-doc-then-back',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A nav the next problem’s doc noticed before the 500 ms poll did still counts: going straight back to the dismissed problem brings its pill back (F238)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a nav its doc noticed before the 500 ms poll did still counts: straight back, the pill returns',
+        why: `${noStep}; it needs the clock held between the doc and the way back, which only the fake page in jsdom can do`,
+      },
+    },
+    {
       id: 'ext-reopen-sitting',
       entry: 'extension',
       kind: 'edge',
