@@ -22,7 +22,7 @@ export type Limits = {
   // measured safe at 4 workers; 3+ unmeasured, estimated near the hard line). Was 4, from the 2026-10-13 edge.
   concurrency?: Record<string, number>;
   // At most this many active lanes (policy; `pnpm lanes start` enforces it, docs/ops/LANES.md).
-  lanes?: { maxActive: number };
+  lanes?: { maxActive: number; autoCompactWindow?: number }; // the window: lane/state.ts compactWindow
   classes: Record<string, ClassCost>;
 };
 
