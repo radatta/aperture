@@ -155,6 +155,9 @@ describe('plan', () => {
       ]),
     );
     expect(pkg(m, 'extension').tests).toContain('extension/test/overlay.test.ts');
+    const v = plan(ch('app/pwa/extensionVersion.ts'), TESTS);
+    expect(pkg(v, 'app').tests).toContain('app/src/pages/Settings/Settings.test.tsx');
+    expect(pkg(v, 'scripts').tests).toContain('scripts/src/devcheck/scenarios/index.test.ts');
   });
 
   it('app sources run the raw-glob scanners', () => {
