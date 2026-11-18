@@ -140,10 +140,28 @@ const leads = (label: string, live: Set<string>): Sample[] => [
   ].filter((s) => !live.has(s.line.split(/[\s,:]/)[0]!)),
 ];
 
-// One word, this run's own: no live category or earlier run's can match it, and it doesn't carry the marker
-// every sample line does (a line naming the marker would read as naming the category).
-const baitLabel = (nonce: string) =>
-  `quince${nonce.replace(/\d/g, (d) => 'qrstuvwxyz'[Number(d)]!)}`;
+// One real word no sample line is about, and not a live category (an earlier run's leftover included). A made-up
+// label ("quincerstu") read as noise, so a lead-in naming it missed twice on model nondeterminism (F249); a word
+// that reads like a category is filed like one. Never the marker every sample line carries.
+const BAIT_WORDS = [
+  'quince',
+  'damson',
+  'medlar',
+  'loquat',
+  'kumquat',
+  'tamarind',
+  'mulberry',
+  'sorrel',
+];
+const baitLabel = (nonce: string, live: Set<string>, skip = 0): string => {
+  const start = [...nonce].reduce((n, c) => n + c.charCodeAt(0), 0);
+  const free = BAIT_WORDS.map((_, i) => BAIT_WORDS[(start + i) % BAIT_WORDS.length]!).filter(
+    (w) => !live.has(w),
+  );
+  const word = free[skip];
+  if (!word) throw new Error(`every bait word is a live category: ${BAIT_WORDS.join(', ')}`);
+  return word;
+};
 
 const parsed =
   (parse: (line: string) => Promise<DevParseResult>, categoryId: string | null = null) =>
@@ -310,7 +328,7 @@ export const captureTitles: Scenario = {
         const live = new Set(
           (await ctx.api.reads.listCategories()).map((c) => c.label.toLowerCase()),
         );
-        const label = baitLabel(ctx.nonce);
+        const label = baitLabel(ctx.nonce, live);
         const cat = await ctx.api.writes.upsertCategory({ label, isWork: false });
         const parse = (line: string) => ctx.api.reads.parseTask(line);
         try {
@@ -357,8 +375,12 @@ export const captureTitles: Scenario = {
       async run(ctx) {
         const s = verbatim(marker(ctx.nonce))[0]!;
         // A category no line is about, live while the app parses (F229: a line is never forced into it).
+        const live = new Set(
+          (await ctx.api.reads.listCategories()).map((c) => c.label.toLowerCase()),
+        );
+        // Not api-sample's word (skip 1): its category may still be live when the two overlap.
         const cat = await ctx.api.writes.upsertCategory({
-          label: `${baitLabel(ctx.nonce)}ui`,
+          label: baitLabel(ctx.nonce, live, 1),
           isWork: false,
         });
         try {
