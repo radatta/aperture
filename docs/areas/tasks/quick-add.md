@@ -58,6 +58,7 @@ typed — couldn't parse (reason)` under the field (`timeout`, `unavailable: no 
 | Where                                   | What                                                                                                                          |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `packages/shared/src/quickParse.ts`     | `ParseTaskResult` contract, `validateParsedTask` (the server's field rules over Haiku's untrusted JSON), `runQuickParse` flow |
+| `packages/shared/src/titleWords.ts`     | `keepTitleWords`: the model's title lined up against the typed words — dropped words back, a used due phrase out              |
 | `lambdas/src/anthropic/`                | gateway (`noopAnthropic` / `FakeAnthropic` / `createLiveAnthropic`), the one prompt + JSON schema (`parsePrompt.ts`)          |
 | `lambdas/src/backend.ts` `parseTask`    | server owns today (`dayStartHour` in LA) and the active category list; the client sends only text                             |
 | `lambdas/src/mcp/tools.ts` `parse_task` | the same method for Raycast (agent token)                                                                                     |
@@ -131,6 +132,37 @@ autonomous build:
 - **Not built:** an editable preview (edit the text, Review again). The scoped Raycast token landed with
   voice capture (2026-11-16): Raycast and the Siri Shortcut post to `/api/capture` with a capture token —
   the same parse, plus voice-only time rules ([capture](capture.md)).
+
+## Decision log (2026-11-17, titles — an autonomous build)
+
+The title is the user's words, checked against the line rather than left to the model (`titleWords.ts`, run last
+in `validateParsedTask`). Two dev findings: the model dropped "typed" from "call the bank typed at 1 am" (10 of 10)
+and kept a due phrase it had used ("finish slides before 3pm" due 15:00; a dangling "send invoice until"), and it
+stripped "aperture," with no category set — the prompt's own example. The model's title is lined up, in order,
+against the typed words; then:
+
+- **A word the parse didn't use goes back**, in place, as typed — and a word the model only recapitalized takes
+  the user's casing again. The parse used a clock or clock range ("3pm to 4pm") when a time was set, "today" / "tomorrow" when they name the
+  due day ("the day after tomorrow" doesn't) or the date it named, a day part ("morning", "this afternoon"), a
+  duration whole ("an hour and a half"), a lone "due", and the leading category word (when the parse set that
+  category) — each with the word that leads it ("before", "due by", "this coming", "around", "~"); on a spoken
+  line also the said time and a leading "remind me … to". A clock the task is about ("move standup to 5pm", "prep
+  notes for the 3pm") isn't the due's: its words stay.
+- **A due phrase the parse used leaves the title** when it ends it and is the line's one stated clock, equal to the
+  due time: "before 3pm", "until 5pm", a bare "6pm", with a day beside it or with its own connector ("today 3pm",
+  "5pm friday", "due by friday 9am"), and an at/by/before/until it leaves dangling — never "on" or "to" ("turn
+  the heating on 7am", "decide what to work on tomorrow" keep theirs). A spoken "remind me … to" leaves even when
+  the model kept it. The server never strips a clock mid-title ("watch 9pm show", "the 3pm meeting"), but one
+  the model used for the time isn't put back ("watch show" at 21:00, dev 2026-11-17); a leading one ("3pm meeting prep"), a day the task is about ("prep for this friday
+  5pm") and a day with no clock ("pay rent today") stay. Before/until never fill a time: only the model's own does.
+- **A leading category word leaves only when it names the category the parse set** — exactly its label, with
+  `,` `:` or a spaced dash after it; with no separator the model's choice stands. "work, email sam" with no such
+  category keeps "work,".
+- **The model's title stands** when it doesn't line up (reworded, reordered), notes took the overflow, or a field
+  it set has no words for it ("end of month", "quarter past five"): the dropped words may have been that field's.
+  A restored title may run past the prompt's 80 characters.
+- The prompt also says it now: the category word only when it names a listed category, "before 3pm" / "until 5pm"
+  are due phrases, and a word beside a time is a title word.
 
 ## Decision log (2026-11-17, the maintainer)
 

@@ -76,6 +76,22 @@ export interface DevCategory {
   // from before the field lists as null (the areas scenario).
   area: 'school' | 'aperture' | 'recruiting' | 'personal' | null;
 }
+// What parseTask / parse_task answer (shared quickParse.ts ParseTaskResult) — the fields the check reads. It
+// writes nothing.
+export type DevParseResult =
+  | {
+      ok: true;
+      input: {
+        title: string;
+        categoryId?: string;
+        dueDay?: string;
+        dueTime?: string;
+        estimateMin?: number;
+        notes?: string;
+      };
+      categoryLabel: string | null;
+    }
+  | { ok: false; reason: string; detail?: string };
 export interface DevPlan {
   id: string;
   taskId: string;
@@ -755,6 +771,7 @@ export function createApiClient({
     listBacklog: () => call<DevTask[]>('listBacklog', []),
     getTask: (id: string) => call<DevTask | null>('getTask', [id]),
     listCategories: () => call<DevCategory[]>('listCategories', []),
+    parseTask: (text: string) => call<DevParseResult>('parseTask', [text]), // the real model; writes nothing
     listPlansForDay: (day: string) => call<DevPlan[]>('listPlansForDay', [day]),
     listHabits: () => call<DevHabit[]>('listHabits', []),
     listRolls: () => call<DevRoll[]>('listRolls', []),

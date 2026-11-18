@@ -60,12 +60,19 @@ const AMPM = new RegExp(
   `\\b(\\d{1,2}|${HOUR_WORD})(?::(\\d{2})|${MINUTE_WORD})?\\s*(a\\.?m\\.?|p\\.?m\\.?)(?=\\s|$|[,.;!?])`,
   'i',
 );
+// "half past five pm", "quarter past 9 am", "quarter to six pm": the am/pm belongs to the hour named — read
+// alone, "five pm" would be 17:00, half an hour early (F208, 2026-11-17).
+const PAST_TO = new RegExp(
+  `\\b(half\\s+past|quarter\\s+past|quarter\\s+to)\\s+(\\d{1,2}|${HOUR_WORD})\\s*(a\\.?m\\.?|p\\.?m\\.?)(?=\\s|$|[,.;!?])`,
+  'i',
+);
 const H24 = /\b([01]?\d|2[0-3]):([0-5]\d)\b/;
 const NOON = /\bnoon\b/i;
 const MIDNIGHT = /\bmidnight\b/i;
-// A bare hour: "at 5", "at 5:30", "at five", "at five thirty", "5 o'clock", "five o'clock".
+// A bare hour: "at 5", "at 5:30", "at five", "at five thirty", "5 o'clock", "five o'clock". "at 5 o'clock" is
+// said whole, so the title loses all of it (titleWords.ts), not "at 5" alone.
 const AT_HOUR = new RegExp(
-  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d)|${MINUTE_WORD})?(?=\\s|$|[,.;!?])`,
+  `\\bat\\s+(\\d{1,2}|${HOUR_WORD})(?::([0-5]\\d)|${MINUTE_WORD})?(?:\\s*o['’]?\\s?clock\\b)?(?=\\s|$|[,.;!?])`,
   'i',
 );
 const OCLOCK = new RegExp(`\\b(\\d{1,2}|${HOUR_WORD})\\s*o['’]?\\s?clock\\b`, 'i');
@@ -100,6 +107,20 @@ export function spokenTimeIn(line: string): SpokenTime | null {
   // A minute given as digits ("5:30") or as a word ("five thirty").
   const minuteOf = (digits: string | undefined, word: string | undefined) =>
     digits ? Number(digits) : word ? num(word.replace(' ', '-')) : 0;
+  const pastTo = PAST_TO.exec(line);
+  if (pastTo) {
+    const h = num(pastTo[2]!);
+    if (h >= 1 && h <= 12) {
+      const pm = /^p/i.test(pastTo[3]!);
+      const by = /^half/i.test(pastTo[1]!) ? 30 : /past$/i.test(pastTo[1]!) ? 15 : -15;
+      const min = (((((h % 12) + (pm ? 12 : 0)) * 60 + by) % 1440) + 1440) % 1440;
+      return {
+        said: pastTo[0],
+        kind: 'clock',
+        hhmm: `${pad2(Math.floor(min / 60))}:${pad2(min % 60)}`,
+      };
+    }
+  }
   const ampm = AMPM.exec(line);
   if (ampm) {
     const h = num(ampm[1]!);
@@ -128,7 +149,9 @@ export function spokenTimeIn(line: string): SpokenTime | null {
         : null;
   // "at five twenty pm", "at 5 20": a minute the grammar doesn't read follows the hour — not a time it
   // can resolve, so none (the model's own clock takes over, quickParse.ts).
-  if (at && MORE_NUMBER.test(line.slice(at.index + at[0].length))) return null;
+  // No minute follows "o'clock": "at five o'clock one more time" is 5:00.
+  if (at && !/clock$/i.test(at[0]) && MORE_NUMBER.test(line.slice(at.index + at[0].length)))
+    return null;
   if (bare && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
     return { kind: 'bare', ...bare, part };
   return partMatch && part ? { said: partMatch[0], kind: 'part', part } : null;

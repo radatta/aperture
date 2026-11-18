@@ -139,7 +139,8 @@ Two checks keep the grammar honest:
   title: "look at one of the leases", "email the team about the 3pm meeting" or "read John 3:16" keep their
   words, so they get no time. A delay ("in 20 minutes") is a time whatever the model did with its title, and so
   is a stated clock after "at" / "by" ("call the bank at 1 am") when it's the line's only stated clock; it then
-  leaves the title — the model once returned that line unchanged with no time (2026-11-17).
+  leaves the title — the model once returned that line unchanged with no time (2026-11-17). After both, the title is lined up
+  against the words: a word the model dropped that no field used goes back ([quick-add](quick-add.md)).
 - **A stated clock the model missed is filled from the words** — typed lines too (Raycast, the app's quick
   add): the 2026-11-16 dev check saw "call the bank at 6 pm" come back with today and no time. Only when the
   model took those words out of its title, or they're an at/by clock ("watch 9pm show" kept them: no time); a
@@ -162,6 +163,7 @@ Two checks keep the grammar honest:
 | at 12 tonight / at 1 tonight / at 11 tonight | 9 PM        | tomorrow 12 AM / tomorrow 1 AM / today 11 PM     |
 | at five thirty / five thirty pm              | 6 AM        | today 5:30 PM                                    |
 | noon / midnight / 17:00                      | any         | as said, rolled if past                          |
+| half past five pm / quarter to six pm        | any         | 17:30 / 17:45 (2026-11-17), rolled if past       |
 
 - A time equal to now is past ("at 5" at 5:00 PM → tomorrow 5 AM).
 - A day the model gives is trusted unless it's calendar tomorrow and the words name no day (`DAY_WORD`:
@@ -229,6 +231,9 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
 - **2026-11-17 (the maintainer):** typed lines roll a past clock with no day as spoken ones do (a day they
   name stays as written), and a stated clock after
   "at" / "by" is the due time even when the model kept it in its title — [quick-add's decision log](quick-add.md).
+- **2026-11-17 (titles, autonomous):** a spoken title keeps every word the parse didn't use, as a typed one does;
+  the spoken time, "tonight", "morning" and a leading "remind me to" are the parse's — [quick-add's titles
+  log](quick-add.md).
 
 ## 8. Build record
 
@@ -242,4 +247,5 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
   recipe.
 - **tools:** Raycast posts to the route with its own capture token.
 - **cdk:** none — `/api/*` already allows every method and forwards the auth header to the same Lambda.
-- **Dev check:** the `siri-capture` scenario (`scripts/src/devcheck/scenarios/siri-capture.ts`).
+- **Dev check:** the `siri-capture` scenario (`scripts/src/devcheck/scenarios/siri-capture.ts`); titles, the
+  `capture-titles` scenario.

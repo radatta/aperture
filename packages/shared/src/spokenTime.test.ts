@@ -27,6 +27,23 @@ describe('spokenTimeIn', () => {
       expect(spokenTimeIn(line)).toBeNull();
   });
 
+  it('reads half past, quarter past and quarter to with the am/pm of the hour named', () => {
+    const clock = (line: string) => {
+      const t = spokenTimeIn(line);
+      return t?.kind === 'clock' ? [t.hhmm, t.said] : t;
+    };
+    expect(clock('call mum at half past five pm')).toEqual(['17:30', 'half past five pm']);
+    expect(clock('call mum at half past 5 p.m.')).toEqual(['17:30', 'half past 5 p.m.']);
+    expect(clock('stretch quarter past 9 am')).toEqual(['09:15', 'quarter past 9 am']);
+    expect(clock('call the bank quarter to six PM')).toEqual(['17:45', 'quarter to six PM']);
+    expect(clock('quarter to 12 pm')).toEqual(['11:45', 'quarter to 12 pm']);
+    expect(clock('quarter to 12 am')).toEqual(['23:45', 'quarter to 12 am']);
+    expect(clock('half past 12 am')).toEqual(['00:30', 'half past 12 am']);
+    // Without am/pm the grammar still has nothing to read: the model's clock takes over (quickParse.ts).
+    expect(spokenTimeIn('call mum at half past five')).toBeNull();
+    expect(said('call mum at half past five pm', MON, '15:00')).toBe('2026-11-16 17:30');
+  });
+
   it('takes relative first, then a stated clock, then a bare hour, then a day-part', () => {
     expect(spokenTimeIn('call mum in 20 minutes at 5')).toEqual({
       said: 'in 20 minutes',
@@ -96,11 +113,16 @@ describe('spokenTimeIn', () => {
     expect(bare('call mum at five')).toBe('5:0');
     expect(bare("call mum at 5 o'clock")).toBe('5:0');
     expect(bare('call mum five o’clock')).toBe('5:0');
+    // "at 5 o'clock" is said whole, o'clock and all.
+    expect(spokenTimeIn("call mum at 5 o'clock")?.said).toBe("at 5 o'clock");
+    expect(spokenTimeIn('call mum at five oclock today')?.said).toBe('at five oclock');
     expect(bare('call mum at 5:30')).toBe('5:30');
     expect(bare('call mum at 13')).toBeNull();
     // A minute the grammar can't read: no time at all, so the model's clock takes over.
     expect(spokenTimeIn('call mum at five twenty pm')).toBeNull();
     expect(spokenTimeIn('call mum at 5 20')).toBeNull();
+    expect(bare("call mum at five o'clock one more time")).toBe('5:0');
+    expect(bare("call mum at 5 o'clock 2 times")).toBe('5:0');
     expect(spokenTimeIn('call mum at seven forty')).toBeNull();
     expect(bare('call mum at five thirty')).toBe('5:30');
     expect(bare('call mum at 8 forty five')).toBe('8:45');

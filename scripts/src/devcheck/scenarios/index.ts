@@ -9,6 +9,7 @@ import { attachmentDelete } from './attachment-delete';
 import { calibrationIntegrity } from './calibration-integrity';
 import { captureDock } from './capture-dock';
 import { captureTask } from './capture-task';
+import { captureTitles } from './capture-titles';
 import { categorySuggest } from './category-suggest';
 import { cognitoRefresh } from './cognito-refresh';
 import { deadRows } from './dead-rows';
@@ -86,6 +87,7 @@ export const SCENARIOS: Scenario[] = [
   bffShapes,
   perSlotRuns,
   identifierCleanup,
+  captureTitles, // its one category is gone before the scenarios after it
   siriCapture, // late, and tears its tokens and tasks down itself: no later scenario sees its captures
   lcExtension, // rows only: the extension is proven off dev (scripts/src/lc-e2e) and in Safari
   failedReads, // its intercepts and a 30 s wait shouldn't sit in front of the others

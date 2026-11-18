@@ -82,6 +82,7 @@ describe('createMcpClient', () => {
       'listStories',
       'listTasks',
       'liveSitting',
+      'parseTask',
       'searchLog',
       'toolSchemas',
       'toolsList',
