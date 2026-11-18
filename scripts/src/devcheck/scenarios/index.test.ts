@@ -4,9 +4,13 @@ import { describe, expect, it } from 'vitest';
 import { IosAssert, validateSimParams, type IosOp } from '../../mailroom/sim.ts';
 import { MATRIX_EXEMPT, matrixProblems } from '../matrix';
 import {
+  LEGACY_ORDER,
   PROBE_COVERED,
   SCENARIOS,
   globMatch,
+  ordered,
+  scenarioFiles,
+  scenarioOf,
   probeSkip,
   selectScenarios,
   slowScenarios,
@@ -25,6 +29,49 @@ describe('SCENARIOS', () => {
 
   it('only smoke declares no rows', () => {
     expect(SCENARIOS.filter((s) => !s.rows.length).map((s) => s.id)).toEqual(MATRIX_EXEMPT);
+  });
+});
+
+describe('discovery', () => {
+  const sc = (id: string, order?: number): Scenario => ({
+    id,
+    title: id,
+    tiers: ['full'],
+    rows: [],
+    steps: [],
+    ...(order === undefined ? {} : { order }),
+  });
+
+  it('loads one scenario from every file on disk, its id its file name', () => {
+    expect(SCENARIOS.map((s) => `${s.id}.ts`).sort()).toEqual(scenarioFiles());
+    expect(new Set(SCENARIOS.map((s) => s.id)).size).toBe(SCENARIOS.length);
+  });
+
+  it('keeps the scenarios that predate it in their old order, and the list frozen', () => {
+    expect(LEGACY_ORDER).toHaveLength(44);
+    const legacy = new Set<string>(LEGACY_ORDER);
+    expect(SCENARIOS.map((s) => s.id).filter((id) => legacy.has(id))).toEqual([...LEGACY_ORDER]);
+  });
+
+  it('refuses a file with no scenario, two, or one under another id', () => {
+    expect(() => scenarioOf('x.ts', { helper: () => 1 })).toThrow(
+      'scenarios/x.ts exports 0 scenarios',
+    );
+    expect(() => scenarioOf('x.ts', { a: sc('x'), b: sc('y') })).toThrow('exports 2 scenarios');
+    expect(() => scenarioOf('x.ts', { a: sc('y') })).toThrow('its id must be its file name');
+    expect(scenarioOf('x.ts', { a: sc('x'), helper: 'not one' }).id).toBe('x');
+  });
+
+  it('places a new scenario by its order, ties by id, and refuses one with none', () => {
+    const smoke = SCENARIOS.find((s) => s.id === 'smoke')!; // 10
+    const areas = SCENARIOS.find((s) => s.id === 'areas')!; // 220
+    expect(ordered([areas, sc('b-new', 15), sc('a-new', 15), smoke]).map((s) => s.id)).toEqual([
+      'smoke',
+      'a-new',
+      'b-new',
+      'areas',
+    ]);
+    expect(() => ordered([smoke, sc('no-order')])).toThrow('scenario no-order has no order');
   });
 });
 
