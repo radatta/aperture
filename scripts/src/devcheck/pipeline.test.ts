@@ -157,6 +157,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       status: () => 200,
       request: () => ({ method: () => 'POST' }),
       json: async () => ({ id }),
+      text: async () => '',
     };
     const req = {
       url: () => url,
@@ -178,6 +179,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       status: () => 200,
       request: () => ({ method: () => 'POST' }),
       json: async () => places.get(id),
+      text: async () => '',
     };
     const req = {
       url: () => url,
@@ -200,6 +202,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       status: () => 200,
       request: () => ({ method: () => 'POST' }),
       json: async () => ({ token: `apc_${'s'.repeat(43)}`, info }),
+      text: async () => '',
     };
     const req = {
       url: () => url,
@@ -215,6 +218,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     path: string,
     status: number,
     request: { method(): string } = { method: () => 'POST' },
+    body = '',
   ) => {
     const res = {
       url: () =>
@@ -222,6 +226,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       status: () => status,
       request: () => request,
       json: async () => ({}),
+      text: async () => body,
     };
     for (const l of responseListeners) l(res);
   };
@@ -2562,5 +2567,99 @@ describe('runPipeline — the local check’s hooks', () => {
     });
     const off = await runPipeline(deps(w, [sc], memLedger()));
     expect(off.status).toBe('PASS');
+  });
+});
+
+// F233: the test user's daily sitting budget (budget.ts). A step that fails on the cap's refusal reads needs-you
+// with the reason, and so does the rest of its scenario — when the ledger's count makes the refusal plausible.
+describe('the sitting budget', () => {
+  const NOW = Date.parse('2026-11-17T20:00:00Z'); // 12:00 PT: the app day began at 04:00 PT
+  const CAP = '{"error":"Too many sittings started today."}';
+  const spent = (n: number) => {
+    const l = memLedger();
+    for (let i = 0; i < n; i++)
+      l.entries.push({
+        t: new Date(NOW - i * 1000).toISOString(),
+        run: 'old',
+        op: 'created',
+        id: `s${i}`,
+        via: 'api:lcSittingStart',
+      });
+    return l;
+  };
+  const run = (
+    w: ReturnType<typeof world>,
+    sc: Scenario,
+    ledger: ReturnType<typeof memLedger>,
+    over: Partial<PipelineDeps> = {},
+  ) => runPipeline(deps(w, [sc], ledger, { now: () => NOW, ...over }));
+
+  it('a thrown refusal with the budget spent: needs-you with the reason, the rest of the scenario too, the run green', async () => {
+    const w = world();
+    const sc = scenario(
+      async () => {
+        throw new Error(`lcSittingStart → HTTP 400: ${CAP}`);
+      },
+      async () => undefined,
+    )(w);
+    const r = await run(w, sc, spent(990));
+    expect(r.steps.map((s) => s.status)).toEqual(['needs-you', 'needs-you']);
+    expect(r.steps[0]!.note).toBe(
+      "the test user's 1000 sitting starts for today are spent (~990 counted); rerun after 04:00 PT",
+    );
+    expect(r.steps[1]!.note).toBe(r.steps[0]!.note);
+    expect(r.status).toBe('PASS');
+    expect(r.sittingStarts).toBe(990);
+  });
+
+  it('a refusal the step swallowed, then a failure: still the budget, read from the client’s answers', async () => {
+    const w = world();
+    let answer: (method: string, status: number, text: string) => void = () => undefined;
+    const sc = scenario(async () => {
+      answer('lcSittingStart', 400, CAP); // the step caught the refusal...
+      throw new Error('expected a sitting, got none'); // ...and failed on what followed
+    })(w);
+    const r = await run(w, sc, spent(700), {
+      makeApi: (_t, _f, onAnswer) => ((answer = onAnswer), w.api),
+    });
+    expect(r.steps[0]).toMatchObject({ status: 'needs-you' });
+    expect(r.status).toBe('PASS');
+  });
+
+  it('the page’s own Start refused for the cap counts too', async () => {
+    const w = world();
+    const sc = scenario(async (x) => {
+      x.respond('/api/lcSittingStart', 400, { method: () => 'POST' }, CAP);
+      throw new Error('the Start button never turned into a timer');
+    })(w);
+    const r = await run(w, sc, spent(700));
+    expect(r.steps[0]).toMatchObject({ status: 'needs-you' });
+  });
+
+  it('a refusal well under the cap stays a failure, saying to check the counter', async () => {
+    const w = world();
+    const sc = scenario(async () => {
+      throw new Error(`lcSittingStart → HTTP 400: ${CAP}`);
+    })(w);
+    const r = await run(w, sc, spent(12));
+    expect(r.steps[0]).toMatchObject({ status: 'fail' });
+    expect(r.steps[0]!.error).toMatch(/at ~12 counted — check the gate counter\)$/);
+    expect(r.codes).toContain('STEP_FAILED');
+  });
+
+  it('an unrelated failure is untouched, and a refusal answer from an earlier step doesn’t carry over', async () => {
+    const w = world();
+    let answer: (method: string, status: number, text: string) => void = () => undefined;
+    const sc = scenario(
+      async () => answer('lcSittingStart', 400, CAP), // refused, but the step expected that and passed
+      async () => {
+        throw new Error('boom');
+      },
+    )(w);
+    const r = await run(w, sc, spent(990), {
+      makeApi: (_t, _f, onAnswer) => ((answer = onAnswer), w.api),
+    });
+    expect(r.steps.map((s) => s.status)).toEqual(['pass', 'fail']);
+    expect(r.steps[1]!.error).toBe('boom');
   });
 });

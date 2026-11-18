@@ -140,6 +140,11 @@ export const INPUT_RULES: InputRule[] = [
     why: 'imports lambdas/src/rpc/argSpecs.ts by path at runtime (and so everything it imports)',
   },
   {
+    inputs: ['packages/shared/src/sittings.ts'],
+    tests: ['scripts/src/devcheck/budget.test.ts'],
+    why: 'pins the sitting caps and refusal texts to shared’s by reading the file',
+  },
+  {
     inputs: ['packages/shared/src/'],
     tests: ['scripts/src/devcheck/scenarios/siri-capture.ts'],
     why: 'loadShared imports shared’s dates/due/spokenTime/capture by URL; naming the module runs its importers',

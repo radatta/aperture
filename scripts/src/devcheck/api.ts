@@ -747,6 +747,7 @@ export interface ApiDeps {
   ledger: Ledger;
   run: string;
   sleep?: (ms: number) => Promise<void>;
+  onAnswer?: (method: string, status: number, text: string) => void; // every answer, before it's checked
 }
 
 // Every finance row the server keeps: the fixture's rows shift once at link and then stand still (DEV-CHECK.md
@@ -774,6 +775,7 @@ export function createApiClient({
   ledger,
   run,
   sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  onAnswer,
 }: ApiDeps) {
   let throttled = 0; // 429s answered so far, each retried below: a call that succeeded may still have been throttled
   // `retry(status, text)` says whether this answer is a throttle to back off from.
@@ -804,6 +806,7 @@ export function createApiClient({
         body: JSON.stringify({ args }),
       }),
     );
+    onAnswer?.(method, status, text);
     if (status !== 200) throw new Error(`${method} → HTTP ${status}: ${text.slice(0, 200)}`);
     return JSON.parse(text) as T;
   }
