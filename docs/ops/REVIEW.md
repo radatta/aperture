@@ -156,15 +156,18 @@ commit for the round.
   than the one before; or, from round 2 on, at a **twin** — a serious `cause=fix` or `cause=sibling` finding in
   the mechanism an earlier round's fix already patched (one regex family, one parser, one state machine): the
   design is wrong, not the code. Round 2 counts; a serious regression elsewhere (a caller, another module) does
-  not. Leave the twin unpatched: patch the round's other findings, gate, commit, then ask. `[ask-maintainer]`
-  with the open list and three options — another recheck, re-plan that piece, or ship with it logged as a
-  follow-up — and the lane's pick; the lane holds until the relay.
+  not. The round file names, for each serious `cause=fix` or `cause=sibling` finding, the earlier finding whose
+  fix patched that mechanism, or why it lies elsewhere. At any stop the round's findings stay unpatched:
+  `[ask-maintainer]` with the open list and three options — patch it and recheck, re-plan that piece, or ship with
+  it logged as a follow-up — and the lane's pick; the lane holds until the relay.
 - **The pick.** At a twin, cap or not: re-plan that piece — move the judgment to where it is made once (the
-  model, one parser) or narrow the scope. A relayed re-plan is built, gated and committed, then reviewed as its own
-  chain, as a dev fix is (_After a dev fix or a rebase_). At the cap with no twin, on a diff with no risk class:
-  ship after one final broad review — `code-reviewer`, plus `review-correctness` when the branch has code, on the
-  whole branch diff, not the fix range — the cap's open list and that review's S1/S2 fixed in one pass and gated,
-  with no further round; one it can't fix goes back as `[ask-maintainer]`. Not another narrow recheck.
+  model, one parser) or narrow the scope. A relayed re-plan, with the open list's other fixes, is built, gated and
+  committed, then reviewed afresh: a round 1 over its own diff with every lens its paths trigger, never skipped,
+  its rounds counted anew in `localNotes/review/replan<k>-round-<n>.md`. At the cap with no twin, on a diff with no
+  risk class: fix the open list, gate, commit, then one final broad review — every lens the branch's paths trigger
+  (_Picking lenses_), on the whole branch diff, not the fix range — its S1/S2 fixed and gated with no further
+  round, then ship; one it can't fix goes back as `[ask-maintainer]`. Not another narrow recheck. At any other
+  stop, the lane picks on the merits.
 
 ## After a dev fix or a rebase
 
@@ -173,8 +176,8 @@ A fix from dev testing (phases 8–9, a red `Branch` run included), or a rebase 
 whatever its size. Only a fix that touches no infra, shell, UI or extension trigger and no risk class, and is
 covered by a test it adds or changes, may skip `review-fixes`; say so in the record. Each dev fix or rebase is its own chain: its first
 recheck is the chain's round 1, the rest runs as round 2 and later (serious again → recheck that fix), the cap and the
-no-fewer comparison count within the chain, the twin from the chain's round 1 on, against any earlier fix to that
-mechanism, and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
+no-fewer comparison count within the chain, the twin in a dev-fix chain from its round 1 on, against any earlier
+fix to that mechanism (a rebase's bad resolution is serious again, not a twin), and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D<k>R<n>-<nn>`.
 
 - **Dev fix** — the range is `<the commit before the fix>..HEAD`; the list is the dev defects it fixes.
 - **Rebase** — note the head before rebasing (`git rev-parse HEAD`); after, the recheck reads
@@ -183,7 +186,7 @@ mechanism, and its files are `localNotes/review/dev<k>-round-<n>.md` with ids `D
 
 ## Lens gaps
 
-A serious finding in round 2 or later, or in any recheck of a dev or rebase chain, that the fixes didn't cause
+A serious finding in round 2 or later, or in any recheck of a dev, rebase or re-plan chain, that the fixes didn't cause
 (`cause=pre-existing`) means an earlier lens should have seen it.
 
 - **The lane** records it under `## Lens gaps` in its report — lens, kind, one line, round — and sends one
