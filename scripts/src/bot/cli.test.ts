@@ -11,7 +11,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { acquireLock, lockPerms, lockWait, main, parseSlot, tellingWhoToTell } from './cli.ts';
+import {
+  acquireLock,
+  lockChange,
+  lockPerms,
+  lockRelease,
+  lockStatus,
+  lockWait,
+  main,
+  parseSlot,
+  tellingWhoToTell,
+} from './cli.ts';
 import { PERMS } from './token.ts';
 import { fakeApi, fakeClock, ghError } from './fakes.ts';
 import { LockHeld, MainPending } from './lock.ts';
@@ -294,5 +304,95 @@ describe('lock wait and lock acquire hold back for main', () => {
     expect(err).toBeInstanceOf(MainPending);
     expect((err as Error).message).toMatch(/main's deploy is still to land on dev \(main-run\)/);
     expect(g.calls.filter((c) => c.method !== 'GET')).toEqual([]);
+  });
+});
+
+describe('the lock subcommands log to the board (lock-events.ts)', () => {
+  const R = '/repos/radatta/aperture';
+  // One slot's lock, held by `h` until deleted; slot B free. DELETE answers per `gone`.
+  const oneLock = (h: object | null, gone = false) => {
+    let ref: object | null = h;
+    return fakeApi({
+      [`GET ${R}/git/ref/locks/dev`]: () => {
+        if (!ref) throw ghError(404);
+        return { object: { sha: 't1', type: 'tag' } };
+      },
+      [`GET ${R}/git/ref/locks/devb`]: () => {
+        throw ghError(404);
+      },
+      [`GET ${R}/git/tags/t1`]: () => ({ message: JSON.stringify(ref) }),
+      [`DELETE ${R}/git/refs/locks/dev`]: () => {
+        if (gone) ref = null; // someone else's take-over got there first: release reads it gone
+        ref = null;
+        return undefined;
+      },
+    });
+  };
+  const mine = {
+    branch: 'ci-bot',
+    sha: 'c'.repeat(40),
+    takenAt: new Date(NOW - 20 * 60_000).toISOString(),
+    expiresAt: new Date(NOW + 25 * 60_000).toISOString(),
+  };
+
+  it('lockChange writes the cache, then one acquired per hold and a released on null', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const changed = lockChange(dir, clock);
+    changed(mine, 'dev');
+    changed({ ...mine, expiresAt: new Date(NOW + 45 * 60_000).toISOString() }, 'dev'); // a renew
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder.branch).toBe(
+      'ci-bot',
+    );
+    clock.t = NOW + 5 * 60_000;
+    changed(null, 'dev');
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toBeNull();
+    expect(devlockRows(dir).map((r) => [r.action, r.heldSec ?? null, r.by ?? null])).toEqual([
+      ['acquired', null, null],
+      ['released', 25 * 60, 'deploy-dev'],
+    ]);
+  });
+
+  it('lockRelease logs the hold it freed, and nothing when the branch holds none', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const said: string[] = [];
+    await lockRelease(oneLock(mine).api, 'ci-bot', dir, clock, (l) => void said.push(l));
+    await lockRelease(oneLock(null).api, 'ci-bot', dir, clock, (l) => void said.push(l));
+    await lockRelease(oneLock(holder).api, 'ci-bot', dir, clock, (l) => void said.push(l)); // flux's, not ours
+    expect(said).toEqual([
+      'dev lock released',
+      'ci-bot holds no dev lock — already free',
+      'ci-bot holds no dev lock — already free',
+    ]);
+    expect(devlockRows(dir)).toEqual([
+      expect.objectContaining({
+        action: 'released',
+        branch: 'ci-bot',
+        slot: 'dev',
+        heldSec: 20 * 60,
+        by: 'release',
+      }),
+    ]);
+    expect(JSON.parse(readFileSync(join(dir, 'devlock.json'), 'utf8')).holder).toBeNull();
+  });
+
+  it('lockStatus prints each slot, with its last take when one is logged', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bot-cli-'));
+    const clock = fakeClock(NOW);
+    const said: string[] = [];
+    await lockStatus(oneLock(holder).api, dir, clock, (l) => void said.push(l));
+    expect(said).toEqual([
+      expect.stringMatching(/^dev lock: flux @ aaaaaaa until /),
+      'devb lock: free',
+    ]);
+    lockChange(dir, clock)(mine, 'dev');
+    said.length = 0;
+    await lockStatus(oneLock(mine).api, dir, clock, (l) => void said.push(l));
+    expect(said).toEqual([
+      expect.stringMatching(/^dev lock: ci-bot @ ccccccc until /),
+      expect.stringMatching(/^ {2}last take of dev: ci-bot at \d\d:\d\d — no wait$/),
+      'devb lock: free',
+    ]);
   });
 });

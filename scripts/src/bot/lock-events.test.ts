@@ -1,5 +1,4 @@
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -153,11 +152,29 @@ describe('devlock events', () => {
     expect(rows()[1].waitedSec).toBe(55 * 60);
   });
 
+  it('a lock wait started late inside an open wait, running its full 55 min, keeps the wait whole', () => {
+    const { clock, rows, log } = board();
+    log.refused('mine', new LockHeld(other, 'dev'), []);
+    const reads = [{ slot: 'dev' as const, cur: { holder: other, tagSha: 't' } }];
+    clock.at(T0 + 10 * MIN); // the lane told the hub, then started the wait
+    log.blocked('mine', reads, [], ['dev']);
+    clock.at(T0 + 65 * MIN); // 65 min after the last written row, but the wait began inside the window
+    log.waitEnd('mine', { outcome: 'gave-up', slot: 'dev' }, ['dev'], T0 + 10 * MIN);
+    clock.at(T0 + 70 * MIN);
+    log.blocked('mine', reads, [], ['dev']);
+    clock.at(T0 + 100 * MIN);
+    log.waitEnd('mine', { outcome: 'free', slot: 'dev' }, ['dev'], T0 + 70 * MIN);
+    clock.at(T0 + 101 * MIN);
+    log.changed(held('mine', T0 + 101 * MIN), 'dev');
+    expect(rows().map((r) => r.action)).toEqual(['wait-start', 'wait-end', 'wait-end', 'acquired']);
+    expect(rows().at(-1)).toMatchObject({ waitSec: 101 * 60, waitFrom: '2026-11-18T19:00:00Z' });
+  });
+
   it('a wait silent past OPEN_WAIT_MS is abandoned: the take reports none, the next refusal starts afresh', () => {
     const { clock, rows, log } = board();
     log.refused('mine', new LockHeld(other, 'dev'), []);
     clock.at(T0 + OPEN_WAIT_MS + 1000);
-    log.waitEnd('mine', { outcome: 'free', slot: 'dev' }, ['dev'], T0);
+    log.waitEnd('mine', { outcome: 'free', slot: 'dev' }, ['dev'], T0 + OPEN_WAIT_MS + 1000); // a lock wait begun after the window lapsed
     log.refused('mine', new LockHeld(other, 'dev'), []);
     clock.at(T0 + OPEN_WAIT_MS + 5 * MIN);
     log.changed(held('mine', T0 + OPEN_WAIT_MS + 5 * MIN), 'dev');
@@ -301,9 +318,15 @@ describe('devlock events', () => {
     );
     log.changed(held('mine', T0), 'dev');
     expect(rows().at(-1)).toMatchObject({ action: 'acquired', waitSec: 0 });
-    chmodSync(join(dir, 'history'), 0o500); // unwritable
-    expect(() => log.refused('mine', new LockHeld(other), [])).not.toThrow();
-    chmodSync(join(dir, 'history'), 0o700);
+    // unwritable whoever runs it (root ignores modes): history is a file, so neither mkdir nor append can work
+    const blocked = mkdtempSync(join(tmpdir(), 'lock-events-'));
+    writeFileSync(join(blocked, 'history'), 'not a dir');
+    const stuck = lockLog(blocked, () => T0);
+    expect(() => {
+      stuck.refused('mine', new LockHeld(other), []);
+      stuck.changed(held('mine', T0), 'dev');
+    }).not.toThrow();
+    expect(readFileSync(join(blocked, 'history'), 'utf8')).toBe('not a dir');
   });
 
   it('lock status: the last take per slot, waited or not', () => {
@@ -313,11 +336,24 @@ describe('devlock events', () => {
     log.changed(held('mine', T0 + 14 * MIN), 'dev');
     log.changed(held('other', T0 + 14 * MIN), 'devb');
     const takes = lastTakes(readLockEvents(dir, clock.now()));
-    expect(takeLine(takes.dev, 'dev')).toMatch(
-      /^ {2}last take of dev: mine at \d\d:14 — waited 14 min$/,
+    const hm = (ms: number) =>
+      new Date(ms).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+    expect(takeLine(takes.dev, 'dev', clock.now())).toBe(
+      `  last take of dev: mine at ${hm(T0 + 14 * MIN)} — waited 14 min`,
     );
-    expect(takeLine(takes.devb, 'devb')).toMatch(/— no wait$/);
-    expect(takeLine(undefined, 'dev')).toBeNull();
+    expect(takeLine(takes.devb, 'devb', clock.now())).toMatch(/— no wait$/);
+    expect(takeLine(undefined, 'dev', clock.now())).toBeNull();
+    // under a minute says seconds, never "0 min"; a take from another local day carries its date
+    const short = { ...takes.dev!, waitSec: 20 };
+    expect(takeLine(short, 'dev', clock.now())).toMatch(/— waited 20 s$/);
+    const later = T0 + 2 * 86400_000;
+    expect(takeLine(takes.dev, 'dev', later)).toMatch(
+      new RegExp(
+        `at ${new Date(T0 + 14 * MIN).toLocaleDateString('en-CA')} ${hm(T0 + 14 * MIN)} —`,
+      ),
+    );
+    // only the last two UTC days are read: an older take shows no line, as the doc says
+    expect(lastTakes(readLockEvents(dir, T0 + 3 * 86400_000)).dev).toBeUndefined();
     expect(openWait(readLockEvents(dir, clock.now()), 'mine', clock.now())).toBeNull();
   });
 });

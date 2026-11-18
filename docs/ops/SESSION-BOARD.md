@@ -119,12 +119,15 @@ off lane reports. Best effort: no board or an unwritable one writes nothing and 
 | `released`   | `slot`, `sha`, `takenAt`, `heldSec` (null without `takenAt`), `lapsed?` (stops at `expiresAt`), `by: release\|deploy-dev` | `lock release`, or deploy-dev's release of a failed run                                                                                 |
 
 A wait is **open** from its `wait-start` until an `acquired` of the same branch, while its last start or end is at most
-60 min old (`OPEN_WAIT_MS`: `lock wait`'s 55-minute cap plus slack), so a refusal, a `lock wait` that gave up and the
-next one are one wait; the bot reads today's and yesterday's files to pair them across UTC midnight. An unpaired start
-is a wait abandoned. Hold start is `takenAt`, not `t` (a lost first row is written late, on the next re-take). Not
-logged: a lock left to lapse, and `acquireSlot` letting go of the branch's own lapsed lock. `pnpm bot lock status`
-prints each slot's last take and its wait. By hand: `jq -c 'select(.kind == "devlock" and .action == "acquired") |
-{t, slot, branch, waitSec}' history/events-*.jsonl`. The older `lease: "dev"` rows are the retired board lease (_Leases_).
+60 min old (`OPEN_WAIT_MS`: `lock wait`'s 55-minute cap plus slack) — judged, for a `lock wait`'s end, as of that wait's
+own start — so a refusal, a `lock wait` that gave up and the next one are one wait; the bot reads today's and
+yesterday's files to pair them across UTC midnight. An unpaired start is a wait abandoned. `waitSec` runs from the
+first start to the take, so it includes the session's reaction after a `wait-end`; the `wait-end` rows split the two.
+Hold start is `takenAt`, not `t` (a lost first row is written late, on the next re-take). Not logged: a lock left to
+lapse, and `acquireSlot` letting go of the branch's own lapsed lock. `pnpm bot lock status` prints each slot's last
+take in those two UTC days and its wait (nothing for an older one). By hand, in the container: `jq -c 'select(.kind ==
+"devlock" and .action == "acquired") | {t, slot, branch, waitSec}' /workspace/localNotes/board/history/events-*.jsonl`.
+The older `lease: "dev"` rows are the retired board lease (_Leases_).
 
 **Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
 envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard"|"lock", cap: {max, running,

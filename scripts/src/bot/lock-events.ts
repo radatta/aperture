@@ -102,12 +102,18 @@ export const lastTakes = (events: DevlockEvent[]): Partial<Record<Slot, Acquired
     events.flatMap((e) => (e.action === 'acquired' ? [[e.slot, e]] : [])),
   ) as Partial<Record<Slot, Acquired>>;
 
-const hhmm = (iso: string) =>
-  new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-export const takeLine = (a: Acquired | undefined, slot: Slot) =>
-  a
-    ? `  last take of ${slot}: ${a.branch} at ${hhmm(a.takenAt)} — ${a.waitSec ? `waited ${Math.round(a.waitSec / 60)} min` : 'no wait'}`
-    : null;
+// Local time, with the date when it isn't today (the window holds yesterday's UTC file too).
+export function takeLine(a: Acquired | undefined, slot: Slot, nowMs: number): string | null {
+  if (!a) return null;
+  const at = new Date(Number.isNaN(Date.parse(a.takenAt)) ? a.t : a.takenAt);
+  const when = `${at.toDateString() === new Date(nowMs).toDateString() ? '' : `${at.toLocaleDateString('en-CA')} `}${at.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}`;
+  const wait = !a.waitSec
+    ? 'no wait'
+    : a.waitSec < 60
+      ? `waited ${a.waitSec} s`
+      : `waited ${Math.round(a.waitSec / 60)} min`;
+  return `  last take of ${slot}: ${a.branch} at ${when} — ${wait}`;
+}
 
 export interface LockLog {
   refused(branch: string, err: LockHeld, mainSlots: Slot[]): void;
@@ -200,7 +206,9 @@ export function lockLog(dir: string | null, now: () => number): LockLog {
     }),
     waitEnd: safe((branch, r, slots, startedMs) => {
       if (r.outcome === 'ours') return; // its acquired closed the wait already
-      if (!openWait(readLockEvents(dir, now()), branch, now())) return;
+      // Open as of this wait's own start: a lock wait inside an open wait writes nothing until it ends, so judged at
+      // the end, a long gap before it plus its own 55 minutes would read as abandoned and split the wait.
+      if (!openWait(readLockEvents(dir, now()), branch, startedMs)) return;
       append({
         action: 'wait-end',
         branch,
