@@ -123,6 +123,12 @@ const state = {
 // fast run (the local check) a plain Date.now() is still behind it, and live and `last` — the newest by `at` —
 // would rightly keep the older event. Dev's round trips hid that.
 const nextAt = () => (state.aNewestAt = Math.max(Date.now(), state.aNewestAt + 1));
+// Settings → LeetCode on a full page load. The API Starts these steps check bypass the page, and a goto to the URL
+// the tab is already on (only the hash) is an in-page navigation: it would show the last step's cached sittings.
+async function settingsFresh(ctx: Ctx) {
+  await ctx.page.goto('about:blank');
+  await ctx.ui.goto('/settings#leetcode');
+}
 async function sittingA(ctx: Ctx) {
   if (!state.a) throw new Error('no sitting A — the start step failed');
   return ctx.api.reads.getSitting(state.a);
@@ -1436,7 +1442,7 @@ export const lcSittings: Scenario = {
       proves: ['settings-ext-differs'],
       title: 'Settings → LeetCode after A’s Start from an older build: rebuild needed',
       async run(ctx) {
-        await ctx.ui.goto('/settings#leetcode');
+        await settingsFresh(ctx);
         await ctx.page
           .getByText(`Extension: installed 0.0.1, latest ${LATEST_EXT} — rebuild needed.`)
           .waitFor({ timeout: 15_000 });
@@ -1736,7 +1742,7 @@ export const lcSittings: Scenario = {
         'Settings → LeetCode after C’s Start with a malformed build label: an older build, rebuild needed',
       async run(ctx) {
         if (!state.c) throw new Error('no sitting C — the double-start step failed');
-        await ctx.ui.goto('/settings#leetcode');
+        await settingsFresh(ctx);
         await ctx.page
           .getByText(
             `Extension: the last Start came from a build older than ${LATEST_EXT} — rebuild needed.`,
@@ -1884,7 +1890,7 @@ export const lcSittings: Scenario = {
       async run(ctx) {
         if (!state.d) throw new Error('no sitting D — the late-neighbour step failed');
         const line = `Extension: ${LATEST_EXT}, up to date as of your last Start.`;
-        await ctx.ui.goto('/settings#leetcode');
+        await settingsFresh(ctx);
         await ctx.page.getByText(line).waitFor({ timeout: 15_000 });
         await ctx.shot('settings-leetcode-ext-equal');
         await ctx.page.reload();
@@ -2025,7 +2031,7 @@ export const lcSittings: Scenario = {
         if (await ctx.page.getByRole('region', { name: 'Now' }).count())
           throw new Error('an ended sitting is still pinned as open');
         await ctx.shot('sittings-ended');
-        await ctx.ui.goto('/settings#leetcode');
+        await settingsFresh(ctx);
         const select = ctx.page.getByLabel('Sittings are reps of');
         await select.waitFor({ timeout: 15_000 });
         // The select reads empty (and disabled) until the Rolls load — wait for it to settle on the link.
@@ -2133,7 +2139,7 @@ export const lcSittings: Scenario = {
       title: 'Settings → LeetCode after a Start from a build newer than the app’s: no rebuild nag',
       async run(ctx) {
         if (!state.newer) throw new Error('no newer sitting — the parallel step failed');
-        await ctx.ui.goto('/settings#leetcode');
+        await settingsFresh(ctx);
         await ctx.page
           .getByText(`Extension: installed 99.0.0; this app was built with ${LATEST_EXT}.`)
           .waitFor({ timeout: 15_000 });
