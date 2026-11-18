@@ -89,8 +89,7 @@ export interface PwPage {
   evaluate<T>(expression: string): Promise<T>;
   // A script run in every document this page loads, before its own (the lc-e2e sets the fake page's switches).
   addInitScript?(script: string): Promise<void>;
-  // `type`: real key events into the focused field (the lc-e2e types into the trace card's closed root).
-  keyboard: { press(key: string): Promise<void>; type?(text: string): Promise<void> };
+  keyboard: { press(key: string): Promise<void> };
   screenshot(opts: { path: string; fullPage?: boolean }): Promise<unknown>;
   on(event: 'console', fn: (msg: { type(): string; text(): string }) => void): void;
   on(event: 'pageerror', fn: (err: Error) => void): void;

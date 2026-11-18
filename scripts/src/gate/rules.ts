@@ -76,6 +76,11 @@ export interface InputRule {
 // `inputs` adds `tests`. Every graph-blind test file is named in a rule's `tests`, ALWAYS_RUN or SELF_CONTAINED.
 export const INPUT_RULES: InputRule[] = [
   {
+    inputs: ['extension/manifest.json', 'app/pwa/extensionVersion.ts'],
+    tests: ['app/src/pages/Settings/Settings.test.tsx', 'scripts/src/devcheck/scenarios/'],
+    why: 'the extension’s version is the app’s "latest" (vitest.config.ts sets it from app/pwa/extensionVersion.ts) and lc-sittings.ts reads it from disk',
+  },
+  {
     inputs: ['extension/'],
     tests: ['extension/test/', 'scripts/src/lc-e2e/extension.test.ts'],
     why: 'test/load.ts reads extension/src/*.js from disk; lc-e2e boots the extension in a browser',
@@ -311,6 +316,8 @@ const STACK_ENTRY =
 export const MODULE_READERS: Record<string, string> = {
   'app/pwa/identityPages.ts':
     'app/pages/*.html (the app/pages/ rule) and identifiers.json (REPO_FULL)',
+  'app/pwa/extensionVersion.ts':
+    'extension/manifest.json (the manifest rule); only the vite and vitest configs import it (PACKAGE_FULL)',
   'app/src/modules/flux/engine/tracker.ts': 'a method named spawn: no process, no file',
   'app/vite.config.ts': 'app/pages and identifiers.json for the build; itself PACKAGE_FULL',
   'cdk/src/bin/aperture.ts': 'the cdk app entry: gitignored secret files; no test imports it',
@@ -344,6 +351,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/usage/scan.ts': `${RUNTIME}: transcript files, the cgroup`,
   'scripts/src/usage/store.ts': `${RUNTIME}: the usage cache`,
   'scripts/src/bot/cli.ts': 'scripts/board/hub.json (its rule runs the bot tests)',
+  'scripts/src/devcheck/scenarios/lc-sittings.ts': 'extension/manifest.json (the manifest rule)',
   'scripts/src/bot/config.ts': 'the gitignored bot env file and key',
   'scripts/src/bot/lock-cache.ts': `${RUNTIME}: localNotes/board`,
   'scripts/src/bot/logs.ts': `${RUNTIME}: fetched log files`,

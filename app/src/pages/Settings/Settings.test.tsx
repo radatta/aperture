@@ -224,6 +224,77 @@ describe('the coach’s AI pick switch', () => {
   });
 });
 
+// Settings → LeetCode's extension line: the newest sitting's build against the one the app was built with.
+// The line keeps the dash with the version (a no-break space); Testing Library collapses it to a space in the page.
+describe('the extension version line', () => {
+  const LATEST = import.meta.env.VITE_LC_EXTENSION_VERSION as string;
+  async function withStart(extensionVersion?: string | null) {
+    const api = createStubClient({ seed: false, storageKey: `settings-ext-${Math.random()}` });
+    if (extensionVersion === undefined) return api; // no sitting yet
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZZ',
+      problemSlug: 'two-sum',
+      problemTitle: 'Two Sum',
+      lang: 'python3',
+      startedAt: Date.now(),
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+      extensionVersion,
+    });
+    return api;
+  }
+  it('is the manifest’s version, from vite’s config', () => {
+    expect(LATEST).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+  it('no sitting yet: names the latest', async () => {
+    renderApp({ api: await withStart(), path: '/settings' });
+    expect(
+      await screen.findByText(
+        `Extension: latest ${LATEST}. Your next Start shows which build Safari runs.`,
+      ),
+    ).toBeTruthy();
+  });
+  it('the last Start came from this build: up to date', async () => {
+    renderApp({ api: await withStart(LATEST), path: '/settings' });
+    expect(
+      await screen.findByText(`Extension: ${LATEST}, up to date as of your last Start.`),
+    ).toBeTruthy();
+  });
+  it('an older build, or one from before versions: rebuild needed', async () => {
+    renderApp({ api: await withStart('0.0.1'), path: '/settings' });
+    expect(
+      await screen.findByText(`Extension: installed 0.0.1, latest ${LATEST} — rebuild needed.`),
+    ).toBeTruthy();
+  });
+  it('a failed read says so, with a Retry that recovers', async () => {
+    const api = await withStart(LATEST);
+    const real = api.listSittings.bind(api);
+    let fail = true;
+    vi.spyOn(api, 'listSittings').mockImplementation((...a) =>
+      fail ? Promise.reject(new Error('offline')) : real(...a),
+    );
+    const user = userEvent.setup();
+    renderApp({ api, path: '/settings' });
+    expect(
+      await screen.findByText('Couldn’t read which extension build your last Start came from.'),
+    ).toBeTruthy();
+    fail = false;
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+    expect(
+      await screen.findByText(`Extension: ${LATEST}, up to date as of your last Start.`),
+    ).toBeTruthy();
+  });
+  it('a Start with no version reads as a build from before versions', async () => {
+    renderApp({ api: await withStart(null), path: '/settings' });
+    expect(
+      await screen.findByText(
+        `Extension: the last Start came from a build older than ${LATEST} — rebuild needed.`,
+      ),
+    ).toBeTruthy();
+  });
+});
+
 describe('build stamp', () => {
   it('shows the build the page came from — "local" outside a deploy', async () => {
     renderApp({ path: '/settings' });

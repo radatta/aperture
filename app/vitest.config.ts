@@ -1,5 +1,6 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
+import { lcExtensionVersion } from './pwa/extensionVersion.ts';
 
 // auth.test.tsx rebuilds the module registry (vi.resetModules), so it runs alone in an isolated
 // worker; every other file shares one jsdom and one module graph per worker — the per-file jsdom was
@@ -11,6 +12,8 @@ const REBUILDS_MODULES = 'src/auth/auth.test.tsx';
 // (UTC) is: a stub date bug then reads as it would on the phone. Set before vitest forks its workers,
 // which inherit it; src/test/tz.test.ts guards it. (lambdas pins UTC, the Lambda's zone.)
 process.env.TZ = 'America/Los_Angeles';
+// As vite.config.ts sets it for a build (this config doesn't load that one): the manifest's version.
+process.env.VITE_LC_EXTENSION_VERSION = lcExtensionVersion();
 
 export default defineConfig({
   plugins: [react()],

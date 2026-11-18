@@ -20,6 +20,14 @@
   // as long as this background page does
   const memSession = new Map();
 
+  // The build this background runs (manifest.json version), stamped on every Start so the sitting records it
+  // and the app can say when Safari's copy is behind (README -> Versions). null if the browser won't say.
+  let extensionVersion = null;
+  try {
+    const v = api.runtime.getManifest().version;
+    if (typeof v === 'string') extensionVersion = v.slice(0, 20);
+  } catch {}
+
   let idSeq = 0;
   const entryId = () =>
     `${Date.now().toString(36)}-${(idSeq++).toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -228,7 +236,7 @@
   async function onMessage(msg) {
     switch (msg && msg.type) {
       case 'start':
-        return post('lcSittingStart', msg.body);
+        return post('lcSittingStart', { ...msg.body, extensionVersion });
       case 'enqueue':
         await enqueue(msg);
         return { ok: true };

@@ -228,7 +228,7 @@ export interface Attempt {
   submits: number;
   runs: number;
   runFirst: boolean | null; // a Run before the first submit; null with no captured submit
-  traced: boolean | null; // all three trace inputs stood at the first submit; null with no trace data or the card off
+  traced: boolean | null; // a trace comment before the first Run or Submit (tracedOf); null when the sitting predates the rule
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
   minutes: number | null; // the day's minutes on it: sittings to the first accept (else their length), logged ones as given
   note: string | null; // the newest logged note
@@ -1485,7 +1485,7 @@ export function coachStats(
 export interface PatternDetail {
   submitsPerTry: number | null; // captured submits ÷ attempts with one (a re-solve is its own), 1 decimal; null with none
   runBeforeSubmit: Rate; // attempts with a captured submit whose first submit had a Run before it
-  traced: Rate; // attempts with trace data whose trace stood at all three inputs at the first submit
+  traced: Rate; // attempts with trace data that were traced before the first Run or Submit (a trace comment)
   weeks: { week: string; firstTry: Rate }[]; // ISO weeks in range with a first try, oldest first
 }
 // Every attempt in range counts toward the first three (a re-solve too); `weeks` counts first tries only, by

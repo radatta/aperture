@@ -15,8 +15,11 @@ type Call = {
   headers: Record<string, string>;
   body: { args: [Record<string, unknown>] };
 };
-function setup(script: (call: Call, n: number) => { status: number; body: unknown }) {
-  const ext = fakeExtension();
+function setup(
+  script: (call: Call, n: number) => { status: number; body: unknown },
+  extOpts: Parameters<typeof fakeExtension>[0] = {},
+) {
+  const ext = fakeExtension(extOpts);
   const calls: Call[] = [];
   const fetch = async (url: string, init: { headers: Record<string, string>; body: string }) => {
     const call = { url, headers: init.headers, body: JSON.parse(init.body) };
@@ -194,6 +197,31 @@ describe('background', () => {
       return s && s.sittingId === 'NEW' ? s : null;
     });
     expect(sync.status).toBeUndefined();
+  });
+
+  // The build Safari runs rides on every Start, so the sitting records it (README → Versions).
+  it('stamps every Start with the manifest’s version; a browser that won’t say sends null, and the Start still goes', async () => {
+    const version = (JSON.parse(src('manifest.json')) as { version: string }).version;
+    const cases: Array<[Parameters<typeof fakeExtension>[0], string | null]> = [
+      [{}, version],
+      [
+        {
+          version: () => {
+            throw new Error('getManifest unavailable');
+          },
+        },
+        null,
+      ],
+    ];
+    for (const [opts, want] of cases) {
+      const { ext, calls, send } = setup(
+        () => ({ status: 200, body: { sitting: { id: 'S' }, resumed: false } }),
+        opts,
+      );
+      await ext.local.set({ apiOrigin: 'https://aperture.test', deviceToken: 't' });
+      await send({ type: 'start', body: { problemSlug: 'two-sum', extensionVersion: 'forged' } });
+      expect(calls[0]!.body.args[0]).toEqual({ problemSlug: 'two-sum', extensionVersion: want });
+    }
   });
 
   it('answers Start directly, says when it isn’t configured, and remembers Just looking for the session until the pill', async () => {

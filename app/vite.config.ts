@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { APERTURE_MANIFEST } from './pwa/manifest.ts';
 import { identityPages } from './pwa/identityPages.ts';
+import { lcExtensionVersion } from './pwa/extensionVersion.ts';
 
 // Port ownership — so a listening port always tells you WHOSE dev server it is (docs/ops/COI-SANDBOX.md
 // → Ports): 5173+ is you on the Mac, 6173+ is a COI container. Vite walks upward from its base port
@@ -16,6 +17,9 @@ const DEV_PORT = hostname().startsWith('coi-') ? 6173 : 5173;
 // The build marker: index.html's %VITE_BUILD_SHA% and BUILD_SHA (src/shared/env.ts). publish-frontend.mjs
 // sets the deployed commit; any other build says 'local' rather than shipping the literal placeholder.
 process.env.VITE_BUILD_SHA ||= 'local';
+// The LeetCode extension's version this app is built with: Settings → LeetCode's "latest" (LC_EXTENSION_VERSION in
+// src/shared/env.ts). Always from the checkout's manifest, never an outside value.
+process.env.VITE_LC_EXTENSION_VERSION = lcExtensionVersion();
 
 // The deployed wasm is brotli-encoded (scripts/aws/publish-frontend.mjs). Its hash is of bytes that never
 // change between builds, so the suffix gives the encoded body a key the uncompressed one never had: an edge

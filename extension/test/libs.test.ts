@@ -124,7 +124,7 @@ describe('selectors', () => {
       bogus: 'x',
       dialog: 7,
       lang: null, // not a step: a null is ignored
-      submit: null, // the trace card's hold, off
+      submit: null, // the resubmit note, off
     });
     expect(m).toMatchObject({
       editorReset: '#r',

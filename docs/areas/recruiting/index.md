@@ -117,7 +117,10 @@ by the next read, never by a scheduled job ($0, no new resource).
 
 All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda share them):
 
-- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), the user's review
+- **Head** (`lcsit#<id>`): the problem, rep, status, prep target (`General` until the company UI), the extension
+  build that started it (`extensionVersion`: its manifest's x.y.z, anything else null and never a refusal, set at
+  creation only — a resume or a same-day reopen keeps it — absent before 2.2.0; Settings → LeetCode compares the newest with the app's own —
+  `extension/README.md` → Versions), the user's review
   (`review`, _Review and the Claude draft_ below) and the `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
   runs before the first submit, LeetCode's timer state, and `headEvents`, how many rows it folds.
   **Recomputed, never incremented:** any events call carrying a head event — fresh or a repeat — rebuilds it
@@ -148,22 +151,26 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 
 ### Coach events
 
-The extension's coaching (the trace card at the first Submit, the resubmit nudge — LeetCode coach epic, PR C) reports
-as events of type `coach`, a head event like a run: a compact head row (`coachMarkOf`: the kind, how many of the
-three inputs a trace filled, a config's switches) and the payload kept forever beside it. The payload is
-`CoachEventPayload` in `packages/shared/src/types.ts`: `config` (what was on: trace card, hold, nudge — once per
-sitting, so weeks with the gate on and off can be told apart), `trace` (the user's empty/boundary/normal inputs, each ≤ 300
-chars), `trace-skip`, `untraced-submit` (a Submit seen with neither) and `nudge-shown`; ≤ 4 KB each. They fold into
-`summary.coach` — `trace` is the state **at the first submit** (three inputs `traced`, one or two `partial`, none or a
-skip `skipped`, a submit seen untraced `none`; a trace after the first submit changes nothing), plus the config and
-a nudge count. A kind the server doesn't know is stored (its payload in full) and folds nothing — its head row keeps
-`kind: null` for good, so an extension that ships a kind first loses that kind's fold on those sittings unless a
-backfill re-reads the payloads. `summary.coach` is absent until a coach event folds — on every sitting before them, and with an
-extension that sends none — so readers take `summary.coach ?? null`.
+The extension's coaching (the resubmit note — LeetCode coach epic, PR C) reports as events of type `coach`, a head
+event like a run: a compact head row (`coachMarkOf`: the kind and a config's switch) and the payload kept forever
+beside it. The payload is `CoachEventPayload` in `packages/shared/src/types.ts`: `config` (whether the note is on,
+once per sitting) and `nudge-shown` (a resubmit within ~60 s of a failed one, with the gap); ≤ 4 KB each. They fold
+into `summary.coach = {config: {nudge} | null, nudges}`. A kind the server doesn't know is stored (its payload in
+full) and folds nothing — its head row keeps `kind: null` for good, so an extension that ships a kind first loses
+that kind's fold on those sittings unless a backfill re-reads the payloads. `summary.coach` is absent until a coach
+event folds — on every sitting before them, and with an extension that sends none — so readers take
+`summary.coach ?? null`.
+
+**The trace card is gone (extension 2.2.0, extension-tidy).** Its kinds (`trace`, `trace-skip`, `untraced-submit`)
+and the config's `trace`/`hold` switches were removed end to end, with no compatibility path (the maintainer,
+2026-11-17). The card's build (manifest 2.0.0, from before builds were stamped) still sending them until it's rebuilt is answered 200: its card events land on the
+unknown-kind path above (stored, folding nothing), and its config folds `nudge` alone. A head row or summary stored
+before (a card kind, a config's `trace`/`hold`, a summary's `trace`) folds only its `nudge`; the next coach fold drops
+the rest. The card's rows on prod are tombstoned (compact tombstones, as `tombstoneSitting` writes them) and the summaries
+trimmed by a one-off `aws` CLI cleanup after the merge (the PR's _Needs you_), with no code left behind. Whether a sitting was traced is decided server-side, from the code:
 
 **The trace comment (coach-fixes, the server part).** In an interview the user writes the trace as a comment, so
-the code itself is the only traced/untraced source (the card is going: extension-tidy removes it; nothing here reads
-it). At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in
+the code itself is the only traced/untraced source. At ingest (`lcSittingEvents`), the earliest snapshot in the batch (a repeat too, so a retry finishes a call that died midway) before the sitting's first judged event (stored or in
 the same batch) whose code holds a trace comment becomes the server's own head row — type `trace-comment` (never an
 extension event), at the snapshot's time, keyed by its event id, once per sitting (`traceCommentRow`). The rule
 (`traceComment.ts`, no model): a block is a Python `"""`/`'''` string, a `/* */`, or a run of at least 3 `#` or
@@ -392,12 +399,11 @@ that comes after the Start goes in a repeat Start that fills it in. How, and the
 `extension/README.md` → _The sitting, from LeetCode's side_, step 8. Don't add a fetch of our own for it: the
 extension stays passive.
 
-**The Submit hold is the one place the extension stands between the user and LeetCode's UI** (the
-maintainer, 2026-11-16: hold once, re-click). The first real Submit click of a sitting is swallowed so the trace
-card can ask for three hand-traced inputs; no request is made, altered or re-issued, and the user clicks Submit
-again. The extension never clicks Submit — an automated submit was rejected. It fails open (a keyboard submit,
-a missing selector or the hold off pass untouched and are logged `untraced-submit`), and each part is off-able
-in Options. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
+**The extension never stands between the user and LeetCode's Submit.** The Submit hold (2026-11-16: hold
+once for the trace card, re-click) was retired with the card in 2.2.0 (the maintainer, 2026-11-17: in an
+interview the trace goes in a code comment, so a separate card is extra infra). What's left reads a real Submit
+click only for the resubmit note, which never blocks it; the extension never clicks Submit — an automated
+submit was rejected. How: `extension/README.md` → _The sitting, from LeetCode's side_, step 9.
 
 **The page's world is evidence, never authority** (the maintainer, 2026-11-08). Any script on leetcode.com can
 spoof what the MAIN world sees, so: only the isolated-world overlay can Start a sitting, on a real click on

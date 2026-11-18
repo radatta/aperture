@@ -20,7 +20,7 @@ import { cx } from '../../lib/cx';
 import { fmtDateTime } from '../../lib/format';
 import { ArrowDownIcon, ArrowUpIcon } from '../../components/icons';
 import { useApi } from '../../data/api-context';
-import { BUILD_SHA } from '../../shared/env';
+import { BUILD_SHA, LC_EXTENSION_VERSION } from '../../shared/env';
 import {
   useCategories,
   useDeleteCategory,
@@ -31,11 +31,13 @@ import {
 import { useSettings, useUpdateSettings } from '../../data/hooks/useSettings';
 import { fmtMoney, parseDollars } from '../../modules/finances/money';
 import { useRolls } from '../../data/hooks/useRolls';
+import { useSittings } from '../../data/hooks/useSittings';
 import { useVoice } from '../../modules/flux/useVoice';
 import { VoicePicker } from '../../modules/flux/VoicePicker';
 import { NotificationsSection } from './NotificationsSection';
 import { CaptureTokensSection } from './CaptureTokensSection';
 import { PlacesSection } from './PlacesSection';
+import { extensionRow } from './extensionRow';
 import {
   useConnectGoogle,
   useDisconnectGoogleAccount,
@@ -930,6 +932,7 @@ function LeetcodeSection() {
             </label>
           ))}
         </fieldset>
+        <ExtensionVersionLine />
         {update.isError && (
           <p role="alert" className="text-xs text-danger">
             Couldn&apos;t save that — try again.
@@ -956,6 +959,26 @@ const PLAN_MODE_OPTIONS: { value: CoachPlanMode; label: string; hint: string }[]
     hint: 'Re-solves fill every slot but one new; no stretch. Fewer slots when fewer are due.',
   },
 ];
+
+// Which extension build the newest sitting's Start came from, against the one this app was built with
+// (extensionRow.ts; extension/README.md → Versions). Shares the Sittings page's cached list.
+// Refetched on coming back to the app: a Settings page left open through a rebuild and a Start catches up.
+function ExtensionVersionLine() {
+  const sittingsQ = useSittings(undefined, { refetchOnWindowFocus: true });
+  if (!LC_EXTENSION_VERSION || sittingsQ.isPending) return null;
+  if (sittingsQ.isError && sittingsQ.data === undefined)
+    return (
+      <LoadError size="xs" onRetry={() => void sittingsQ.refetch()}>
+        Couldn’t read which extension build your last Start came from.
+      </LoadError>
+    );
+  const row = extensionRow(sittingsQ.data ?? [], LC_EXTENSION_VERSION);
+  return (
+    <Text size="xs" tone={row.rebuild ? 'gold' : 'muted'}>
+      {row.text}
+    </Text>
+  );
+}
 
 function FluxVoiceCard() {
   const voice = useVoice();

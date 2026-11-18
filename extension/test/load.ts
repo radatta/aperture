@@ -179,7 +179,13 @@ export function background(extra: Record<string, unknown>) {
 }
 
 // A fake extension API: storage.local/session (with onChanged), runtime messaging, alarms, permissions.
-export function fakeExtension(opts: { onMessage?: (msg: unknown) => unknown; id?: string } = {}) {
+export function fakeExtension(
+  opts: {
+    onMessage?: (msg: unknown) => unknown;
+    id?: string;
+    version?: string | (() => string); // runtime.getManifest().version: the real manifest's unless given
+  } = {},
+) {
   const id = opts.id ?? 'ext-id';
   const listeners: Array<(changes: object, area: string) => void> = [];
   const msgListeners: Array<(m: unknown, s: unknown, r: (v: unknown) => void) => boolean | void> =
@@ -231,6 +237,11 @@ export function fakeExtension(opts: { onMessage?: (msg: unknown) => unknown; id?
   const api = {
     runtime: {
       id,
+      getManifest: () => ({
+        ...manifest,
+        version:
+          typeof opts.version === 'function' ? opts.version() : (opts.version ?? manifest.version),
+      }),
       onMessage: { addListener: (l: (typeof msgListeners)[number]) => msgListeners.push(l) },
       onStartup: { addListener() {} },
       onInstalled: { addListener() {} },

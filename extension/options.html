@@ -106,6 +106,7 @@
   </head>
   <body>
     <h1>Aperture LeetCode</h1>
+    <p class="sub" id="version" aria-live="polite"></p>
     <p class="sub">
       On a LeetCode problem, Start opens a sitting in Aperture and this extension sends what
       LeetCode itself sends — your code as you type, every Run and Submit with its result, your
@@ -151,20 +152,13 @@
 
     <h2>Coach</h2>
     <label class="inline"
-      ><input type="checkbox" id="coachTrace" /> Trace card at the first Submit</label
-    >
-    <label class="inline"
-      ><input type="checkbox" id="coachHold" /> Hold that Submit until you Trace or Skip</label
-    >
-    <label class="inline"
       ><input type="checkbox" id="coachNudge" /> A note on a resubmit within a minute of a failed
       one</label
     >
     <p class="hint">
-      The card asks you to trace three inputs by hand before your first Submit in a sitting; with
-      the hold on, that Submit waits and you click it again yourself — the extension never submits.
-      Each Trace, Skip and note is recorded with the sitting. Open LeetCode tabs pick a change up at
-      once.
+      A Submit within a minute of a failed one shows “trace the failing input before you resubmit”
+      on the badge for a few seconds — it never blocks the Submit. Each note is recorded with the
+      sitting. Open LeetCode tabs pick a change up at once.
     </p>
     <div id="coachStatus" class="status" aria-live="polite"></div>
 
@@ -188,7 +182,7 @@
       <code>timerOpen</code>, <code>timerStart</code>, <code>timerReset</code>,
       <code>timerResetConfirm</code>, <code>lang</code>, <code>submit</code>), each a CSS selector.
       <code>null</code> on a click key (the reset, its confirm, the four timer keys) turns that step
-      off, and on <code>submit</code> turns the Submit hold off. Empty means the defaults.
+      off, and on <code>submit</code> turns the resubmit note off. Empty means the defaults.
     </p>
     <textarea id="selectors" spellcheck="false" placeholder="{}"></textarea>
     <div class="row">

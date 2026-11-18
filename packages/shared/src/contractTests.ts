@@ -3299,6 +3299,30 @@ export function runApiContract(
         expect((await api.listTasks()).filter((t) => t.rollId === first.roll.id)).toHaveLength(1);
       });
 
+      it('start stores the extension build that opened it; a resume never rewrites it; a malformed one is null', async () => {
+        const first = await startSitting(api, { extensionVersion: '2.2.0' });
+        expect(first.sitting.extensionVersion).toBe('2.2.0');
+        const again = await api.lcSittingStart(
+          sittingStart({
+            clientSittingId: first.sitting.clientSittingId,
+            extensionVersion: '9.9.9',
+          }),
+        );
+        expect(again).toMatchObject({ resumed: true, sitting: { extensionVersion: '2.2.0' } });
+        expect((await api.listSittings())[0]!.extensionVersion).toBe('2.2.0');
+        expect((await api.getSitting(first.sitting.id)).sitting.extensionVersion).toBe('2.2.0');
+        await api.setTaskActual(first.sitting.repTaskId, 30);
+        await api.transitionTask(first.sitting.repTaskId, 'done');
+        const bad = await api.lcSittingStart(
+          sittingStart({
+            problemSlug: 'add-two-numbers',
+            problemTitle: 'Add Two',
+            extensionVersion: 'v2-beta',
+          }),
+        );
+        expect(bad.sitting.extensionVersion).toBeNull();
+      });
+
       it('start on another problem is refused while a sitting is open, and spawns after Done', async () => {
         const { sitting } = await startSitting(api);
         await expect(
@@ -3461,47 +3485,78 @@ export function runApiContract(
           at,
           payload,
         });
-        const tracePayload = {
-          kind: 'trace',
-          inputs: { empty: '[]', boundary: '[1]', normal: '[3,1,2]' },
-          ms: 45_000,
-        };
-        const traced = coachEv(LC_T0 + 2000, tracePayload);
+        const nudge = coachEv(LC_T0 + 4000, { kind: 'nudge-shown', gapMs: 30_000 });
         const events = [
-          coachEv(LC_T0 + 1000, { kind: 'config', trace: true, hold: true, nudge: true }),
-          traced,
+          coachEv(LC_T0 + 1000, { kind: 'config', nudge: true }),
           lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 3000, 1, 3),
-          coachEv(LC_T0 + 4000, { kind: 'nudge-shown', gapMs: 30_000 }),
+          nudge,
         ];
         await api.lcSittingEvents({ sittingId: sitting.id, events });
-        const again = await api.lcSittingEvents({ sittingId: sitting.id, events: [traced] });
+        const again = await api.lcSittingEvents({ sittingId: sitting.id, events: [nudge] });
         expect(again).toMatchObject({ accepted: 0, duplicates: 1 });
         const detail = await api.getSitting(sitting.id);
-        expect(detail.sitting.summary.coach).toEqual({
-          config: { trace: true, hold: true, nudge: true },
-          trace: 'traced',
+        expect(detail.sitting.summary.coach).toEqual({ config: { nudge: true }, nudges: 1 });
+        expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 3 });
+        // Each coach event's payload is kept whole beside its head row.
+        const kept = detail.events.filter((e) => e.type === 'coach');
+        expect(kept.map((e) => e.payload)).toContainEqual({ kind: 'nudge-shown', gapMs: 30_000 });
+        expect((await api.listSittings())[0]!.summary.coach).toEqual({
+          config: { nudge: true },
           nudges: 1,
         });
-        expect(detail.sitting.summary).toMatchObject({ submits: 1, headEvents: 4 });
-        // Each coach event's payload is kept whole beside its head row — the trace text included.
-        const kept = detail.events.filter((e) => e.type === 'coach');
-        expect(kept).toHaveLength(3);
-        expect(kept.map((e) => e.payload)).toContainEqual(tracePayload);
-        expect((await api.listSittings())[0]!.summary.coach?.trace).toBe('traced');
-        // The export carries each coach row's mark (never its text), on both clients.
+        // The export carries each coach row's mark, on both clients.
         const exported = (await api.exportData()).sittingHeadRows.filter((r) => r.type === 'coach');
-        expect(exported.map((r) => r.coach?.kind).sort()).toEqual([
-          'config',
-          'nudge-shown',
-          'trace',
-        ]);
-        expect(exported.find((r) => r.coach?.kind === 'trace')?.coach?.inputs).toBe(3);
+        expect(exported.map((r) => r.coach)).toEqual(
+          expect.arrayContaining([
+            { kind: 'config', config: { nudge: true } },
+            { kind: 'nudge-shown', config: null },
+          ]),
+        );
         // Over its 4 KB cap: refused, nothing written.
-        const big = coachEv(LC_T0 + 5000, { kind: 'trace-skip', pad: 'x'.repeat(4200) });
+        const big = coachEv(LC_T0 + 5000, { kind: 'nudge-shown', gapMs: 1, pad: 'x'.repeat(4200) });
         await expect(api.lcSittingEvents({ sittingId: sitting.id, events: [big] })).rejects.toThrow(
           /too large/,
         );
-        expect((await api.getSitting(sitting.id)).sitting.summary.headEvents).toBe(4);
+        expect((await api.getSitting(sitting.id)).sitting.summary.headEvents).toBe(3);
+      });
+
+      // The card's build (manifest 2.0.0, the retired trace card) until it's rebuilt: its card events are stored as unknown kinds,
+      // never refused, so a batch carrying a submit still lands; they fold nothing.
+      it('a pre-2.2 batch with the card’s events is taken whole and folds no trace', async () => {
+        const { sitting } = await startSitting(api);
+        const coachEv = (at: number, payload: unknown): SittingEventInput => ({
+          id: ulid(),
+          type: 'coach',
+          at,
+          payload,
+        });
+        const card = coachEv(LC_T0 + 2000, {
+          kind: 'trace',
+          inputs: { empty: '[]', boundary: '[1]', normal: '[3,1,2]' },
+          ms: 45_000,
+        });
+        const events = [
+          coachEv(LC_T0 + 1000, { kind: 'config', trace: true, hold: true, nudge: true }),
+          card,
+          lcJudged('submit', 11, 'Wrong Answer', LC_T0 + 3000, 1, 3),
+          coachEv(LC_T0 + 3500, { kind: 'untraced-submit' }),
+          coachEv(LC_T0 + 4000, { kind: 'trace-skip', ms: 900 }),
+        ];
+        expect(await api.lcSittingEvents({ sittingId: sitting.id, events })).toMatchObject({
+          accepted: 5,
+          duplicates: 0,
+        });
+        const again = await api.lcSittingEvents({ sittingId: sitting.id, events });
+        expect(again).toMatchObject({ accepted: 0, duplicates: 5 });
+        const { summary } = (await api.getSitting(sitting.id)).sitting;
+        expect(summary.coach).toEqual({ config: { nudge: true }, nudges: 0 });
+        expect(summary).toMatchObject({ submits: 1, headEvents: 5 });
+        const marks = (await api.exportData()).sittingHeadRows
+          .filter((r) => r.sittingId === sitting.id && r.type === 'coach')
+          .map((r) => r.coach);
+        expect(marks).toHaveLength(4);
+        expect(marks.filter((m) => m?.kind === null)).toHaveLength(3);
+        expect(marks).toContainEqual({ kind: 'config', config: { nudge: true } });
       });
 
       it('a sitting with no coach events reads no coach', async () => {

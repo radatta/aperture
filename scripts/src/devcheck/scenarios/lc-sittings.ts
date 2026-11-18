@@ -9,6 +9,16 @@ import type { DevSittingReview } from '../api';
 import type { DevSittingEvent, DevSittingStart } from '../api';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import { devUlid } from './flux-history';
+import { readFileSync } from 'node:fs';
+
+// The extension build this checkout ships (extension/manifest.json): the app's Settings calls it "latest".
+const LATEST_EXT = (
+  JSON.parse(
+    readFileSync(new URL('../../../../extension/manifest.json', import.meta.url), 'utf8'),
+  ) as {
+    version: string;
+  }
+).version;
 
 const tag = (ctx: Ctx) => ctx.nonce.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const slugOf = (ctx: Ctx, which: string) => `devcheck-lc-${tag(ctx)}-${which}`;
@@ -107,11 +117,18 @@ const state = {
   d: '',
   dRep: '',
   dStartedAt: 0,
+  newer: false, // E or F started from a build newer than the app's (ui-ext-newer)
 };
 // A time after everything already sent on A. The events step stamps its batch up to 6 s ahead of the clock, so on a
 // fast run (the local check) a plain Date.now() is still behind it, and live and `last` — the newest by `at` —
 // would rightly keep the older event. Dev's round trips hid that.
 const nextAt = () => (state.aNewestAt = Math.max(Date.now(), state.aNewestAt + 1));
+// Settings → LeetCode on a full page load. The API Starts these steps check bypass the page, and a goto to the URL
+// the tab is already on (only the hash) is an in-page navigation: it would show the last step's cached sittings.
+async function settingsFresh(ctx: Ctx) {
+  await ctx.page.goto('about:blank');
+  await ctx.ui.goto('/settings#leetcode');
+}
 async function sittingA(ctx: Ctx) {
   if (!state.a) throw new Error('no sitting A — the start step failed');
   return ctx.api.reads.getSitting(state.a);
@@ -125,6 +142,7 @@ export const lcSittings: Scenario = {
     'app/src/pages/Recruiting/**',
     'app/src/data/hooks/useSittings.ts',
     'app/src/pages/Settings/index.tsx',
+    'app/src/pages/Settings/extensionRow.ts',
     'packages/shared/src/sittings.ts',
     'scripts/src/devcheck/scenarios/lc-sittings.ts',
     'lambdas/src/anthropic/sittingReviewPrompt.ts',
@@ -327,6 +345,60 @@ export const lcSittings: Scenario = {
       kind: 'edge',
       what: 'Start on another problem while one is open is refused',
     },
+    // The extension build on each sitting (extension/README.md → Versions).
+    {
+      id: 'start-ext-version',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A Start stores the extension build that sent it; the list and the detail read it back',
+    },
+    {
+      id: 'start-ext-version-resume',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A repeat Start carrying another build keeps the first one',
+    },
+    {
+      id: 'start-ext-version-invalid',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A Start with a malformed build label is not refused; the sitting stores null',
+    },
+    {
+      id: 'settings-ext-differs',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Settings → LeetCode, after a Start from an older build: installed, latest, rebuild needed',
+    },
+    {
+      id: 'settings-ext-equal',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Settings → LeetCode, after a Start from this build: up to date, and still after a reload',
+    },
+    {
+      id: 'settings-ext-unversioned',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Settings → LeetCode after a Start whose build label was malformed (stored null): read as an older build, rebuild needed',
+    },
+    {
+      id: 'settings-ext-newer',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Settings → LeetCode after a Start from a build newer than the app’s (the app not yet deployed): no nag',
+    },
+    {
+      id: 'settings-ext-none',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Settings → LeetCode with no sitting at all names the latest',
+      offDev: {
+        file: 'app/src/pages/Settings/Settings.test.tsx',
+        test: 'no sitting yet: names the latest',
+        why: 'every run leaves the dev test user’s partition with sittings (lc-sittings itself starts several) and nothing deletes them; the real Settings page renders over the stub',
+      },
+    },
     {
       id: 'events-fold',
       entry: 'api',
@@ -339,18 +411,13 @@ export const lcSittings: Scenario = {
       kind: 'edge',
       what: 'Sending the same events again counts them as duplicates, nothing double-counted',
     },
-    // lc-coach C0: the extension's coach events (trace card, resubmit nudge) fold into summary.coach.
+    // lc-coach C0: the extension's coach events (the resubmit note) fold into summary.coach. The trace card is
+    // retired (extension-tidy): a pre-2.2 extension's card events are stored as unknown kinds until it's rebuilt.
     {
       id: 'coach-fold',
       entry: 'api',
       kind: 'nominal',
-      what: 'Coach events (config, an untraced submit, a nudge) fold into the sitting’s coaching, each payload kept whole; a repeat is a duplicate',
-    },
-    {
-      id: 'coach-after-submit',
-      entry: 'api',
-      kind: 'edge',
-      what: 'A trace sent after the first submit leaves the trace state as it stood at that submit',
+      what: 'Coach events (config with the note’s switch, a nudge) fold into the sitting’s coaching as `{config: {nudge}, nudges}`, each payload kept whole; a repeat is a duplicate',
     },
     {
       id: 'coach-too-big',
@@ -359,25 +426,26 @@ export const lcSittings: Scenario = {
       what: 'A coach event over 4 KB is refused, with nothing written',
     },
     {
-      id: 'coach-trace-states',
+      id: 'coach-old-ext-batch',
       entry: 'api',
       kind: 'edge',
-      what: 'Before the first submit, three inputs traced is traced, one or two partial, none or a skip skipped',
-      offDev: {
-        file: 'packages/shared/src/sittings.test.ts',
-        test: 'three inputs before the first submit is traced; one or two partial; none or a skip, skipped',
-        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
-      },
+      what: 'A pre-2.2 extension’s batch (its config with trace and hold, a trace, an untraced-submit, a trace-skip) is taken whole, never refused, and folds no card field: the coaching is `{config: {nudge}, nudges}` with that config’s `nudge`',
     },
     {
-      id: 'coach-trace-latest',
+      id: 'coach-old-ext-repeat',
       entry: 'api',
       kind: 'edge',
-      what: 'Of a skip and a trace before the first submit, the later one stands',
+      what: 'The same pre-2.2 batch again is all duplicates, the summary unchanged',
+    },
+    {
+      id: 'coach-old-head-row',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A head row or summary stored before 2.2 (a card kind, a config with trace and hold, a summary’s trace) folds only its note switch; headEvents still counts it',
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
-        test: 'the latest before the first submit wins; one after it changes nothing',
-        why: 'same path as coach-fold (proven on dev): the same ingest and refold, only the fold’s input differs',
+        test: 'a head row or summary stored before 2.2 folds only its note switch; headEvents still counts it',
+        why: 'dev can’t hold an old-shape row once this build is deployed: the server writes only the new mark; same fold as coach-fold (proven on dev)',
       },
     },
     {
@@ -874,7 +942,13 @@ export const lcSittings: Scenario = {
     {
       id: 'start',
       entry: 'api',
-      proves: ['start-spawn', 'start-resume', 'start-other-refused'],
+      proves: [
+        'start-spawn',
+        'start-resume',
+        'start-other-refused',
+        'start-ext-version',
+        'start-ext-version-resume',
+      ],
       title: 'Link a fresh roll; Start A spawns its rep; repeats resume; Start B is refused',
       async run(ctx) {
         const roll = await ctx.api.writes.upsertRoll({
@@ -883,7 +957,7 @@ export const lcSittings: Scenario = {
         });
         state.rollId = roll.id;
         await ctx.api.writes.linkLeetcodeRoll(roll.id);
-        const input = start(ctx, 'a');
+        const input = start(ctx, 'a', { extensionVersion: '0.0.1' }); // a build older than this checkout's
         const { sitting, resumed } = await ctx.api.writes.lcSittingStart(input);
         if (resumed || sitting.status !== 'active')
           throw new Error(`start: ${JSON.stringify(sitting)}`);
@@ -904,6 +978,7 @@ export const lcSittings: Scenario = {
         const again = await ctx.api.writes.lcSittingStart({
           ...input,
           problemTitle: 'devcheck hijack',
+          extensionVersion: '9.9.9', // a resume never rewrites the build
         });
         const same = await ctx.api.writes.lcSittingStart(
           start(ctx, 'a', { problemTitle: 'hijack 2' }),
@@ -911,6 +986,15 @@ export const lcSittings: Scenario = {
         for (const r of [again, same])
           if (!r.resumed || r.sitting.id !== sitting.id)
             throw new Error(`resume: ${JSON.stringify(r)}`);
+        const listed = (await ctx.api.reads.listSittings()).find((x) => x.id === sitting.id);
+        const detail = (await sittingA(ctx)).sitting;
+        for (const [where, v] of [
+          ['start', sitting.extensionVersion],
+          ['resume', again.sitting.extensionVersion],
+          ['list', listed?.extensionVersion],
+          ['detail', detail.extensionVersion],
+        ] as const)
+          if (v !== '0.0.1') throw new Error(`extensionVersion from ${where}: ${String(v)}`);
         // A repeat shapes the rep from the stored sitting: a different title in the request renames nothing.
         if ((await ctx.api.reads.getTask(rep.id))?.title !== `LeetCode · ${titleOf(ctx, 'a')}`)
           throw new Error('a repeated Start renamed the rep');
@@ -979,9 +1063,9 @@ export const lcSittings: Scenario = {
     {
       id: 'coach',
       entry: 'api',
-      proves: ['coach-fold', 'coach-after-submit', 'coach-too-big'],
+      proves: ['coach-fold', 'coach-too-big', 'coach-old-ext-batch', 'coach-old-ext-repeat'],
       title:
-        'Coach events on A after its submits: the config, an untraced submit, a nudge, a late trace; then again; then one too big',
+        'Coach events on A after its submits: the config and a nudge, then a pre-2.2 batch with the card’s events, each twice; then one too big',
       async run(ctx) {
         const coach = (payload: unknown): DevSittingEvent => ({
           id: devUlid(),
@@ -989,47 +1073,68 @@ export const lcSittings: Scenario = {
           at: nextAt(),
           payload,
         });
+        // The coaching field by field (a stored map's key order isn't kept), with no card key anywhere in it.
+        const coachIs = (c: unknown, nudges: number, nudge = true) => {
+          const m = c as { config?: { nudge?: unknown } | null; nudges?: unknown } | undefined;
+          return (
+            JSON.stringify(Object.keys(m ?? {}).sort()) === '["config","nudges"]' &&
+            JSON.stringify(Object.keys(m?.config ?? {})) === '["nudge"]' &&
+            m?.config?.nudge === nudge &&
+            m.nudges === nudges
+          );
+        };
         const batch = [
-          coach({ kind: 'config', trace: true, hold: true, nudge: true }),
-          coach({ kind: 'untraced-submit' }),
+          coach({ kind: 'config', nudge: true }),
           coach({ kind: 'nudge-shown', gapMs: 30_000 }),
+        ];
+        const first = await ctx.api.writes.lcSittingEvents(state.a, batch);
+        if (first.accepted !== 2) throw new Error(`first: ${JSON.stringify(first)}`);
+        const again = await ctx.api.writes.lcSittingEvents(state.a, batch);
+        if (again.accepted !== 0 || again.duplicates !== 2)
+          throw new Error(`again: ${JSON.stringify(again)}`);
+        let read = await sittingA(ctx);
+        if (read.events.filter((e) => e.type === 'coach').length !== 2)
+          throw new Error('the coach payloads weren’t kept');
+        if (!coachIs(read.sitting.summary.coach, 1))
+          throw new Error(`coach: ${JSON.stringify(read.sitting.summary.coach)}`);
+        // What a pre-2.2 extension still sends until it's rebuilt: taken whole, stored, folding nothing of the card.
+        const old = [
+          // Its note switch off, so the fold shows this config's `nudge` was read and its card switches weren't.
+          coach({ kind: 'config', trace: true, hold: true, nudge: false }),
           coach({
             kind: 'trace',
             inputs: { empty: '[]', boundary: '[1]', normal: '[2,1]' },
             ms: 1,
           }),
+          coach({ kind: 'untraced-submit' }),
+          coach({ kind: 'trace-skip', ms: 1 }),
         ];
-        const first = await ctx.api.writes.lcSittingEvents(state.a, batch);
-        if (first.accepted !== 4) throw new Error(`first: ${JSON.stringify(first)}`);
-        const again = await ctx.api.writes.lcSittingEvents(state.a, batch);
-        if (again.accepted !== 0 || again.duplicates !== 4)
-          throw new Error(`again: ${JSON.stringify(again)}`);
-        const read = await sittingA(ctx);
-        const kept = read.events.filter((e) => e.type === 'coach');
-        const keptTrace = kept.find((e) => JSON.stringify(e.payload).includes('"boundary":"[1]"'));
-        if (kept.length !== 4 || !keptTrace)
+        const headBefore = read.sitting.summary.headEvents;
+        const took = await ctx.api.writes.lcSittingEvents(state.a, old);
+        if (took.accepted !== 4) throw new Error(`pre-2.2 batch: ${JSON.stringify(took)}`);
+        read = await sittingA(ctx);
+        const sum = read.sitting.summary;
+        if (!coachIs(sum.coach, 1, false) || sum.headEvents !== headBefore + 4)
           throw new Error(
-            `${kept.length} coach payloads kept, trace ${keptTrace ? 'kept' : 'missing'}`,
+            `after the pre-2.2 batch: ${JSON.stringify({ coach: sum.coach, headEvents: sum.headEvents })}`,
           );
-        const before = read.sitting.summary;
-        const c = before.coach; // field by field: a stored map's key order isn't kept
-        if (
-          c?.trace !== 'none' ||
-          c.nudges !== 1 ||
-          c.config?.trace !== true ||
-          c.config.hold !== true ||
-          c.config.nudge !== true
-        )
-          throw new Error(`coach: ${JSON.stringify(c)}`);
-        const big = coach({ kind: 'trace-skip', pad: 'x'.repeat(4200) });
+        if (!read.events.some((e) => JSON.stringify(e.payload).includes('"boundary":"[1]"')))
+          throw new Error('the pre-2.2 trace payload wasn’t kept');
+        const repeat = await ctx.api.writes.lcSittingEvents(state.a, old);
+        if (repeat.accepted !== 0 || repeat.duplicates !== 4)
+          throw new Error(`pre-2.2 again: ${JSON.stringify(repeat)}`);
+        const same = (await sittingA(ctx)).sitting.summary;
+        if (!coachIs(same.coach, 1, false) || same.headEvents !== sum.headEvents)
+          throw new Error('the pre-2.2 repeat changed the summary');
+        const big = coach({ kind: 'nudge-shown', gapMs: 1, pad: 'x'.repeat(4200) });
         await refused(
           'a coach event over 4 KB',
           ctx.api.writes.lcSittingEvents(state.a, [big]),
           /too large/,
         );
         const after = (await sittingA(ctx)).sitting.summary;
-        if (after.headEvents !== before.headEvents)
-          throw new Error(`headEvents ${before.headEvents} → ${after.headEvents} after a refusal`);
+        if (after.headEvents !== same.headEvents)
+          throw new Error(`headEvents ${same.headEvents} → ${after.headEvents} after a refusal`);
       },
     },
     {
@@ -1331,6 +1436,20 @@ export const lcSittings: Scenario = {
       },
     },
     {
+      id: 'ui-ext-differs',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-differs'],
+      title: 'Settings → LeetCode after A’s Start from an older build: rebuild needed',
+      async run(ctx) {
+        await settingsFresh(ctx);
+        await ctx.page
+          .getByText(`Extension: installed 0.0.1, latest ${LATEST_EXT} — rebuild needed.`)
+          .waitFor({ timeout: 15_000 });
+        await ctx.shot('settings-leetcode-ext-differs');
+      },
+    },
+    {
       id: 'end',
       entry: 'api',
       proves: ['end-done'],
@@ -1572,17 +1691,19 @@ export const lcSittings: Scenario = {
     {
       id: 'double-start',
       entry: 'api',
-      proves: ['double-start', 'prep-target', 'end-drop', 'late-drop'],
+      proves: ['double-start', 'prep-target', 'end-drop', 'late-drop', 'start-ext-version-invalid'],
       title:
         'Start C twice at once (one sitting, one rep, one plan row); tag it; dropping its rep abandons it, and a note stamped before the drop still lands',
       async run(ctx) {
-        const input = start(ctx, 'c');
+        const input = start(ctx, 'c', { extensionVersion: 'v2-beta' }); // malformed: stored null, never refused
         const [x, y] = await Promise.all([
           ctx.api.writes.lcSittingStart(input),
           ctx.api.writes.lcSittingStart({ ...input }),
         ]);
         if (x.sitting.id !== y.sitting.id || [x.resumed, y.resumed].filter(Boolean).length !== 1)
           throw new Error(`two answers: ${JSON.stringify([x.resumed, y.resumed])}`);
+        if (x.sitting.extensionVersion !== null)
+          throw new Error(`a malformed build stored as ${String(x.sitting.extensionVersion)}`);
         const reps = (await ctx.api.reads.listTasks()).filter(
           (t) => t.title === `LeetCode · ${titleOf(ctx, 'c')}`,
         );
@@ -1610,6 +1731,23 @@ export const lcSittings: Scenario = {
         const c1 = (await ctx.api.reads.getSitting(id)).sitting;
         if (c1.summary.notes !== after.summary.notes + 1 || c1.status !== 'abandoned')
           throw new Error(`C after a late note: ${JSON.stringify(c1)}`);
+      },
+    },
+    {
+      id: 'ui-ext-unversioned',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-unversioned'],
+      title:
+        'Settings → LeetCode after C’s Start with a malformed build label: an older build, rebuild needed',
+      async run(ctx) {
+        if (!state.c) throw new Error('no sitting C — the double-start step failed');
+        await settingsFresh(ctx);
+        await ctx.page
+          .getByText(
+            `Extension: the last Start came from a build older than ${LATEST_EXT} — rebuild needed.`,
+          )
+          .waitFor({ timeout: 15_000 });
       },
     },
     {
@@ -1720,7 +1858,9 @@ export const lcSittings: Scenario = {
         'Start D; a note stamped before C’s drop, sent now, lands on C and leaves D’s head and live row as they were',
       async run(ctx) {
         if (!state.cBeforeDrop) throw new Error('no drop of C — the double-start step failed');
-        const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
+        const { sitting } = await ctx.api.writes.lcSittingStart(
+          start(ctx, 'd', { extensionVersion: LATEST_EXT }), // this checkout's build: Settings reads up to date
+        );
         state.d = sitting.id;
         state.dRep = sitting.repTaskId;
         state.dStartedAt = sitting.startedAt;
@@ -1739,6 +1879,22 @@ export const lcSittings: Scenario = {
           throw new Error(`a note to C beside open D: ${JSON.stringify(late)}`);
         if (JSON.stringify(await ctx.api.reads.getSitting(state.d)) !== d0)
           throw new Error('a late note to C moved D');
+      },
+    },
+    {
+      id: 'ui-ext-equal',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-equal'],
+      title: 'Settings → LeetCode after D’s Start from this build: up to date, and after a reload',
+      async run(ctx) {
+        if (!state.d) throw new Error('no sitting D — the late-neighbour step failed');
+        const line = `Extension: ${LATEST_EXT}, up to date as of your last Start.`;
+        await settingsFresh(ctx);
+        await ctx.page.getByText(line).waitFor({ timeout: 15_000 });
+        await ctx.shot('settings-leetcode-ext-equal');
+        await ctx.page.reload();
+        await ctx.page.getByText(line).waitFor({ timeout: 15_000 });
       },
     },
     {
@@ -1875,7 +2031,7 @@ export const lcSittings: Scenario = {
         if (await ctx.page.getByRole('region', { name: 'Now' }).count())
           throw new Error('an ended sitting is still pinned as open');
         await ctx.shot('sittings-ended');
-        await ctx.ui.goto('/settings#leetcode');
+        await settingsFresh(ctx);
         const select = ctx.page.getByLabel('Sittings are reps of');
         await select.waitFor({ timeout: 15_000 });
         // The select reads empty (and disabled) until the Rolls load — wait for it to settle on the link.
@@ -1958,8 +2114,9 @@ export const lcSittings: Scenario = {
         'Start E and F at once: one opens, the other is refused as still open; drop the winner',
       async run(ctx) {
         const results = await Promise.allSettled([
-          ctx.api.writes.lcSittingStart(start(ctx, 'e')),
-          ctx.api.writes.lcSittingStart(start(ctx, 'f')),
+          // A build newer than the app's: the winner is the newest sitting, for ui-ext-newer.
+          ctx.api.writes.lcSittingStart(start(ctx, 'e', { extensionVersion: '99.0.0' })),
+          ctx.api.writes.lcSittingStart(start(ctx, 'f', { extensionVersion: '99.0.0' })),
         ]);
         const won = results.filter((r) => r.status === 'fulfilled');
         const lost = results.filter((r) => r.status === 'rejected');
@@ -1971,6 +2128,23 @@ export const lcSittings: Scenario = {
         const { sitting } = (won[0] as PromiseFulfilledResult<{ sitting: { repTaskId: string } }>)
           .value;
         await ctx.api.writes.finishTask(sitting.repTaskId, 'cancelled');
+        state.newer = true;
+      },
+    },
+    {
+      id: 'ui-ext-newer',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['settings-ext-newer'],
+      title: 'Settings → LeetCode after a Start from a build newer than the app’s: no rebuild nag',
+      async run(ctx) {
+        if (!state.newer) throw new Error('no newer sitting — the parallel step failed');
+        await settingsFresh(ctx);
+        await ctx.page
+          .getByText(`Extension: installed 99.0.0; this app was built with ${LATEST_EXT}.`)
+          .waitFor({ timeout: 15_000 });
+        if (await ctx.page.getByText(/rebuild needed/).count())
+          throw new Error('a newer build still asks for a rebuild');
       },
     },
     {

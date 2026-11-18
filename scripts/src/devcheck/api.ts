@@ -313,6 +313,7 @@ export interface DevVerdict {
 export interface DevSitting {
   id: string;
   day: string;
+  extensionVersion?: string | null; // the extension build its Start came from (absent before 2.2.0)
   status: 'active' | 'done' | 'abandoned';
   repTaskId: string;
   rollId: string;
@@ -335,12 +336,8 @@ export interface DevSitting {
     submitsBeforeAccepted: number | null;
     runsBeforeFirstSubmit: number;
     headEvents: number;
-    // lc-coach C0 — absent until a coach event folds
-    coach?: {
-      config: { trace: boolean; hold: boolean; nudge: boolean } | null;
-      trace: 'traced' | 'partial' | 'skipped' | 'none' | null;
-      nudges: number;
-    };
+    // lc-coach C0 — absent until a coach event folds; the resubmit note's switch and count (the card is retired)
+    coach?: { config: { nudge: boolean } | null; nudges: number };
     commentTrace?: 'traced' | 'none'; // coach-fixes: the trace comment before the first judged event
   };
   claudeNotes?: { text: string; updatedAt: number } | null; // coach-fixes: Claude's notes, beside the review
@@ -510,6 +507,7 @@ export interface DevSittingStart {
   startedAt: number;
   tzOffsetMinutes: number;
   problem?: unknown;
+  extensionVersion?: string | null; // the extension's manifest version, as its background stamps it
 }
 export type DevSittingEvent =
   | {

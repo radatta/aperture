@@ -6,6 +6,7 @@ import { ALWAYS_RUN, MAX_CHANGED } from './rules.ts';
 const TESTS = [
   'app/src/pages/Home/Home.test.tsx',
   'app/src/pages/Home/HomeCard.test.tsx',
+  'app/src/pages/Settings/Settings.test.tsx',
   'app/src/styles/fieldSize.test.ts',
   'app/src/styles/theme.test.ts',
   'app/src/styles/tokens.test.ts',
@@ -17,6 +18,7 @@ const TESTS = [
   'scripts/src/board/board-cli.test.ts',
   'scripts/src/board/tower/queue.test.ts',
   'scripts/src/devcheck/run.test.ts',
+  'scripts/src/devcheck/scenarios/index.test.ts',
   'scripts/src/workflow-triggers.test.ts',
   'scripts/src/checked-tree.test.ts',
   FIXTURE_SUITE,
@@ -141,6 +143,21 @@ describe('plan', () => {
       ]),
     );
     expect(fullPkgs(w)).toEqual([]);
+  });
+
+  it('the extension’s version runs the app’s Settings and the dev check’s scenarios, which read it', () => {
+    const m = plan(ch('extension/manifest.json'), TESTS);
+    expect(pkg(m, 'app').tests).toContain('app/src/pages/Settings/Settings.test.tsx');
+    expect(pkg(m, 'scripts').tests).toEqual(
+      expect.arrayContaining([
+        'scripts/src/devcheck/scenarios/index.test.ts',
+        'scripts/src/lc-e2e/extension.test.ts',
+      ]),
+    );
+    expect(pkg(m, 'extension').tests).toContain('extension/test/overlay.test.ts');
+    const v = plan(ch('app/pwa/extensionVersion.ts'), TESTS);
+    expect(pkg(v, 'app').tests).toContain('app/src/pages/Settings/Settings.test.tsx');
+    expect(pkg(v, 'scripts').tests).toContain('scripts/src/devcheck/scenarios/index.test.ts');
   });
 
   it('app sources run the raw-glob scanners', () => {
