@@ -71,8 +71,9 @@ export interface Step {
 export const BUDGET = 10;
 // A narrow gate is uncapped, so it stays near the sequential gate's peak: one 4-worker package beside tsc and eslint.
 export const NARROW_BUDGET = 6;
-// scripts' tests spawn shells and CLIs: ~220 threads and ~2.2 GB at its 2 workers, an app run's weight (2026-11-17
-// replay: the two together made a wide gate's tree 7 GB against a suite's ≤ 5.2). Costed one past what app leaves
+// scripts' tests spawn shells and CLIs: a wide gate's scripts set ran ~220 threads and ~2.2 GB at its 2 workers, an
+// app run's weight (2026-11-17 replay: the two together made the tree 7 GB against a suite's ≤ 5.2). A narrow set
+// can be as heavy (a scripts/board diff), so the cost is flat. Costed one past what app leaves
 // free, it never runs beside app; in a narrow gate it runs alone.
 export const SCRIPTS_COST = BUDGET - 4 + 1; // 4 = WIDE_WORKERS.app (a test pins it)
 // A wide gate's vitest workers per package, app the long pole. A narrow one keeps the container cap (4).
@@ -96,7 +97,7 @@ const RANK = [
   'cdk',
   'lambdas',
   'packages/shared',
-  'scripts', // last: its cost keeps it off app + extension at once (SCRIPTS_COST)
+  'scripts', // its cost keeps it off app; ranked last so smaller steps go first
 ];
 export const rank = (s: Step) => {
   const i = RANK.indexOf(s.label.split(':').at(-1)!);
@@ -422,7 +423,7 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
     whole
       ? '  as a full suite: one `test` slot (the 2-suite cap); typecheck and lint at once, then the suite alone'
       : wide
-        ? `  at once, as a full suite: one \`test\` slot (the 2-suite cap), up to ${BUDGET} tokens (workers + tsc + eslint)`
+        ? `  at once, as a full suite: one \`test\` slot (the 2-suite cap), up to ${BUDGET} tokens (tests + tsc + eslint)`
         : `  at once: one \`test-fast\` slot, uncapped, up to ${NARROW_BUDGET} tokens`,
   );
   if (opts.dryRun) {

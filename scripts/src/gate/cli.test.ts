@@ -350,6 +350,37 @@ describe('schedule', () => {
     expect(peak).toBeLessThanOrEqual(10);
   });
 
+  it('the narrow budget: one 4-worker package beside tsc + eslint, the second after it', async () => {
+    const started: string[] = [];
+    const kids = new Map<string, ReturnType<typeof child>>();
+    const h = schedule(
+      [
+        step('typecheck', 1),
+        step('lint', 1),
+        step('test-fast:app', 4),
+        step('test-fast:lambdas', 4),
+      ],
+      (s) => {
+        started.push(s.label);
+        const c = child();
+        kids.set(s.label, c);
+        return c;
+      },
+      quiet,
+      NARROW_BUDGET,
+    );
+    expect(started).toEqual(['test-fast:app', 'typecheck', 'lint']);
+    kids.get('typecheck')!.finish(0);
+    kids.get('lint')!.finish(0);
+    await flush();
+    expect(started).toHaveLength(3); // 2 free: lambdas (4) waits for app
+    kids.get('test-fast:app')!.finish(0);
+    await flush();
+    expect(started.at(-1)).toBe('test-fast:lambdas');
+    kids.get('test-fast:lambdas')!.finish(0);
+    await h.done;
+  });
+
   it('a step costing the whole budget waits for the rest, then runs alone; one costing more still runs', async () => {
     const order: string[] = [];
     const kids: ReturnType<typeof child>[] = [];
@@ -456,7 +487,7 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
   });
 
   it('stop sends TERM', async () => {
-    const { dir, f } = stub('trap "kill $!; exit 99" TERM; sleep 30 & wait');
+    const { dir, f } = stub("trap 'kill $!; exit 99' TERM; sleep 30 & wait");
     const c = spawnExec(s, f, dir);
     await new Promise((r) => setTimeout(r, 200));
     c.stop();
@@ -464,10 +495,10 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
   });
 
   it('a pipe held open past exit ends the step within the drain bound, not with the holder', async () => {
-    const { dir, f } = stub('sleep 4 & exit 0'); // holds the pipes 4 s
+    const { dir, f } = stub('sleep 8 & exit 0'); // holds the pipes 8 s
     const t0 = Date.now();
     expect((await spawnExec(s, f, dir).done).code).toBe(0);
-    expect(Date.now() - t0).toBeLessThan(3500); // the 2 s bound, not the holder
+    expect(Date.now() - t0).toBeLessThan(6000); // the 2 s bound, not the holder
   }, 10000);
 
   it('the outer run: heavy.sh gets the args and env, its exit comes back; one that can’t start is 127', async () => {

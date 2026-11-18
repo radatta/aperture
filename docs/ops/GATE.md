@@ -46,8 +46,10 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
      gate is uncapped).
      - A test step costs its workers; typecheck and lint cost 1 each, since `tsc -b` and eslint are single-threaded.
      - Scripts costs 7 (`SCRIPTS_COST`, one more than app leaves free) at its 2 workers. Its tests spawn shells and
-       CLIs, ~220 threads and ~2.2 GB, an app run's weight; beside app, a replayed wide gate's process tree reached
-       7 GB against a suite's 5.2 at most. So it never runs beside app, and in a narrow gate it runs alone.
+       CLIs: a wide gate's scripts set ran ~220 threads and ~2.2 GB, an app run's weight; beside app, a replayed
+       wide gate's process tree reached 7 GB against a suite's 5.2 at most. So it never runs beside app, and in a
+       narrow gate it runs alone. A narrow set is often lighter, but a `scripts/board` diff makes it as heavy, so the
+       cost is flat (it costs a light narrow gate ~10 s).
    - **Start order:** longest first, a smaller step filling any gap: app, extension, typecheck, lint, cdk, lambdas,
      shared, and scripts last.
    - **Workers:** a wide gate uses `WIDE_WORKERS` (app 4; extension, lambdas, cdk and scripts 2; shared 1). A narrow
@@ -170,7 +172,8 @@ importers; a Lambda entry-file change also runs the cdk stack tests:
 
 **Concurrent steps (gate-parallel, 2026-11-17).** Each diff was replayed through the sequential gate and the
 concurrent one on the same base (`496b934e`), serially, one run each, under `heavy.sh` on the shared container. The
-replay script is in the lane archive, `gate-parallel/replay/`. Typecheck and lint were warm in both variants.
+replay script is in the lane archive, `gate-parallel/replay/`. Lint was warm in both variants; the sequential
+typecheck was partly cold (13–19 s against ~2 s), which is most of the narrow row's gain (about 50 s → 49 s warm).
 
 - **Peak.** For the concurrent gate, its outer run's whole tree. For the sequential gate, the max over its steps.
 - **The yardstick:** 147 green full `pnpm test` runs on 11-17/18. Their median (max) is:
@@ -191,7 +194,7 @@ there:
 - **With scripts beside app and extension** (an earlier tune), a wide gate peaked at 371–389 threads and up to 7.1 GB
   RSS. Hence `SCRIPTS_COST`.
 - **The narrow budget** keeps a narrow gate near the sequential peak: it saves the typecheck and lint time, and runs
-  its packages one after another.
+  its packages one after another. A narrow gate gains little; the win is the wide one.
 
 **Speed knobs** (adopted only if ≥15% faster and stable, at equal strictness):
 
