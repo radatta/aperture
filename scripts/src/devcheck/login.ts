@@ -163,7 +163,11 @@ export async function cachedState(
       grantTokens(
         fetch,
         env.DEVCHECK_COGNITO_HOST,
-        { grant_type: 'refresh_token', client_id: env.DEVCHECK_CLIENT_ID, refresh_token: user.refresh_token },
+        {
+          grant_type: 'refresh_token',
+          client_id: env.DEVCHECK_CLIENT_ID,
+          refresh_token: user.refresh_token,
+        },
         now,
         (m, error) => {
           dead = error === 'invalid_grant';
@@ -172,7 +176,8 @@ export async function cachedState(
       ),
       new Promise<never>((_, reject) => {
         timer = setTimeout(
-          () => reject(new Error(`the token endpoint took over ${LAUNCH_RENEW_TIMEOUT_MS / 1000} s`)),
+          () =>
+            reject(new Error(`the token endpoint took over ${LAUNCH_RENEW_TIMEOUT_MS / 1000} s`)),
           LAUNCH_RENEW_TIMEOUT_MS,
         );
       }),
@@ -183,7 +188,9 @@ export async function cachedState(
       unlinkSync(path);
       return undefined;
     }
-    log(`cached session not renewed (${err instanceof Error ? err.message : 'failed'}) — loading it as cached`);
+    log(
+      `cached session not renewed (${err instanceof Error ? err.message : 'failed'}) — loading it as cached`,
+    );
     return state;
   } finally {
     clearTimeout(timer);
@@ -204,7 +211,10 @@ export async function cachedState(
     origins: state.origins.map((o) =>
       o !== origin
         ? o
-        : { ...o, localStorage: o.localStorage.map((x) => (x === entry ? { ...x, value: renewed } : x)) },
+        : {
+            ...o,
+            localStorage: o.localStorage.map((x) => (x === entry ? { ...x, value: renewed } : x)),
+          },
     ),
   };
 }

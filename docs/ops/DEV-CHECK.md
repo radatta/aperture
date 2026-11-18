@@ -130,7 +130,14 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   while the page sits idle), so before every API request a session with under 60 s left is re-read from the
   page, which renews itself, and if the page hasn't, renewed from here with the page's refresh token at the
   env's dev-pool token endpoint (`login.ts` `refreshSession`, `assertDevCognitoUrl`, never following a
-  redirect), then checked again (`WRONG_USER`). Nothing is written back to the page or logged.
+  redirect), then checked again (`WRONG_USER`). Nothing is written back to the page or logged. **Before the
+  browser loads anything**, a cached session with under 15 min left (`LAUNCH_MARGIN_MS`, expired included) is renewed
+  the same way with the cache's refresh token, checked (`WRONG_USER` throws before any browser), and handed to the
+  context in memory (`login.ts` `cachedState`). The app therefore never launches on a dead or boundary token, and
+  never renews at launch. The file is untouched: it is re-saved after sign-in, as before. A dead refresh token
+  (`invalid_grant`) discards the cache, so the run signs in through the form. Any other failure (the network, a 5xx,
+  no answer in 15 s) loads the cache as it is, logged, and the app renews it itself. Why: F226, a first load that
+  401-burst on 2026-11-17 and failed every scenario's console row.
 - **MCP as the test user.** Dev's `/mcp` accepts only tokens minted for the claude client (D14,
   `docs/areas/mcp/index.md`), so after the sweep the harness signs the test user in as `aperture-claude-dev` —
   authorization code + PKCE, no secret (a public client), the Hosted UI cookie reused so the form usually
@@ -213,7 +220,7 @@ playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROO
   is never touched. **A dropped connection is retried**: a removal or read-back that hits one (`terminated`, a
   socket-level `fetch failed`) is tried again after 0.5 s and 2 s, each retry listed under _Retried after a dropped
   connection_; only then is it a failure (F177). Never a create — one whose answer died may have landed. Loading the app writes server-side too (`getDay` materialises the day), always as the test user —
-  the cached session is checked before any page loads.
+  the cached session is checked, and renewed when near expiry, before any page loads.
 - **A row is proven only through its own entry point.** A UI row proven only through the API is a gap, not
   a pass. Every scenario's rows are checked when the run loads, before the deploy wait — a row no step proves
   through its entry, or an off-dev row naming a test that isn't there, is `MATRIX_GAP` — and again by
@@ -286,7 +293,7 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 | `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                                                                                                             | the message names what it serves                                                                                                                                                                                                           |
 | `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                                                                                                 | check the env file's host                                                                                                                                                                                                                  |
 | `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                                                                                               | screenshot in `shots/`; update `login.ts` deliberately                                                                                                                                                                                     |
-| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a refresh's `invalid_grant` means the cached session is dead: the operator deletes `.secrets/devcheck.dev.state.json`, then rerun                                                            |
+| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a mid-run refresh's `invalid_grant` means the cached session is dead: the operator deletes `.secrets/devcheck.dev.state.json`, then rerun (at launch, the run discards a dead cache itself)  |
 | `WRONG_USER`               | the session isn't the test user                                                                                                                                                                                        | delete `.secrets/devcheck.dev.state.json`, rerun                                                                                                                                                                                           |
 | `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                                                                                                             | rerun; persistent → service-worker bug                                                                                                                                                                                                     |
 | `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                                                                                               | the message names the scenario and row; fix the scenario, never the rule                                                                                                                                                                   |
@@ -459,7 +466,7 @@ scenario's, and a branch with no scenario of its own reports "no feature rows". 
 carry its verdict: they hold only once a run passes.
 Shared, in the main checkout: the ledgers and the run locks, one of each per slot (_Dev slots_). Secrets beside the env file:
 `.secrets/devcheck.dev.state.json` (the cached session and the Hosted UI cookie, mode 600 — re-saved after the MCP
-sign-in).
+sign-in; the before-launch renew patches the loaded copy in memory, never the file).
 
 ## Why not Claude in Chrome
 

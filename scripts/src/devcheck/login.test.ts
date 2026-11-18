@@ -1,11 +1,18 @@
-import { mkdtempSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { DEV_ORIGIN, TEST_USER_EMAIL, type DevcheckEnv } from './config';
 import type { FetchLike } from './api';
-import { readCheckedSession, refreshSession, validateCachedState } from './login';
-import type { PwPage } from './pw-types';
+import { launch } from './browser';
+import {
+  cachedState,
+  LAUNCH_RENEW_TIMEOUT_MS,
+  readCheckedSession,
+  refreshSession,
+  validateCachedState,
+} from './login';
+import type { PwModule, PwPage } from './pw-types';
 import { cognitoAuthority, userStoreKey } from './token';
 
 const env = {
@@ -161,5 +168,220 @@ describe('refreshSession', () => {
     ).catch((e: unknown) => e as Error);
     expect(String(err)).toMatch(/AUTH_REJECTED.*session refresh.*HTTP 400 invalid_grant/);
     expect(String(err)).not.toMatch(/SECRETBODY|RT-1/);
+  });
+});
+
+describe('cachedState', () => {
+  const HOST = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
+  const cenv = { ...env, DEVCHECK_COGNITO_HOST: HOST } as DevcheckEnv;
+  const key = userStoreKey(cognitoAuthority(cenv.DEVCHECK_POOL_ID), cenv.DEVCHECK_CLIENT_ID);
+  const claims = (p: Record<string, unknown>) =>
+    `h.${Buffer.from(JSON.stringify(p)).toString('base64url')}.sig`;
+  const NOW = 1_800_000_000_000; // ms
+  const OLD_AT = claims({ sub: 's1', exp: 1 });
+  const NEW_AT = claims({ sub: 's1', exp: NOW / 1000 + 3600, n: 'new' });
+  const NEW_ID = claims({ sub: 's1', email: TEST_USER_EMAIL, n: 'new' });
+  // A cached file as the harness saves it: the app's record (with the cookie the MCP sign-in reuses) and the
+  // refresh token; expiresIn is seconds from NOW (negative: expired).
+  const cache = (expiresIn: number, extra: Record<string, unknown> = {}) => {
+    const path = join(mkdtempSync(join(tmpdir(), 'state-')), 'state.json');
+    writeFileSync(
+      path,
+      JSON.stringify({
+        cookies: [{ name: 'cognito', value: 'cookie' }],
+        origins: [
+          {
+            origin: DEV_ORIGIN,
+            localStorage: [
+              { name: 'theme', value: 'dark' },
+              {
+                name: key,
+                value: JSON.stringify({
+                  access_token: OLD_AT,
+                  id_token: 'OLD-ID',
+                  refresh_token: 'RT-1',
+                  token_type: 'Bearer',
+                  expires_at: NOW / 1000 + expiresIn,
+                  profile: { sub: 's1', email: TEST_USER_EMAIL },
+                  ...extra,
+                }),
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    return path;
+  };
+  const grant = (status: number, body: Record<string, unknown> = {}) =>
+    vi.fn<FetchLike>(async () => ({
+      status,
+      text: async () =>
+        JSON.stringify(
+          status === 200
+            ? { access_token: NEW_AT, id_token: NEW_ID, expires_in: 3600, ...body }
+            : body,
+        ),
+    }));
+  const record = (state: unknown) => {
+    const s = state as { origins: { localStorage: { name: string; value: string }[] }[] };
+    return JSON.parse(s.origins[0]!.localStorage.find((x) => x.name === key)!.value) as Record<
+      string,
+      unknown
+    >;
+  };
+  const fakePw = () => {
+    const newContext = vi.fn(async () => ({}));
+    const pw = { chromium: { launch: vi.fn(async () => ({ newContext })) } } as unknown as PwModule;
+    return { pw, newContext };
+  };
+  const run = (path: string, fetch: FetchLike, log = vi.fn()) =>
+    cachedState(path, cenv, { fetch, now: () => NOW, log });
+
+  it("renews a cached session older than the token's life before the first page load", async () => {
+    const path = cache(-3 * 3600);
+    const before = readFileSync(path, 'utf8');
+    const fetch = grant(200);
+    const log = vi.fn();
+    const { pw, newContext } = fakePw();
+    await launch(pw, await run(path, fetch, log));
+    const opts = (newContext.mock.calls[0] as unknown[])[0] as { storageState: unknown };
+    expect(record(opts.storageState)).toMatchObject({
+      access_token: NEW_AT,
+      id_token: NEW_ID,
+      expires_at: NOW / 1000 + 3600,
+      refresh_token: 'RT-1',
+      profile: { sub: 's1', email: TEST_USER_EMAIL },
+    });
+    expect(JSON.stringify(opts)).not.toContain(OLD_AT);
+    // the cookie and the page's other keys are untouched
+    expect(JSON.stringify(opts)).toContain('"theme","value":"dark"');
+    expect(JSON.stringify(opts)).toContain('"cookie"');
+    expect(fetch.mock.invocationCallOrder[0]).toBeLessThan(
+      (pw.chromium.launch as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!,
+    );
+    expect(readFileSync(path, 'utf8')).toBe(before); // memory only: the file is re-saved after sign-in
+    expect(log).toHaveBeenCalledWith(
+      'renewed the cached session before launch (was expired 180 min)',
+    );
+  });
+  it("posts the refresh grant to the dev pool's token endpoint, refusing a redirect", async () => {
+    const fetch = grant(200);
+    await run(cache(-60), fetch);
+    const [url, init] = fetch.mock.calls[0]!;
+    expect(url).toBe(`https://${HOST}/oauth2/token`);
+    expect(init).toMatchObject({ method: 'POST', redirect: 'error' });
+    expect(Object.fromEntries(new URLSearchParams(String(init?.body)))).toEqual({
+      grant_type: 'refresh_token',
+      client_id: 'c1',
+      refresh_token: 'RT-1',
+    });
+  });
+  it('renews under 15 min left; 15 min or more is left alone, with no request', async () => {
+    const near = grant(200);
+    const log = vi.fn();
+    expect(record(await run(cache(15 * 60 - 1), near, log)).access_token).toBe(NEW_AT);
+    expect(log).toHaveBeenCalledWith('renewed the cached session before launch (had 15 min left)');
+    const fresh = grant(200);
+    const flog = vi.fn();
+    const path = cache(15 * 60);
+    const state = await run(path, fresh, flog);
+    expect(fresh).not.toHaveBeenCalled();
+    expect(state).toEqual(JSON.parse(readFileSync(path, 'utf8')));
+    expect(flog).toHaveBeenCalledWith('cached session good for 15 min');
+  });
+  it('keeps a rotated refresh token', async () => {
+    expect(record(await run(cache(-60), grant(200, { refresh_token: 'RT-2' }))).refresh_token).toBe(
+      'RT-2',
+    );
+  });
+  it('a dead refresh token (invalid_grant) discards the cache, so the run signs in by the form', async () => {
+    const path = cache(-60);
+    const log = vi.fn();
+    const { pw, newContext } = fakePw();
+    await launch(pw, await run(path, grant(400, { error: 'invalid_grant' }), log));
+    expect(existsSync(path)).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/discarding.*invalid_grant/));
+    expect((newContext.mock.calls[0] as unknown[])[0]).not.toHaveProperty('storageState');
+  });
+  it('any other failure loads the cache as it is, with a log line', async () => {
+    const down = vi.fn<FetchLike>(async () => {
+      throw new Error('ECONNRESET');
+    });
+    for (const fetch of [
+      down,
+      grant(503, { error: 'server_error' }),
+      grant(200, { id_token: 7 }),
+    ]) {
+      const path = cache(-60);
+      const before = JSON.parse(readFileSync(path, 'utf8'));
+      const log = vi.fn();
+      expect(await run(path, fetch, log)).toEqual(before);
+      expect(existsSync(path)).toBe(true);
+      expect(log).toHaveBeenCalledOnce();
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/not renewed.*loading it as cached/));
+    }
+  });
+  it('a token endpoint that never answers times out and loads the cache as it is', async () => {
+    vi.useFakeTimers();
+    try {
+      const path = cache(-60);
+      const log = vi.fn();
+      const hung = vi.fn<FetchLike>(() => new Promise(() => {}));
+      const out = run(path, hung, log);
+      await vi.advanceTimersByTimeAsync(LAUNCH_RENEW_TIMEOUT_MS);
+      expect(record(await out).access_token).toBe(OLD_AT);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/took over 15 s.*loading it as cached/),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('renewed tokens for anyone else throw WRONG_USER before any browser, keeping the file', async () => {
+    const path = cache(-60);
+    const other = grant(200, {
+      access_token: claims({ sub: 's9', exp: NOW / 1000 + 3600 }),
+      id_token: claims({ sub: 's9', email: 'x@example.com' }),
+    });
+    const { pw } = fakePw();
+    await expect(run(path, other).then((s) => launch(pw, s))).rejects.toThrow(/WRONG_USER/);
+    expect(pw.chromium.launch).not.toHaveBeenCalled();
+    expect(existsSync(path)).toBe(true);
+  });
+  it('a wrong cached identity is still discarded first, with no request', async () => {
+    const path = cache(-60, { profile: { sub: 's9', email: 'x@example.com' } });
+    const fetch = grant(200);
+    expect(await run(path, fetch)).toBeUndefined();
+    expect(existsSync(path)).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('no refresh token: loads as cached, logged, with no request', async () => {
+    const fetch = grant(200);
+    const log = vi.fn();
+    expect(
+      record(await run(cache(-60, { refresh_token: undefined }), fetch, log)).access_token,
+    ).toBe(OLD_AT);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/no refresh token/));
+  });
+  it('no token text reaches a log line or an error', async () => {
+    const seen: string[] = [];
+    const log = (m: string) => void seen.push(m);
+    await run(cache(-60), grant(200), log);
+    await run(cache(-60), grant(400, { error: 'invalid_grant', detail: 'SECRETBODY' }), log);
+    await run(cache(-60), grant(503, { detail: 'SECRETBODY' }), log);
+    await run(
+      cache(-60),
+      grant(200, {
+        access_token: claims({ sub: 's9', exp: 9e9 }),
+        id_token: claims({ sub: 's9' }),
+      }),
+      log,
+    ).catch((e: unknown) => seen.push(String(e)));
+    const all = seen.join('\n');
+    expect(seen.length).toBeGreaterThanOrEqual(4);
+    for (const secret of [OLD_AT, NEW_AT, NEW_ID, 'OLD-ID', 'RT-1', 'SECRETBODY', 'cookie'])
+      expect(all).not.toContain(secret);
   });
 });
