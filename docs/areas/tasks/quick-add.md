@@ -57,14 +57,14 @@ Raycast ─ parse_task ┘     (RPC / MCP)    runQuickParse └─ else → Anth
 
 ## Pieces
 
-| Where                                   | What                                                                                                                          |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Where                                   | What                                                                                                                              |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `packages/shared/src/quickParse.ts`     | `ParseTaskResult` contract, `validateParsedTask` (the server's field rules over the model's untrusted JSON), `runQuickParse` flow |
-| `packages/shared/src/titleWords.ts`     | `keepTitleWords`: the model's title lined up against the typed words — dropped words back, a used due phrase out              |
-| `lambdas/src/anthropic/`                | gateway (`noopAnthropic` / `FakeAnthropic` / `createLiveAnthropic`), the one prompt + JSON schema (`parsePrompt.ts`)          |
-| `lambdas/src/backend.ts` `parseTask`    | server owns today (`dayStartHour` in LA) and the active category list; the client sends only text                             |
-| `lambdas/src/mcp/tools.ts` `parse_task` | the same method for Raycast (agent token)                                                                                     |
-| `app/src/modules/capture/`              | `useQuickParse` (preview, in-flight reuse, 10s ceiling), `captureOutbox.ts`, `parsePreview.ts`, CaptureBar wiring + parking   |
+| `packages/shared/src/titleWords.ts`     | `keepTitleWords`: the model's title lined up against the typed words — dropped words back, a used due phrase out                  |
+| `lambdas/src/anthropic/`                | gateway (`noopAnthropic` / `FakeAnthropic` / `createLiveAnthropic`), the one prompt + JSON schema (`parsePrompt.ts`)              |
+| `lambdas/src/backend.ts` `parseTask`    | server owns today (`dayStartHour` in LA) and the active category list; the client sends only text                                 |
+| `lambdas/src/mcp/tools.ts` `parse_task` | the same method for Raycast (agent token)                                                                                         |
+| `app/src/modules/capture/`              | `useQuickParse` (preview, in-flight reuse, 10s ceiling), `captureOutbox.ts`, `parsePreview.ts`, CaptureBar wiring + parking       |
 | `app/src/data/stubParse.ts`             | the stub's heuristic stand-in for the model (same flow + validator); `aperture:stub:failNextParse` fails the next parse once      |
 
 The model call: `claude-sonnet-5-5` (Haiku until 2026-11-17), structured outputs (`categoryId` an enum of
