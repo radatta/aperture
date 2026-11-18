@@ -28,7 +28,8 @@ export interface MissEvent {
   unsure: { file: string; why: string }[];
 }
 
-const ANSI = /\x1b\[[0-9;]*m/g;
+// vitest's colours in the log: ESC [ … m (built from a string: a literal ESC in a regex trips no-control-regex).
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 // `<job>\t<step>\t<ts> [<pkg dir> test: ] FAIL [|project| ]<path> [> test name | [ path ]]`
 const FAIL = /^([^\t]*)\t[^\t]*\t\S+\s+(?:(\S+) test: )?\s*FAIL\s+(?:\|[^|]+\|\s+)?(\S+)/;
 

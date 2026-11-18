@@ -15,7 +15,7 @@ const ch = (...paths: string[]): Change[] => paths.map((path) => ({ path, delete
 const withRules = (r: Partial<Rules>) => async () => ({ ...HEAD, ...r }) as Rules;
 const fullPkgs = (p: ReturnType<typeof plan>) =>
   Object.keys(p.packages).filter((d) => modeOf(p, d) === 'full');
-const never = () => {
+const never = (): string => {
   throw new Error('readBase called');
 };
 
@@ -87,8 +87,8 @@ describe('planWithBase', () => {
     expect(p.packages).toEqual(plan(ch(RULES_PATH, 'docs/ops/LANES.md'), TESTS).packages);
   });
 
-  it.each([
-    ['unreadable', () => never(), undefined, /couldn't be loaded \(readBase called\)/],
+  const cases: [string, () => string, ReturnType<typeof withRules> | undefined, RegExp][] = [
+    ['unreadable', never, undefined, /couldn't be loaded \(readBase called\)/],
     ['not loadable', () => 'export const PACKAGES = [;', undefined, /couldn't be loaded/],
     [
       'with another package list',
@@ -96,7 +96,8 @@ describe('planWithBase', () => {
       withRules({ PACKAGES: HEAD.PACKAGES.slice(1) }),
       /package list changed/,
     ],
-  ] as const)('a base copy %s runs the whole suite', async (_, read, load, why) => {
+  ];
+  it.each(cases)('a base copy %s runs the whole suite', async (_, read, load, why) => {
     const p = await planWithBase(ch(RULES_PATH), TESTS, read, load);
     expect(p.full).toEqual([expect.stringMatching(why)]);
   });
