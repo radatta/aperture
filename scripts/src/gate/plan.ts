@@ -56,9 +56,8 @@ const CODE_EXT = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 export const pkgOf = (path: string, pkgs: Pkg[] = PACKAGES): Pkg | undefined =>
   pkgs.find((p) => path.startsWith(`${p.dir}/`));
 
-// A full rule's `except` hands a path it matches back to the other rules (`<pkg>` stands for each package dir).
-const excepted = (r: FullRule, path: string, dir = '') =>
-  !!r.except?.some((x) => matches(x.replace('<pkg>', dir), path));
+// A REPO_FULL rule's `except` hands a path it matches back to the other rules.
+const excepted = (r: FullRule, path: string) => !!r.except?.some((x) => matches(x, path));
 
 // A rule's `tests` entry: a file, or every test file under a `dir/`.
 const expand = (entry: string, testFiles: string[]) =>
@@ -119,7 +118,6 @@ export function plan(changes: Change[], testFiles: string[], rules: Rules = HEAD
     for (const r of PACKAGE_FULL)
       for (const p of PACKAGES)
         if (
-          !excepted(r, path, p.dir) &&
           r.match.some(
             (m) =>
               matches(m.replace('<pkg>', p.dir), path) &&

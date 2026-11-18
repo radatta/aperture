@@ -22,6 +22,7 @@ export interface GhRun {
   conclusion: string;
   createdAt: string;
   url: string;
+  headBranch?: string;
 }
 
 // The run that speaks for this sha: the newest PR run, else the newest Branch run.
@@ -53,7 +54,7 @@ export function verdict(sha: string, r: GhRun | undefined, failedJobs: string[] 
   return { code: 1, line: `${what}: ${r.conclusion}${jobs} — ${r.url}` };
 }
 
-const FIELDS = 'databaseId,workflowName,event,status,conclusion,createdAt,url';
+const FIELDS = 'databaseId,workflowName,event,status,conclusion,createdAt,url,headBranch';
 // A hung gh is a failure (exit 2, retried under --wait), and its minute counts toward --timeout.
 const GH = { timeoutMs: 60_000 };
 
@@ -122,6 +123,8 @@ export async function main(
           await miss(v.run, sha, { run, log, now });
         } catch (err) {
           log(`gate:ci — miss check failed: ${msg(err)} (the verdict stands)`);
+        } finally {
+          log(v.line); // the verdict stays the last line
         }
       return v.code;
     }

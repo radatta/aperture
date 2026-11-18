@@ -74,9 +74,14 @@ describe('main', () => {
         run,
         async () => {},
         (l) => out.push(l),
+        Date.now,
+        async () => null,
       ),
     ).toBe(1);
-    expect(out[0]).toMatch(/Branch run 1 on 35fe83b8: failure \(branch \/ check\)/);
+    expect(out).toEqual([
+      expect.stringMatching(/Branch run 1 on 35fe83b8: failure \(branch \/ check\)/),
+      out[0],
+    ]);
   });
 
   // The miss check (miss.ts) runs after a failed verdict's line, and never changes the exit code.
@@ -115,7 +120,7 @@ describe('main', () => {
       ),
     ).toBe(1);
     expect(seen).toEqual([[1, SHA]]);
-    expect(out).toEqual([expect.stringMatching(/: failure/), '!! miss']);
+    expect(out).toEqual([expect.stringMatching(/: failure/), '!! miss', out[0]]); // the verdict last too
     const broken: string[] = [];
     const boom = async () => {
       throw new Error('gh: log not found');

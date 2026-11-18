@@ -93,15 +93,19 @@ describe('rules', () => {
       '\r',
       'plain text',
     ];
+    lines.push('~/Alpha/x', '${HOME:-', '}/Alpha/b', 'alpha\\beta', 'Alpha', 'Beta/x', '$HOME');
+    // the projects-folder rule exists only where the Mac root is known (not on CI): build it from a made-up one
+    const all = identifierRules(IDS, ['', 'Users', 'someone', 'Alpha', 'Beta', 'repo'].join('/'));
+    expect(all.map(([k]) => k)).toContain('projects-folder');
     const reference = (text: string, path: string) =>
       text
         .split('\n')
-        .flatMap((l, i) => findIdentifiers(l, rules, path).map((h) => ({ ...h, line: i + 1 })));
+        .flatMap((l, i) => findIdentifiers(l, all, path).map((h) => ({ ...h, line: i + 1 })));
     for (const path of ['', 'docs/a.md', SIM_RUNNER, IDENTIFIERS_FILE])
       for (const a of lines)
         for (const b of lines) {
           const text = `${a}\n${b}\n${a}${b}`;
-          expect(findIdentifiers(text, rules, path), JSON.stringify([path, text])).toEqual(
+          expect(findIdentifiers(text, all, path), JSON.stringify([path, text])).toEqual(
             reference(text, path),
           );
         }

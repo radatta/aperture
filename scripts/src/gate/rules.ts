@@ -55,7 +55,7 @@ export const PACKAGES: Pkg[] = [
 export interface FullRule {
   match: string[];
   why: string;
-  except?: string[]; // paths under `match` the rule leaves to the other rules (same pattern syntax)
+  except?: string[]; // REPO_FULL only: paths under `match` the rule leaves to the other rules (same pattern syntax)
   // PACKAGE_FULL only: the packages a non-`<pkg>` path runs whole, when they aren't (only) the one that owns it.
   pkgs?: string[];
 }
@@ -78,7 +78,8 @@ export const REPO_FULL: FullRule[] = [
   {
     // The selection code, and any gate file not yet classed below. rules.ts is data: base.ts plans a change to it
     // with the merge-base's rules too, so it can't narrow its own gate. The others are ordinary modules and tests.
-    match: ['scripts/src/gate/'],
+    // fixture-inputs.ts is selection code too: plan.ts asks it whether the fixture suite runs.
+    match: ['scripts/src/gate/', 'scripts/src/fixture-inputs.ts'],
     except: [
       'scripts/src/gate/rules.ts',
       'scripts/src/gate/ci.ts',
@@ -319,9 +320,10 @@ export const INPUT_RULES: InputRule[] = [
     why: 'the board shell, its limits and the heavy guard, run by the board tests',
   },
   {
-    // Every limits.json reader is in scripts: heavy.sh, lib.sh and the watchers (spawned by the board tests), the board
-    // and lane modules (the rule above), and this one. CI never runs heavy.sh, and a broken heavy.sh fails the gate's own
-    // steps, which run under it.
+    // limits.json's vitest readers: heavy.sh, lib.sh, the watchers and the heavy guard hook (spawned by the board
+    // tests), the board and lane modules (the rule above), and this one. The hook fixtures read it too, outside vitest
+    // (run them by hand: .claude/hooks/README.md). CI never runs heavy.sh, and cli.ts fails a gate whose inner pass
+    // never reported, so a broken heavy.sh can't pass it.
     inputs: ['scripts/board/limits.json'],
     tests: ['scripts/src/gate/cli.test.ts'],
     why: 'pins NARROW_WORKERS to tuning.test.maxWorkers',

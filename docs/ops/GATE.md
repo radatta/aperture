@@ -81,8 +81,9 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 
 - **Every package** (`REPO_FULL`): the lockfile, the workspace file, the root `package.json`, `.nvmrc`/`.npmrc`, the
   root tsconfigs, the eslint config, `identifiers.json` (cdk and scripts read it at import time, behind a cast `tsc`
-  can't check), and the gate's selection code: `cli.ts`, `plan.ts`, `registry.ts`, `base.ts` and any gate file a
-  rule's `except` doesn't name yet. A bug there could skip tests in the very run judging it.
+  can't check), and the gate's selection code: `cli.ts`, `plan.ts`, `registry.ts`, `base.ts`, `fixture-inputs.ts`
+  and any gate file the rule's `except` doesn't name yet (`rules.test.ts` pins that list). A bug there could skip
+  tests in the very run judging it.
 - **One package** (`PACKAGE_FULL`): its `package.json`, tsconfigs and vitest/vite config, and its `src/test/` (the
   shared test setup and harness). Also every module a setupFile imports from outside `src/test/` — the console guard
   (app and lambdas), the modules app's `setup.ts` resets: no test imports a setupFile, so the graph never sees them.
@@ -105,8 +106,10 @@ same-area rule runs every gate test on any change to it.
     lc-e2e) runs every test in that area, which covers the CLIs those tests spawn.
   - The board shell (`scripts/board/`: `heavy.sh`, `lib.sh`, `limits.json`, the watchers) runs the board and lane
     tests, which spawn it and read it; `limits.json` also runs `gate/cli.test.ts`, which pins `NARROW_WORKERS` to it.
-    Every reader is in scripts, CI never runs `heavy.sh`, and the gate's own steps run under it, so a broken one
-    fails the gate itself.
+    Every vitest reader is in scripts, and CI never runs `heavy.sh`. A broken `heavy.sh` can't pass the gate: the
+    inner pass reports its exit code through a file the caller names (`GATE_RESULT`), and a `heavy.sh` 0 with no
+    report is exit 2. The hook fixtures read `limits.json` too, outside vitest: after a change to it, run them by hand
+    (`.claude/hooks/README.md` → _Testing_), as before.
   - `extension/` runs every extension test plus `lc-e2e`, because `test/load.ts` reads the extension's `.js` from
     disk.
 - **A changed module** runs `vitest related` in its own package and in every package that imports it (`reaches`).
@@ -159,11 +162,19 @@ On a failed run (conclusion `failure`), `gate:ci` prints the verdict, then check
 - **ran:** the repo or its package ran whole, the plan named it, or `vitest related` reaches it (`related.ts` reads its
   imports with vitest's own walk, without running a test);
 - **missed:** its package was skipped, ran named tests only, or no changed module reaches it;
-- **unsure:** HEAD isn't the run's sha or the tree has edits (so its imports can't be read), or the graph helper failed.
+- **unsure:** the checkout isn't at the run's sha or has tracked edits (so its rules may not be the run's: every file
+  is unsure), the file is in no test package or vitest doesn't collect it, the graph helper failed, or a PR run tests
+  a merge with a main that has moved past the merge-base (a miss there is only unsure).
+
+gh prints vitest's colours as the literal text `^[[…m` (piped), and a coloured project label (`app`) can come
+before the path; both are read. The graph helper starts one vitest per fast package with an unnamed failing file
+(0.7 s for scripts, 3.4 s for app, outside `heavy.sh`), each within 60 s, as is the log fetch; the verdict line is
+printed again last.
 
 A miss or an unsure prints a `!!` block and appends one `kind: "gate-miss"` row to the board's
 `history/events-<UTC day>.jsonl` (`branch`, `sha`, `run`, `workflow`, `url`, `failing`, `missed`, `unsure`; no
-`class`, so the job-row readers skip it), once per run. Send the hub the block as `[info]`: a real miss means a rule
+`class`, so the job-row readers skip it), once per run and failing set (best effort: two checks at once can both
+log). Send the hub the block as `[info]`: a real miss means a rule
 is missing. A failing test that CI alone hits (a flake, or a break from main in a PR run) also reads as one, so a row
 is a candidate. The check never changes the exit code; its own failure prints `miss check failed` and the verdict
 stands.
@@ -283,6 +294,7 @@ there:
    - `gate:ci` logs a failing test the plan skipped (_A miss_).
 7. **Timing-sensitive tests no longer run under container load.**
 8. **A `heavy.sh` or `lib.sh` change runs the board and lane tests, not every package** (2026-11-18). A change that
-   breaks only another package's run under it shows on the next gate that runs that package. CI never uses them.
+   breaks only another package's run under it shows on the next gate that runs that package; one that exits 0
+   without running the gate fails it (`GATE_RESULT`). CI never uses them.
 
 **Not weaker:** typecheck and lint (full every time), the required PR checks, and main's pipeline.

@@ -49,6 +49,21 @@ describe('gate rules', () => {
     expect(named.filter((p) => !exists(p))).toEqual([]);
   });
 
+  // The gate dir's whole-suite rule: only these leave it. A new name here narrows what a gate change runs, so it is a
+  // reviewed edit to this list too.
+  it('only the classed gate files leave the selection-code rule; no PACKAGE_FULL rule has an except', () => {
+    const gate = REPO_FULL.find((r) => r.match.includes('scripts/src/gate/'))!;
+    expect(gate.except).toEqual([
+      'scripts/src/gate/rules.ts',
+      'scripts/src/gate/ci.ts',
+      'scripts/src/gate/miss.ts',
+      'scripts/src/gate/related.ts',
+      'scripts/src/gate/*.test.ts',
+    ]);
+    expect(REPO_FULL.filter((r) => r.except).length).toBe(1);
+    expect(PACKAGE_FULL.filter((r) => r.except)).toEqual([]);
+  });
+
   // No test imports a setupFile, so the graph never sees one or what it imports, yet both run around every test of
   // the package: each setupFile sits under <pkg>/src/test/, and each repo module it imports from outside that dir is
   // a PACKAGE_FULL path whose rule runs the package whole. One level deep: what those modules import is graph-visible

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -26,6 +27,20 @@ describe('loadRules', () => {
     expect(r.REPO_FULL).toEqual(HEAD.REPO_FULL);
     expect(String(r.MODULE_EXT)).toBe(String(HEAD.MODULE_EXT));
   });
+
+  it('loads it under plain node too (how gate:fast runs), not only through vitest', () => {
+    const base = fileURLToPath(new URL('./base.ts', import.meta.url));
+    const rules = fileURLToPath(new URL('./rules.ts', import.meta.url));
+    const script = `import { readFileSync } from 'node:fs';
+const { loadRules } = await import(${JSON.stringify(base)});
+const r = await loadRules(readFileSync(${JSON.stringify(rules)}, 'utf8'));
+process.stdout.write(String(r.PACKAGES.length));`;
+    const out = execFileSync(process.execPath, ['--input-type=module'], {
+      input: script,
+      encoding: 'utf8',
+    });
+    expect(out).toBe(String(HEAD.PACKAGES.length));
+  }, 30_000);
 
   it('refuses an import, a missing export and a broken file', async () => {
     await expect(loadRules(`import { x } from './x.ts';\n${TEXT}`)).rejects.toThrow(/imports/);
@@ -80,6 +95,17 @@ describe('planWithBase', () => {
     expect(p.full).toEqual(['scripts/board/limits.json: old trigger (the merge-base rules)']);
     // HEAD alone keeps it narrow
     expect(plan(ch('scripts/board/limits.json'), TESTS).full).toEqual([]);
+  });
+
+  it('a test only the base names, which the diff deleted, is dropped (vitest would find no file)', async () => {
+    const base = withRules({
+      ALWAYS_RUN: [...HEAD.ALWAYS_RUN, 'scripts/src/gone.test.ts'],
+    });
+    const diff: Change[] = [...ch(RULES_PATH), { path: 'scripts/src/gone.test.ts', deleted: true }];
+    const p = await planWithBase(diff, TESTS, () => TEXT, base);
+    expect(p.packages.scripts!.tests).not.toContain('scripts/src/gone.test.ts');
+    const kept = await planWithBase(diff, [...TESTS, 'scripts/src/gone.test.ts'], () => TEXT, base);
+    expect(kept.packages.scripts!.tests).toContain('scripts/src/gone.test.ts');
   });
 
   it('the union keeps HEAD’s tests and reasons first', async () => {

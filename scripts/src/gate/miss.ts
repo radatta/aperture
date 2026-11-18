@@ -28,10 +28,19 @@ export interface MissEvent {
   unsure: { file: string; why: string }[];
 }
 
-// vitest's colours in the log: ESC [ … m (built from a string: a literal ESC in a regex trips no-control-regex).
-const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
-// `<job>\t<step>\t<ts> [<pkg dir> test: ] FAIL [|project| ]<path> [> test name | [ path ]]`
-const FAIL = /^([^\t]*)\t[^\t]*\t\S+\s+(?:(\S+) test: )?\s*FAIL\s+(?:\|[^|]+\|\s+)?(\S+)/;
+// vitest's colours: `gh run view --log-failed` prints each ESC as the two characters `^[` (run 44213262154 has no ESC
+// byte at all); a raw ESC is stripped too. Built from a string: a literal ESC in a regex trips no-control-regex.
+const ANSI = new RegExp(`(?:${String.fromCharCode(27)}|\\^\\[)\\[[0-9;]*m`, 'g');
+// `<job>\t<step>\t<ts> [<pkg dir> test: ] FAIL <rest>`; in <rest> the path is the first test-named token before ` > `
+// or ` [ `, after any project label (`|app|` plain, ` app ` when coloured).
+const FAIL = /^([^\t]*)\t[^\t]*\t\S+\s+(?:(\S+) test: )?\s*FAIL\s+(.*)$/;
+const pathIn = (rest: string) => {
+  for (const tok of rest.split(/\s+/)) {
+    if (tok === '>' || tok === '[') return undefined;
+    if (isTest(tok)) return tok;
+  }
+  return undefined;
+};
 
 // The failed logs → the failing test files, as repo paths. A line's package comes from pnpm's `<dir> test:` prefix,
 // an app shard's job name, or a unique match among the sha's test files.
@@ -39,8 +48,9 @@ export function failingFiles(log: string, testFiles: string[]): string[] {
   const out = new Set<string>();
   for (const raw of log.split('\n')) {
     const m = FAIL.exec(raw.replace(ANSI, ''));
-    if (!m || !isTest(m[3]!)) continue;
-    const [, job, dir, path] = m as unknown as [string, string, string | undefined, string];
+    const path = m && pathIn(m[3]!);
+    if (!path) continue;
+    const [, job, dir] = m as unknown as [string, string, string | undefined];
     const pkg = dir ?? (/test-app/.test(job) ? 'app' : undefined);
     if (pkg) out.add(`${pkg}/${path}`);
     else {
@@ -59,10 +69,19 @@ export interface Judged {
   unsure: { file: string; why: string }[];
 }
 
-// Each failing file against the plan. `graph` is false when the tree here isn't the run's (another HEAD, or edits):
-// a fast package's un-named file can then only be unsure.
-export function judge(files: string[], p: Plan, deps: Deps, graph: boolean): Judged {
+// vitest related runs a package's every spec when a related path matches its forceRerunTriggers (any package.json, a
+// vitest or vite config).
+const RERUN_ALL = /(?:^|\/)(?:package\.json|(?:vitest|vite)\.config\.[^/]+)$/;
+
+export interface Context {
+  here: string | null; // null: this checkout is the run's sha; else why it isn't, and nothing can be judged
+  merged: string | null; // a PR run that tests a merge the diff doesn't hold: a miss is only unsure
+}
+
+// Each failing file against the plan made here for the run's sha.
+export function judge(files: string[], p: Plan, deps: Deps, ctx: Context): Judged {
   const out: Judged = { ran: [], missed: [], unsure: [] };
+  if (ctx.here) return { ...out, unsure: files.map((file) => ({ file, why: ctx.here! })) };
   const fast: Record<string, string[]> = {};
   for (const f of files) {
     const pkg = pkgOf(f);
@@ -72,19 +91,12 @@ export function judge(files: string[], p: Plan, deps: Deps, graph: boolean): Jud
     else if (modeOf(p, pkg.dir) === 'skip')
       out.missed.push({ file: f, why: `${pkg.dir} was skipped: nothing in the diff reaches it` });
     else if (p.packages[pkg.dir]!.tests.includes(f)) out.ran.push(f);
+    else if (p.packages[pkg.dir]!.related.some((r) => RERUN_ALL.test(r))) out.ran.push(f);
     else if (!p.packages[pkg.dir]!.related.length)
       out.missed.push({ file: f, why: `${pkg.dir} ran named tests only, not this one` });
     else (fast[pkg.dir] ??= []).push(f);
   }
   for (const [dir, fs] of Object.entries(fast)) {
-    if (!graph) {
-      for (const f of fs)
-        out.unsure.push({
-          file: f,
-          why: 'the tree here isn’t the run’s, so its imports can’t be read',
-        });
-      continue;
-    }
     let d: Record<string, string[]>;
     try {
       d = deps(dir, fs);
@@ -103,6 +115,12 @@ export function judge(files: string[], p: Plan, deps: Deps, graph: boolean): Jud
           why: `${dir} ran \`vitest related\`, and no changed module reaches it`,
         });
   }
+  if (ctx.merged) {
+    out.unsure.push(
+      ...out.missed.map((m) => ({ file: m.file, why: `${m.why}, but ${ctx.merged}` })),
+    );
+    out.missed = [];
+  }
   return out;
 }
 
@@ -117,7 +135,7 @@ export const vitestDeps =
     const abs = (f: string) => `${root}/${f}`;
     const rel = (a: string) => (a.startsWith(`${root}/`) ? a.slice(root.length + 1) : a);
     const raw = JSON.parse(
-      run(process.execPath, [RELATED, ...files.map(abs)], { cwd: abs(dir), timeoutMs: 120_000 }),
+      run(process.execPath, [RELATED, ...files.map(abs)], { cwd: abs(dir), timeoutMs: 60_000 }),
     ) as Record<string, string[]>;
     return Object.fromEntries(Object.entries(raw).map(([k, v]) => [rel(k), v.map(rel)]));
   };
@@ -126,8 +144,12 @@ const stamp = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z
 const eventsFile = (dir: string, ms: number) =>
   join(dir, 'history', `events-${new Date(ms).toISOString().slice(0, 10)}.jsonl`);
 
-// Already logged for this run (today's or yesterday's file): a repeat `gate:ci` prints, but doesn't log again.
-function logged(dir: string, run: number, nowMs: number): boolean {
+// Already logged for this run and these failing files (today's or yesterday's file): a repeat `gate:ci` prints, but
+// doesn't log again; a rerun attempt that fails elsewhere does. Best effort: two checks at the same moment can both log.
+const same = (a: MissEvent, b: MissEvent) =>
+  a.run === b.run &&
+  JSON.stringify([...a.failing].sort()) === JSON.stringify([...b.failing].sort());
+function logged(dir: string, e: MissEvent, nowMs: number): boolean {
   for (const ms of [nowMs - 86400_000, nowMs]) {
     let text: string;
     try {
@@ -138,8 +160,8 @@ function logged(dir: string, run: number, nowMs: number): boolean {
     for (const l of text.split('\n'))
       if (l.includes('"gate-miss"'))
         try {
-          const e = JSON.parse(l) as MissEvent;
-          if (e.kind === 'gate-miss' && e.run === run) return true;
+          const x = JSON.parse(l) as MissEvent;
+          if (x.kind === 'gate-miss' && same(x, e)) return true;
         } catch {
           // a torn line
         }
@@ -159,7 +181,7 @@ export interface MissOpts {
 export async function missCheck(r: GhRun, sha: string, o: MissOpts): Promise<MissEvent | null> {
   const { run, log } = o;
   const failedLog = run('gh', ['run', 'view', String(r.databaseId), '--log-failed'], {
-    timeoutMs: 120_000,
+    timeoutMs: 60_000,
   });
   const root = run('git', ['rev-parse', '--show-toplevel']);
   const testFiles = fields(
@@ -183,17 +205,26 @@ export async function missCheck(r: GhRun, sha: string, o: MissOpts): Promise<Mis
   const p = await planWithBase(changes, testFiles, () =>
     run('git', ['show', `${mb}:${RULES_PATH}`], { cwd: root }),
   );
+  // The plan above is this checkout's rules and code on the run's diff: it speaks for the run only when the checkout is
+  // the run's sha with no tracked edits (untracked files change neither, nor what a tracked file imports).
   const here =
-    run('git', ['rev-parse', 'HEAD'], { cwd: root }) === sha &&
-    run('git', ['status', '--porcelain', '-z'], { cwd: root }) === '';
-  const j = judge(failing, p, o.deps ?? vitestDeps(run, root), here);
+    run('git', ['rev-parse', 'HEAD'], { cwd: root }) !== sha
+      ? `this checkout isn't at ${sha.slice(0, 8)}, so its rules may not be the run's`
+      : run('git', ['status', '--porcelain', '-z', '--untracked-files=no'], { cwd: root }) !== ''
+        ? 'this checkout has uncommitted edits, so its rules or imports may not be the run’s'
+        : null;
+  const merged =
+    r.event === 'pull_request' && run('git', ['rev-parse', 'origin/main'], { cwd: root }) !== mb
+      ? 'a PR run tests the merge with main, which has moved past the merge-base'
+      : null;
+  const j = judge(failing, p, o.deps ?? vitestDeps(run, root), { here, merged });
   if (!j.missed.length && !j.unsure.length)
     return (
       log(`gate:ci — the local gate:fast plan ran all ${failing.length} failing test file(s)`),
       null
     );
 
-  const branch = run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root });
+  const branch = r.headBranch || run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root });
   const dir = o.board === undefined ? boardDir(run) : o.board;
   const e: MissEvent = {
     v: 1,
@@ -216,7 +247,7 @@ export async function missCheck(r: GhRun, sha: string, o: MissOpts): Promise<Mis
   for (const m of j.missed) log(`${bar}   missed  ${m.file}: ${m.why}`);
   for (const m of j.unsure) log(`${bar}   unsure  ${m.file}: ${m.why}`);
   if (!dir) log(`${bar} no board here: not logged`);
-  else if (logged(dir, r.databaseId, o.now())) log(`${bar} already logged for run ${r.databaseId}`);
+  else if (logged(dir, e, o.now())) log(`${bar} already logged for run ${r.databaseId}`);
   else {
     const f = eventsFile(dir, o.now());
     if (!existsSync(join(dir, 'history'))) mkdirSync(join(dir, 'history'), { recursive: true });

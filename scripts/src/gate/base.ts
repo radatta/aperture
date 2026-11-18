@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { plan, type Change, type Plan, type Rules } from './plan.ts';
+import { isTest, plan, type Change, type Plan, type Rules } from './plan.ts';
 import * as HEAD_RULES from './rules.ts';
 
 export const RULES_PATH = 'scripts/src/gate/rules.ts';
@@ -85,6 +85,12 @@ export async function planWithBase(
   if (JSON.stringify(base.PACKAGES) !== JSON.stringify(HEAD_RULES.PACKAGES))
     return full('the package list changed, so the two plans don’t compare');
   const out = union(head, plan(changes, testFiles, base));
+  // A test file the base names and the diff deleted would make `vitest related` find no file: drop it.
+  const have = new Set(testFiles);
+  for (const [dir, p] of Object.entries(out.packages))
+    p.tests = p.tests.filter(
+      (t) => !isTest(t) || have.has(t) || head.packages[dir]!.tests.includes(t),
+    );
   out.notes.push(`${RULES_PATH} changed: planned with the merge-base's rules too; the union runs`);
   return out;
 }

@@ -145,7 +145,8 @@ export function findIdentifiers(
   const hits: IdentifierHit[] = [];
   // A rule that hits a line hits any text holding that line whole: none anchors on ^ or $, uses `.` or the m flag,
   // and each lookaround reads a newline as the non-letter, non-digit a line's edge is. So a rule that misses the
-  // whole text can't hit a line of it, and most files skip the per-line pass (the tree scan's cost).
+  // whole text can't hit a line of it, and most files skip the per-line pass. A new rule needs a sample line in
+  // tracked-identifiers.test.ts's prefilter test, which pins this.
   const live = text.includes('\n') ? rules.filter(([, hit]) => hit(text)) : rules;
   if (!live.length) return hits;
   text.split('\n').forEach((l, i) => {
