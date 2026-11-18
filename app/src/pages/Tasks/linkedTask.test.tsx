@@ -32,6 +32,23 @@ describe('Tasks: a reminder’s link', () => {
     );
   });
 
+  it('the same link again (a re-ping) clears a search typed since', async () => {
+    const api = stub();
+    const t = await api.createTask({ title: 'Renew passport' });
+    const user = userEvent.setup();
+    const { router } = renderApp({ api, path: taskPushPath(t.id, t.id) });
+    expect(await screen.findByRole('dialog', { name: 'Task: Renew passport' })).toBeTruthy();
+    await waitFor(() => expect(router.state.location.search).toBe('?lens=today'));
+    await user.keyboard('{Escape}');
+    await user.type(screen.getByRole('searchbox', { name: 'Search tasks' }), 'groceries');
+    await act(() => router.navigate(taskPushPath(t.id, t.id)));
+    await waitFor(() =>
+      expect(screen.getByRole<HTMLInputElement>('searchbox', { name: 'Search tasks' }).value).toBe(
+        '',
+      ),
+    );
+  });
+
   it('a search stored earlier this session is cleared by a cold-start tap too', async () => {
     const api = stub();
     const t = await api.createTask({ title: 'Renew passport' });

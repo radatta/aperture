@@ -1288,7 +1288,8 @@ export class Repo {
   }
 
   // The tick's one read of its own rows (PushRows), consistent: what it acts on was written by the last
-  // tick. A range over `pq#` … `ptest#`, so it costs what the sweep's two reads of psent# and ptest# did.
+  // tick. A range over `pq#` … `ptest#` (keys.test.ts pins that nothing else sorts in it): one request
+  // where the sweep made two (psent#, ptest#).
   async listPushRows(): Promise<PushRows> {
     const out: PushRows = { retries: [], misses: [], sent: [], tests: [] };
     const items = await this.doc.query(this.p(), 'p', {

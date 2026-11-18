@@ -122,6 +122,8 @@ export class Deliverer {
   // goes to their (slow) device last.
   private readonly pending = new Set<string>();
   private readonly queued: PushMissRow[] = []; // misses this tick wrote (a run-out, a gap)
+  // Devices that refused or timed out lately (a retry row with a try spent): sent to, and retried, last.
+  private readonly slow = new Set<string>();
 
   constructor(
     private readonly d: DelivererDeps,
@@ -129,7 +131,10 @@ export class Deliverer {
     retries: readonly PushRetryRow[],
   ) {
     this.subs = new Map(subs.map((s) => [s.id, s]));
-    for (const r of retries) this.pending.add(`${r.subId}#${r.topic}`);
+    for (const r of retries) {
+      this.pending.add(`${r.subId}#${r.topic}`);
+      if (r.tries >= 1) this.slow.add(r.subId);
+    }
   }
 
   subIds = (): string[] => [...this.subs.keys()];
@@ -138,15 +143,16 @@ export class Deliverer {
     if (!this.fails.includes(message)) this.fails.push(message);
   };
   private hasPending = (subId: string) => [...this.pending].some((k) => k.startsWith(`${subId}#`));
+  private slowFirst = (subId: string) => Number(this.slow.has(subId)); // sorts slow devices last
 
-  // A fresh notification to every device, the ones with a retry pending (slow lately) last, so one that
-  // times out again doesn't use up the tick before the rest. A transient refusal, or a device the tick's
-  // deadline skipped, leaves a retry row.
+  // A fresh notification to every device, the slow ones (a try spent on a retry still pending) last, so
+  // one that times out again doesn't use up the tick before the rest. A transient refusal, or a device the
+  // tick's deadline skipped, leaves a retry row.
   async sendBatch(cands: readonly StoredCandidate[], topic: string): Promise<void> {
     this.attempted = true;
     const payload = JSON.stringify(reminderPayload(cands, this.d.appUrl, topic));
     const order = [...this.subs.values()].sort(
-      (a, b) => Number(this.hasPending(a.id)) - Number(this.hasPending(b.id)),
+      (a, b) => this.slowFirst(a.id) - this.slowFirst(b.id),
     );
     for (const sub of order) {
       if (this.d.past()) {
@@ -161,11 +167,16 @@ export class Deliverer {
     }
   }
 
-  // Earlier ticks' retries: the least-tried first (a device the deadline skipped goes before one that
-  // timed out), then oldest. A claim (the try counted on the version read) comes before the POST, so a
+  // Earlier ticks' retries: a slow device's last (every row of it), then the least-tried, then oldest — a
+  // device the deadline skipped goes before the one that timed out. A claim (the try counted on the version read) comes before the POST, so a
   // crash spends that try instead of risking a second one.
   async runRetries(rows: readonly PushRetryRow[]): Promise<void> {
-    const order = [...rows].sort((a, b) => a.tries - b.tries || a.firstAt - b.firstAt);
+    const order = [...rows].sort(
+      (a, b) =>
+        this.slowFirst(a.subId) - this.slowFirst(b.subId) ||
+        a.tries - b.tries ||
+        a.firstAt - b.firstAt,
+    );
     for (const row of order) {
       if (this.d.past()) return void (this.tally.deadline = true); // untried rows wait a tick
       const sub = this.subs.get(row.subId);
@@ -364,6 +375,7 @@ export class Deliverer {
       updatedAt: this.d.now,
     });
     this.pending.add(`${sub.id}#${topic}`);
+    if (tries >= 1) this.slow.add(sub.id);
   }
   private async dropRetry(row: Pick<PushRetryRow, 'subId' | 'topic'>): Promise<void> {
     await this.d.repo.deletePushRetry(row.subId, row.topic);

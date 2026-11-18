@@ -111,7 +111,9 @@ export function useTaskQuery() {
   const link = hasLink ? `${linkedTaskId ?? ''}#${params.get('n') ?? ''}` : null;
   const cleared = useRef<string | null>(null);
   useEffect(() => {
-    if (link === null || cleared.current === link) return;
+    // The link left the URL: the next one clears again, the same link (a re-ping) included.
+    if (link === null) return void (cleared.current = null);
+    if (cleared.current === link) return;
     cleared.current = link;
     if (query.text !== '') setQuery({ ...query, text: '' });
   }, [link, query, setQuery]);

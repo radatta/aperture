@@ -203,9 +203,14 @@ proves the whole chain. The BFF never holds the private key.
 - **Cost bound:**
   - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
     tiers. A tick reads a user's send queue, dedup and Send-test rows in one consistent range Query (`pq#` …
-    `ptest#`, which sort together), reads the health row only when it writes it, and sweeps guard counters
-    every 10 minutes — fewer reads than before the queue existed (2026-11-18: about 1.1 Queries per user per
-    tick, against 3). The nudges add a plan read twice a day. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
+    `ptest#`, which sort together — `keys.test.ts` pins it), reads the health row only when it writes it, and
+    sweeps guard counters every 10 minutes: fewer requests than before the queue existed (2026-11-18: 3 Queries
+    and 2 Gets per user per quiet tick, against 5 and 2). In read units that holds while the 48 h of dedup rows
+    stay under ~8 KB (the range is a consistent read; the sweep's `psent#` read wasn't), past which it's under a
+    cent a month more. While a fault persists past the window (every tick failing), each tick re-runs the gap
+    pass — its candidates already deduped, so only reads and refused conditional puts, cents a day and inside
+    the stuck-tick bound below, with the Errors alarm already firing. Users are taken in an order rotated each
+    minute, so one whose device keeps timing out can't delay the others every tick. The nudges add a plan read twice a day. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
     per stage, against CloudWatch's free 5 GB.
   - Worst case is a tick stuck at the 20 s timeout every minute: 1,440 × 20 s × 0.25 GB = 7,200 GB-s, about
     **$0.12/day of compute**, about $0.15/day with DynamoDB and logs, with pushes capped by the guard.

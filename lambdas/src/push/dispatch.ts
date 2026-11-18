@@ -360,7 +360,11 @@ export async function runPushTick(
       coldStart.logged.add(ready);
     } else {
       checkedAll = true;
-      for (const user of await registry.listUsers()) {
+      // Rotated a place each minute: a device that keeps timing out can hold the first users' ticks to
+      // the deadline, and the rest must not wait behind them every minute.
+      const users = await registry.listUsers();
+      const at = users.length > 0 ? Math.floor(started / 60_000) % users.length : 0;
+      for (const user of [...users.slice(at), ...users.slice(0, at)]) {
         if (past()) {
           report.deadline = true;
           checkedAll = false;
