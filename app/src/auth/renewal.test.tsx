@@ -226,6 +226,23 @@ describe('renewal — relaunch', () => {
 
     expect(getAuthToken()).toBe('fresh-token');
   });
+
+  // Any renewal — SilentRenewService's, the redirect callback's — publishes at the event, not a render later.
+  it('publishes a renewal it did not ask for at once, without refetching', async () => {
+    const fake = createFakeManager(makeUser({ expired: false }));
+    renderBridge(fake);
+    await settle();
+    expect(getAuthToken()).toBe('t1');
+
+    let atEvent: string | null = null;
+    await act(async () => {
+      fake.events.loaded.emit(makeUser({ access_token: 't3' }));
+      atEvent = getAuthToken(); // before act flushes the re-render
+    });
+
+    expect(atEvent).toBe('t3');
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('renewal — network failure keeps the session', () => {
@@ -476,6 +493,33 @@ describe('renewal — the 401 bridge', () => {
 
     expect(fake.calls.signinSilent).toHaveBeenCalledTimes(1);
     expect(invalidateSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // The recovery refetch runs inside invalidateQueries, before React re-renders — so the store has to hold
+  // the new token by then, or every refetch goes out with the refused one, 401s again, and a second renew
+  // and a second burst follow (seen on devb, 11-17). The fake raises userLoaded synchronously where the
+  // real Event.raise awaits each handler; neither lets React render in between, so the order is the same.
+  it('sends the recovery refetch with the renewed token, so there is no second burst', async () => {
+    const fake = createFakeManager(makeUser({ expired: false }));
+    fake.renewSucceeds();
+    const sent: (string | null)[] = [];
+    invalidateSpy.mockImplementation(() => {
+      const token = getAuthToken(); // what a refetch reads, synchronously, as invalidateQueries starts it
+      sent.push(token);
+      if (token === 't1') setTimeout(notifyUnauthorized, 300); // the BFF refusing the old token
+      return Promise.resolve();
+    });
+    renderBridge(fake);
+    await settle();
+
+    await act(async () => notifyUnauthorized());
+    await settle();
+    await advance(1000);
+
+    expect(sent).toEqual(['t2']);
+    expect(fake.calls.signinSilent).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(getAuthToken()).toBe('t2'); // and no render wrote the old one back
   });
 
   // A 401 a fresh token can't fix (audience mismatch, clock skew) otherwise self-sustains: invalidate →

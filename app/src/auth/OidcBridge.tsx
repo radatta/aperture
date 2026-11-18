@@ -120,7 +120,11 @@ export function OidcBridge({ manager, children }: { manager: UserManager; childr
     // userLoaded/userUnloaded are the only reset points, because the library raises them whoever did the
     // work — us, SilentRenewService, or the redirect callback. Resetting inside our own success path
     // instead is what previously left the UI stuck one expiry away from dropping the whole tree.
-    const offLoaded = manager.events.addUserLoaded(() => {
+    const offLoaded = manager.events.addUserLoaded((user) => {
+      // Publish the new token before anything reads it. The render mirror above only catches up on the
+      // next render, but invalidateQueries starts every refetch synchronously, right here — so without
+      // this the recovery burst re-sends the refused token, 401s again, and costs a second renew.
+      setAuthToken(user.access_token);
       attempt = 0;
       setHideError(false);
       settle('idle', false);
