@@ -44,7 +44,10 @@ export function union(a: Plan, b: Plan): Plan {
     const why = { ...x.why };
     for (const t of y.tests) why[t] ??= `${y.why[t]} (the merge-base rules)`;
     packages[dir] = {
-      full: merge(x.full, y.full.map((w) => `${w} (the merge-base rules)`)),
+      full: merge(
+        x.full,
+        y.full.map((w) => `${w} (the merge-base rules)`),
+      ),
       related: merge(x.related, y.related),
       tests: merge(x.tests, y.tests),
       why,

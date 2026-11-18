@@ -740,7 +740,13 @@ describe('main', () => {
   it('a rules.ts change reads the merge-base copy and runs the union (rules.ts + limits.json: narrow)', async () => {
     const { run, calls } = withBase(() => RULES_TEXT);
     const out: string[] = [];
-    const code = await main(['--dry-run'], { run, exec: record().exec, outer: noOuter, log: (l) => out.push(l), env: {} });
+    const code = await main(['--dry-run'], {
+      run,
+      exec: record().exec,
+      outer: noOuter,
+      log: (l) => out.push(l),
+      env: {},
+    });
     expect(code).toBe(0);
     expect(calls).toEqual([['show', 'abc:scripts/src/gate/rules.ts']]);
     const text = out.join('\n');
@@ -754,9 +760,17 @@ describe('main', () => {
       throw new Error("fatal: invalid object name 'abc'");
     });
     const out: string[] = [];
-    await main(['--dry-run'], { run, exec: record().exec, outer: noOuter, log: (l) => out.push(l), env: {} });
+    await main(['--dry-run'], {
+      run,
+      exec: record().exec,
+      outer: noOuter,
+      log: (l) => out.push(l),
+      env: {},
+    });
     const text = out.join('\n');
-    expect(text).toMatch(/merge-base's copy couldn't be loaded \(fatal: invalid object name 'abc'\)/);
+    expect(text).toMatch(
+      /merge-base's copy couldn't be loaded \(fatal: invalid object name 'abc'\)/,
+    );
     expect(text).toMatch(/would run: test$/m);
   });
 

@@ -199,7 +199,10 @@ describe('plan', () => {
       expect(p.full).toEqual([]);
       expect(fullPkgs(p)).toEqual([]);
       expect(pkg(p, 'scripts').tests).toEqual(
-        expect.arrayContaining(['scripts/src/board/board-cli.test.ts', 'scripts/src/lane/state.test.ts']),
+        expect.arrayContaining([
+          'scripts/src/board/board-cli.test.ts',
+          'scripts/src/lane/state.test.ts',
+        ]),
       );
     },
   );

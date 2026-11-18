@@ -6,7 +6,11 @@ import { modeOf, plan, type Change, type Rules } from './plan.ts';
 import * as HEAD from './rules.ts';
 
 const TEXT = readFileSync(fileURLToPath(new URL('./rules.ts', import.meta.url)), 'utf8');
-const TESTS = ['scripts/src/docs-reader.test.ts', 'scripts/src/checked-tree.test.ts', ...HEAD.ALWAYS_RUN];
+const TESTS = [
+  'scripts/src/docs-reader.test.ts',
+  'scripts/src/checked-tree.test.ts',
+  ...HEAD.ALWAYS_RUN,
+];
 const ch = (...paths: string[]): Change[] => paths.map((path) => ({ path, deleted: false }));
 const withRules = (r: Partial<Rules>) => async () => ({ ...HEAD, ...r }) as Rules;
 const fullPkgs = (p: ReturnType<typeof plan>) =>
@@ -27,9 +31,9 @@ describe('loadRules', () => {
     await expect(loadRules(`import { x } from './x.ts';\n${TEXT}`)).rejects.toThrow(/imports/);
     await expect(loadRules(`export * from './x.ts';\n`)).rejects.toThrow(/imports/);
     await expect(loadRules(`const m = await import('./x.ts');\n`)).rejects.toThrow(/imports/);
-    await expect(loadRules(TEXT.replace('export const ALWAYS_RUN', 'const ALWAYS_RUN'))).rejects.toThrow(
-      /no ALWAYS_RUN/,
-    );
+    await expect(
+      loadRules(TEXT.replace('export const ALWAYS_RUN', 'const ALWAYS_RUN')),
+    ).rejects.toThrow(/no ALWAYS_RUN/);
     await expect(loadRules('export const PACKAGES = [;')).rejects.toThrow();
   });
 });
@@ -43,16 +47,23 @@ describe('planWithBase', () => {
   it('a rule HEAD dropped still runs its tests: the base named them', async () => {
     // HEAD has no rule for docs-reader; the base reads docs/ with it
     const base = withRules({
-      INPUT_RULES: [...HEAD.INPUT_RULES, { inputs: ['docs/'], tests: ['scripts/src/docs-reader.test.ts'], why: 'old rule' }],
+      INPUT_RULES: [
+        ...HEAD.INPUT_RULES,
+        { inputs: ['docs/'], tests: ['scripts/src/docs-reader.test.ts'], why: 'old rule' },
+      ],
     });
     const diff = ch(RULES_PATH, 'docs/ops/LANES.md');
     const p = await planWithBase(diff, TESTS, () => TEXT, base);
-    expect(plan(diff, TESTS).packages.scripts!.tests).not.toContain('scripts/src/docs-reader.test.ts');
+    expect(plan(diff, TESTS).packages.scripts!.tests).not.toContain(
+      'scripts/src/docs-reader.test.ts',
+    );
     expect(p.packages.scripts!.tests).toContain('scripts/src/docs-reader.test.ts');
     expect(p.packages.scripts!.why['scripts/src/docs-reader.test.ts']).toBe(
       'docs/ops/LANES.md → old rule (the merge-base rules)',
     );
-    expect(p.notes).toContain(`${RULES_PATH} changed: planned with the merge-base's rules too; the union runs`);
+    expect(p.notes).toContain(
+      `${RULES_PATH} changed: planned with the merge-base's rules too; the union runs`,
+    );
     expect(p.full).toEqual([]);
   });
 
@@ -60,7 +71,12 @@ describe('planWithBase', () => {
     const base = withRules({
       REPO_FULL: [...HEAD.REPO_FULL, { match: ['scripts/board/limits.json'], why: 'old trigger' }],
     });
-    const p = await planWithBase(ch(RULES_PATH, 'scripts/board/limits.json'), TESTS, () => TEXT, base);
+    const p = await planWithBase(
+      ch(RULES_PATH, 'scripts/board/limits.json'),
+      TESTS,
+      () => TEXT,
+      base,
+    );
     expect(p.full).toEqual(['scripts/board/limits.json: old trigger (the merge-base rules)']);
     // HEAD alone keeps it narrow
     expect(plan(ch('scripts/board/limits.json'), TESTS).full).toEqual([]);
