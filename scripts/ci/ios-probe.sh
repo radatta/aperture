@@ -16,9 +16,9 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card nohub,light,hostlog,dyld,taplanded" ;;
-    2) echo "restore card nohub,light,hostlogafter,taplanded" ;;
-    *) echo "restore card nohub,light,hostlog,taplanded" ;;
+    1) echo "restore card nohub,light,axe2,taplanded" ;;
+    2) echo "restore card nohub,light,axe2,hostlog,taplanded" ;;
+    *) echo "restore card nohub,light,axe2,hostlog,dyld,taplanded" ;;
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -39,7 +39,17 @@ BUDGET=2400 # seconds of probe before every loop gives up, inside the job's 45 m
 
 SHARD="${IOS_PROBE_SHARD:-1}"
 read -r SRC AFTER OPTS <<<"$(variant)"
-OPTS="${OPTS:-}" # nohub: leave Device Hub off (sim.sh gets the shim); light: launch waits on point reads only
+OPTS="${OPTS:-}"
+# axe2 (relay 11-17 18:40): AXe 2.0.4, whose 2.0.0 fixed first-event loss (issue 71: guest acknowledgement), the
+# after-boot accessibility break (PR 68) and Xcode 27.2's post-home barrier, and is the fix issue 100's reporter found
+# for 1.8.0's no-effect taps on Xcode 27.2 / iOS 27. Same CLI for what this script uses (describe-ui JSON, --point,
+# tap -x -y, swipe, gesture, button home). The Mac stays on 1.8.0 (2.0.4 broke its relaunch switcher kill: decision 24).
+case ",$OPTS," in *,axe2,*)
+  AXE_VER=2.0.4
+  AXE_SHA=3178ec66d9ff46455fec737debad719c41cab16edb1435b2c721e07760a208c3
+  AXE_URL="https://github.com/cameroncooke/AXe/releases/download/v$AXE_VER/AXe-macOS-v$AXE_VER-universal.tar.gz" ;;
+esac
+# nohub: leave Device Hub off (sim.sh gets the shim); light: launch waits on point reads only
 # Only a rows shard holds the password, and only as an unexported shell variable: no child process inherits it.
 PW=""
 [ "$AFTER" != rows ] || PW="${DEVCHECK_PASSWORD:-}"
@@ -224,6 +234,7 @@ DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
 BOOT_PID=""
 # The boot starts here, before env and AXe, and runs beside them (option 2); s_boot_wait collects it.
 boot_start() {
+  dyld_update
   (cap 400 xcrun simctl bootstatus "$U" -b >"$WORK/boot.log" 2>&1; echo "$?" >"$WORK/boot.rc") &
   BOOT_PID=$!
 }
@@ -368,14 +379,15 @@ s_simlog() {
 # Research panel leads (11-17, community sources), run 20:
 # dyld: Apple DTS (forums thread 820720) suggested `simctl runtime dyld_shared_cache update` for slow first launches;
 # timed on its own, before the boot, to see whether the settle is the shared-cache build.
-s_dyld() {
-  case ",$OPTS," in *,dyld,*) ;; *) note "dyld off"; return 0 ;; esac
-  select_xcode
-  # this runtime only if simctl takes its identifier (4 runtimes on the image), else --all as DTS gave it
-  if cap 600 xcrun simctl runtime dyld_shared_cache update "$RUNTIME_ID" >"$WORK/dyld.log" 2>&1; then note "dyld update ($RUNTIME_ID) ok"
-  elif cap 600 xcrun simctl runtime dyld_shared_cache update --all >>"$WORK/dyld.log" 2>&1; then note "dyld update --all ok"
-  else note "dyld update failed: $(tail -1 "$WORK/dyld.log" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-100)"; fi
-  return 0
+dyld_update() {
+  case ",$OPTS," in *,dyld,*) ;; *) return 0 ;; esac
+  local t0 rc=0
+  t0=$(now_ms)
+  # this runtime only if simctl takes its identifier (4 runtimes on the image), else --all as DTS gave it; no --all
+  # after a timeout (rc 124), only after simctl refused the argument
+  cap 600 xcrun simctl runtime dyld_shared_cache update "$RUNTIME_ID" >"$OUT/dyld.log" 2>&1 || rc=$?
+  if [ "$rc" != 0 ] && [ "$rc" != 124 ]; then rc=0; cap 600 xcrun simctl runtime dyld_shared_cache update --all >>"$OUT/dyld.log" 2>&1 || rc=$?; fi
+  note "dyld update rc $rc in $(( ($(now_ms) - t0) / 1000 )) s: $(tail -1 "$OUT/dyld.log" | tr -cd 'A-Za-z0-9 ._:/()-' | cut -c1-100)"
 }
 # hostlogafter: CircleCI's own order (support.circleci.com 46737392770203), after the boot, `unload -w` (CI only).
 s_hostlog_after() {
@@ -900,7 +912,6 @@ trap finish EXIT
 trap 'exit 143' TERM
 log "shard $SHARD: $SRC → $AFTER"
 step hostlog s_hostlog # before the boot
-step dyld s_dyld       # before the boot
 case "$SRC" in
   restore) step restore s_restore ;;
   *) step create s_create ;; # cold, seed (seeding happens before the boot starts)
