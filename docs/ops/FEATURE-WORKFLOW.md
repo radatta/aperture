@@ -131,7 +131,8 @@ hub message (the checkpoints stay).
      `origin/main` against `docs/ops/PUBLIC-CONTENT.md` — the judgment half; the identifier and identity checks are
      `pnpm bot push`'s own. Phase 10 scans the PR text again.
    - Then `pnpm bot push` — every push starts the full suite on GitHub (the `Branch` workflow; GATE.md); start
-     `pnpm gate:ci --wait` in the background beside the dev steps. A red one is a gate failure: fix, `gate:fast`, push.
+     `pnpm gate:ci --wait` in the background beside the dev steps. A red one is a gate failure: fix, `gate:fast`, the recheck
+     (`docs/ops/REVIEW.md` → _After a dev fix or a rebase_), push.
      A branch with no dev deploy (nothing deployed changes) waits for it here.
    - `pnpm bot deploy-dev`: it takes a dev slot's lock (slot A only when the branch touches
      iOS paths), which stays held through dev testing — `pnpm bot lock renew` before it runs out (**→ hub:** `[lock]`
