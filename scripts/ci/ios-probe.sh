@@ -231,18 +231,34 @@ s_axe_install() {
   [ -n "$AXE" ] || { note "no axe binary in the tarball"; return 1; }
   v="$("$AXE" --version 2>&1)" || { note "axe won't run: $(head -1 <<<"$v")"; AXE=""; return 1; }
   note "axe --version: $(head -1 <<<"$v")"
-  case ",$OPTS," in *,axe2mix,*) ;; *) return 0 ;; esac
-  local t18="$WORK/axe18.tar.gz" a18 w="$WORK/axemix"
-  curl -fsSL --retry 3 -o "$t18" "$AXE18_URL" || { note "1.8.0 download failed"; return 1; }
-  [ "$(shasum -a 256 "$t18" | cut -d' ' -f1)" = "$AXE18_SHA" ] || { note "1.8.0 sha256 mismatch"; return 1; }
-  mkdir -p "$WORK/axe18" "$w" && tar xzf "$t18" -C "$WORK/axe18" || { note "1.8.0 untar failed"; return 1; }
-  a18="$(find "$WORK/axe18" -type f -name axe | head -1)"
-  [ -n "$a18" ] && "$a18" --version >/dev/null 2>&1 || { note "1.8.0 won't run"; return 1; }
-  # sim.sh calls `axe` by name: a batch with two or more home presses (only the switcher's double press, sim.sh
-  # sim_kill_switcher) goes to 1.8.0; single-press batches (launch, relaunch) and everything else to 2.0.4 (review S2)
-  printf '#!/bin/bash\nn=0; for a in "$@"; do [ "$a" != "button home" ] || n=$((n + 1)); done\n[ "$n" -lt 2 ] || exec %q "$@"\nexec %q "$@"\n' "$a18" "$AXE" >"$w/axe"
+  # rows: sim.sh calls `axe` by name, so a PATH wrapper adapts it to the runner (CI only; the Mac's sim.sh unchanged):
+  # - its Home Screen page turn, `gesture scroll-left`, didn't turn the page on 3 of 3 rows shards (rows run 1:
+  #   ICON_SCROLL_DROPPED twice each; 2.0's preset moves 200 pt), so it becomes the 340 pt swipe the card path has
+  #   turned pages with since run 4. Same page, same asserts.
+  # - axe2mix: a batch with two or more home presses (only sim_kill_switcher's double press) goes to 1.8.0, since on
+  #   2.0.4 the two presses land as two singles (IOS-CHECK.md → Setup); everything else, typing included, to 2.0.4.
+  [ "$AFTER" = rows ] || return 0
+  local t18="$WORK/axe18.tar.gz" a18="" w="$WORK/axemix"
+  mkdir -p "$w"
+  case ",$OPTS," in *,axe2mix,*)
+    curl -fsSL --retry 3 -o "$t18" "$AXE18_URL" || { note "1.8.0 download failed"; return 1; }
+    [ "$(shasum -a 256 "$t18" | cut -d' ' -f1)" = "$AXE18_SHA" ] || { note "1.8.0 sha256 mismatch"; return 1; }
+    mkdir -p "$WORK/axe18" && tar xzf "$t18" -C "$WORK/axe18" || { note "1.8.0 untar failed"; return 1; }
+    a18="$(find "$WORK/axe18" -type f -name axe | head -1)"
+    [ -n "$a18" ] && "$a18" --version >/dev/null 2>&1 || { note "1.8.0 won't run"; return 1; } ;;
+  esac
+  {
+    echo '#!/bin/bash'
+    echo 'n=0; for a in "$@"; do [ "$a" != "button home" ] || n=$((n + 1)); done'
+    [ -z "$a18" ] || printf '[ "$n" -lt 2 ] || exec %q "$@"\n' "$a18"
+    echo 'if [ "${1:-}" = gesture ] && [ "${2:-}" = scroll-left ]; then'
+    echo '  u=""; while [ $# -gt 0 ]; do [ "$1" != --udid ] || u="${2:-}"; shift; done'
+    printf '  exec %q swipe --start-x 400 --start-y 480 --end-x 60 --end-y 480 --duration 0.4 --udid "$u"\n' "$AXE"
+    echo 'fi'
+    printf 'exec %q "$@"\n' "$AXE"
+  } >"$w/axe"
   chmod +x "$w/axe"
-  note "axe2mix: switcher batches → 1.8.0 ($a18), the rest → 2.0.4"
+  note "rows wrapper: scroll-left → 340 pt swipe${a18:+; switcher batches → 1.8.0}"
 }
 
 DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
