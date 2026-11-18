@@ -201,6 +201,11 @@ describe('staleItems', () => {
       'waiting-on',
       'merge-order',
     ]);
+    // "+ 1 day" after a recent merge fires once its day is up
+    const later = queue({ devQueue: [lane({ waitingOn: 'echo merges + 1 day' })] });
+    expect(kinds(run({ queue: later, prs: [merged(201, 'echo', NOW - 25 * 3600e3)] }))).toEqual([
+      'waiting-on',
+    ]);
     // a derived row (its lane file dates the lane) decides: its open PR is no landing
     const rows = new Map([['echo', { state: 'PR', pr: { number: 230 } }]]);
     const open = pr({ number: 230 });

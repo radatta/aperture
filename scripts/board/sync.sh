@@ -11,20 +11,24 @@
 set -u
 case "${1:-}" in '' | --once) ;; *) echo "usage: bash sync.sh [--once]" >&2; exit 2 ;; esac
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE # an inherited git target would point every git here elsewhere
 
 interval="${SYNC_INTERVAL:-120}"
 self="$SB_SCRIPTS/sync.sh"
 stamp() { stat -c '%Y %s' "$self" "$SB_SCRIPTS/lib.sh" 2>/dev/null | tr '\n' ' '; }
 
 round() {
-  local out ok=true head
+  local out ok=true head rc
   # fd 8 is the singleton's lock: no child keeps it (a tower started from here would hold it past our death)
   # INIT_CWD is where sync-main finds the checkout: pinned, so one inherited from a pnpm parent never moves another;
   # no inherited GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE either. The budget: a 20 s main-lock wait (a busy checkout
   # waits for the next round), the 60 s fetch, the switch, the 30 s restart lock and the restart all fit under 240 s,
   # so the timeout's KILL is for a hang, never a slow switch.
-  out=$(cd "$SB_REPO" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE INIT_CWD="$SB_REPO" APERTURE_MAIN_LOCK_WAIT=20 \
-    timeout -k 5 240 node "$SB_REPO/scripts/src/board/cli.ts" sync-main 2>&1 8>&-) || ok=false
+  out=$(cd "$SB_REPO" && INIT_CWD="$SB_REPO" APERTURE_MAIN_LOCK_WAIT=20 \
+    timeout -k 5 240 node "$SB_REPO/scripts/src/board/cli.ts" sync-main 2>&1 8>&-)
+  rc=$?
+  # 75: the main checkout was busy (a lanes start): not a failure, the next round tries
+  if [ "$rc" = 75 ]; then out+=$'\n'"main checkout busy: next round"; elif [ "$rc" != 0 ]; then ok=false; fi
   head=$(git -C "$SB_REPO" rev-parse HEAD 2>/dev/null)
   if [ "${APERTURE_SYNC_TOWER:-on}" != off ] && ! bash "$SB_SCRIPTS/board.sh" tower status >/dev/null 2>&1 8>&-; then
     out+=$'\n'$(bash "$SB_SCRIPTS/board.sh" tower start 2>&1 8>&-)
@@ -34,7 +38,7 @@ round() {
     '{v: 1, t: $t, pid: $pid, ok: $ok, head: $head, msg: ($msg | split("\n") | map(select(. != "")) | join(" · ") | .[0:300])}' \
     >"$BOARD_DIR/main-sync.json.tmp.$$" && mv -f "$BOARD_DIR/main-sync.json.tmp.$$" "$BOARD_DIR/main-sync.json"
   # the log keeps what moved, restarted, started or failed; a quiet round leaves no line
-  printf '%s\n' "$out" | grep -v -E '^$|already at|restart not needed' | sed "s/^/$(date '+%m-%d %H:%M') /" >>"$BOARD_DIR/main-sync.log"
+  printf '%s\n' "$out" | grep -v -E '^$|already at|restart not needed|busy' | sed "s/^/$(date '+%m-%d %H:%M') /" >>"$BOARD_DIR/main-sync.log"
   "$ok"
 }
 
@@ -49,7 +53,8 @@ nap=""
 trap '[ -n "$nap" ] && kill "$nap" 2>/dev/null; exit 0' TERM INT
 born=$(stamp)
 while :; do
-  [ -r "$self" ] || exit 0 # its checkout is gone (a test's temp repo): never loop on nothing
+  # its checkout is gone (a test's temp repo): never loop on nothing (a second look: a git switch may be mid-write)
+  [ -r "$self" ] || { sleep 2 8>&-; [ -r "$self" ]; } || exit 0
   round
   sleep "$interval" 8>&- &
   nap=$!

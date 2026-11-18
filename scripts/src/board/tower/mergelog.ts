@@ -6,8 +6,9 @@ import type { Pr } from './prs.ts';
 export type MainMerge = { number: number; sha: string; mergedAt: number };
 
 // A branch name is reused (a new lane under an old name). With nothing naming a PR number and no lane file to date
-// the lane, a merge on that name counts as this lane's only while it is under a day old: the queue never keeps a
-// merged lane a day (plan-age flags a stale plan sooner), and an older one is a new lane's namesake.
+// the lane, a merge on that name counts as this lane's only while it is under a day old: a day is long past the
+// stale item that told the hub to drop it, and an older one is more likely a new lane's namesake. (So an entry the
+// hub kept a whole day reads as not started again; the tower can't tell that from a reused name.)
 export const REUSE_MS = 24 * 3600e3;
 
 export const MAINLOG_ARGS = [

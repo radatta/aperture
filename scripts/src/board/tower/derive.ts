@@ -705,7 +705,8 @@ export function derive(i: Inputs): View {
   const landed = (o: { branch: string; pr: number | null }) =>
     o.pr !== null
       ? prs.some((p) => p.state === 'MERGED' && p.number === o.pr)
-      : prFor(o.branch, prs, null, files.get(o.branch) ?? null, i.now)?.state === 'MERGED';
+      : prFor(o.branch, prs, queued.get(o.branch)?.pr ?? null, files.get(o.branch) ?? null, i.now)
+          ?.state === 'MERGED';
   const order = (q?.mergeOrder ?? []).filter((o) => !landed(o));
 
   const rows = names.map((b) => {

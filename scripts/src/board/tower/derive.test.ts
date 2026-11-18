@@ -477,6 +477,25 @@ describe('the accuracy audit (2026-11-14)', () => {
       ['F4: do F4', NOW - 3600e3, 'PR 41'],
     ]);
   });
+  it('a reused name: a follow-up written days after a merge on its branch name waits for the new one', () => {
+    const v = derive(
+      inputs({
+        prs: [pr({ number: 41, branch: 'alpha', state: 'MERGED', mergedAt: NOW - 3 * 86400e3 })],
+        followups: [
+          {
+            id: 'F9',
+            what: 'w',
+            owner: 'lane',
+            after: 'alpha merges',
+            status: 'open',
+            source: null,
+            since: NOW - MIN,
+          },
+        ],
+      }),
+    );
+    expect(v.slipping.filter((s) => s.kind === 'fired')).toEqual([]);
+  });
 
   it('a building lane whose file has not moved in 2 h is quiet; under it, or another state, is not', () => {
     const at = (age: number, phase: LaneFile['phase'] = 'build') =>
@@ -1382,6 +1401,9 @@ describe('tower-current: derived over hand-written', () => {
     // a lane's row naming the PR it lands on top of isn't struck by that one's merge
     const onTop = [{ ...laned[0]!, what: 'Merge x (on top of PR 183)' }];
     expect(both({ plan: onTop, mainLog: log }).done).toBe(false);
+    // its own "(PR n, …)" or "(PR n) once …", as the hub writes them
+    for (const what of ['Merge x (PR 183, its CI)', 'Merge x (PR 183) once devb is free'])
+      expect(both({ plan: [{ ...laned[0]!, what }], mainLog: log }).done).toBe(true);
   });
 });
 

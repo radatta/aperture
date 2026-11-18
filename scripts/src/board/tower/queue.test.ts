@@ -549,5 +549,12 @@ describe('tower-current: autoStart and merge references', () => {
     expect(refFiredAt('PR 9 + 1 day', merged)).toBe(1000 + 86400e3);
     expect(refFiredAt('2026-11-17', merged)).toBeNull();
     expect(refFiredAt('fox merges', merged)).toBeNull();
+    // a reused name: a branch merge counts only when it fires at or after the cut; a PR number always
+    expect(refFiredAt('echo merges', merged, 2000)).toBeNull();
+    expect(refFiredAt('echo merges + 1 day', merged, 2000)).toBe(1000 + 86400e3);
+    expect(refFiredAt('PR 9', merged, 2000)).toBe(1000);
+    // a follow-up written after the namesake's merge doesn't fire from it
+    expect(firedAt('echo merges', merged, 5000, 3000)).toBeNull();
+    expect(firedAt('echo merges', merged, 5000, 500)).toBe(1000);
   });
 });

@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
+  chmodSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -686,6 +687,11 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
     // sync-main runs in its own checkout, with the loop's short main-lock wait and no inherited git target
     expect(once({ FAKE_ENV: '1' }).status).toBe(0);
     expect(beat().msg).toBe(`init=${join(tmp, 'repo')} fd8=no-lock wait=20 gitdir=-`);
+    // a busy main checkout (75) is no failure: ok, says why, logs nothing
+    const before = log();
+    expect(once({ FAKE_OUT: 'board cli: main checkout busy', FAKE_RC: '75' }).status).toBe(0);
+    expect(beat()).toMatchObject({ ok: true, msg: expect.stringMatching(/busy: next round$/) });
+    expect(log()).toBe(before);
     // a stray argument is refused, never a forever loop
     const bad = spawnSync('bash', [join(s, 'sync.sh'), '--help'], {
       env: senv(),
@@ -755,10 +761,15 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
       expect(readFileSync(join(tmp, 'sync.pid'), 'utf8').trim()).toBe(pid);
       expect(sync('status').stdout).toMatch(`sync: running (pid ${pid}), last round`);
       // lib.sh changes on disk: the next round re-execs, same pid, still holding the lock
+      // a loop that reopened the lock file on re-exec (instead of keeping fd 8) can't now: it would exit
+      chmodSync(join(tmp, 'sync.lock'), 0o000);
       writeFileSync(join(s, 'lib.sh'), readFileSync(join(s, 'lib.sh'), 'utf8') + '\n# moved\n');
       expect(
         await until(() => log().includes(`re-exec (pid ${pid}): sync.sh or lib.sh changed`)),
       ).toBe(true);
+      await new Promise((r) => setTimeout(r, 1500)); // a reopening loop would have exited by now
+      expect(process.kill(+pid, 0)).toBe(true); // still alive, past the re-exec, on its kept fd
+      chmodSync(join(tmp, 'sync.lock'), 0o644);
       expect(sync('status').stdout).toMatch(`sync: running (pid ${pid})`);
       // a pidfile naming some other live process (this worker) while the loop runs: neither is killed
       writeFileSync(join(tmp, 'sync.pid'), `${process.pid}\n`);

@@ -44,10 +44,11 @@ export function planTable(
     const pr = p.lane ? prOf(p.lane) : null;
     // a merge row whose lane's PR merged is finished then, whether or not dispatch has marked it; so is one once
     // every PR its text names has merged (the last merge is its actual). A lane's row may name the PR it lands on top
-    // of, so it reads only its own "(PR n)" suffix, and only when nothing places the lane's PR.
+    // of, so it reads only its own "(PR n…)" (the first parenthesis opening with its PR), and only when nothing
+    // places the lane's PR.
     let mergedTime = p.kind === 'merge' && pr?.state === 'MERGED' ? pr.mergedAt : null;
     if (p.kind === 'merge' && mergedTime === null && !(p.lane && pr)) {
-      const own = /\(PR (\d+)\)\s*$/.exec(p.what);
+      const own = /\(PR (\d+)[,)]/.exec(p.what);
       const at = (p.lane ? (own ? [+own[1]!] : []) : namedPrs(p.what)).map(mergedAt);
       if (at.length && at.every((t) => t !== null)) mergedTime = Math.max(...(at as number[]));
     }

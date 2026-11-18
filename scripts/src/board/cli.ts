@@ -17,7 +17,7 @@ import {
   type Sample,
 } from './rollup.ts';
 import { sessionNames } from './sessions.ts';
-import { withMainLock, withRestartLock } from './main-lock.ts';
+import { MainBusy, withMainLock, withRestartLock } from './main-lock.ts';
 import { execRun, syncMain } from './sync-main.ts';
 import { cliGuard, isHelp } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
@@ -243,6 +243,7 @@ if (process.argv[1]?.endsWith('cli.ts')) {
     if (out) process.stdout.write(out + '\n');
   } catch (e) {
     process.stderr.write(`board cli: ${(e as Error).message}\n`);
-    process.exit(2);
+    // a busy main checkout is no failure: the main sync loop tries again next round (sync.sh)
+    process.exit(e instanceof MainBusy ? 75 : 2);
   }
 }

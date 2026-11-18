@@ -286,7 +286,9 @@ What the tower derives over the hand-written fields:
 | `queue-bad`    | the file has problems: the first, and how many more                                                                                                     |
 
 A lock fact counts only from a fresh lock read and an open-PR fact only from a fresh PR list; a merge is final and
-always counts. When either is stale the count reads `n?` and says which.
+always counts. A branch name gets reused, so a merge known only by its branch name (no PR number, no lane file
+begun after it) counts only while under a day old (`mergelog.ts` `REUSE_MS`); a follow-up's branch trigger counts a
+merge from a day before it was written on. When either is stale the count reads `n?` and says which.
 
 **Tone**, one for the age and the count: red when the main sync failed or went silent (7 min: a round's 240 s and its 2 min nap), at 5 items, or when
 one has sat 30 min; amber with any item or an unsure count; else dim. A STALE follow-up is a judgment backlog, not a

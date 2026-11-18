@@ -2,6 +2,7 @@
 // docs/ops/SESSION-BOARD.md → Control tower). Never throws: a bad file renders as its problems.
 import { findIdentifiers } from '../../identifiers.ts';
 import { clean, parseTime } from './fmt.ts';
+import { REUSE_MS } from './mergelog.ts';
 
 // pr-open: the lane opened its PR and checks aren't green yet (between building and ready)
 export const LANE_STATES = [
@@ -122,7 +123,12 @@ const AFTER_REF =
 const AFTER_ISO = /^(\d{4})-(\d{2})-(\d{2})(?:(?:T| ~?)(\d{1,2}):(\d{2}))?(?=$|[ (~])/;
 const AFTER_MD = /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]* )?(\d{2})-(\d{2})(?=$|[ (])/;
 export type Merged = { branch: string; number: number; mergedAt: number };
-export function firedAt(after: string, merged: Merged[], now: number): number | null {
+export function firedAt(
+  after: string,
+  merged: Merged[],
+  now: number,
+  branchSince = -Infinity,
+): number | null {
   const iso = planAt(after.split(/[ (]/)[0]); // a whole ISO date-time (`2026-11-20T09:00Z`), as the plan takes it
   if (iso !== null) return iso;
   let m = AFTER_ISO.exec(after);
@@ -139,7 +145,7 @@ export function firedAt(after: string, merged: Merged[], now: number): number | 
         ? local(y - 1, +m[1]!, +m[2]!)
         : at;
   }
-  return refFiredAt(after, merged);
+  return refFiredAt(after, merged, branchSince);
 }
 // The merge half alone (`<branch> merges`, `PR <n>`, `+ N days`): what a devQueue `waitingOn` can name (stale.ts).
 // `branchSince`: a branch reference counts only a merge at or after it (a reused name: mergelog.ts REUSE_MS); a PR
@@ -150,18 +156,22 @@ export function refFiredAt(
   branchSince = -Infinity,
 ): number | null {
   const r = AFTER_REF.exec(after);
+  const off = r?.[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0;
+  // the cut applies to when it fires: "<branch> merges + 1 day" still fires a day after a recent merge
   const pr =
     r &&
     merged.find((p) =>
-      r[1] ? p.number === +r[1] : p.branch === r[2] && p.mergedAt >= branchSince,
+      r[1] ? p.number === +r[1] : p.branch === r[2] && p.mergedAt + off >= branchSince,
     );
   if (!r || !pr) return null;
-  return pr.mergedAt + (r[3] ? +r[3] * (r[4] === 'week' ? 7 : 1) * 86400e3 : 0);
+  return pr.mergedAt + off;
 }
 export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
   fu.flatMap((f) => {
     if (f.status !== 'open' || f.after === 'now') return [];
-    const at = firedAt(f.after, merged, now);
+    // a branch merge over a day before the follow-up was written is a namesake's (a reused name: mergelog.ts); one
+    // just before is the one it records (the hub often logs a follow-up after its trigger)
+    const at = firedAt(f.after, merged, now, f.since === null ? -Infinity : f.since - REUSE_MS);
     return at !== null && at <= now ? [{ ...f, firedAt: at }] : [];
   });
 

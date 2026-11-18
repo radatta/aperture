@@ -215,7 +215,7 @@ sync_running() { ! flock -n "$SYNC_LOCK" true 2>/dev/null; }
 # outlive the worktree). None until main has one (fails: nothing to start).
 sync_script() {
   [ -n "${APERTURE_SYNC_SCRIPT:-}" ] && { printf '%s' "$APERTURE_SYNC_SCRIPT"; return; }
-  local common; common=$(git -C "$SB_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  local common; common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$SB_REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   [ -n "$common" ] && [ -r "${common%/*}/scripts/board/sync.sh" ] || return 1
   printf '%s' "${common%/*}/scripts/board/sync.sh"
 }
@@ -245,7 +245,7 @@ cmd_sync() {
       if sync_running; then
         p=$(sync_loop_pid) || { echo "sync: running, but $SYNC_PID doesn't name the loop; not stopped" >&2; return 1; }
         kill "$p" && echo "sync: stopping $p (after the round in flight)"
-        for ((i = 0; i < ${SYNC_STOP_POLLS:-500}; i++)); do sync_running || break; sleep 0.5; done
+        for ((i = 0; i < ${SYNC_STOP_POLLS:-600}; i++)); do sync_running || break; sleep 0.5; done # 300 s > a round
         sync_running && { echo "sync: still running (pid $p); not stopped" >&2; return 1; }
         echo "sync: stopped $p"
       fi
@@ -297,7 +297,7 @@ cmd_tower() {
     start)
       # the main sync rides along (a container restart's SessionStart, and the stopgap's cutover, come through here)
       # (1 s at most here: the SessionStart hook's budget; a loop slower to come up is still starting)
-      SYNC_START_POLLS=5 cmd_sync ensure >/dev/null 2>&1 || true
+      (SYNC_START_POLLS=5; cmd_sync ensure) >/dev/null 2>&1 || true # a plain variable: the loop never inherits it
       p=$(tower_pid) && { echo "tower: already running (pid $p) — http://localhost:$TOWER_PORT"; return 0; }
       sb_init_dirs
       APERTURE_TOWER_PID="$TOWER_PID" setsid nohup bash "$SB_SCRIPTS/tower-web.sh" --port "$TOWER_PORT" </dev/null >>"$BOARD_DIR/tower.log" 2>&1 &
