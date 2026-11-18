@@ -120,6 +120,10 @@ describe('dev lock', () => {
     expect((await acquire(lapsed.api, 'ci-bot', SHA, NOW)).takenAt).toBe(
       new Date(NOW).toISOString(),
     );
+    const garbled = github({ ...live('ci-bot'), takenAt: 'soon' }); // never kept: a fresh take
+    expect((await acquire(garbled.api, 'ci-bot', SHA, NOW)).takenAt).toBe(
+      new Date(NOW).toISOString(),
+    );
     const old = github(live('ci-bot')); // an older bot's lock: no takenAt to keep
     expect((await acquire(old.api, 'ci-bot', SHA, NOW)).takenAt).toBe(new Date(NOW).toISOString());
   });

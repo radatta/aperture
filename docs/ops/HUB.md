@@ -246,9 +246,9 @@ names the holder main waits for, and prints the hub note and the wait (step 2; `
 So a merge during a lane's dev test no longer replaces its branch: it waits for the release, up to an hour from the
 later of the merge and the lock's taking — renewals and redeploys don't stretch it — and 15 min of its run's wait at
 least (CI-BOT.md → _Dev deploys_ → _A merge waits for the lock_). Until the tower's HOLD is relaxed for this (a
-follow-up, TOWER.md → _The automatic HOLD_), it still shows HOLD on a live lock: the hub may merge through that HOLD knowingly, or
-keep ordering merges as before. A holder about to merge its own PR releases first (phase 10), or its merge waits on
-itself. To hurry a hotfix, ask the holder to release; never cancel the run.
+follow-up, TOWER.md → _The automatic HOLD_), it still shows HOLD on a live lock: the hub may merge through that HOLD
+knowingly, or keep ordering merges as before. A holder about to merge its own PR releases first (phase 10), or its
+merge waits on itself. To hurry a hotfix, ask the holder to release; never cancel the run.
 
 **In a named dev order, lanes take the lock themselves** (the user, 2026-11-08). The hub sends the order and
 keeps it current as `devQueue` in `queue.json`, in file order; only the hub changes it. A lane is ready once its

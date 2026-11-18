@@ -413,7 +413,12 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     const h = harness(() => ({ status: 502 }), ['dev'], RUN_ENV, { runs });
     expect(await h.go()).toBe(0);
     expect(h.reads()).toBe(MAX_ERRORS + 1); // the holder read before the wait, then the wait's own tries
-    expect(h.lines.find((l) => l.startsWith('::warning '))).toContain('could not read its lock');
+    expect(h.lines.some((l) => l.startsWith('::warning title=dev wait cap fell back::'))).toBe(
+      true,
+    );
+    expect(h.lines.find((l) => l.startsWith('::warning title=dev deploy could not'))).toContain(
+      'could not read its lock',
+    );
   });
 
   it('falls back to 60 min from its own start, with a warning, when the runs listing fails', async () => {
@@ -535,8 +540,8 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     expect(
       h.lines.some(
         (l) =>
-          l.startsWith('dev: the holder read failed (') &&
-          l.endsWith("the cap counts from this wait's start"),
+          l.startsWith('::warning title=dev wait cap fell back::the holder read failed (') &&
+          l.endsWith("the cap counts 60 min from this wait's start"),
       ),
     ).toBe(true);
     expect(h.clock.t).toBe(START + CEILING_MS);

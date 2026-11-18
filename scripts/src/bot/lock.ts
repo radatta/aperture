@@ -20,7 +20,7 @@ export interface Holder {
   branch: string;
   sha: string;
   expiresAt: string;
-  // When this branch took the lock (acquire; renew keeps it): main's wait counts a holder's turn from it
+  // When this branch took the lock (acquire; renew and the holder's own live re-take keep it): main's wait counts a holder's turn from it
   // (main-dev-wait.ts). Absent on a lock an older bot wrote.
   takenAt?: string;
 }
@@ -155,7 +155,7 @@ export async function acquire(
       // Its own live lock (a redeploy): keep when it was taken, so a re-take never restarts the turn main's wait counts
       // from (main-dev-wait.ts). A lapsed one is a fresh take.
       const kept =
-        cur.holder.takenAt && !isExpired(cur.holder, nowMs)
+        Date.parse(cur.holder.takenAt ?? '') <= nowMs && !isExpired(cur.holder, nowMs) // NaN or future: fresh
           ? { ...holder, takenAt: cur.holder.takenAt }
           : holder;
       const sha = kept === holder ? tagSha : await makeTag(api, kept, slot);

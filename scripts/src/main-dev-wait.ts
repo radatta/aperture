@@ -18,7 +18,7 @@
 // first read is honoured instead). So a lane that took the slot after the merge gets its full turn, and a lock renewed
 // or re-taken for hours holds each merge an hour from its merge, not each run an hour from its wait. Never under
 // FLOOR_MS from this wait's start (MAX_ERRORS' tries at a failing read), never over CEILING_MS from it. A re-run, a runs
-// listing that fails or a holder read that fails counts CEILING_MS from this wait's start (the old rule), the listing
+// listing that fails or a holder read that fails counts CEILING_MS from this wait's start (the old rule), the last two
 // with a ::warning:: (CI-BOT.md → Dev deploys → A merge waits for the lock).
 //
 // The holder JSON is anyone-with-contents-write's text printed to a public log: every line is stripped of control
@@ -241,7 +241,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary, prob
       first = (await readLock(api, slot))?.holder ?? null;
     } catch (err) {
       log(
-        `${slot}: the holder read failed (${clean((err as Error).message)}) — the cap counts from this wait's start`,
+        `::warning title=${slot} wait cap fell back::the holder read failed (${clean((err as Error).message)}) — the cap counts ${CEILING_MS / 60_000} min from this wait's start`,
       );
       anchor = null;
     }
@@ -273,7 +273,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary, prob
     if (r.outcome === 'gave-up')
       loud(
         `${slot} deploy waited ${mins()} min and went anyway`,
-        `The ${slot} lock was still held by ${who(r.holder)} at this run's cap, ${cap} — ${why[by]}: this deploy replaces that branch on ${slot} mid-test. Its devcheck's build-marker check will say so; re-run its \`pnpm bot deploy-dev\` after this run's ${slot} job (it restores the branch, not the turn: the next queued merge waits only its own hour from its merge, or 15 min).`,
+        `The ${slot} lock was still held by ${who(r.holder)} at this run's cap, ${cap} — ${why[by]}: this deploy replaces that branch on ${slot} mid-test. Its devcheck's build-marker check will say so; re-run its \`pnpm bot deploy-dev\` after this run's ${slot} job ${by === 'ttl' ? '' : ' (it restores the branch, not the turn: the next queued merge waits only its own hour from its merge, or 15 min)'}.`,
       );
     else if (!slept && r.outcome === 'free') log(`${slot} lock free — deploying`);
     else
