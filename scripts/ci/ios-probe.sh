@@ -872,6 +872,9 @@ run_sim_ci() (
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
+  # sim.sh's validator caps timeoutSec at 600 (the Mac's jobs); the runner's launch job needs ~900 with the long Home
+  # wait, so the CI job file says 600 for the check and the real budget is set after it (rows run 4 hit BAD_PARAM)
+  [ -n "$bad" ] || [ -z "${CI_JOB_TO:-}" ] || { jq --argjson t "$CI_JOB_TO" '.params.timeoutSec = $t' "$1" >"$1.t" && mv "$1.t" "$1"; }
   [ -z "$bad" ] || { echo "rejected $bad {}"; return 0; }
   mkdir -p "$3"
   run_sim "$1" "$2" "$(cd "$3" && pwd -P)"
@@ -947,14 +950,14 @@ s_rows() {
     # IOS-CHECK.md → Failures: these are dropped input ("rerun the step"), so a job that ends on one runs once more
     for try in 1 2; do
     left=$((DEADLINE - SECONDS - 60)) # per try, so a rerun can't run past the deadline (review S2)
-    [ "$left" -le 900 ] || left=900 # rows run 4: the launch job carries up to ~6 min of Home reads after submit
+    [ "$left" -le 900 ] || left=900 # rows run 4: the launch job carries up to ~7.5 min of Home reads after submit
     [ "$left" -ge 60 ] || { st=error rs=BUDGET js="{}"; break; }
-    jq -e --arg n "$j" --arg sha "$sha" --argjson to "$left" --argjson last "$([ "$j" = "$last" ] && echo true || echo false)" \
+    jq -e --arg n "$j" --arg sha "$sha" --argjson to "$([ "$left" -le 600 ] && echo "$left" || echo 600)" --argjson last "$([ "$j" = "$last" ] && echo true || echo false)" \
       '. as $p | ($p.jobs[] | select(.name == $n)) as $j
        | {job: "sim", params: {sha: $sha, timeoutSec: $to, shutdown: $last, steps: $j.steps}}' \
       "$REPO/tools/mailroom/bench/plans.json" >"$job" || { note "no $j job in plans.json"; return 1; }
       : >"$WORK/diag.txt"
-      out="$(CI_JOB_TAG="$j try $try" run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j-$try" 2>>"$WORK/sim.err")" || true
+      out="$(CI_JOB_TAG="$j try $try" CI_JOB_TO="$left" run_sim_ci "$job" "$WORK/p-$j" "$WORK/res-$j-$try" 2>>"$WORK/sim.err")" || true
       read -r st rs js <<<"$out"
       [ -n "$js" ] || js="{}"
       # only known shapes reach the artifact, whatever run_sim printed
