@@ -17,6 +17,11 @@ import {
   parseTrial,
   simTrial,
   summarise,
+  SWITCHER_KILLS,
+  SWITCHER_ROUNDS,
+  parseKillNote,
+  switcherPlan,
+  switcherTrial,
   tapPlan,
   targetOf,
 } from './sim-trial.ts';
@@ -620,5 +625,153 @@ describe('simTrial --icon', () => {
       await simTrial(d, 'icon2', runner({ ok: true, lines: 0, noSvc: 0 }), undefined, 'icon'),
     ).toBe(1);
     expect(logs.join('\n')).toContain('without a trustworthy cause');
+  });
+});
+
+describe('switcherPlan (--switcher)', () => {
+  it('is a valid plan: signed in, then each kill followed by a launch and the signed-in check', () => {
+    const p = switcherPlan(true);
+    expect(validateSimParams(p)).toBeNull();
+    expect(p.shutdown).toBe(true);
+    expect(switcherPlan(false).shutdown).toBe(false);
+    expect(p.steps.slice(0, 2)).toEqual([{ op: 'launch' }, { op: 'signIn' }]);
+    const kills = p.steps.flatMap((s, i) => (s.op === 'kill' ? [i] : []));
+    expect(kills).toHaveLength(SWITCHER_KILLS);
+    for (const i of kills) {
+      expect(p.steps[i]).toEqual({ op: 'kill', method: 'switcher' });
+      expect(p.steps.slice(i + 1, i + 3)).toEqual([
+        { op: 'launch' },
+        { op: 'expect', signedIn: true },
+      ]);
+    }
+  });
+});
+
+describe('parseKillNote', () => {
+  it('reads every swipe of a kill note, in order', () => {
+    expect(
+      parseKillNote(
+        'killed by switcher; web: gone; card 239,136 306x664 r2; s1 flick 339,600 alive>sw; s2 lead 339,600 gone@0.5',
+      ),
+    ).toEqual([
+      { rung: 1, name: 'flick', killed: false },
+      { rung: 2, name: 'lead', killed: true },
+    ]);
+  });
+  it('reads a fallback aim, a swipe that left the switcher, and a late kill', () => {
+    expect(
+      parseKillNote('; s1 flick 340,560 frame? alive>app; s2 lead 339,600 alive>sw; late'),
+    ).toEqual([
+      { rung: 1, name: 'flick', killed: false },
+      { rung: 2, name: 'lead', killed: true },
+    ]);
+  });
+  it('is empty for a kill that never swiped', () => {
+    expect(
+      parseKillNote("the app switcher didn't kill the app; the switcher didn't open (Web)"),
+    ).toEqual([]);
+    expect(parseKillNote('killed by terminate; web: gone')).toEqual([]);
+  });
+});
+
+describe('switcherTrial', () => {
+  const kill = (i: number, status: 'pass' | 'fail' | 'error' | 'skipped', note?: string) => ({
+    i,
+    op: 'kill',
+    status,
+    ms: 1,
+    ...(note ? { note } : {}),
+  });
+  const setup = () => {
+    const fs = memFs([`${HJ}/inbox`]);
+    const logs: string[] = [];
+    const jobs: SimJob[] = [];
+    const d = { fs, clock: fakeClock(), dir: HJ, log: (s: string) => logs.push(s) };
+    return { d, logs, jobs };
+  };
+  it('tallies each rung across rounds; a clean trial exits 0', async () => {
+    const { d, logs, jobs } = setup();
+    const runner = async (_: unknown, job: SimJob) => {
+      jobs.push(job);
+      return result(job, {
+        steps: [
+          kill(
+            2,
+            'pass',
+            'killed by switcher; web: gone; card 239,136 306x664 r2; s1 flick 339,600 gone@0',
+          ),
+          kill(
+            5,
+            'pass',
+            'killed by switcher; web: gone; s1 flick 339,600 alive>sw; s2 lead 339,600 gone@0',
+          ),
+        ],
+      });
+    };
+    expect(await switcherTrial(d, 'quiet', runner)).toBe(0);
+    expect(jobs).toHaveLength(SWITCHER_ROUNDS);
+    expect(jobs.map((j) => j.params.shutdown)).toEqual([false, false, true]);
+    const out = logs.join('\n');
+    expect(out).toContain('6 of 6 kills passed (100%); 0 failed before any swipe');
+    expect(out).toMatch(/1 flick\s+6\s+3\s+50%/);
+    expect(out).toMatch(/2 lead\s+3\s+3\s+100%/);
+  });
+  it('counts a failed kill and its swipes, and exits 1; a kill that never swiped is counted apart', async () => {
+    const { d, logs } = setup();
+    const failed = result({ id: 'x' } as SimJob, {
+      status: 'error',
+      reason: 'SIM_UNAVAILABLE',
+      steps: [
+        kill(
+          2,
+          'error',
+          "the switcher swipe didn't kill the app; s1 flick 339,600 alive>sw; s2 lead 339,600 alive>sw; s3 drag 339,720 alive>sw",
+        ),
+        kill(5, 'skipped'),
+      ],
+    });
+    const dropped = result({ id: 'y' } as SimJob, {
+      status: 'fail',
+      steps: [
+        kill(2, 'fail', "the app switcher didn't kill the app; the switcher didn't open (Web)"),
+      ],
+    });
+    let n = 0;
+    const runner = async () => {
+      n++;
+      if (n === 1) throw new IosUnavailable('SIM_UNAVAILABLE', 'SWITCHER_FAILED', 'v', failed);
+      if (n === 2) throw new IosAssert('SWITCHER_FAILED', dropped);
+      return result({ id: 'z' } as SimJob, { steps: [] });
+    };
+    expect(await switcherTrial(d, 'loaded', runner)).toBe(1);
+    const out = logs.join('\n');
+    expect(out).toContain('0 of 2 kills passed (0%); 1 failed before any swipe');
+    expect(out).toMatch(/3 drag\s+1\s+0\s+0%/);
+    expect(out).toContain('pnpm mailroom sim-shutdown');
+  });
+  it('stops at a Mac that never answered (exit 3), and refuses a bad tag or round (exit 2)', async () => {
+    const { d, logs } = setup();
+    let n = 0;
+    const runner = async () => {
+      n++;
+      throw new IosUnavailable('MAC_UNREACHABLE', 'no pickup');
+    };
+    expect(await switcherTrial(d, 'asleep', runner)).toBe(3);
+    expect(n).toBe(1);
+    expect(logs.join('\n')).toContain('0 of 0 kills passed');
+    expect(await switcherTrial(d, 'Bad Tag', runner)).toBe(2);
+    expect(await switcherTrial(d, 'x', runner, SWITCHER_ROUNDS)).toBe(2);
+    expect(n).toBe(1);
+  });
+  it('--round reruns one round, shutting the sim down after it', async () => {
+    const { d, jobs } = setup();
+    const runner = async (_: unknown, job: SimJob) => {
+      jobs.push(job);
+      return result(job, { steps: [] });
+    };
+    expect(await switcherTrial(d, 'one', runner, 1)).toBe(0);
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]?.id).toContain('trial-one-1');
+    expect(jobs[0]?.params.shutdown).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ import { editPr } from './edit-pr.ts';
 import { fixturesJob } from './fixtures-job.ts';
 import { EXIT, openPr, probe } from './open-pr.ts';
 import type { Deps } from './open-pr.ts';
-import { simTrial } from './sim-trial.ts';
+import { simTrial, switcherTrial } from './sim-trial.ts';
 import { simCommand } from './sim.ts';
 import { hostjobsDir, nodeFs, repoRunnerVersion } from './submit.ts';
 
@@ -25,10 +25,11 @@ export const USAGE = `pnpm mailroom <command>   (-h / --help on any command: its
   sim-probe [--sign-in]                          boot the Mac's iOS sim, launch the web app, screenshot (≤ 5 min)
   sim-shutdown                                   shut the Mac's iOS sim down
   clip-probe [--out <png>] [--wait <seconds>]    fetch the Mac clipboard's image, as tools/coi/xclip does on Ctrl+V
-  sim-trial --tag <idle|loaded|…> [--round N] [--keys | --icon]
+  sim-trial --tag <idle|loaded|…> [--round N] [--keys | --icon | --switcher]
                                                  the input-gap trial: first-tap drops per target and way of tapping (~40 min;
                                                  one round ~6); --keys: per keys/erase variant instead (~15 min); --icon: icon
-                                                 taps only, 1 s vs 3 s after Home, drops attributed by the sim's log (~22 min)`;
+                                                 taps only, 1 s vs 3 s after Home, drops attributed by the sim's log (~22 min);
+                                                 --switcher: 3 × 8 app switcher kills, kills per swipe rung (~15–25 min)`;
 
 // Every command's allowed flags; anything else refuses before it runs (bot/help.ts).
 export const FLAGS: Record<string, Spec> = {
@@ -39,7 +40,7 @@ export const FLAGS: Record<string, Spec> = {
   'sim-probe': { bare: ['sign-in'] },
   'sim-shutdown': {},
   'clip-probe': { flags: ['out', 'wait'] },
-  'sim-trial': { flags: ['tag', 'round'], bare: ['keys', 'icon'] },
+  'sim-trial': { flags: ['tag', 'round'], bare: ['keys', 'icon', 'switcher'] },
 };
 
 const clock: Clock = {
@@ -107,18 +108,24 @@ export async function main(argv: string[]): Promise<number> {
         },
         waitMs,
       );
-    case 'sim-trial': // --keys or --icon with a value is refused by the guard (FLAGS: bare)
-      if (flags.keys === 'true' && flags.icon === 'true') {
-        console.error(`--keys and --icon are two trials: pick one\n${USAGE}`);
+    case 'sim-trial': {
+      // --keys, --icon or --switcher with a value is refused by the guard (FLAGS: bare)
+      const kinds = (['keys', 'icon', 'switcher'] as const).filter((k) => flags[k] === 'true');
+      if (kinds.length > 1) {
+        console.error(`--keys, --icon and --switcher are separate trials: pick one\n${USAGE}`);
         return EXIT.usage;
       }
+      const td = { fs: nodeFs, clock, dir: hostjobsDir(run), log: (s: string) => console.log(s) };
+      const round = flags.round === undefined ? undefined : Number(flags.round);
+      if (kinds[0] === 'switcher') return switcherTrial(td, flags.tag ?? '', undefined, round);
       return simTrial(
-        { fs: nodeFs, clock, dir: hostjobsDir(run), log: (s) => console.log(s) },
+        td,
         flags.tag ?? '',
         undefined,
-        flags.round === undefined ? undefined : Number(flags.round),
+        round,
         flags.keys === 'true' ? 'keys' : flags.icon === 'true' ? 'icon' : 'taps',
       );
+    }
     case 'help':
     case undefined:
       console.log(USAGE);

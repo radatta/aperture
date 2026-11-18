@@ -33,8 +33,10 @@ SIM_Y_NAV=168                                  # the nav row (page scrolled to t
 SIM_XS_NAV="38 88 136 205 276 332 380 268 395" # tab centres: seven unscrolled, then Finances/Inbox/Settings swiped
 SIM_X_BUILD=57                                 # Settings' build stamp, page scrolled to the bottom
 SIM_YS_BUILD="935 920 905 890 875 860 845 830 815 800 785 770 755 740 725 710 695 680 665 650 635"
-SIM_CARD_SWIPE="340 560 340 40"                # the app switcher: the app's card, swiped up
+SIM_PT_CARD="340 560"                          # the app switcher: where the app's card is read (its frame aims the swipe)
+SIM_CARD_END_Y=40                              # the app switcher: where a card swipe ends
 SIM_PT_BACKGROUND="400 880"                    # the app switcher: empty background, to leave it
+SIM_KILL_POLLS=6                               # after a card swipe: the process checked 1 + 6 times, 0.5 s apart
 SIM_SCROLL_X=220                               # where page swipes run
 SIM_MAX_PROBES=400
 if [ "$(uname)" = Darwin ]; then SIM_MV_NOFOLLOW=-fh; else SIM_MV_NOFOLLOW=-fT; fi # mv onto a link: replace it
@@ -971,70 +973,168 @@ sim_front() {
   SIM_FRONT_PAGE="$(jq -r 'first(.. | objects | .AXValue? | select(type == "string" and test("^Page [0-9]+ of [0-9]+$"))) // ""' <<<"$t" 2>/dev/null)"
 }
 
-# Double home opens the switcher, a swipe up on the card kills the app, a tap on the background leaves (a home press
-# doesn't). Each step is read back, since AXe reports presses and swipes iOS never got (job …192707Z…-relaunch-bd33):
-# swipe only once the switcher is in front (neither the app nor the Home Screen), and tap only once the app's process
-# is gone and the switcher is still in front, so neither lands in a live app or on the Home Screen. Two tries, then SWITCHER_FAILED. Its note lists what each miss saw.
-sim_kill_switcher() {
-  local try sx sy ex ey bx by e why="" sawcard="" inswitcher=""
-  read -r sx sy ex ey <<<"$SIM_CARD_SWIPE"
+# The app switcher kill (IOS-CHECK.md -> kill). Double home opens the switcher, a swipe up on Aperture's card kills the
+# app, a tap on the background leaves (a home press doesn't). Each step is read back, since AXe reports presses and
+# swipes iOS never got (job …192707Z…-relaunch-bd33): swipe only once the switcher is in front (neither the app nor the
+# Home Screen), and tap only once the app's process is gone and the switcher is still in front, so neither lands in a
+# live app or on the Home Screen. A swipe that leaves the app running takes the ladder's next rung (sim_card_rung): two
+# presses and three swipes at most, then SWITCHER_FAILED. The note records the card and every swipe, pass or fail:
+# "; card 239,136 306x664 r2; s1 flick 339,600 alive>sw; s2 lead 339,600 gone@0.5".
+
+# Double home, read back: 0 with the switcher in front; 2 with the app or the Home Screen (SIM_FRONT_*); 1 on an error.
+# The one AXe-version-specific step: on 2.0.4 the two presses land as two single ones (IOS-CHECK.md -> Setup).
+sim_switcher_open() {
+  ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
+    || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+  sim_front || return 1
+  if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then return 2; fi
+}
+
+# Aperture's card at the read spot (the switcher also holds Safari's: Aperture's reads AXGenericElement "Aperture"),
+# held still: SIM_CARD_F ← its frame "x y w h" once two reads 0.5 s apart agree, SIM_CARD_R ← "r<reads>" (4 at most;
+# else the last frame and "moving"). 0: the card; 2: not Aperture's (SIM_CARD_E: what the spot read); 1: an error.
+sim_card() {
+  local cx cy e f prev="" i
+  read -r cx cy <<<"$SIM_PT_CARD"
+  SIM_CARD_F="" SIM_CARD_R=moving SIM_CARD_E=""
+  for i in 1 2 3 4; do
+    [ "$i" = 1 ] || sleep 0.5
+    rm -f "$SIM_P.unread"
+    e="$(sim_point "$cx" "$cy")" || return 1
+    sim_hung_err "reading the switcher card" && return 1
+    if ! sim_match "$e" Aperture ""; then SIM_CARD_E="$(jq -r '"\(.role) \(.label // "")"' <<<"$e")"; return 2; fi
+    f="$(jq -r '.frame // {} | "\(.x // 0) \(.y // 0) \(.w // 0) \(.h // 0)"' <<<"$e")"
+    SIM_CARD_F="$f"
+    if [ "$f" = "$prev" ]; then SIM_CARD_R="r$i"; return 0; fi
+    prev="$f"
+  done
+  return 0
+}
+
+# The swipe's ladder, one shape per rung, ordered by the trial (IOS-CHECK.md -> kill): name, the start at a share (%)
+# of the card's height, duration (s), then AXe's --delta (px between points), --pre-delay and --post-delay ("-": none).
+sim_card_rung() {
+  case "$1" in
+    1) echo "flick 70 0.3 - - -" ;;
+    2) echo "lead 70 0.3 - 1 0.5" ;;
+    3) echo "drag 88 0.6 20 1 0.5" ;;
+  esac
+}
+
+# Swipe the card up with rung $1, aimed at SIM_CARD_F: x mid its on-screen part, the start at the rung's share of its
+# height but clear of the bottom edge (the home gesture's), the end at SIM_CARD_END_Y. A frame that doesn't hold the
+# read spot (an empty or odd read) falls back to the spot, noted "frame?". SIM_SWIPE ← "<name> x,y" for the note.
+sim_card_swipe() {
+  local name pct dur delta pre post cx cy fx fy fw fh l r x y fb=""
+  read -r name pct dur delta pre post <<<"$(sim_card_rung "$1")"
+  [ "$delta" != - ] || delta=""
+  [ "$pre" != - ] || pre=""
+  [ "$post" != - ] || post=""
+  read -r cx cy <<<"$SIM_PT_CARD"
+  read -r fx fy fw fh <<<"${SIM_CARD_F:-0 0 0 0}"
+  l="$fx"; [ "$l" -ge 0 ] || l=0
+  r=$((fx + fw)); [ "$r" -le "$SIM_W" ] || r="$SIM_W"
+  if [ "$fw" -gt 0 ] && [ "$fh" -gt 0 ] && [ $((r - l)) -ge 40 ] && [ "$cx" -ge "$l" ] && [ "$cx" -le "$r" ] \
+    && [ "$cy" -ge "$fy" ] && [ "$cy" -le $((fy + fh)) ]; then
+    x=$(((l + r) / 2))
+    y=$((fy + fh * pct / 100))
+    [ "$y" -le $((SIM_H - 120)) ] || y=$((SIM_H - 120))
+  else
+    x="$cx" y="$cy" fb=" frame?"
+  fi
+  SIM_SWIPE="$name $x,$y$fb"
+  ax swipe --start-x "$x" --start-y "$y" --end-x "$x" --end-y "$SIM_CARD_END_Y" --duration "$dur" \
+    ${delta:+--delta "$delta"} ${pre:+--pre-delay "$pre"} ${post:+--post-delay "$post"} >/dev/null 2>&1 \
+    || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+}
+
+# Is the web app's process gone? Checked now, then up to SIM_KILL_POLLS more times 0.5 s apart (a killed process takes
+# a moment to exit). SIM_GONE_AT ← the seconds it took ("0", "0.5", …).
+sim_web_gone() {
+  local i=0
+  while sim_web_alive; do
+    [ "$i" -lt "$SIM_KILL_POLLS" ] || return 1
+    sleep 0.5
+    i=$((i + 1))
+  done
+  SIM_GONE_AT="$((i / 2))"
+  [ $((i % 2)) = 0 ] || SIM_GONE_AT="$SIM_GONE_AT.5"
+}
+
+# Leave the switcher once the app is gone: the last card gone can close it by itself, and on the Home Screen the
+# background spot is a dock icon, so it's tapped only with the switcher still in front. SIM_NOTE ← $1.
+sim_switcher_leave() {
+  local bx by
   read -r bx by <<<"$SIM_PT_BACKGROUND"
-  for try in 1 2; do
+  sim_front || return 1
+  if [ -n "$SIM_FRONT_PAGE" ] || [ "$SIM_FRONT_APP" = Web ]; then
+    SIM_NOTE="$1; no switcher left to leave (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
+    return 0
+  fi
+  ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
+  SIM_NOTE="$1"
+}
+
+sim_kill_switcher() {
+  local presses=0 rung=0 rc bx by insw="" swiped="" tel="" why="" lastf="" fx fy fw fh w
+  read -r bx by <<<"$SIM_PT_BACKGROUND"
+  while :; do
     # After a swipe that left the app running the switcher is still up: pressing home there reopens the app (relaunch
     # job …011904Z… run 2026-11-09T01-14-43), so the card is read and swiped again without pressing.
-    if [ -z "$inswitcher" ]; then
-      ax batch --step "button home" --step "sleep 0.15" --step "button home" --step "sleep 1.5" >/dev/null 2>&1 \
-        || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-      sim_front || return 1
-      if [ "$SIM_FRONT_APP" = Web ] || [ -n "$SIM_FRONT_PAGE" ]; then
+    if [ -z "$insw" ]; then
+      [ "$presses" -lt 2 ] || break
+      presses=$((presses + 1))
+      rc=0
+      sim_switcher_open || rc=$?
+      [ "$rc" != 1 ] || return 1
+      if [ "$rc" = 2 ]; then
         why="$why; the switcher didn't open (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
         continue
       fi
+      insw=1
     fi
-    inswitcher=""
-    # Only Aperture's own card is swiped (the switcher also holds Safari's): it reads AXGenericElement "Aperture".
-    rm -f "$SIM_P.unread"
-    e="$(sim_point "$sx" "$sy")" || return 1
-    sim_hung_err "reading the switcher card" && return 1
-    if ! sim_match "$e" Aperture ""; then
-      why="$why; no Aperture card at $sx,$sy ($(jq -r '"\(.role) \(.label // "")"' <<<"$e"))"
-      # leave the switcher (its background, as below) so the next try, or op, starts from the Home Screen
+    rc=0
+    sim_card || rc=$?
+    [ "$rc" != 1 ] || return 1
+    if [ "$rc" = 2 ]; then
+      # A swiped card can go after the polls: the process gone too is the kill, late.
+      if [ -n "$swiped" ] && ! sim_web_alive; then sim_switcher_leave "$tel; late$why"; return; fi
+      why="$why; no Aperture card at ${SIM_PT_CARD/ /,} ($SIM_CARD_E)"
+      # leave the switcher so the next press, or op, starts from the Home Screen
       ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
       sleep 1
+      insw=""
       continue
     fi
-    sawcard=1
-    ax swipe --start-x "$sx" --start-y "$sy" --end-x "$ex" --end-y "$ey" --duration 0.2 >/dev/null 2>&1 \
-      || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-    sleep 1
-    ! sim_web_alive || sleep 1
-    if ! sim_web_alive; then
-      # The last card gone can close the switcher by itself: on the Home Screen the background spot is a dock icon.
-      sim_front || return 1
-      if [ -n "$SIM_FRONT_PAGE" ] || [ "$SIM_FRONT_APP" = Web ]; then
-        SIM_NOTE="$why; no switcher left to leave (${SIM_FRONT_APP:-no app}${SIM_FRONT_PAGE:+, $SIM_FRONT_PAGE})"
-        return 0
-      fi
-      ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE AXE_FAILED "the app switcher gesture failed"; return 1; }
-      SIM_NOTE="$why"
-      return 0
+    rung=$((rung + 1))
+    if [ "$SIM_CARD_F" != "$lastf" ]; then
+      read -r fx fy fw fh <<<"${SIM_CARD_F:-0 0 0 0}"
+      tel="$tel; card $fx,$fy ${fw}x$fh $SIM_CARD_R"
+      lastf="$SIM_CARD_F"
     fi
-    why="$why; still running after the swipe"
-    inswitcher=1
+    sim_card_swipe "$rung" || return 1
+    swiped=1
+    if sim_web_gone; then sim_switcher_leave "$tel; s$rung $SIM_SWIPE gone@$SIM_GONE_AT$why"; return; fi
+    # Still running: what's in front says whether the swipe left the switcher (>app: it opened the app; >home).
+    sim_front || return 1
+    if [ "$SIM_FRONT_APP" = Web ]; then w=app; elif [ -n "$SIM_FRONT_PAGE" ]; then w=home; else w=sw; fi
+    tel="$tel; s$rung $SIM_SWIPE alive>$w"
+    [ "$w" = sw ] || insw=""
+    [ "$rung" -lt 3 ] || break
   done
-  # Still in the switcher (the card read as Aperture's, then a swipe left it running): leave it by its background.
-  # Swiped and still running is the gesture not killing (2 of 2 runs on 2026-11-08, iOS 27.0), not a dropped input:
-  # needs you (the maintainer, option a), never a pass, until the swipe is re-trialled.
-  if [ -n "$inswitcher" ]; then
-    ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
-    sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app: re-trial the gesture (IOS-CHECK.md -> Failures)$why"
+  # Out of presses or rungs: leave the switcher only when the last read showed it in front.
+  [ -z "$insw" ] || ax tap -x "$bx" -y "$by" --tap-style physical >/dev/null 2>&1 || true
+  # Every rung swiped the card and the app ran on: the gesture not killing, not a dropped input. Needs you (the
+  # maintainer, option a), never a pass.
+  if [ "$rung" = 3 ]; then
+    sim_err SIM_UNAVAILABLE SWITCHER_FAILED "the switcher swipe didn't kill the app (IOS-CHECK.md -> Failures)$tel$why"
     return 1
   fi
-  if [ -z "$sawcard" ] && [ "${why#*no Aperture card}" != "$why" ]; then
+  if [ -z "$swiped" ] && [ "${why#*no Aperture card}" != "$why" ]; then
     sim_fail SWITCHER_FAILED "no Aperture card in the app switcher in two tries$why: was the app running? Rerun from a launch"
     return 1
   fi
-  sim_fail SWITCHER_FAILED "the app switcher didn't kill the app in two tries$why: iOS dropped the input; rerun the step, don't debug the app"
+  sim_fail SWITCHER_FAILED "the app switcher didn't kill the app$tel$why: iOS dropped the input; rerun the step, don't debug the app"
 }
 
 sim_to_top() { local i; for i in 1 2 3 4 5 6 7 8; do ax swipe --start-x "$SIM_SCROLL_X" --start-y 250 --end-x "$SIM_SCROLL_X" --end-y $((SIM_H - 74)) --duration 0.15 >/dev/null 2>&1 || true; done; }
