@@ -504,13 +504,16 @@ export const coachFixes: Scenario = {
           return {
             attempts: p.record?.attempts ?? 0,
             inTries: (p.tries ?? []).some((x) => x.sittingIds.includes(id)),
-            offPlan: t.offPlan.some((o) => o.sittingId === id),
+            // On today's view: off the plan, or a slot's sitting when the problem was due and the plan took it
+            // (a run alone, with no other scenario's due problems ahead of it).
+            shown:
+              t.offPlan.some((o) => o.sittingId === id) || t.slots.some((x) => x.sittingId === id),
             unnoted: (t.unnoted ?? []).some((u) => u.sittingId === id),
             stats: (await ctx.mcp.reads.coachStats()).attempts,
           };
         };
         const before = await counted();
-        if (before.attempts !== 2 || !before.inTries || !before.offPlan || !before.unnoted)
+        if (before.attempts !== 2 || !before.inTries || !before.shown || !before.unnoted)
           fail(`before the void: ${JSON.stringify(before)}`);
 
         const out = await ctx.mcp.writes.setVoid([{ sittingId: id, void: true }]);
@@ -529,7 +532,7 @@ export const coachFixes: Scenario = {
         if (
           after.attempts !== 1 ||
           after.inTries ||
-          after.offPlan ||
+          after.shown ||
           after.unnoted ||
           after.stats !== before.stats - 1
         )
