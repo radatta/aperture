@@ -26,6 +26,7 @@ import {
 } from '../gh.ts';
 import { readCosts, readMacStats, type MacRead } from '../health.ts';
 import { readLanes } from '../lanes.ts';
+import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
 import { PrCache, ghFetch, type Fetch } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
@@ -229,6 +230,22 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     return ok;
   };
 
+  // main's squash merges (mergelog.ts), a local git read at most once a minute; fixtures: their mainlog.txt, if any
+  let mainLog: { at: number; list: MainMerge[] } | null = null;
+  const readMainLog = (now: number): MainMerge[] => {
+    if (mainLog && now - mainLog.at < 60000) return mainLog.list;
+    let list: MainMerge[] = mainLog?.list ?? [];
+    try {
+      list = parseMainLog(
+        fx ? readFileSync(join(fx, 'mainlog.txt'), 'utf8') : repoGit([...MAINLOG_ARGS]),
+      );
+    } catch {
+      // no fixture log, or no origin/main: the last read (or none) stands
+    }
+    mainLog = { at: now, list };
+    return list;
+  };
+
   // GitHub, in the background: never awaited by a request, never two of one kind at once.
   async function poll(now: number) {
     await Promise.all([prs?.poll(now), runs.poll(now)]);
@@ -264,6 +281,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       macInstall: MAC_INSTALL,
       macInstallReady: installReady(now),
       dayStart: dayStart(now),
+      mainLog: readMainLog(now),
     };
     const v = derive(inputs);
     const sparks = {

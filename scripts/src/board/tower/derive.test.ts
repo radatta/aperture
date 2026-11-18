@@ -113,6 +113,8 @@ function inputs(
     mergeOrder?: NonNullable<TowerState['queue']['data']>['mergeOrder'];
     plan?: (Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'> & Partial<PlanItem>)[];
     planNotes?: string[];
+    mainLog?: Inputs['mainLog'];
+    sessionsByBranch?: Record<string, string>;
   } = {},
 ): Inputs {
   const tower = {
@@ -159,7 +161,7 @@ function inputs(
     tower,
     lanes: over.lanes ?? [],
     laneProblems: [],
-    sessionsByBranch: {},
+    sessionsByBranch: over.sessionsByBranch ?? {},
     runs: { value: over.runs ?? [], at: NOW - MIN, error: null, tried: NOW - MIN },
     checks: (s) =>
       over.checks?.[s] ? { runs: over.checks[s]!, at: NOW - MIN, error: null } : null,
@@ -171,6 +173,7 @@ function inputs(
     macInstall: 'cd /x && install',
     macInstallReady: true,
     dayStart: Date.parse('2026-11-13T08:00:00Z'),
+    mainLog: over.mainLog ?? [],
   };
 }
 const green = { [sha('e')]: [run(), run({ id: 2, name: 'Secret scan' })] };
@@ -295,6 +298,19 @@ describe('laneRow states', () => {
     expect(row(inputs(), { queue: queueLane({ waitingOn: 'PARKED until Fri' }) }).state).toBe(
       'PARKED',
     );
+  });
+  it('a merged PR beats a PARKED word', () => {
+    const merged = pr({ state: 'MERGED', mergedAt: NOW - 5 * MIN, mergeSha: sha('m') });
+    const parked = queueLane({ waitingOn: 'PARKED until Fri' });
+    expect(row(inputs(), { queue: parked, pr: merged }).state).toBe('MERGED');
+    expect(row(inputs(), { file: file({ phase: 'parked' }), pr: merged }).state).toBe('MERGED');
+  });
+  it("session: the lane file's, then the live registry, then dispatch's hand-written one", () => {
+    const reg = inputs({ sessionsByBranch: { echo: 'live-1' } });
+    const q = queueLane({ session: 'hand-1' });
+    expect(row(reg, { file: file(), queue: q }).session).toBe('auto-9');
+    expect(row(reg, { queue: q }).session).toBe('live-1');
+    expect(row(inputs(), { queue: q }).session).toBe('hand-1');
   });
 });
 
@@ -1262,5 +1278,82 @@ describe('tower-expand: pr-open, lane steps and ETAs, the plan table, heads, for
     expect(s()!.detail).toBeNull();
     i.tower.prs = { list: [], at: NOW - MIN, error: 'HTTP 502', forks: 1 };
     expect(s()).toMatchObject({ state: 'failed', detail: 'HTTP 502' });
+  });
+});
+
+describe('tower-current: derived over hand-written', () => {
+  const merged = (n: number, branch: string, at = NOW - 30 * MIN) =>
+    pr({ number: n, branch, state: 'MERGED', mergedAt: at, mergeSha: sha('m') });
+  it('the dev order drops a lane on a slot or merged, whatever its queue state says', () => {
+    const v = derive(
+      inputs({
+        lock: lock('alpha'),
+        prs: [merged(60, 'bravo')],
+        devQueue: [
+          queueLane({ branch: 'alpha', state: 'next' }),
+          queueLane({ branch: 'bravo', state: 'waiting' }),
+          queueLane({ branch: 'charlie', state: 'waiting' }),
+        ],
+      }),
+    );
+    expect(v.next.queue.map((l) => l.branch)).toEqual(['charlie']);
+  });
+  it('a reused branch name: a lane file begun after the old merge is the new lane, not DONE', () => {
+    const old = merged(201, 'echo', NOW - 3 * 3600e3);
+    const fresh = file({ phase: 'build', phaseSince: NOW - 3600e3 });
+    const v = derive(inputs({ prs: [old], lanes: [fresh] }));
+    expect(v.active.find((r) => r.branch === 'echo')).toMatchObject({
+      state: 'BUILDING',
+      pr: null,
+    });
+    // the finished lane's own file (begun before the merge, or naming it) still reads the merge
+    const before = derive(inputs({ prs: [old], lanes: [file({ phaseSince: NOW - 4 * 3600e3 })] }));
+    expect(before.active.find((r) => r.branch === 'echo')).toBeUndefined();
+    const own = derive(
+      inputs({ prs: [old], lanes: [file({ pr: 201, phaseSince: NOW - 3600e3 })] }),
+    );
+    expect(own.active.find((r) => r.branch === 'echo')).toBeUndefined();
+  });
+  it("main's log: a PR a queue entry names, past gh's window, reads merged", () => {
+    const log = [{ number: 12, sha: sha('c'), mergedAt: NOW - 26 * 3600e3 }];
+    const q = [queueLane({ branch: 'golf', state: 'building', pr: 12 })];
+    const live = derive(inputs({ devQueue: q }));
+    expect(live.active.map((r) => r.branch)).toEqual(['golf']);
+    const v = derive(inputs({ devQueue: q, mainLog: log }));
+    expect(v.active).toEqual([]);
+    // it never adds a DONE row (that's gh's list with its deploy marks)
+    expect(v.done).toEqual([]);
+    // the landing order drops it too
+    const o = derive(
+      inputs({ mainLog: log, mergeOrder: [{ branch: 'golf', pr: 12, note: null }] }),
+    );
+    expect(o.next.order).toEqual([]);
+  });
+  it('a merge row is struck once every PR its text names has merged', () => {
+    const plan = (what: string) => [
+      { at: NOW - 60 * MIN, what, kind: 'merge' as const, who: null },
+    ];
+    const log = [{ number: 183, sha: sha('c'), mergedAt: NOW - 40 * MIN }];
+    const both = (o: Parameters<typeof inputs>[0]) => derive(inputs(o)).next.table[0]!;
+    expect(both({ plan: plan('Merges: PR 183, PR 184'), mainLog: log }).done).toBe(false);
+    expect(
+      both({ plan: plan('Merges: PR 183, PR 184'), mainLog: log, prs: [merged(184, 'x')] }),
+    ).toMatchObject({ done: true, doneAt: NOW - 30 * MIN });
+    // no PR named: never struck by a guess
+    expect(both({ plan: plan('Merge G'), mainLog: log }).done).toBe(false);
+    // a row with a lane gh can't place (its file gone) still reads its text
+    const laned = [
+      {
+        at: NOW - 60 * MIN,
+        what: 'Merge x (PR 183)',
+        kind: 'merge' as const,
+        who: null,
+        lane: 'x',
+      },
+    ];
+    expect(both({ plan: laned, mainLog: log })).toMatchObject({
+      done: true,
+      doneAt: NOW - 40 * MIN,
+    });
   });
 });

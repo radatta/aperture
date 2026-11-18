@@ -23,19 +23,30 @@ export type Ask = {
 
 const PAST_MS = 2 * 3600e3; // a row past due longer than this (and not slipping) drops off the glance
 
-// `prOf` gives a lane's PR (newest 40); `etaOf` its lane file's ETAs.
+// A merge row names its PRs in its text ("Merges: tower 183, PR 184 …"): `PR <n>` only.
+export const namedPrs = (what: string) => [...what.matchAll(/\bPR (\d+)\b/g)].map((m) => +m[1]!);
+
+// `prOf` gives a lane's PR (newest 40, or main's log); `etaOf` its lane file's ETAs; `mergedAt` when a PR number
+// merged (gh or main's log), else null.
 export function planTable(
   plan: PlanItem[],
   etaOf: (branch: string) => LaneEta | null,
   prOf: (branch: string) => PlanPr,
   now: number,
+  mergedAt: (n: number) => number | null = () => null,
 ): { rows: PlanRow[]; nowIndex: number } {
   const rows = plan.map((p): PlanRow => {
     const pr = p.lane ? prOf(p.lane) : null;
-    // a merge row whose lane's PR merged is finished then, whether or not dispatch has marked it
-    const merged = p.kind === 'merge' && pr?.state === 'MERGED' && pr.mergedAt !== null;
+    // a merge row whose lane's PR merged is finished then, whether or not dispatch has marked it; so is one once
+    // every PR its text names has merged (the last merge is its actual), lane or not
+    let mergedTime = p.kind === 'merge' && pr?.state === 'MERGED' ? pr.mergedAt : null;
+    if (p.kind === 'merge' && mergedTime === null) {
+      const at = namedPrs(p.what).map(mergedAt);
+      if (at.length && at.every((t) => t !== null)) mergedTime = Math.max(...(at as number[]));
+    }
+    const merged = mergedTime !== null;
     const done = p.done || merged;
-    const doneAt = p.doneAt ?? (merged ? pr!.mergedAt : null);
+    const doneAt = p.doneAt ?? mergedTime;
     const due = p.eta?.to ?? p.at;
     let slip: number | null = null;
     let slipLo: number | null = null;

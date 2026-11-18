@@ -9,6 +9,7 @@ import { powerSummary, type Costs, type MacRead, type PowerSummary } from './hea
 import { slowdown, type Slowdown } from './slowdown.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
+import { mergedFromLog, mergedNumbers, type MainMerge } from './mergelog.ts';
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
 import type { Pr } from './prs.ts';
 import { firedFollowups, sinceTime, staleFollowups, type Lane } from './queue.ts';
@@ -175,6 +176,7 @@ export type Inputs = {
   macInstall: string; // NEEDS YOU's command when the Mac agent is missing
   macInstallReady: boolean; // tools/macstats/install.sh is on origin/main (the install line fetches it from there)
   dayStart: number; // where DONE TODAY begins: local midnight, reaching back 12 h before noon (web/main.ts dayStart)
+  mainLog: MainMerge[]; // main's squash merges (mergelog.ts): merged truth past gh's newest 40
 };
 
 // Freshness thresholds, seconds (TOWER.md → Sources): past them a source shows amber with its age.
@@ -187,6 +189,7 @@ export const STALE = {
   lane: 7200,
   laneQuiet: 86400,
 };
+const OFF_DEV_ORDER: State[] = ['TESTING', 'MERGED', 'DEPLOYING', 'DONE', 'DEPLOY FAILED'];
 const PARKED = /^PARKED/i; // dispatch's word for a parked lane, at the start of its waitingOn
 const RUN_FRESH_MS = 2 * 3600e3; // a ledger run with no end older than this is an orphan, not in flight
 
@@ -379,7 +382,8 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
   const { branch, file, queue, pr } = c;
   const base = {
     branch,
-    session: file?.session ?? queue?.session ?? i.sessionsByBranch[branch] ?? null,
+    // the lane's own word, then the live registry, then dispatch's hand-written one
+    session: file?.session ?? i.sessionsByBranch[branch] ?? queue?.session ?? null,
     pr: pr ? { number: pr.number, title: pr.title, url: pr.url } : null,
     hold: null as string | null,
     fileAge: file ? Math.max(0, (i.now - file.updatedAt) / 1000) : null,
@@ -403,15 +407,6 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     hold,
     phase: trackPhase(state, file),
   });
-
-  if (file?.phase === 'parked' || PARKED.test(queue?.waitingOn ?? ''))
-    return row(
-      'PARKED',
-      'PARKED',
-      queue?.waitingOn ?? file?.step ?? null,
-      'dim',
-      file?.phaseSince ?? null,
-    );
 
   if (pr?.state === 'MERGED') {
     const d = deployFor(pr.mergeSha, i.runs.value);
@@ -451,6 +446,16 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
       dep.startedAt,
     );
   }
+
+  // a merged PR beats a PARKED word (dispatch's, or a lane file that never moved on)
+  if (file?.phase === 'parked' || PARKED.test(queue?.waitingOn ?? ''))
+    return row(
+      'PARKED',
+      'PARKED',
+      queue?.waitingOn ?? file?.step ?? null,
+      'dim',
+      file?.phaseSince ?? null,
+    );
 
   // a lane file past its merge, with no open PR (none in the newest 40, or a closed one): finished, so off NOW even
   // while it still holds a lock (its slot card shows that). An open PR wins: PRs are truth over lane files.
@@ -592,7 +597,7 @@ function orderRow(
 ): LaneRow {
   const file = files.get(o.branch) ?? null;
   const queue = queued.get(o.branch) ?? null;
-  const pr = prFor(o.branch, prs, o.pr, file?.pr ?? null);
+  const pr = prFor(o.branch, prs, o.pr, file);
   if (file || queue || pr) return laneRow({ branch: o.branch, file, queue, pr }, i);
   return {
     branch: o.branch,
@@ -612,22 +617,33 @@ function orderRow(
   };
 }
 
-// Which PR is a branch's: the open one, else the newest merged one.
+// Which PR is a branch's: the open one, the one its lane file or queue entry names, else the newest merged one —
+// unless a lane file began its phase after that merge without naming it: a new lane on a reused branch name, not
+// the finished one (faster-lanes had PRs 201 and 204).
 function prFor(
   branch: string,
   prs: Pr[],
   queuePr: number | null,
-  filePr: number | null,
+  file: LaneFile | null,
 ): Pr | null {
   const mine = prs.filter((p) => p.branch === branch);
   const byNum = (n: number | null) => (n === null ? undefined : prs.find((p) => p.number === n));
+  const last = mine
+    .filter((p) => p.state === 'MERGED')
+    .sort((a, b) => (b.mergedAt ?? 0) - (a.mergedAt ?? 0))[0];
+  const reused =
+    !!last &&
+    !!file &&
+    file.phase !== 'merged' &&
+    file.phase !== 'cleanup' &&
+    file.pr !== last.number &&
+    last.mergedAt !== null &&
+    (file.phaseSince ?? file.updatedAt) > last.mergedAt;
   return (
     mine.find((p) => p.state === 'OPEN') ??
-    byNum(filePr) ??
+    byNum(file?.pr ?? null) ??
     byNum(queuePr) ??
-    mine
-      .filter((p) => p.state === 'MERGED')
-      .sort((a, b) => (b.mergedAt ?? 0) - (a.mergedAt ?? 0))[0] ??
+    (reused ? undefined : last) ??
     null
   );
 }
@@ -635,9 +651,17 @@ function prFor(
 export function derive(i: Inputs): View {
   const t = i.tower;
   const q = t.queue.data;
-  const prs = t.prs.list;
   const files = new Map(i.lanes.map((l) => [l.branch, l]));
   const queued = new Map((q?.devQueue ?? []).map((l) => [l.branch, l]));
+  // gh's newest 40, plus any PR a board record names that main's log shows merged and gh's window doesn't hold
+  const named = [
+    ...(q?.devQueue ?? []),
+    ...i.lanes,
+    ...(q?.mergeOrder ?? []),
+    ...(q?.wave?.items ?? []),
+  ].map((x) => ({ branch: x.branch, pr: x.pr ?? null }));
+  const prs = [...t.prs.list, ...mergedFromLog(named, t.prs.list, i.mainLog)];
+  const mergedPrs = mergedNumbers(prs, i.mainLog);
 
   // The lane universe: dispatch's queue first (its order), then lane files, open PRs, lock holders, today's merges.
   const names: string[] = [...queued.keys()];
@@ -666,10 +690,7 @@ export function derive(i: Inputs): View {
   const rows = names.map((b) => {
     const file = files.get(b) ?? null;
     const queue = queued.get(b) ?? null;
-    return laneRow(
-      { branch: b, file, queue, pr: prFor(b, prs, queue?.pr ?? null, file?.pr ?? null) },
-      i,
-    );
+    return laneRow({ branch: b, file, queue, pr: prFor(b, prs, queue?.pr ?? null, file) }, i);
   });
 
   // NEEDS YOU: lane asks, merges, failed deploys, dispatch's to-dos for the maintainer, sources only the maintainer can fix.
@@ -677,7 +698,7 @@ export function derive(i: Inputs): View {
   for (const l of i.lanes) {
     if (!l.needs) continue;
     // an ask written before its lane's PR merged is finished with the lane; one written after is deliberate
-    const p = prFor(l.branch, prs, queued.get(l.branch)?.pr ?? null, l.pr ?? null);
+    const p = prFor(l.branch, prs, queued.get(l.branch)?.pr ?? null, l);
     if (p?.state === 'MERGED' && p.mergedAt !== null && l.updatedAt < p.mergedAt) continue;
     needs.push(fromNeeds(l.needs, l.branch, l.updatedAt));
   }
@@ -814,8 +835,9 @@ export function derive(i: Inputs): View {
   const table = planTable(
     q?.plan ?? [],
     (b) => files.get(b)?.eta ?? null,
-    (b) => prFor(b, prs, queued.get(b)?.pr ?? null, files.get(b)?.pr ?? null),
+    (b) => prFor(b, prs, queued.get(b)?.pr ?? null, files.get(b) ?? null),
     i.now,
+    (n) => mergedPrs.get(n) ?? null,
   );
   // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
   // within 2 h of now either way: tomorrow evening's step never jumps the undated ones); the rest follow it
@@ -839,10 +861,14 @@ export function derive(i: Inputs): View {
     order: order
       .map((o) => ({ ...o, row: byBranch.get(o.branch) ?? orderRow(o, i, prs, files, queued) }))
       .filter((o) => !['MERGED', 'DEPLOYING', 'DONE', 'DEPLOY FAILED'].includes(o.row.state)),
-    // parked lanes aren't next for dev: they get one muted line instead
+    // parked lanes aren't next for dev: they get one muted line instead; nor is a lane already on a slot or
+    // merged, whatever the hand-written state says
     queue: (q?.devQueue ?? [])
       .filter(
-        (l) => (l.state === 'next' || l.state === 'waiting') && !PARKED.test(l.waitingOn ?? ''),
+        (l) =>
+          (l.state === 'next' || l.state === 'waiting') &&
+          !PARKED.test(l.waitingOn ?? '') &&
+          !OFF_DEV_ORDER.includes(byBranch.get(l.branch)?.state as State),
       )
       .map((l) => ({ slot: l.slot, branch: l.branch, state: l.state, waitingOn: l.waitingOn })),
     parked: rows.filter((r) => r.state === 'PARKED').map((r) => r.branch),
