@@ -81,7 +81,7 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
     const held = v.next.merge.filter((r) => r.state === 'HOLD');
     if (!me.length && !held.length) return [`MERGE ${unsure ? `unknown${unsure}` : 'none'}`];
     const pr = (r: LaneRow) =>
-      r.pr ? `PR ${r.pr.number} ${r.branch} "${one(r.pr.title, 50)}"` : r.branch;
+      r.pr ? `PR ${r.pr.number} ${one(r.branch, 40)} "${one(r.pr.title, 50)}"` : one(r.branch, 40);
     return [
       `MERGE ${me.length}${held.length ? ` · ${held.length} on hold` : ''}${unsure}`,
       ...me.map((r) => `  ${pr(r)}`),

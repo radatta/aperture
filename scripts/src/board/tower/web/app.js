@@ -568,17 +568,9 @@ function next(v) {
   // dispatch's landing order, each lane as it stands; its merge rows aren't repeated in the merge queue
   const order = v.next.order ?? [];
   const merge = v.next.merge.filter((r) => !order.some((o) => o.branch === r.branch));
-  // the glance: a merge waiting on you first, then the next few plan rows with what they cost you; expanded, the
-  // whole plan table first
-  if (inFull) {
-    items.push(planTable(v));
-    for (const r of v.next.soon) rendered.add(planKey(r)); // a glance row opened stays open for the glance's return
-  } else {
-    for (const r of merge) items.push(laneItem(r));
-    for (const r of v.next.soon) items.push(planItem(r));
-  }
   // QUEUED: approved autoStart lanes not started, in start order (queued.ts). The glance folds them into one row,
-  // above the landing order so the 8-row cap never hides it; expanded, a group of their own further down.
+  // ahead of the merge and plan rows (neither has a limit) so the 8-row cap never hides it; expanded, a group of their
+  // own further down.
   const queued = v.queued ?? [];
   if (queued.length && !inFull) {
     const ready = queued.filter((q) => q.state === 'ready');
@@ -594,6 +586,15 @@ function next(v) {
         more: queued.map((q) => q.line),
       }),
     );
+  }
+  // the glance: a merge waiting on you, then the next few plan rows with what they cost you; expanded, the
+  // whole plan table first
+  if (inFull) {
+    items.push(planTable(v));
+    for (const r of v.next.soon) rendered.add(planKey(r)); // a glance row opened stays open for the glance's return
+  } else {
+    for (const r of merge) items.push(laneItem(r));
+    for (const r of v.next.soon) items.push(planItem(r));
   }
   if (order.length) group('Landing order');
   order.forEach((o, k) => items.push(laneItem(o.row, { pos: k + 1, note: o.note })));

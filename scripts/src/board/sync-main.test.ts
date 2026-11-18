@@ -339,7 +339,9 @@ describe('sync-main: the merge record (merge-record.ts)', () => {
   });
   it('a failed record never fails the sync: a merge log line, the move stands', () => {
     const f = fake({ head: A, origin: B, tower: 'running', served: B });
-    const r = { dir: '/nonexistent/board', now: () => new Date() };
+    const file = join(mkdtempSync(join(tmpdir(), 'sync-rec-')), 'board');
+    writeFileSync(file, 'a file where the board dir should be'); // so mkdir fails even as root
+    const r = { dir: file, now: () => new Date() };
     const out = syncMain(
       f.run,
       '/repo/wt',
@@ -347,7 +349,7 @@ describe('sync-main: the merge record (merge-record.ts)', () => {
       (fn) => fn(),
       r,
     );
-    expect(out).toMatch(/moved aaaaaaa → bbbbbbb\nmerge log: /);
+    expect(out).toMatch(/moved aaaaaaa → bbbbbbb\nmerge log: (?!baseline)/);
     expect(f.did('switch')).toBe(true);
   });
   it('a failed fetch records nothing', () => {

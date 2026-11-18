@@ -8,6 +8,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -135,7 +136,7 @@ describe('merge-watch.sh: merges', () => {
   });
   // root writes through the mode bit: the container user and CI's runner aren't root
   it.skipIf(process.getuid?.() === 0)(
-    'a state file it cannot write: exit 74 naming it, never a quiet exit 10',
+    'a state file it cannot write: its lines, then exit 74 naming it, never a quiet exit 10',
     () => {
       const dir = fake(
         [{ [ev('2026-11-18')]: `${merged(231, sha('b'))}\n`, 'board/merge-announced': '' }],
@@ -151,6 +152,7 @@ describe('merge-watch.sh: merges', () => {
           74,
           expect.stringMatching(/cannot write .*merge-announced/),
         ]);
+        expect(r.stdout).toMatch(/MERGED PR 231 bbbbbbb/); // recorded or not, its line is said before the exit
       } finally {
         chmodSync(join(dir, 'board'), 0o700);
       }
@@ -205,6 +207,43 @@ describe('merge-watch.sh: merges', () => {
     expect(r.stdout).toMatch(/PR 201/);
     expect(r.stdout).not.toMatch(/PR 200/);
   });
+  it('an empty field stays a field: no time reads ?, a backslash in a title stays one, a control byte in a time is cut', () => {
+    const row = (pr: number, c: string, o: object) =>
+      JSON.stringify({ v: 1, kind: 'merged', pr, sha: sha(c), ...o });
+    const dir = fake([
+      { 'board/merge-announced': '' },
+      {
+        [ev('2026-11-18')]:
+          [
+            row(250, 'd', { mergedAt: '', title: 'a\\b' }),
+            row(251, 'e', { title: 'no time' }),
+            row(252, 'f', { mergedAt: '2026-11-18T20:00:00Z\n\u001fx', title: 'torn' }),
+          ].join('\n') + '\n',
+      },
+    ]);
+    const r = run(dir);
+    expect(r.status).toBe(10);
+    expect(lines(r.stdout).map((l) => l.slice(6))).toEqual([
+      'MERGED PR 250 ddddddd at ? "a\\b"',
+      'MERGED PR 251 eeeeeee at ? "no time"',
+      'MERGED PR 252 fffffff at ? "torn"',
+    ]);
+    expect(ctl(r.stdout)).toBe(false);
+  });
+  it('no jq: exit 78 naming it, never a watcher that can no longer see a merge', () => {
+    const dir = fake([{ 'board/merge-announced': '' }]);
+    // every tool on the box but jq
+    const nojq = join(dir, 'nojq');
+    mkdirSync(nojq);
+    for (const f of readdirSync('/usr/bin'))
+      if (f !== 'jq') symlinkSync(join('/usr/bin', f), join(nojq, f));
+    const r = spawnSync('/usr/bin/bash', [SCRIPT], {
+      encoding: 'utf8',
+      timeout: 25_000,
+      env: { PATH: `${dir}/bin:${nojq}`, WATCH_FAKE: dir, APERTURE_BOARD_DIR: join(dir, 'board') },
+    });
+    expect([r.status, r.stderr]).toEqual([78, expect.stringMatching(/jq missing/)]);
+  });
   it('control bytes in a title never reach stdout', () => {
     const dir = fake([
       { 'board/merge-announced': '' },
@@ -241,6 +280,30 @@ describe('merge-watch.sh: Mac ran markers', () => {
     const dir = fake([{ ...base, 'board/ran/late-0001': '' }, { 'board/ran/late-0001': '1\n' }]);
     const r = run(dir);
     expect([r.status, lines(r.stdout)]).toEqual([11, ['12:00 RAN late-0001 exit 1']]);
+  });
+  it('a FIFO swapped in after the file check never hangs the watcher', () => {
+    const REAL_STAT = ['/usr/bin/stat', '/bin/stat'].find(existsSync)!;
+    const dir = fake([{ ...base, 'board/ran/swap-0001': '0\n' }, {}], (d) =>
+      // stat runs between the -f check and the read: this one swaps the marker for a FIFO with no writer first
+      writeFileSync(
+        join(d, 'bin/stat'),
+        `#!/bin/bash\nfor a; do case "$a" in */swap-0001) rm -f "$a"; mkfifo "$a" ;; esac; done\nexec ${REAL_STAT} "$@"\n`,
+        { mode: 0o755 },
+      ),
+    );
+    const r = run(dir);
+    expect(r.quiet).toBe(true); // a 1 s timeout, then never a plain file again: skipped, not a hang to the test's kill
+    expect(r.tick).toBe(2);
+  });
+  it('more markers than any cap: each said once, a restart is quiet', () => {
+    const many = Object.fromEntries(
+      Array.from({ length: 205 }, (_, i) => [`board/ran/m-${String(i).padStart(4, '0')}`, '0\n']),
+    );
+    const dir = fake([{ ...base, ...many }]);
+    const r = run(dir);
+    expect([r.status, lines(r.stdout).length]).toEqual([11, 205]);
+    writeFileSync(join(dir, 'tick'), '0\n');
+    expect(run(dir).quiet).toBe(true);
   });
   it('a bad name, a symlink, a directory and an oversize file are never read or announced', () => {
     const dir = fake(

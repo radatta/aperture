@@ -367,10 +367,24 @@ export function main(argv: string[], stdin: () => string): string {
         throw new Error(
           `ran: the board dir ${dir} is not <repo>/localNotes/board, where the suffix writes`,
         );
-      mkdirSync(join(dir, 'ran'), { recursive: true }); // the suffix never makes it: a missing folder fails loud
-      if (existsSync(join(dir, 'ran', id)))
-        throw new Error(`ran: ${id} is already on disk (issued this second): run it again`);
-      return ranOut(macRoot(), id);
+      const ran = join(dir, 'ran');
+      mkdirSync(ran, { recursive: true }); // the suffix never makes it: a missing folder fails loud
+      // Each id is handed out once: a create-only `.<id>` (the watcher reads no dot-file) reserves it, and an id
+      // taken (reserved, or its marker already written) moves to the next second's, within the minute.
+      for (let k = 0; k < 60; k++) {
+        const next = k ? ranId(slug, new Date(now.getTime() + k * 1000)) : id;
+        if (existsSync(join(ran, next))) continue;
+        try {
+          writeFileSync(join(ran, `.${next}`), '', { flag: 'wx' });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
+          throw e;
+        }
+        return ranOut(macRoot(), next);
+      }
+      throw new Error(
+        `ran: every ${slug} id for the next minute is already on disk: try again later`,
+      );
     }
     default:
       throw new Error(

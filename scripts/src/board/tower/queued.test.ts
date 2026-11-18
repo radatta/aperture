@@ -114,7 +114,8 @@ describe('queuedView', () => {
     ]);
   });
   // On a well-formed queue. A malformed entry (a bad state, a branch that fails LANE_RE) is dropped by the parser but
-  // still counted by the jq; it is already a problem row on the tower and a pq-check error, so the two may disagree then.
+  // still counted by the jq. The tower drops it silently by design (queue.test: never a problem row); pq-check, run
+  // after every queue.json write, is what names it. So the two may disagree only on a queue pq-check already refused.
   it("matches pace-watch.sh's exit-6 ready rule on the same queue", () => {
     const raw = {
       v: 1,

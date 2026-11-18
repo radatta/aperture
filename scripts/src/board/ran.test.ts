@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -121,6 +122,15 @@ describe('pnpm board ran', () => {
       /^; \(r=\$\?; set -C; echo \$r > \S+\/localNotes\/board\/ran\/xcode-[0-9a-z]{4}\)$/,
     );
     expect(statSync(join(dir, 'ran')).isDirectory()).toBe(true);
+  });
+  it('two hand-outs before either line runs never share an id: each is reserved create-only', () => {
+    const dir = board();
+    const ids = [ran(dir, 'twice'), ran(dir, 'twice'), ran(dir, 'twice')].map(
+      (r) => /ran\/(\S+)\)$/.exec(r.stdout.split('\n')[0]!)![1]!,
+    );
+    expect(new Set(ids).size).toBe(3);
+    for (const id of ids) expect(existsSync(join(dir, 'ran', `.${id}`))).toBe(true);
+    expect(readdirSync(join(dir, 'ran')).filter((f) => !f.startsWith('.'))).toEqual([]); // the markers stay the Mac's
   });
   it('a bad slug, none, a board dir the suffix does not write, or an id already on disk refuses', () => {
     const dir = board();

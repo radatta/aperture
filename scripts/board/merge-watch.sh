@@ -29,7 +29,8 @@ fail() { echo "$W: cannot write $1" | tee -a "$BOARD_DIR/$W.log" >&2; exit 74; }
 put() { local t="$1.tmp.$$"; cat >"$t" && mv -f "$t" "$1" || { rm -f "$t"; return 1; }; } # sb_write, empty allowed
 
 # The merged rows of the two newest events files (name order is date order), one per line as
-# sha US pr US mergedAt US title; a torn line, a bad sha or a non-numeric pr is dropped, a title loses control bytes.
+# sha US pr US mergedAt US title; a torn line, a bad sha or a non-numeric pr is dropped, the text fields lose control
+# bytes (US among them), so a field never splits.
 merges() {
   local files=("$HIST"/events-*.jsonl)
   [ -e "${files[0]}" ] || return 0
@@ -38,7 +39,7 @@ merges() {
   grep -h -F '"kind":"merged"' "${pick[@]}" 2>/dev/null | jq -Rr --arg us "$US" '
     fromjson? | objects | select(.kind == "merged" and (.pr | type) == "number" and (.sha | type) == "string")
     | select(.sha | test("^[0-9a-f]{40}$"))
-    | [.sha, (.pr | floor | tostring), ((.mergedAt // "") | tostring),
+    | [.sha, (.pr | floor | tostring), ((.mergedAt // "") | tostring | gsub("[[:cntrl:]]"; " ")),
        ((.title // "") | tostring | gsub("[[:cntrl:]]"; " ") | .[0:120])] | join($us)'
 }
 
@@ -58,7 +59,8 @@ while :; do
     grep -qxF "$sha" "$ANN" 2>/dev/null && continue
     batch[$sha]=1
     shas+=("$sha")
-    hm=$(date -d "$at" +%H:%M 2>/dev/null) || hm='?'
+    hm='?'
+    [ -z "$at" ] || hm=$(date -d "$at" +%H:%M 2>/dev/null) || hm='?' # date -d '' would read as midnight
     lines+=("$(wl_at +%H:%M) MERGED PR $pr ${sha:0:7} at $hm \"$title\"")
   done < <(merges)
   unset batch
@@ -70,8 +72,8 @@ while :; do
     read -r size mt < <(stat -c '%s %Y' -- "$f" 2>/dev/null) || continue
     [ "${size:-9}" -le 8 ] || continue
     grep -qxF "$id $mt" "$RANN" && continue
-    code=''
-    IFS= read -r -t 1 -n 4 code <"$f" 2>/dev/null # -t: a FIFO swapped in after the -f check never blocks
+    # timeout around the open too: a FIFO swapped in after the -f check blocks in open(), not in the read
+    code=$(timeout 1 head -c 4 -- "$f" 2>/dev/null)
     if [[ "$code" =~ ^[0-9]{1,3}$ ]]; then
       rans+=("$id $mt")
       lines+=("$(wl_at +%H:%M) RAN $id exit $((10#$code))")
@@ -84,17 +86,20 @@ while :; do
   done
 
   if [ ${#shas[@]} -gt 0 ] || [ ${#rans[@]} -gt 0 ]; then
-    # recorded before the exit, so a restart is quiet; a write that fails exits 74 rather than wake the hub in a loop
+    # recorded before the exit, so a restart is quiet; a write that fails still says its lines, then exits 74 rather
+    # than wake the hub in a loop (what it recorded is never said again, so it is never lost unsaid)
+    bad=''
     if [ ${#shas[@]} -gt 0 ]; then
-      { cat "$ANN" 2>/dev/null; printf '%s\n' "${shas[@]}"; } | tail -n 200 | sb_write "$ANN" || fail "$ANN"
+      { cat "$ANN" 2>/dev/null; printf '%s\n' "${shas[@]}"; } | tail -n 200 | sb_write "$ANN" || bad=$ANN
     fi
     if [ ${#rans[@]} -gt 0 ]; then
       # one entry per marker still on disk (the week's prune bounds it), so none is ever dropped and said again
       { cat "$RANN" 2>/dev/null; printf '%s\n' "${rans[@]}"; } | while read -r i m; do
         [[ "$i" =~ $ID_RE ]] && [ -e "$RAN/$i" ] && printf '%s %s\n' "$i" "$m"
-      done | put "$RANN" || fail "$RANN"
+      done | put "$RANN" || bad=$RANN
     fi
     for l in "${lines[@]}"; do wl_say $W "$l"; done
+    [ -z "$bad" ] || fail "$bad"
     [ ${#shas[@]} -gt 0 ] && exit 10
     exit 11
   fi

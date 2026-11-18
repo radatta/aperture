@@ -59,6 +59,15 @@ const writeSeen = (dir: string, sha: string) => {
   renameSync(`${f}.tmp.${process.pid}`, f);
 };
 
+const hasCommit = (git: (args: string[]) => string, sha: string) => {
+  try {
+    git(['cat-file', '-e', `${sha}^{commit}`]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 // One line for the sync's output, or null when nothing changed. `git` throws on a non-zero exit.
 export function recordMerges(
   git: (args: string[]) => string,
@@ -79,8 +88,9 @@ export function recordMerges(
   try {
     git(['merge-base', '--is-ancestor', seen, target]);
   } catch (e) {
-    // exit 1 is "not an ancestor" (a rewrite); anything else (128: an object git can't read) keeps the baseline
-    if ((e as { status?: unknown }).status !== 1) throw e;
+    // exit 1 is "not an ancestor" (a rewrite). Anything else keeps the baseline and fails the round, unless the
+    // baseline commit is simply gone from the checkout (pruned): then no round could ever read it, so it is reset too.
+    if ((e as { status?: unknown }).status !== 1 && hasCommit(git, seen)) throw e;
     writeSeen(rec.dir, target);
     return `merge log: ${seen.slice(0, 7)} is not under origin/main: baseline reset at ${target.slice(0, 7)} (nothing back-filled)`;
   }

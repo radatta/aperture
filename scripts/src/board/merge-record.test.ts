@@ -21,7 +21,13 @@ const NOW = new Date('2026-11-19T03:00:30.250Z'); // 11-18 in Pacific time: the 
 const line = (sha: string, epoch: number, subject: string) => `${sha}\t${epoch}\t${subject}`;
 
 function world(
-  o: { seen?: string; log?: string; notAncestor?: boolean; gitBroken?: boolean } = {},
+  o: {
+    seen?: string;
+    log?: string;
+    notAncestor?: boolean;
+    gitBroken?: boolean;
+    gone?: boolean;
+  } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), 'merge-record-'));
   if (o.seen !== undefined) writeFileSync(join(dir, SEEN_FILE), o.seen);
@@ -34,6 +40,10 @@ function world(
       return '';
     }
     if (args[0] === 'log') return o.log ?? '';
+    if (args[0] === 'cat-file') {
+      if (o.gone) throw Object.assign(new Error('fatal: Not a valid object name'), { status: 128 });
+      return '';
+    }
     throw new Error(`unexpected git ${args[0]}`);
   };
   const rec = { dir, now: () => NOW };
@@ -142,6 +152,11 @@ describe('recordMerges', () => {
     const w = world({ seen: A, gitBroken: true });
     expect(() => recordMerges(w.git, D, w.rec)).toThrow(/bad object/);
     expect(w.seen()).toBe(A);
+  });
+  it('a baseline commit the checkout no longer has is reset, never a round that fails for good', () => {
+    const w = world({ seen: A, gitBroken: true, gone: true });
+    expect(recordMerges(w.git, D, w.rec)).toMatch(/baseline reset at ddddddd /);
+    expect([w.seen(), w.events()]).toEqual([D, []]);
   });
   it('events are written before the baseline moves: an append that fails leaves the baseline where it was', () => {
     const w = world({ seen: A, log: line(B, 1, 'x (#5)') });
