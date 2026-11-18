@@ -44,7 +44,10 @@ OPTS="${OPTS:-}"
 # after-boot accessibility break (PR 68) and Xcode 27.2's post-home barrier, and is the fix issue 100's reporter found
 # for 1.8.0's no-effect taps on Xcode 27.2 / iOS 27. Same CLI for what this script uses (describe-ui JSON, --point,
 # tap -x -y, swipe, gesture, button home). The Mac stays on 1.8.0 (2.0.4 broke its relaunch switcher kill: decision 24).
-case ",$OPTS," in *,axe2,*)
+AXE18_URL="$AXE_URL" AXE18_SHA="$AXE_SHA"
+# axe2mix: 2.0.4 for everything but sim.sh's switcher kill (its `batch` double home press: on 2.0.4 the two presses
+# land as two singles, so the switcher never opens: IOS-CHECK.md → Setup), which goes to 1.8.0 by a PATH wrapper.
+case ",$OPTS," in *,axe2,* | *,axe2mix,*)
   AXE_VER=2.0.4
   AXE_SHA=3178ec66d9ff46455fec737debad719c41cab16edb1435b2c721e07760a208c3
   AXE_URL="https://github.com/cameroncooke/AXe/releases/download/v$AXE_VER/AXe-macOS-v$AXE_VER-universal.tar.gz" ;;
@@ -228,6 +231,17 @@ s_axe_install() {
   [ -n "$AXE" ] || { note "no axe binary in the tarball"; return 1; }
   v="$("$AXE" --version 2>&1)" || { note "axe won't run: $(head -1 <<<"$v")"; AXE=""; return 1; }
   note "axe --version: $(head -1 <<<"$v")"
+  case ",$OPTS," in *,axe2mix,*) ;; *) return 0 ;; esac
+  local t18="$WORK/axe18.tar.gz" a18 w="$WORK/axemix"
+  curl -fsSL --retry 3 -o "$t18" "$AXE18_URL" || { note "1.8.0 download failed"; return 1; }
+  [ "$(shasum -a 256 "$t18" | cut -d' ' -f1)" = "$AXE18_SHA" ] || { note "1.8.0 sha256 mismatch"; return 1; }
+  mkdir -p "$WORK/axe18" "$w" && tar xzf "$t18" -C "$WORK/axe18" || { note "1.8.0 untar failed"; return 1; }
+  a18="$(find "$WORK/axe18" -type f -name axe | head -1)"
+  [ -n "$a18" ] && "$a18" --version >/dev/null 2>&1 || { note "1.8.0 won't run"; return 1; }
+  # sim.sh calls `axe` by name: this one sends a batch holding a home press to 1.8.0, the rest to 2.0.4
+  printf '#!/bin/bash\nfor a in "$@"; do [ "$a" != "button home" ] || exec %q "$@"; done\nexec %q "$@"\n' "$a18" "$AXE" >"$w/axe"
+  chmod +x "$w/axe"
+  note "axe2mix: switcher batches → 1.8.0 ($a18), the rest → 2.0.4"
 }
 
 DEVICES="$HOME/Library/Developer/CoreSimulator/Devices"
@@ -708,6 +722,7 @@ s_save() {
 # `axe type --stdin`). Prints run_sim's "status reason json".
 run_sim_ci() (
   PATH="$(dirname "$AXE"):$PATH"
+  [ ! -x "$WORK/axemix/axe" ] || PATH="$WORK/axemix:$PATH"
   export PATH
   # shellcheck disable=SC2034 # read by the sourced sim.sh
   STATE="$WORK"
