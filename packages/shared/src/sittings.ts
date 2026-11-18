@@ -8,6 +8,7 @@
 import { msToMin } from './dates';
 import { normalizeVerdict } from './leetcode';
 import { findOpenRollTask } from './rolls';
+import { isDevSlot } from './stage';
 import { isUlid } from './ulid';
 import type {
   BaseEntity,
@@ -41,9 +42,13 @@ export const SITTING_EVENTS_PER_CALL = 50;
 export const SITTING_CALL_BYTES = 256 * 1024;
 export const SITTING_MAX_EVENTS = 3000;
 export const SITTING_MAX_BYTES = 16 * 1024 * 1024;
-// Starts a day: well above real use (a handful) and the dev check's three a run across a day's lanes; a leaked
-// token's ceiling is this many visible junk reps a day.
+// Starts a day: well above real use (a handful); a leaked token's ceiling is this many visible junk reps a day.
+// The dev slots get 10×: a full dev check starts ~20–25 sittings on one test user, so a few runs spent prod's cap.
+// Any stage that isn't a dev slot — unset or unknown included — gets prod's.
 export const SITTING_STARTS_PER_DAY = 100;
+export const SITTING_STARTS_PER_DAY_DEV = 1000;
+export const sittingStartsPerDay = (stage: string | undefined) =>
+  isDevSlot(stage) ? SITTING_STARTS_PER_DAY_DEV : SITTING_STARTS_PER_DAY;
 // Events are refused this long after Start: a sitting left open forever stops taking writes.
 export const SITTING_INGEST_WINDOW_MS = 24 * 3600_000;
 // After its end a sitting still takes, this long, the events stamped before the end (the outbox's retries
@@ -76,7 +81,11 @@ export const SITTING_CAP_ERROR = 'This sitting is over its capture limit.';
 export const SITTING_START_CAP_ERROR = 'Too many sittings started today.';
 export const SITTING_EVENT_TIME_ERROR = 'An event’s time is off the sitting’s clock.';
 export const SITTING_START_TIME_ERROR = 'The Start’s time is off by more than a day.';
+// Every Start counts an attempt first, refused and resumed ones too, so the dev slots scale it with the Starts.
 export const LC_START_ATTEMPTS_PER_DAY = 400;
+export const LC_START_ATTEMPTS_PER_DAY_DEV = 4000;
+export const lcStartAttemptsPerDay = (stage: string | undefined) =>
+  isDevSlot(stage) ? LC_START_ATTEMPTS_PER_DAY_DEV : LC_START_ATTEMPTS_PER_DAY;
 export const LC_START_ATTEMPT_CAP_ERROR = 'Too many Start attempts today.';
 // A gate claim this young may be a Start still writing its head; older and not found, it died — let through.
 const CLAIM_IN_FLIGHT_MS = 2 * 60_000;
@@ -775,9 +784,13 @@ export const emptyGate = (day: string): GateFields => ({
 // resets a gate another call already moved on.
 const onDay = <G extends GateFields>(g: G, day: string): G =>
   day > g.day ? { ...g, day, attempts: 0, starts: 0 } : g;
-export function countStartAttempt<G extends GateFields>(g: G, day: string): G {
+export function countStartAttempt<G extends GateFields>(
+  g: G,
+  day: string,
+  cap = LC_START_ATTEMPTS_PER_DAY,
+): G {
   const d = onDay(g, day);
-  if (d.attempts >= LC_START_ATTEMPTS_PER_DAY) throw new Error(LC_START_ATTEMPT_CAP_ERROR);
+  if (d.attempts >= cap) throw new Error(LC_START_ATTEMPT_CAP_ERROR);
   return { ...d, attempts: d.attempts + 1 };
 }
 // The claim for a new sitting `self`. Refused while the gate holds another sitting that's open by `sittings`
@@ -790,6 +803,7 @@ export function claimStart<G extends GateFields>(
   sittings: readonly Pick<Sitting, 'id' | 'status' | 'endedAt'>[],
   ended: ReadonlySet<string>,
   now: number,
+  cap = SITTING_STARTS_PER_DAY,
 ): G | null {
   if (g.openSittingId === self) return null;
   const held = g.openSittingId;
@@ -801,7 +815,7 @@ export function claimStart<G extends GateFields>(
     if (open) throw new Error(SITTING_ACTIVE_ERROR);
   }
   const d = onDay(g, day);
-  if (d.starts >= SITTING_STARTS_PER_DAY) throw new Error(SITTING_START_CAP_ERROR);
+  if (d.starts >= cap) throw new Error(SITTING_START_CAP_ERROR);
   return { ...d, starts: d.starts + 1, openSittingId: self, openClaimedAt: now };
 }
 // `claimedBy`: release only a claim made no later than it — an idle close never frees a reopen's newer claim.

@@ -99,6 +99,8 @@ import {
   newestOfType,
   claimStart,
   countStartAttempt,
+  sittingStartsPerDay,
+  lcStartAttemptsPerDay,
   emptyGate,
   releaseStart,
   SITTING_INGEST_WINDOW_MS,
@@ -346,6 +348,9 @@ export interface BackendOptions {
   scopedTokens?: ScopedTokenStore; // scoped device tokens (capture.md): rows + their lookups
   pushRegistry?: PushRegistry; // the reminder poller's user list + heartbeat (outside the user partition)
   pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM); none → reminders unconfigured
+  // The LeetCode Start gate's daily caps; default by the STAGE env — prod's unless a dev slot (shared sittings.ts).
+  sittingStartsPerDay?: number;
+  lcStartAttemptsPerDay?: number;
 }
 
 // Non-attachment methods never touch it, so a missing presigner is only an error if an attachment method
@@ -482,6 +487,7 @@ export class BackendClient implements ApiClient {
   private readonly scopedTokens: ScopedTokenStore;
   private readonly push: PushService;
   private readonly idlePeek: boolean;
+  private readonly startCaps: { starts: number; attempts: number };
 
   constructor(
     private readonly repo: Repo,
@@ -490,6 +496,10 @@ export class BackendClient implements ApiClient {
     this.userId = opts.userId ?? 'local';
     this.now = opts.now ?? (() => Date.now());
     this.idlePeek = opts.idlePeek ?? false;
+    this.startCaps = {
+      starts: opts.sittingStartsPerDay ?? sittingStartsPerDay(process.env.STAGE),
+      attempts: opts.lcStartAttemptsPerDay ?? lcStartAttemptsPerDay(process.env.STAGE),
+    };
     this.ulid = createUlid(this.now);
     this.google = opts.google ?? noopGoogle();
     this.stateSecret = opts.stateSecret ?? 'dev-state-secret';
@@ -849,10 +859,17 @@ export class BackendClient implements ApiClient {
     const gateDay = dayKeyInZone(now, USER_TIME_ZONE, settings.dayStartHour);
     const gate = this.repo.lcStartShape();
     const fresh = () => ({ ...this.baseAt(now), id: 'lcstart', ...emptyGate(gateDay) });
-    await this.repo.casUpdate(gate, 'lcstart', (g) => countStartAttempt(g, gateDay), now, {
-      consistent: true,
-      create: () => countStartAttempt(fresh(), gateDay),
-    });
+    const { attempts } = this.startCaps;
+    await this.repo.casUpdate(
+      gate,
+      'lcstart',
+      (g) => countStartAttempt(g, gateDay, attempts),
+      now,
+      {
+        consistent: true,
+        create: () => countStartAttempt(fresh(), gateDay, attempts),
+      },
+    );
     const linked = settings.leetcodeRollId
       ? await this.repo.getRoll(settings.leetcodeRollId)
       : null;
@@ -886,7 +903,7 @@ export class BackendClient implements ApiClient {
     await this.repo.casUpdate(
       gate,
       'lcstart',
-      (g) => claimStart(g, gateDay, n.clientSittingId, sittings, ended, now),
+      (g) => claimStart(g, gateDay, n.clientSittingId, sittings, ended, now, this.startCaps.starts),
       now,
       { consistent: true },
     );

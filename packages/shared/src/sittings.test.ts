@@ -25,6 +25,8 @@ import {
   claimStart,
   reclaimStart,
   countStartAttempt,
+  sittingStartsPerDay,
+  lcStartAttemptsPerDay,
   idleCloseAt,
   idleEnd,
   idleClosedSitting,
@@ -520,6 +522,12 @@ describe('the Start gate', () => {
     expect(() => countStartAttempt(g, 'd1')).toThrow(LC_START_ATTEMPT_CAP_ERROR);
     expect(countStartAttempt(g, 'd2').attempts).toBe(1);
     expect(countStartAttempt(emptyGate('d2'), 'd1').day).toBe('d2'); // never rolls back
+    expect(LC_START_ATTEMPTS_PER_DAY).toBe(400);
+    const at = { ...emptyGate('d1'), attempts: 3999 };
+    expect(countStartAttempt(at, 'd1', 4000).attempts).toBe(4000);
+    expect(() => countStartAttempt({ ...at, attempts: 4000 }, 'd1', 4000)).toThrow(
+      LC_START_ATTEMPT_CAP_ERROR,
+    );
   });
   it('lets one sitting through; a parallel Start sees the fresh claim and is refused', () => {
     const g = claimStart(emptyGate('d'), 'd', 'A', [], new Set(), T)!;
@@ -544,6 +552,24 @@ describe('the Start gate', () => {
   it('caps Starts a day', () => {
     const g = { ...emptyGate('d'), starts: SITTING_STARTS_PER_DAY };
     expect(() => claimStart(g, 'd', 'X', [], new Set(), T)).toThrow(SITTING_START_CAP_ERROR);
+    expect(SITTING_STARTS_PER_DAY).toBe(100);
+  });
+  it('caps Starts at the cap it is given', () => {
+    const at = (starts: number) => ({ ...emptyGate('d'), starts });
+    expect(claimStart(at(999), 'd', 'X', [], new Set(), T, 1000)?.starts).toBe(1000);
+    expect(() => claimStart(at(1000), 'd', 'X', [], new Set(), T, 1000)).toThrow(
+      SITTING_START_CAP_ERROR,
+    );
+  });
+  it('gives the dev slots 10× the Starts and attempts, every other stage prod’s', () => {
+    for (const stage of ['dev', 'devb']) {
+      expect(sittingStartsPerDay(stage)).toBe(1000);
+      expect(lcStartAttemptsPerDay(stage)).toBe(4000);
+    }
+    for (const stage of [undefined, '', 'prod', 'Dev', 'dev ', 'garbage']) {
+      expect(sittingStartsPerDay(stage)).toBe(SITTING_STARTS_PER_DAY);
+      expect(lcStartAttemptsPerDay(stage)).toBe(LC_START_ATTEMPTS_PER_DAY);
+    }
   });
 });
 
