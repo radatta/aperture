@@ -286,6 +286,20 @@ describe('the derived files', () => {
         hm,
       ),
     ).toBe(`${s(NOW)} - 1? warn\nmerge ${s(NOW - 30 * MIN)} 19:30 Merge G2 now\n`);
+    // context: the count over 40, over 50, and the names at 50
+    const cx = {
+      at: NOW,
+      stale: false,
+      warn: [{ name: 'a', pct: 41 }],
+      bad: [
+        { name: 'b', pct: 77 },
+        { name: 'c', pct: 51 },
+      ],
+    };
+    expect(boardLine(board(), [], NOW, hm, null, cx).split('\n')[1]).toBe('ctx 3 2 b,c');
+    expect(boardLine(board(), [], NOW, hm, null, { ...cx, warn: [], bad: [] }).split('\n')[1]).toBe(
+      '',
+    );
     // the usage line rides last, one line whatever it was given
     expect(boardLine(board(), [], NOW, hm, { at: NOW - MIN, text: 'usage 41% ·\n0.8%/h' })).toBe(
       `${s(NOW)} ${s(NOW - 12 * MIN)} 0 dim\nusage ${s(NOW - MIN)} usage 41% · 0.8%/h\n`,

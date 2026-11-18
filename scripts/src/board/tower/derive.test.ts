@@ -115,6 +115,7 @@ function inputs(
     planNotes?: string[];
     mainLog?: Inputs['mainLog'];
     mainSync?: Inputs['mainSync'];
+    ctx?: Inputs['ctx'];
     sessionsByBranch?: Record<string, string>;
   } = {},
 ): Inputs {
@@ -176,6 +177,7 @@ function inputs(
     dayStart: Date.parse('2026-11-13T08:00:00Z'),
     mainLog: over.mainLog ?? [],
     mainSync: over.mainSync === undefined ? { at: NOW - MIN, ok: true, msg: '' } : over.mainSync,
+    ctx: over.ctx ?? null,
   };
 }
 const green = { [sha('e')]: [run(), run({ id: 2, name: 'Secret scan' })] };
@@ -669,6 +671,7 @@ describe('sources: every source with its age; failed is failed, never empty', ()
       'dev lock',
       'devb lock',
       'queue.json',
+      'context',
       'main sync',
       'gh PRs',
       'gh runs',
@@ -1418,5 +1421,36 @@ describe('tower-current: the main sync heartbeat', () => {
       derive(inputs({ mainSync: { at: NOW - 6 * MIN, ok: true, msg: '' } })).board.why,
     ).toMatch(/^main sync silent since /);
     expect(derive(inputs({ mainSync: null })).board.tone).toBe('dim');
+  });
+});
+
+describe('tower-current: context per session (F240)', () => {
+  const ctx = (at = NOW - MIN) => ({
+    at,
+    list: [
+      { name: 'auto-9', pct: 46.3 },
+      { name: 'lc', pct: 78.3 },
+      { name: 'quiet', pct: 12 },
+    ],
+  });
+  it("a lane row and a slot card carry their session's %, and the view counts ≥40 and ≥50", () => {
+    const v = derive(inputs({ ctx: ctx(), lanes: [file()], lock: lock('echo') }));
+    expect(v.slots[0]!.ctx).toBe(46.3);
+    expect(row(inputs({ ctx: ctx() }), { file: file() }).ctx).toBe(46.3);
+    expect(v.ctx).toMatchObject({
+      stale: false,
+      warn: [{ name: 'auto-9' }],
+      bad: [{ name: 'lc' }],
+    });
+  });
+  it('a stale ctx.json counts nothing and marks no row; SOURCES says so', () => {
+    const v = derive(inputs({ ctx: ctx(NOW - 6 * MIN), lanes: [file()] }));
+    expect(v.ctx).toMatchObject({ stale: true, warn: [], bad: [] });
+    expect(row(inputs({ ctx: ctx(NOW - 6 * MIN) }), { file: file() }).ctx).toBeNull();
+    expect(
+      sources(inputs({ ctx: ctx(NOW - 6 * MIN) })).find((r) => r.name === 'context')!.state,
+    ).toBe('stale');
+    expect(sources(inputs()).find((r) => r.name === 'context')!.state).toBe('missing');
+    expect(derive(inputs()).ctx).toBeNull();
   });
 });

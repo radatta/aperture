@@ -753,6 +753,15 @@ describe('statusline-board.sh', () => {
     );
     expect(run(`${t} - 6 bad\n`).out).toBe(' \x1b[31m· board ? · 6 stale\x1b[0m');
   });
+  it('context (F240): red with the names at 50 %, amber with a count at 40 %, before the board', () => {
+    const t = now();
+    expect(run(`${t} ${t - 60} 0 dim\nctx 4 1 lc-catalog\n`).out).toBe(
+      ' \x1b[31m· ctx ≥50 lc-catalog · 3 ≥40\x1b[0m \x1b[2m· board 1m\x1b[0m',
+    );
+    expect(run(`${t} ${t - 60} 0 dim\nctx 2 2 a,b\n`).out).toContain('· ctx ≥50 a, b\x1b[0m');
+    expect(run(`${t} ${t - 60} 0 dim\nctx 2 0 -\n`).out).toContain('\x1b[33m· ctx 2 ≥40\x1b[0m');
+    expect(run(`${t} ${t - 60} 0 dim\nctx x y z\n`).out).toBe(' \x1b[2m· board 1m\x1b[0m');
+  });
   it('the tower silent 3 min: red "tower down", nothing else it said', () => {
     const t = now();
     expect(run(`${t - 600} ${t - 700} 0 dim\nmerge ${t + 60} 19:40 x\n`).out).toBe(

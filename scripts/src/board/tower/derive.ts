@@ -17,6 +17,7 @@ import {
 } from './stale.ts';
 import { STEP_PHASES, type LaneFile, type LaneProblem, type Needs, type Range } from './lanes.ts';
 import type { Lock, TowerState } from './model.ts';
+import { CTX_STALE_MS, ctxOf, ctxView, type CtxFile, type CtxView } from './ctx.ts';
 import { mergedFromLog, mergedNumbers, type MainMerge } from './mergelog.ts';
 import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts';
 import type { Pr } from './prs.ts';
@@ -58,6 +59,7 @@ export type LaneRow = {
   // the lane file's step plan (TOWER.md → Lane files): each step's estimate and time spent so far, live
   steps: LaneStep[] | null;
   eta: { next: Range | null; pr: Range | null; source: string; late: boolean } | null;
+  ctx: number | null; // its session's context use, % (ctx.ts; amber ≥ 40, red ≥ 50), while ctx.json is fresh
 };
 export type LaneStep = {
   phase: string;
@@ -90,6 +92,7 @@ export type SlotCard = {
   asOf: number | null;
   failed: boolean;
   deploying: boolean; // dev with no live holder, a dispatch still running (a lock released mid-deploy): not free
+  ctx: number | null; // the holder session's context use, %
 };
 export type SourceRow = {
   name: string;
@@ -165,6 +168,7 @@ export type View = {
   sources: SourceRow[];
   problems: string[];
   board: Board; // queue.json's age and where it contradicts the derived facts (stale.ts)
+  ctx: CtxView | null; // sessions over 40 % and 50 % context (ctx.ts); null with no ctx.json
 };
 
 export type Inputs = {
@@ -187,6 +191,7 @@ export type Inputs = {
   dayStart: number; // where DONE TODAY begins: local midnight, reaching back 12 h before noon (web/main.ts dayStart)
   mainLog: MainMerge[]; // main's squash merges (mergelog.ts): merged truth past gh's newest 40
   mainSync: MainSync | null; // the main-sync loop's heartbeat (sync.sh); null = none written
+  ctx: CtxFile | null; // dispatch's ctx.json (ctx.ts); null = none
 };
 
 // Freshness thresholds, seconds (TOWER.md → Sources): past them a source shows amber with its age.
@@ -399,7 +404,9 @@ export function laneRow(c: Ctx, i: Inputs): LaneRow {
     fileAge: file ? Math.max(0, (i.now - file.updatedAt) / 1000) : null,
     quiet: false,
     ...laneSteps(file, i.now, pr),
+    ctx: null as number | null,
   };
+  base.ctx = ctxOf(i.ctx, base.session, i.now);
   const row = (
     state: State,
     label: string,
@@ -624,6 +631,7 @@ function orderRow(
     fileAge: null,
     quiet: false,
     phase: null,
+    ctx: ctxOf(i.ctx, i.sessionsByBranch[o.branch] ?? null, i.now),
   };
 }
 
@@ -827,8 +835,10 @@ export function derive(i: Inputs): View {
       asOf: lock?.asOf ?? null,
       failed: lock?.failed ?? false,
       deploying: slot === 'dev' && !live && !!unattributedDispatch(i),
+      ctx: null as number | null,
     };
   });
+  for (const c of slots) c.ctx = ctxOf(i.ctx, c.session, i.now);
 
   // WAITING lanes show in NEXT's dev order, not in NOW; finished ones (merged, deploying, deployed, failed) only in
   // DONE TODAY, whose deploy marks and the DEPLOY FAILED need come from the PRs, not from NOW
@@ -1065,6 +1075,7 @@ export function derive(i: Inputs): View {
       ...i.laneProblems.map((p) => `lanes/${p.file}: ${p.problem}`),
     ],
     board,
+    ctx: ctxView(i.ctx, i.now),
   };
 }
 
@@ -1133,6 +1144,23 @@ export function sources(i: Inputs): SourceRow[] {
             at: q.data!.updatedAt,
             detail: null,
           },
+  );
+  out.push(
+    !i.ctx
+      ? {
+          name: 'context',
+          state: 'missing',
+          at: null,
+          detail: 'no ctx.json (dispatch’s context-watch.sh)',
+        }
+      : i.now - i.ctx.at > CTX_STALE_MS
+        ? {
+            name: 'context',
+            state: 'stale',
+            at: i.ctx.at,
+            detail: 'counts nothing until it is fresh',
+          }
+        : { name: 'context', state: 'ok', at: i.ctx.at, detail: null },
   );
   const ms = i.mainSync;
   out.push(

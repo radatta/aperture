@@ -73,6 +73,8 @@ function stress(v) {
   // a red board: long items, a count gh can't vouch for (the chip reads "n? stale")
   v.board = { ...v.board, tone: 'bad', why: LONG('why'), unsure: `gh PRs ${LONG('unsure')}`,
     items: [...(v.board?.items ?? []), { kind: 'queue-state', what: LONG('board'), fix: LONG('fix'), branch: 'echo-branch', since: now - 3600000 }] };
+  // context (F240): several sessions over 50 % with long names
+  v.ctx = { at: now, stale: false, warn: [{ name: 'a-forty-character-session-name-for-ctx-x', pct: 44 }], bad: [1, 2, 3].map((k) => ({ name: `a-forty-character-session-name-for-ctx-${k}`, pct: 50 + k * 9 })) };
   if (v.sparks) v.sparks.mac = Array(58).fill(null).concat([30000, 31000]); // two points: no line to draw
   // F120: every power alert at once, and a slow container
   v.health.power = { known: true, line: 'battery 12% discharging (0:50 left) · Low Power Mode on · limit: CPU speed 80%, thermal warning 2', alerts: ['battery 12%', 'Low Power Mode', 'CPU speed 80%', 'thermal warning 2'], advice: '≤ 3 lanes (on battery under 30% or Low Power Mode)' };
@@ -89,6 +91,7 @@ function empty(v) {
   v.done = [];
   v.slipping = [];
   delete v.board; // a server older than the page: no board chip, no BOARD rows
+  delete v.ctx; // nor a context count
   return v;
 }
 
@@ -144,17 +147,24 @@ async function boardChecks(page, tag, variant, phone) {
     const b = document.querySelector('#board-chip');
     const s = document.querySelector('#sources-chip');
     const rows = [...document.querySelectorAll('#slipping .badge')].filter((e) => e.textContent === 'BOARD' && e.offsetParent !== null).length;
+    const cx = document.querySelector('#ctx-chip');
+    const ctxRow = [...document.querySelectorAll('#now .meta')].some((e) => /^ctx \d+%$/.test(e.textContent) && e.offsetParent !== null);
     // innerText: what shows, not a hidden span
-    return { board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows };
+    return { board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow };
   });
   const loud = /t-(warn|bad)/;
   if (variant === 'empty') {
     if (r.board || /stale/.test(r.sText)) fails.push(`${tag}: a board count with no board in the view`);
+    if (r.ctx || /ctx/.test(r.sText)) fails.push(`${tag}: a context count with no ctx in the view`);
     return;
   }
+  // context (F240): the fixtures have a session over 50 %, so it leads the phone chip and shows on the desktop
+  if (phone ? !/^\d+ ctx≥50/.test(r.sText) : !r.ctx || !/t-bad/.test(r.cCls)) fails.push(`${tag}: no context count (${phone ? r.sText : r.cCls})`);
+  if (!variant.startsWith('x') && !r.ctxRow) fails.push(`${tag}: no row shows its session's ctx %`);
   if (phone) {
     if (r.board) fails.push(`${tag}: the board chip shows on the phone (the header has no room)`);
-    if (!/stale/.test(r.sText) || !loud.test(r.sCls)) fails.push(`${tag}: sources chip lacks the board count (${r.sCls} "${r.sText}")`);
+    // the chip holds the first two of ctx≥50, behind, stale, ctx≥40, off: a session over 50 % may push stale out
+    if (!/stale|^\d+ ctx≥50/.test(r.sText) || !loud.test(r.sCls)) fails.push(`${tag}: sources chip lacks the board count (${r.sCls} "${r.sText}")`);
   } else if (!r.board || !loud.test(r.bCls) || !/^board .* stale$/.test(r.bText))
     fails.push(`${tag}: board chip missing or quiet (${r.bCls} "${r.bText}")`);
   if (variant === 'stress' && !r.rows) fails.push(`${tag}: no BOARD row in the opened SLIPPING`);

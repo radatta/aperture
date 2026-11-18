@@ -6,13 +6,14 @@
 //   --once            print one View as JSON and exit (no socket)
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { execFile, execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { REPO_SLUG } from '../../../identifiers.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../../../mac-root.ts';
 import { sessionNames } from '../../sessions.ts';
 import { behindCheck, type Behind } from '../behind.ts';
+import { parseCtx } from '../ctx.ts';
 import { derive, type Inputs, type View } from '../derive.ts';
 import { hhmm } from '../fmt.ts';
 import {
@@ -313,6 +314,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       dayStart: dayStart(now),
       mainLog: readMainLog(now),
       mainSync: readMainSync(paths.boardDir),
+      ctx: readCtx(paths.boardDir, fx ? now : null),
     };
     const v = derive(inputs);
     const sparks = {
@@ -340,6 +342,16 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
   return { poll, view, sample, clock, paths, version };
 }
 
+// dispatch's ctx.json; its mtime is its time (a fixture's is the fixed clock's)
+const readCtx = (dir: string, fixedAt: number | null) => {
+  try {
+    const f = join(dir, 'ctx.json');
+    return parseCtx(readFileSync(f, 'utf8'), fixedAt ?? statSync(f).mtimeMs);
+  } catch {
+    return null;
+  }
+};
+
 const readMainSync = (dir: string) => {
   try {
     return parseMainSync(readFileSync(join(dir, 'main-sync.json'), 'utf8'));
@@ -357,7 +369,7 @@ export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }
     renameSync(tmp, join(dir, name));
   };
   put('stale.json', JSON.stringify(staleFile(v.board, v.now)) + '\n');
-  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null));
+  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null, v.ctx));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).

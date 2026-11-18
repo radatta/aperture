@@ -112,6 +112,11 @@
       header button {
         white-space: nowrap;
       }
+      #ctx-chip {
+        max-width: 32ch;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
       header .spacer {
         flex: 1;
       }
@@ -965,6 +970,7 @@
       <h1><span class="dot c-dim" id="live-dot"></span>tower</h1>
       <span class="meta" id="meta">loading…</span>
       <span class="spacer"></span>
+      <span class="meta only-desk" id="ctx-chip" hidden></span>
       <span class="meta only-desk" id="usage-chip" hidden></span>
       <button id="board-chip" type="button" hidden>board</button>
       <button id="sources-chip" type="button">sources</button>

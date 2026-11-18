@@ -5,6 +5,7 @@
 import { refFiredAt, type Lane, type Merged, type QueueData } from './queue.ts';
 import type { LaneFile } from './lanes.ts';
 import type { PlanRow } from './plan.ts';
+import type { CtxView } from './ctx.ts';
 import type { Pr } from './prs.ts';
 
 export type StaleKind =
@@ -280,6 +281,7 @@ export function boardTone(
 //   <writtenEpoch> <boardEpoch|-> <count>[?] <tone>
 //   merge <atEpoch> <HH:MM> <what>    the next merge row not done (derived), due no more than 2 h ago; absent when none
 //   usage <atEpoch> <text>            `pnpm usage line`'s last good answer; absent when none
+//   ctx <n≥40> <n≥50> <names≥50,…>     sessions over the context lines (ctx.ts); absent when none is, or ctx.json is stale
 export const NEXT_MERGE_PAST_MS = 2 * 3600e3; // next-merge.sh's window
 export type UsageLine = { at: number; text: string };
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -289,6 +291,7 @@ export function boardLine(
   now: number,
   hhmm: (t: number) => string,
   usage: UsageLine | null = null,
+  ctx: CtxView | null = null,
 ): string {
   const sec = (t: number) => Math.floor(t / 1000);
   const head = `${sec(now)} ${b.updatedAt === null ? '-' : sec(b.updatedAt)} ${b.items.length}${b.unsure ? '?' : ''} ${b.tone}`;
@@ -302,6 +305,9 @@ export function boardLine(
     head,
     next ? `merge ${sec(next.at!)} ${hhmm(next.at!)} ${oneLine(next.what)}` : null,
     usage ? `usage ${sec(usage.at)} ${oneLine(usage.text)}` : null,
+    ctx && ctx.warn.length + ctx.bad.length
+      ? `ctx ${ctx.warn.length + ctx.bad.length} ${ctx.bad.length} ${ctx.bad.map((e) => e.name).join(',') || '-'}`
+      : null,
   ]
     .filter((l) => l !== null)
     .map((l) => `${l}\n`)
