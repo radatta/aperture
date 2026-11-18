@@ -168,6 +168,31 @@ importers; a Lambda entry-file change also runs the cdk stack tests:
 | Extension                | 25        | 62 s |
 | A shared contract change | 153       | 69 s |
 
+**Concurrent steps (gate-parallel, 2026-11-17).** Each diff was replayed through the sequential gate and the
+concurrent one on the same base (`496b934e`), serially, one run each, under `heavy.sh` on the shared container. The
+replay script is in the lane archive, `gate-parallel/replay/`. Typecheck and lint were warm in both variants.
+
+- **Peak.** For the concurrent gate, its outer run's whole tree. For the sequential gate, the max over its steps.
+- **The yardstick:** 147 green full `pnpm test` runs on 11-17/18. Their median (max) is:
+  - wall 191 s;
+  - 276 (284) threads and 4.6 (5.2) GB RSS in the process tree;
+  - +395 container pids, +3.8 GB container anon;
+  - 8.7 cores.
+
+| Diff                                       | Wall: sequential → concurrent | Concurrent peak: threads · RSS | Container: +pids · +anon · cores |
+| ------------------------------------------ | ----------------------------- | ------------------------------ | -------------------------------- |
+| coach-fixes (wide: 6 packages, via shared) | 285 s → 65 s                  | 287 · 4.0 GB                   | 254 · 3.1 GB · 7.6               |
+| lc-catalog (wide: 6 packages, via shared)  | 174 s → 63 s                  | 286 · 4.2 GB                   | 268 · 3.3 GB · 7.3               |
+| Narrow (app + scripts: PR 202, reverted)   | 62 s → 49 s                   | 104 · 3.4 GB                   | 105 · 2.4 GB · 6.1               |
+
+**Tuning.** A wide gate sits at the suite's thread ceiling and under its median on everything else. Two tunes got it
+there:
+
+- **With scripts beside app and extension** (an earlier tune), a wide gate peaked at 371–389 threads and up to 7.1 GB
+  RSS. Hence `SCRIPTS_COST`.
+- **The narrow budget** keeps a narrow gate near the sequential peak: it saves the typecheck and lint time, and runs
+  its packages one after another.
+
 **Speed knobs** (adopted only if ≥15% faster and stable, at equal strictness):
 
 - ESLint `--concurrency`: not adopted. Under ~1 concurrent suite, cold `auto` ran 15–34 s against 33–37 s off, and
