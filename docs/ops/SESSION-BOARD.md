@@ -139,6 +139,9 @@ take in those two UTC days and its wait (nothing for an older one). By hand, in 
 "devlock" and .action == "acquired") | {t, slot, branch, waitSec}' /workspace/localNotes/board/history/events-*.jsonl`.
 The older `lease: "dev"` rows are the retired board lease (_Leases_).
 
+**Gate-miss events** — `pnpm gate:ci` logs a failing CI test the local `gate:fast` plan skipped as `kind: "gate-miss"`,
+once per run (no `class`: the job-row readers skip it). Shape and meaning: `docs/ops/GATE.md` → _A miss_.
+
 **Barrier events** — every hold by the cap or the hard line is a `kind: "lease", lease: "heavy"` event, one
 envelope for all: `{t, action, pid, name, branch, class, label, cmd, reason: "cap"|"hard"|"lock", cap: {max, running,
 full}, holders: [{pid, name, class, label, startedAt}], predicted, thresholds, mix, loadTest, waitedSec?, interrupted?}`.
