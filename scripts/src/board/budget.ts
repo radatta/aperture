@@ -202,7 +202,9 @@ export function laneBudget(
 
 const lim = (x: number) => String(Math.round(x * 100) / 100); // the value `would` compares against: 3.46, not 3.5
 
-// The one status line (board.sh status, pnpm lanes status): what is committed now against each scaled limit.
+// The one status line (board.sh status, pnpm lanes status, the brief's BUDGET): what is committed now against each
+// scaled limit. The brief strips BUDGET_PREFIX, so it has one home.
+export const BUDGET_PREFIX = 'budget (log-only): ';
 export function budgetLine(
   b: Budget,
   now: { jobs: number | null; lanes: number | null; sessions: number | null },
@@ -213,7 +215,7 @@ export function budgetLine(
   if (now.lanes !== null) bits.push(`lanes ${lim(now.lanes)}/${lim(r2(b.laneUnits / pf.k))}`);
   if (now.sessions !== null) bits.push(`sessions ${now.sessions}/${b.sessionsMax}`);
   bits.push(`k ${lim(pf.k)} ${pf.why}`);
-  return `budget (log-only): ${bits.join(' · ')}`;
+  return `${BUDGET_PREFIX}${bits.join(' · ')}`;
 }
 
 // The committed job units right now (status): base + slots + light, no request.

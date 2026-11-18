@@ -392,9 +392,12 @@ export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }
 
 // The log-only budget's line for the brief, from main's limits.json (SESSION-BOARD.md → Budget); null on any error:
 // a budget read never costs the brief.
-function budgetLine(boardDir: string): string | null {
+export function briefBudget(
+  boardDir: string,
+  limitsPath = join(REPO, 'scripts/board/limits.json'),
+): string | null {
   try {
-    const limits = JSON.parse(readFileSync(join(REPO, 'scripts/board/limits.json'), 'utf8'));
+    const limits = JSON.parse(readFileSync(limitsPath, 'utf8'));
     return budgetNow(boardDir, limits, '/proc', Date.now())?.line ?? null;
   } catch {
     return null;
@@ -458,7 +461,7 @@ async function run(a: Args) {
         const v = t.view(false);
         try {
           // its own try: a failed board.line must not age the brief into TOWER DOWN
-          writeBrief(t.paths.boardDir, { ...v, budget: budgetLine(t.paths.boardDir) });
+          writeBrief(t.paths.boardDir, { ...v, budget: briefBudget(t.paths.boardDir) });
         } catch (e) {
           process.stderr.write(`tower-web: brief.txt: ${(e as Error).message}\n`);
         }

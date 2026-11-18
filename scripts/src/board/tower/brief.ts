@@ -2,6 +2,7 @@
 // `pnpm board brief` prints for the hub to paste verbatim when the maintainer asks for status — a script prints, no
 // model composes. Every heading is always there, in this order, with "none" or "unknown" written out. A new line is
 // one more entry in SECTIONS. Pure.
+import { BUDGET_PREFIX } from '../budget.ts';
 import { macLine } from '../machine.ts';
 import type { LaneRow, View } from './derive.ts';
 import { gib, hhmm as hhmmLocal } from './fmt.ts';
@@ -126,7 +127,7 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
   // the smart cap's units beside the live caps (SESSION-BOARD.md → Budget); log-only, so it says so
   (v) => [
     v.budget
-      ? `BUDGET ${one(v.budget.replace(/^budget \(log-only\): /, ''), 100)} (log-only)`
+      ? `BUDGET ${one(v.budget.startsWith(BUDGET_PREFIX) ? v.budget.slice(BUDGET_PREFIX.length) : v.budget, 100)} (log-only)`
       : 'BUDGET unknown',
   ],
   (v) => {

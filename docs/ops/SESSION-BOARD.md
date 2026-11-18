@@ -114,8 +114,8 @@ from heavy-free ticks; and summarises real jobs per class — load-test runs (`l
 guarded jobs and `edge.sh`'s instances) are left out, as they are from `staleness`.
 
 **Budget events** (`kind: "budget"`, `scope: "job" | "lane"`) — the log-only budget's view of each heavy.sh admission
-and each `lanes start`, beside what the live rules did: _Budget_. Every other reader skips them (they have no `peak`,
-and every reader filters by `kind`: `budget.test.ts` pins it).
+and each `lanes start`, beside what the live rules did: _Budget_. Every other reader skips them: each filters by
+`kind`, and `staleness` (which reads `class` and `peak`) finds no `peak` (`budget.test.ts` pins the numeric ones).
 
 **Dev-lock events** (`scripts/src/bot/lock-events.ts`) — the bot logs each dev-slot wait and hold as `kind: "devlock"`,
 `{v, t, name (the branch's board session, else null), branch, action, …}`, so a wait for a slot is measured, not read
@@ -753,7 +753,7 @@ of at most 8 bytes, and then only its first 4 bytes, under a 1 s `timeout` (the 
 as a 1–3 digit number; anything else waits a tick (a write caught mid-way), then reads `RAN <id> unreadable`, its
 content never printed. Markers a week old are deleted at start. A torn line, a bad sha or a non-numeric `pr` is
 dropped; a title or time loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`,
-`lease`), so a `merged` row passes them by.
+`lease`, `devlock`, `budget`), so a `merged` row passes them by.
 
 ## Script-shape rules (COI monitor)
 
