@@ -12,6 +12,21 @@ const check = (tree: Record<string, string>) =>
     return tree[p]!;
   });
 const files = (ps: string[]) => Object.fromEntries(ps.map((p) => [p, PLAIN]));
+// Runs `fn` with app's vitest projects swapped for `projects`.
+const withApp = <T>(projects: Project[], fn: () => T): T => {
+  const app = PACKAGES.find((p) => p.dir === 'app')!;
+  const saved = app.projects;
+  app.projects = projects;
+  try {
+    return fn();
+  } finally {
+    app.projects = saved;
+  }
+};
+const WIDEN = (dir: string) =>
+  new RegExp(
+    `widen the include in ${dir.replace('/', '\\/')}\\/vitest\\.config\\.\\* and PACKAGES`,
+  );
 
 describe('checkRegistry', () => {
   it('a test file in every package’s include passes, as do ALWAYS_RUN’s graph-blind scanners', () => {
@@ -34,22 +49,58 @@ describe('checkRegistry', () => {
   });
 
   it.each([
+    ['scripts/board/x.test.ts', /no vitest project in scripts includes it/, WIDEN('scripts')],
+    ['app/test/x.test.tsx', /no vitest project in app includes it/, WIDEN('app')],
+    ['app/pwa/x.test.tsx', /no vitest project in app includes it/, WIDEN('app')], // pwa takes .ts only
+    ['app/src/a.spec.ts', /no vitest project in app includes it/, WIDEN('app')],
+    ['lambdas/src/x.test.mjs', /no vitest project in lambdas includes it/, WIDEN('lambdas')],
     [
-      'scripts/board/x.test.ts',
-      /no vitest project in scripts includes it/,
-      /scripts\/vitest\.config/,
+      'packages/shared/x.test.ts',
+      /no vitest project in packages\/shared includes it/,
+      WIDEN('packages/shared'),
     ],
-    ['app/test/x.test.tsx', /no vitest project in app includes it/, /PACKAGES\[\]\.projects/],
-    ['app/pwa/x.test.tsx', /no vitest project in app/, /widen the include/], // pwa takes .ts only
-    ['app/src/a.spec.ts', /no vitest project in app/, /move or rename/],
-    ['lambdas/src/x.test.mjs', /no vitest project in lambdas/, /rename/],
-    ['tools/x.test.ts', /outside every vitest package/, /move it under a package/],
+    [
+      'tools/x.test.ts',
+      /outside every vitest package/,
+      /^move it under a package's include \(app, /,
+    ],
   ])('%s: never run, named with why and the fix', (file, why, fix) => {
     const ps = check(files([file]));
     expect(ps).toHaveLength(1);
     expect(ps[0]).toMatchObject({ kind: 'include', file });
     expect(ps[0]!.why).toMatch(why);
     expect(ps[0]!.fix).toMatch(fix);
+  });
+
+  it('a file two projects include is named with both, and the exclude fix', () => {
+    const two = [
+      { name: 'app', include: ['src/**/*.test.{ts,tsx}'] },
+      { name: 'isolated', include: ['src/auth/auth.test.tsx'] },
+    ];
+    const ps = withApp(two, () =>
+      check(files(['app/src/auth/auth.test.tsx', 'app/src/a.test.ts'])),
+    );
+    expect(ps).toEqual([
+      {
+        kind: 'include',
+        file: 'app/src/auth/auth.test.tsx',
+        why: 'included by 2 vitest projects in app (app, isolated), so it runs once in each',
+        fix: 'exclude it from all but one, in app/vitest.config.* and PACKAGES[].projects in scripts/src/gate/rules.ts',
+      },
+    ]);
+  });
+
+  it('a file vitest runs but plan.ts’s isTest doesn’t take is named: the gate would never name it', () => {
+    const ps = withApp([{ include: ['src/**/*.spec.ts'] }], () =>
+      check(files(['app/src/a.spec.ts'])),
+    );
+    expect(ps.map((p) => [p.kind, p.file, p.fix])).toEqual([
+      [
+        'include',
+        'app/src/a.spec.ts',
+        expect.stringMatching(/widen isTest in scripts\/src\/gate\/plan\.ts/),
+      ],
+    ]);
   });
 
   it('a file under node_modules or a snapshot is no test', () => {
@@ -134,20 +185,20 @@ describe('the globs', () => {
     expect(projectsFor(two, 'src/x.test.ts').map((p) => p.name)).toEqual(['b']);
   });
 
-  it('every real include uses only syntax the check reads (an extglob would be refused as a `glob` problem)', () => {
-    expect(check({}).filter((p) => p.kind === 'glob')).toEqual([]);
-    const app = PACKAGES.find((p) => p.dir === 'app')!;
-    const saved = app.projects;
-    app.projects = [{ include: ['src/**/*.test.?(c|m)ts'] }];
-    try {
-      expect(check({}).map((p) => [p.kind, p.why])).toEqual([
-        [
-          'glob',
-          expect.stringMatching(/^app: the glob src\/\*\*\/\*\.test\.\?\(c\|m\)ts uses syntax/),
-        ],
-      ]);
-    } finally {
-      app.projects = saved;
-    }
+  it.each([
+    'src/**/*.test.?(c|m)ts', // an extglob
+    'src/legacy/**', // `**` not followed by `/`: any depth to tinyglobby, one segment to `matches`
+    'src/{a}/*.test.ts', // a one-option brace: literal to picomatch
+    'src/{a,{b,c}}/*.test.ts', // nested braces
+  ])('a glob the check would read differently from vitest is refused: %s', (g) => {
+    expect(check({})).toEqual([]); // the real configs pass
+    const ps = withApp([{ include: ['src/**/*.test.ts'], exclude: [g] }], () => check({}));
+    expect(ps.map((p) => [p.kind, p.file, p.why])).toEqual([
+      [
+        'glob',
+        'scripts/src/gate/rules.ts',
+        `app: the glob ${g} uses syntax the registry check can't match`,
+      ],
+    ]);
   });
 });

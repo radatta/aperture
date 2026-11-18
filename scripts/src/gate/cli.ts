@@ -3,7 +3,7 @@
 // says so. The full suite runs on GitHub on every push (the Branch workflow), which gates the all-clear.
 // The steps run at once, each under scripts/board/heavy.sh (measured and logged), inside one outer heavy.sh slot for the
 // whole gate: a wide one counts as a full suite (docs/ops/GATE.md → What gate:fast runs).
-// First, the registry check (registry.ts, ~1 s): a test file the gate can't pick up fails here, before any step.
+// First, the registry check (registry.ts, ~1–2 s): a test file the gate can't pick up fails here, before any step.
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only.
 import { spawn } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -22,8 +22,8 @@ export const USAGE = `pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait
   --dry-run  print the plan; run nothing
   --wait     how long heavy.sh waits for a slot before giving up with 75 (default 90 s)
   Exit: 1 before any step when the registry check finds a test file the gate can't pick up (every mode, --dry-run
-  too); else the first failing step's code in the order printed (75 = heavy.sh's cap gave up); every step still
-  runs; 128+n when interrupted.`;
+  too); 2 for a bad argument, or a diff that widened past its slot; else the first failing step's code in the order
+  printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted.`;
 
 export interface Opts {
   full: boolean;
@@ -50,41 +50,66 @@ const fields = (s: string) => s.split('\0').filter(Boolean);
 
 // The branch's changes against the merge-base: committed + staged + unstaged in one diff (--no-renames: a move is a
 // delete and an add), plus untracked files. Every test file the planner may name, tracked or new.
-export function readDiff(run: Run, base: string): { changes: Change[]; testFiles: string[] } {
+// `cwd` is the repo root: `git ls-files` lists paths relative to its cwd, `git diff` to the root.
+export function readDiff(
+  run: Run,
+  base: string,
+  cwd?: string,
+): { changes: Change[]; testFiles: string[] } {
   const mb = run('git', ['merge-base', base, 'HEAD']);
   const diff = fields(run('git', ['diff', '--name-status', '--no-renames', '-z', mb]));
   const changes: Change[] = [];
   for (let i = 0; i + 1 < diff.length; i += 2)
     changes.push({ path: diff[i + 1]!, deleted: diff[i] === 'D' });
-  const untracked = fields(run('git', ['ls-files', '-z', '--others', '--exclude-standard']));
+  const untracked = fields(
+    run('git', ['ls-files', '-z', '--others', '--exclude-standard'], { cwd }),
+  );
   for (const path of untracked) changes.push({ path, deleted: false });
-  const testFiles = [...fields(run('git', ['ls-files', '-z'])), ...untracked].filter(isTest);
+  const testFiles = [...fields(run('git', ['ls-files', '-z'], { cwd })), ...untracked].filter(
+    isTest,
+  );
   return { changes, testFiles };
 }
 
-// Every tracked and untracked file still on disk (a deleted-but-staged path is listed, not readable).
-export const listFiles = (run: Run, root: string) =>
-  fields(run('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).filter((f) =>
-    existsSync(`${root}/${f}`),
-  );
+// Every tracked and untracked file still on disk (a deleted-but-staged path is listed, not readable), once (an
+// unmerged path is listed per stage).
+export const listFiles = (run: Run, root: string) => [
+  ...new Set(
+    fields(
+      run('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root }),
+    ).filter((f) => existsSync(`${root}/${f}`)),
+  ),
+];
 
-// The caller pass's registry check: problems → the message to print; null → clean, with a line for the plan. A
-// listing that fails skips the check, said aloud: the full suite on GitHub runs it too (rules.test.ts).
+// The caller pass's registry check: problems → the message to print; else a line for the plan. A check that can't
+// run (the listing fails or comes back empty, a file won't read) is skipped aloud, never passed: the full suite on
+// GitHub runs it too (rules.test.ts). A file gone since the listing has nothing to scan.
 export function registryCheck(
   run: Run,
   root: string,
   read: (abs: string) => string,
 ): { fail?: string; note: string } {
   const t0 = Date.now();
+  const skipped = (why: string) => ({
+    note: `  registry check skipped: ${why}; the Branch run's rules.test.ts still checks`,
+  });
+  const gone = (p: string) => {
+    try {
+      return read(`${root}/${p}`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw err;
+    }
+  };
   let files: string[];
+  let ps: ReturnType<typeof checkRegistry>;
   try {
     files = listFiles(run, root);
+    if (!files.length) return skipped('git listed no files');
+    ps = checkRegistry(files, gone);
   } catch (err) {
-    return {
-      note: `  registry check skipped: couldn't list files (${(err as Error).message.split('\n')[0]}); the Branch run's rules.test.ts still checks`,
-    };
+    return skipped(`couldn't read the tree (${(err as Error).message.split('\n')[0]})`);
   }
-  const ps = checkRegistry(files, (p) => read(`${root}/${p}`));
   const sec = ((Date.now() - t0) / 1000).toFixed(1);
   const tests = files.filter(isTest).length;
   if (!ps.length)
@@ -450,7 +475,7 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
   if (reg?.fail) return (out(reg.fail), 1);
   let diff: ReturnType<typeof readDiff>;
   try {
-    diff = readDiff(run, opts.base);
+    diff = readDiff(run, opts.base, root);
   } catch (err) {
     // A diff we can't read is no reason to skip tests: run them all.
     log(

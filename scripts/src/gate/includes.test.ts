@@ -2,16 +2,17 @@
 // find exactly the files, project for project, that the registry check's static globs select from the same tree. So
 // the ~1 s pre-check (registry.ts) can't drift from what the suite runs. Its rule runs it on any vitest config change.
 import { execFile, execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { promisify } from 'node:util';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { projectsFor, TEST_NAMED } from './registry.ts';
 import { PACKAGES } from './rules.ts';
 
 const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
-const files = execFileSync(
+// As the gate lists them: on disk (a deleted-but-indexed path is listed), once (an unmerged path is listed per stage).
+const listed = execFileSync(
   'git',
   ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
   {
@@ -20,7 +21,8 @@ const files = execFileSync(
   },
 )
   .split('\0')
-  .filter(Boolean);
+  .filter((f) => f && existsSync(join(ROOT, f)));
+const files = [...new Set(listed)];
 
 // The spawned vitest must not think it runs inside this one, nor inherit this run's worker tuning.
 const env = Object.fromEntries(
@@ -29,13 +31,14 @@ const env = Object.fromEntries(
   ),
 );
 const out = mkdtempSync(join(tmpdir(), 'gate-includes-'));
+afterAll(() => rmSync(out, { recursive: true, force: true }));
 
 const vitestList = async (dir: string) => {
   const json = join(out, `${dir.replace('/', '-')}.json`);
   await promisify(execFile)(
     join(ROOT, dir, 'node_modules/.bin/vitest'),
     ['list', '--filesOnly', `--json=${json}`],
-    { cwd: join(ROOT, dir), env },
+    { cwd: join(ROOT, dir), env, timeout: 60_000, killSignal: 'SIGKILL' }, // never a stray vitest past the test
   );
   const rows = JSON.parse(readFileSync(json, 'utf8')) as { file: string; projectName?: string }[];
   return rows.map((r) => `${r.projectName || '-'} ${relative(ROOT, r.file)}`).sort();

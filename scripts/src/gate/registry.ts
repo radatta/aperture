@@ -4,7 +4,7 @@
 // Each problem names the file, why, and the rules.ts list or config to edit (docs/ops/GATE.md → The rules).
 // Plain `node` (cli.ts imports it): erasable syntax, node: builtins only.
 import { FIXTURE_SUITE } from '../fixture-inputs.ts';
-import { matches, pkgOf } from './plan.ts';
+import { isTest, matches, pkgOf } from './plan.ts';
 import {
   ALWAYS_RUN,
   INPUT_RULES,
@@ -34,9 +34,10 @@ export const GATE_DIR = 'scripts/src/gate/';
 // Directories whose every test is graph-blind through a shared loader, named whole by a rule.
 export const DIR_CLAIMS = ['extension/test/'];
 
-// What `matches` can't do: braces (`{ts,tsx}`, no nesting) expand here; any other extglob syntax is refused, so an
-// include the check can't read fails loudly instead of matching nothing.
-const UNSUPPORTED = /[?[\]()!+@]|\{[^}]*\{/;
+// What `matches` can't do: braces (`{ts,tsx}`, no nesting) expand here. Any other syntax is refused, so a glob the
+// check would read differently from vitest fails loudly: extglobs, a `**` not followed by `/` (`matches` takes it as
+// one segment, tinyglobby as any depth), and a one-option brace (literal to picomatch, expanded here).
+const UNSUPPORTED = /[?[\]()!+@]|\{[^}]*\{|\*\*(?!\/)|\{[^,}]*\}/;
 export const braces = (g: string): string[] => {
   const m = /\{([^{}]*)\}/.exec(g);
   if (!m) return [g];
@@ -71,7 +72,7 @@ export function checkRegistry(files: string[], read: (path: string) => string): 
             kind: 'glob',
             file: 'scripts/src/gate/rules.ts',
             why: `${pkg.dir}${p.name ? ` (project ${p.name})` : ''}: the glob ${g} uses syntax the registry check can't match`,
-            fix: 'use `*`, `**/` and one level of `{a,b}` only, in the vitest config and PACKAGES[].projects alike',
+            fix: 'use `*`, `**/` and one level of `{a,b,…}` only, in the vitest config and PACKAGES[].projects alike',
           });
 
   // Every test-named file runs in exactly one vitest project: none, and the gate names a test vitest drops (a fast
@@ -96,7 +97,14 @@ export function checkRegistry(files: string[], read: (path: string) => string): 
         why: `no vitest project in ${pkg.dir} includes it (include: ${globs}), so it never runs`,
         fix: `move or rename it to match, or widen the include in ${pkg.dir}/vitest.config.* and PACKAGES[].projects in scripts/src/gate/rules.ts`,
       });
-    else if (hits.length > 1)
+    if (hits.length && !isTest(f))
+      out.push({
+        kind: 'include',
+        file: f,
+        why: 'vitest runs it, but plan.ts’s isTest doesn’t call it a test, so the gate never names it when it changes',
+        fix: 'rename it to .test.ts/.tsx, or widen isTest in scripts/src/gate/plan.ts with the include',
+      });
+    if (hits.length > 1)
       out.push({
         kind: 'include',
         file: f,
