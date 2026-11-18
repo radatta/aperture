@@ -15,8 +15,8 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore card hub" ;;
-    2) echo "restore card nohub" ;;
+    1) echo "restore card nohub,light" ;;
+    2) echo "restore card nohub,light" ;;
     *) echo "restore card nohub,light" ;;
   esac
 }
@@ -761,7 +761,7 @@ finish() {
 }
 T0=$(now_ms)
 # Who eats the runner's 3 vCPUs (Device Hub has CPU-runaway reports on 8 GB Macs: Apple forums 847485)
-( while sleep 20; do { date +%H:%M:%S; top -l 1 -n 6 -o cpu -stats command,cpu 2>/dev/null | tail -7; } >>"$OUT/cpu.log"; done ) &
+( while sleep 15; do { echo "== $(date +%H:%M:%S)"; top -l 2 -s 2 -n 8 -o cpu -stats command,cpu 2>/dev/null | awk '/^Load Avg/ {n++} n == 2' | grep -v -e '^Load Avg' -e '^CPU usage' -e '^Processes' -e '^SharedLibs' -e '^MemRegions' -e '^PhysMem' -e '^VM:' -e '^Networks' -e '^Disks' -e '^$' -e '^COMMAND'; } >>"$OUT/cpu.log"; done ) &
 CPU_PID=$!
 trap finish EXIT
 trap 'exit 143' TERM
