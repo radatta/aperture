@@ -89,7 +89,7 @@ export async function runCatalogImport(
       counts,
       costUsd,
     });
-    if (staged) await store.clearStage();
+    if (staged) await store.clearStage(now());
     recheckCatalogSoon();
     log(
       JSON.stringify({

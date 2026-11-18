@@ -13,6 +13,11 @@ import { noopInvoker } from '../finance/invoker';
 import { noopAnthropic } from '../anthropic/gateway';
 import type { AnthropicGateway } from '../anthropic/gateway';
 import { inlinePickInvoker } from '../coach/invoker';
+import { inlineCatalogInvoker } from '../catalog/invoker';
+import { runCatalogImport } from '../catalog/import';
+import { FIXTURE_SOURCE } from '../catalog/fixture';
+import { FakeCatalogSource } from '../catalog/source';
+import { CatalogStore } from '../catalog/store';
 import { runCoachPick } from '../coach/pick';
 import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
@@ -48,8 +53,22 @@ export function localDeps(auth: LocalAuth): { bff: BffDeps; mcp: McpDeps; doc: I
       e,
     ),
   );
+  // The full catalog's import runs the real job inline over the synthetic fixture source (never the network), with
+  // the model off: uploaded classes and tags only — the real source and Sonnet are dev's rows.
+  const catalogInvoker = inlineCatalogInvoker((e) =>
+    runCatalogImport(
+      {
+        store: new CatalogStore(doc, liveWrites(doc)),
+        source: new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE }),
+        anthropic: noopAnthropic(),
+        now: Date.now,
+      },
+      e,
+    ),
+  );
   const shared = {
     doc,
+    catalogInvoker,
     google: noopGoogle(),
     presigner: fakePresigner(),
     objects: noopObjectStore(),

@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handleCoachPick, parseCoachWorkerEvent } from './coachWorker';
+import {
+  handleCatalogImport,
+  handleCoachPick,
+  parseCatalogImportEvent,
+  parseCoachWorkerEvent,
+} from './coachWorker';
+import { FIXTURE_SOURCE } from './catalog/fixture';
+import { recheckCatalogSoon } from './catalog/loader';
+import { FakeCatalogSource } from './catalog/source';
+import { CatalogStore } from './catalog/store';
+import { liveWrites } from './ddb/writes';
 import { InMemoryDoc } from './ddb/DocClient';
 import { FakeAnthropic } from './anthropic/gateway';
 
@@ -50,5 +60,36 @@ describe('handleCoachPick', () => {
       handleCoachPick(new InMemoryDoc(), new FakeAnthropic(), { day: EVENT.day }),
     ).rejects.toThrow('userId');
     expect(log).not.toHaveBeenCalled();
+  });
+});
+
+describe('the catalog import on the worker', () => {
+  afterEach(() => recheckCatalogSoon());
+
+  it('refuses a malformed event before any work', () => {
+    expect(parseCatalogImportEvent({ kind: 'catalog-import', runId: 'r', limit: 3, x: 1 })).toEqual(
+      {
+        kind: 'catalog-import',
+        runId: 'r',
+        limit: 3,
+      },
+    );
+    expect(() => parseCatalogImportEvent({ kind: 'catalog-import' })).toThrow('runId');
+    expect(() => parseCatalogImportEvent({ kind: 'catalog-import', runId: 'r', limit: 0 })).toThrow(
+      'limit',
+    );
+  });
+
+  it('runs a claimed import over the table', async () => {
+    const doc = new InMemoryDoc();
+    await new CatalogStore(doc, liveWrites(doc)).claim('run-1', 1);
+    const meta = await handleCatalogImport(
+      doc,
+      new FakeAnthropic(),
+      new FakeCatalogSource({ ok: true, data: FIXTURE_SOURCE }),
+      { kind: 'catalog-import', runId: 'run-1' },
+      { now: () => 2 },
+    );
+    expect(meta).toMatchObject({ live: 'a', count: 14, job: null });
   });
 });

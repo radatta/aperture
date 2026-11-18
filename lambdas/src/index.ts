@@ -49,6 +49,8 @@ import { liveInvoker } from './finance/liveInvoker';
 import { noopPickInvoker } from './coach/invoker';
 import type { CoachPickInvoker } from './coach/invoker';
 import { livePickInvoker } from './coach/liveInvoker';
+import { liveCatalogInvoker, noopCatalogInvoker } from './catalog/invoker';
+import type { CatalogImportInvoker } from './catalog/invoker';
 import { createLiveAnthropic } from './anthropic/liveAnthropic';
 import { createPublicKeyReader } from './push/publicKey';
 import type { PublicKeyReader } from './push/publicKey';
@@ -92,6 +94,10 @@ const financeInvoker = process.env.FINANCE_SYNC_FN
 const coachPickInvoker = process.env.COACH_WORKER_FN
   ? livePickInvoker(process.env.COACH_WORKER_FN)
   : noopPickInvoker();
+// The full catalog's import runs on the same worker (catalog/import.ts); no worker → the import is refused.
+const catalogInvoker = process.env.COACH_WORKER_FN
+  ? liveCatalogInvoker(process.env.COACH_WORKER_FN)
+  : noopCatalogInvoker();
 
 // Quick add's parse (Claude API: raw fetch + the SSM key) — built once, inert until parseTask runs;
 // testMode swaps in noopAnthropic. No key on the stage → every parse says so and the line saves raw.
@@ -112,6 +118,7 @@ export interface BffDeps {
   plaid: PlaidGateway;
   financeInvoker: FinanceSyncInvoker;
   coachPickInvoker: CoachPickInvoker;
+  catalogInvoker: CatalogImportInvoker;
   anthropic: AnthropicGateway;
   pushPublicKey: PublicKeyReader;
 }
@@ -124,6 +131,7 @@ const live: BffDeps = {
   plaid,
   financeInvoker,
   coachPickInvoker,
+  catalogInvoker,
   anthropic,
   pushPublicKey,
 };
@@ -307,6 +315,7 @@ async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
         plaid: d.plaid,
         financeInvoker: d.financeInvoker,
         coachPickInvoker: d.coachPickInvoker,
+        catalogInvoker: d.catalogInvoker,
         anthropic: d.anthropic,
         pushPublicKey: d.pushPublicKey,
       },

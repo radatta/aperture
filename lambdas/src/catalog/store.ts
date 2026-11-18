@@ -1,5 +1,10 @@
 import { gunzipSync, gzipSync } from 'node:zlib';
-import type { CatalogImportState, LcClassifiedBy, LcPackedCatalog } from '@aperture/shared';
+import type {
+  CatalogImportState,
+  CatalogStatus,
+  LcClassifiedBy,
+  LcPackedCatalog,
+} from '@aperture/shared';
 import type { DocClient } from '../ddb/DocClient';
 import { ConditionFailedError } from '../ddb/DocClient';
 import { CATALOG_PK, catalogSk } from '../ddb/keys';
@@ -68,6 +73,24 @@ export function catalogState(
   return meta.by && meta.by.tags > 0 ? 'partial' : 'ready';
 }
 
+export function catalogStatus(
+  meta: CatalogMeta | null,
+  stage: CatalogStage | null,
+  now: number,
+): CatalogStatus {
+  return {
+    state: catalogState(meta, stage, now),
+    sha: meta?.live ? meta.sha : null,
+    count: meta?.live ? meta.count : 0,
+    premium: meta?.live ? meta.premium : 0,
+    by: meta?.live ? meta.by : null,
+    importedAt: meta?.importedAt ?? null,
+    staged: stage && stageHave(stage) < stage.of ? { have: stageHave(stage), of: stage.of } : null,
+    costUsd: meta?.costUsd ?? 0,
+    lastError: meta?.lastError ?? null,
+  };
+}
+
 export class CatalogStore {
   constructor(
     private readonly doc: DocClient,
@@ -78,41 +101,47 @@ export class CatalogStore {
   async meta(consistent = false): Promise<CatalogMeta | null> {
     return metaOf(await this.doc.get(CATALOG_PK, catalogSk.meta(), { consistent }));
   }
+  // An emptied stage (of 0) reads as none: the worker's role may put but never delete (cdk coach-worker).
   async stage(): Promise<CatalogStage | null> {
     const it = await this.doc.get(CATALOG_PK, catalogSk.stage(), { consistent: true });
-    return it
-      ? {
-          of: it.of as number,
-          parts: it.parts as Record<string, string>,
-          updatedAt: it.updatedAt as number,
-        }
-      : null;
+    if (!it || !it.of) return null;
+    return {
+      of: it.of as number,
+      parts: it.parts as Record<string, string>,
+      updatedAt: it.updatedAt as number,
+    };
   }
 
   // One part of a classification upload. A part 1, or a part whose `of` differs from the stage's, starts a new
   // upload. Conditional on the stage as read: a concurrent part retries once on the newer stage.
   async stagePart(part: number, of: number, text: string, now: number): Promise<CatalogStage> {
     for (let tries = 0; ; tries++) {
-      const cur = await this.stage();
+      const row = await this.doc.get(CATALOG_PK, catalogSk.stage(), { consistent: true });
+      const was = (row?.updatedAt as number | undefined) ?? null; // an emptied stage still has a row
+      const cur = row?.of ? (row as unknown as CatalogStage) : null;
       const fresh = !cur || part === 1 || cur.of !== of;
       const next: CatalogStage = {
         of,
         parts: { ...(fresh ? {} : cur.parts), [String(part)]: text },
-        updatedAt: Math.max(now, (cur?.updatedAt ?? 0) + 1),
+        updatedAt: Math.max(now, (was ?? 0) + 1),
       };
       try {
-        await this.writes.putIf(
-          { PK: CATALOG_PK, SK: catalogSk.stage(), ...next },
-          cur?.updatedAt ?? null,
-        );
+        await this.writes.putIf({ PK: CATALOG_PK, SK: catalogSk.stage(), ...next }, was);
         return next;
       } catch (err) {
         if (!(err instanceof ConditionFailedError) || tries) throw err;
       }
     }
   }
-  async clearStage(): Promise<void> {
-    await this.writes.delete(CATALOG_PK, catalogSk.stage());
+
+  async clearStage(now: number): Promise<void> {
+    await this.writes.put({
+      PK: CATALOG_PK,
+      SK: catalogSk.stage(),
+      of: 0,
+      parts: {},
+      updatedAt: now,
+    });
   }
 
   // Claims the import for `runId`: null (and nothing written) while another claim is younger than CLAIM_MS.

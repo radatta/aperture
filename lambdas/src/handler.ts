@@ -20,6 +20,9 @@ import { noopPlaid } from './plaid/gateway';
 import type { PlaidGateway } from './plaid/gateway';
 import { noopAnthropic } from './anthropic/gateway';
 import { noopPickInvoker } from './coach/invoker';
+import { noopCatalogInvoker } from './catalog/invoker';
+import type { CatalogImportInvoker } from './catalog/invoker';
+import { CatalogStore } from './catalog/store';
 import type { CoachPickInvoker } from './coach/invoker';
 import type { AnthropicGateway } from './anthropic/gateway';
 
@@ -43,6 +46,7 @@ export interface RpcDeps {
   plaid?: PlaidGateway; // live Plaid seam (index.ts); ignored in testMode
   financeInvoker?: FinanceSyncInvoker; // starts the sync Lambda; ignored in testMode
   coachPickInvoker?: CoachPickInvoker; // starts the coach worker's AI pick; ignored in testMode (no pick is due)
+  catalogInvoker?: CatalogImportInvoker; // starts the catalog import on the worker; ignored in testMode
   anthropic?: AnthropicGateway; // live Claude API seam (index.ts, mcp/index.ts); ignored in testMode
   pushPublicKey?: PublicKeyReader; // the stage's VAPID public key (SSM read, index.ts); ignored in testMode
 }
@@ -81,6 +85,10 @@ export async function handleRpc(
     placeTokens: new PlaceTokenStore(doc, writes), // the same writes: a smoke run mints nothing
     scopedTokens: new ScopedTokenStore(doc, writes), // likewise
     pushRegistry: new PushRegistry(doc, writes), // likewise: a smoke subscribe registers no one
+    catalog: new CatalogStore(doc, writes), // likewise: a smoke import stages and claims nothing
+    catalogInvoker: call.testMode
+      ? noopCatalogInvoker()
+      : (deps.catalogInvoker ?? noopCatalogInvoker()),
     pushPublicKey: call.testMode ? noPublicKey : (deps.pushPublicKey ?? noPublicKey),
   });
   const fn = (

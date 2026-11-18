@@ -20,6 +20,7 @@ import type {
   CreateCategoryInput,
   SittingReviewInput,
   SittingReviewPatch,
+  CatalogImportInput,
   CoachSlotInput,
   CoachAttemptInput,
   CoachVoidInput,
@@ -178,6 +179,12 @@ const REVIEW_PATCH_KEYS = keysOf<SittingReviewPatch>({ cause: true, help: true, 
 const SLOT_KEYS = keysOf<CoachSlotInput>({ slug: true, action: true, toSlug: true });
 const VOID_KEYS = keysOf<CoachVoidInput>({ day: true, slug: true, void: true });
 const NOTES_KEYS = keysOf<ClaudeNotesInput>({ sittingId: true, text: true });
+const CATALOG_IMPORT_KEYS = keysOf<CatalogImportInput>({
+  classes: true,
+  part: true,
+  parts: true,
+  limit: true,
+});
 const ATTEMPT_KEYS = keysOf<CoachAttemptInput>({
   slug: true,
   title: true,
@@ -470,6 +477,9 @@ export const RPC_ARGS = {
   setSittingClaudeNotes: [
     arr(owned<ClaudeNotesInput>('note', NOTES_KEYS, { object: true }), BATCH_MAX),
   ],
+  // The full catalog — normalizeCatalogImport checks every field with its own messages (a part's 64 k bound).
+  getCatalogStatus: [],
+  startCatalogImport: [owned('import', CATALOG_IMPORT_KEYS, { object: true })],
 
   // Flux — fluxSetError checks every field of a set and the row is rebuilt from them.
   recordFluxSet: [owned('flux set', undefined, { object: true })],

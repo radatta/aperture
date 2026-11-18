@@ -36,8 +36,9 @@ describe('CatalogStore', () => {
     expect(stageComplete(full)).toBe(true);
     expect(stageText(full)).toBe('a\nb');
     expect((await store.stagePart(2, 3, 'x', 4)).parts).toEqual({ '2': 'x' });
-    await store.clearStage();
+    await store.clearStage(5);
     expect(await store.stage()).toBeNull();
+    expect((await store.stagePart(2, 2, 'y', 6)).parts).toEqual({ '2': 'y' }); // after a clear
   });
 
   it('claims once while a claim is young, again once it lapses', async () => {

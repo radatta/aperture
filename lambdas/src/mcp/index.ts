@@ -23,6 +23,8 @@ import { createLiveAnthropic } from '../anthropic/liveAnthropic';
 import { noopPickInvoker } from '../coach/invoker';
 import type { CoachPickInvoker } from '../coach/invoker';
 import { livePickInvoker } from '../coach/liveInvoker';
+import { liveCatalogInvoker, noopCatalogInvoker } from '../catalog/invoker';
+import type { CatalogImportInvoker } from '../catalog/invoker';
 import { handleMcpMessage } from './protocol';
 import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
@@ -42,6 +44,10 @@ const anthropic = createLiveAnthropic({ stage: STAGE });
 const coachPickInvoker = process.env.COACH_WORKER_FN
   ? livePickInvoker(process.env.COACH_WORKER_FN)
   : noopPickInvoker();
+// import_catalog kicks the full catalog's import on the same worker (none → refused).
+const catalogInvoker = process.env.COACH_WORKER_FN
+  ? liveCatalogInvoker(process.env.COACH_WORKER_FN)
+  : noopCatalogInvoker();
 
 interface HttpEvent {
   requestContext?: { http?: { path?: string; method?: string } };
@@ -111,6 +117,7 @@ export interface McpDeps {
   objects: ObjectStore;
   anthropic: AnthropicGateway;
   coachPickInvoker: CoachPickInvoker;
+  catalogInvoker: CatalogImportInvoker;
   mcpVerifier: () => Verifier;
   upload: ToolContext['upload'];
 }
@@ -121,6 +128,7 @@ const live: McpDeps = {
   objects,
   anthropic,
   coachPickInvoker,
+  catalogInvoker,
   mcpVerifier: requireMcpVerifier,
   upload: uploadToPresigned,
 };
@@ -250,6 +258,7 @@ async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {
           financeInvoker: noopInvoker(),
           anthropic: d.anthropic,
           coachPickInvoker: d.coachPickInvoker,
+          catalogInvoker: d.catalogInvoker,
         },
       ),
     upload: d.upload,
