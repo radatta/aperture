@@ -723,6 +723,48 @@ describe('the main sync (sync.sh, board.sh sync)', () => {
   }, 40_000);
 });
 
+describe('statusline-board.sh', () => {
+  const run = (line: string | null, extra: NodeJS.ProcessEnv = {}) => {
+    const dir = join(tmp, 'sl');
+    mkdirSync(dir, { recursive: true });
+    if (line !== null) writeFileSync(join(dir, 'board.line'), line);
+    const r = spawnSync('bash', ['-u', join(boardDir, 'statusline-board.sh')], {
+      env: { ...env, APERTURE_BOARD_DIR: dir, ...extra },
+      encoding: 'utf8',
+    });
+    return { code: r.status, out: r.stdout, err: r.stderr };
+  };
+  const now = () => Math.floor(Date.now() / 1000);
+  it('a fresh board: dim, its age; usage first and the next merge last; "?" once the merge time passed', () => {
+    const t = now();
+    const r = run(
+      `${t} ${t - 720} 0 dim\nmerge ${t + 600} 19:40 Merge coach-fixes (PR 210)\nusage ${t - 60} usage 13% · 9.0%/h\n`,
+    );
+    expect(r).toMatchObject({ code: 0, err: '' });
+    expect(r.out).toBe(
+      ' \x1b[2m· usage 13% · 9.0%/h\x1b[0m \x1b[2m· board 12m\x1b[0m \x1b[2m· next ~19:40 coach-fixes (PR 210)\x1b[0m',
+    );
+    expect(run(`${t} ${t - 60} 0 dim\nmerge ${t - 60} 19:40 x\n`).out).toContain('next ?19:40 x');
+  });
+  it('stale items: amber or red with the count; an old usage line is left off', () => {
+    const t = now();
+    expect(run(`${t} ${t - 7200} 3? warn\nusage ${t - 3600} usage 1%\n`).out).toBe(
+      ' \x1b[33m· board 2h · 3? stale\x1b[0m',
+    );
+    expect(run(`${t} - 6 bad\n`).out).toBe(' \x1b[31m· board ? · 6 stale\x1b[0m');
+  });
+  it('the tower silent 3 min: red "tower down", nothing else it said', () => {
+    const t = now();
+    expect(run(`${t - 600} ${t - 700} 0 dim\nmerge ${t + 60} 19:40 x\n`).out).toBe(
+      ' \x1b[31m· tower down (board.line 10 min old)\x1b[0m',
+    );
+  });
+  it('missing, empty or garbled: silent, exit 0, nothing leaked under set -u', () => {
+    for (const l of [null, '', 'garbage here\n', '\n\nmerge x y\n'])
+      expect(run(l)).toMatchObject({ code: 0, out: '', err: '' });
+  });
+});
+
 describe('heavy.sh', () => {
   it('passes the exit code through and logs a job event, slot released', () => {
     const r = heavy(['--', 'bash', '-c', 'exit 3'], {

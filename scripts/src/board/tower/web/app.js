@@ -863,6 +863,13 @@ function boardChip(v) {
   chip.className = `only-desk ${bd.tone === 'bad' ? 't-bad' : bd.tone === 'warn' ? 't-warn' : 't-dim'}`;
   chip.title = bd.why ?? (bd.unsure ? `can't tell all: ${bd.unsure}` : '');
 }
+// `pnpm usage line` beside it (desktop): the weekly meter, burn rate and forecast; the server runs it every 5 min
+function usageChip(v) {
+  const u = $('#usage-chip');
+  const old = v.usage && v.now - v.usage.at > 15 * 60000;
+  u.textContent = v.usage ? `${v.usage.text}${old ? ` (as of ${hhmm(v.usage.at)})` : ''}` : '';
+  u.hidden = !v.usage;
+}
 const agoShort = (ms, now) => {
   const m = Math.max(0, Math.round((now - ms) / 60000));
   return m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
@@ -1147,6 +1154,7 @@ function render(v, fresh = true) {
   const y = window.scrollY;
   health(v);
   boardChip(v);
+  usageChip(v);
   for (const [id, draw] of [
     ['needs', needs],
     ['now', nowPanel],

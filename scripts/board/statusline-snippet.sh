@@ -6,3 +6,5 @@ if [ -r /workspace/localNotes/board/status.line ]; then
   [ -n "$_board" ] && printf ' \033[2m· %s\033[0m' "${_board#board: }"
   unset _board
 fi
+# The tower's derived board.line: usage, board freshness, the next merge (statusline-board.sh, docs/ops/TOWER.md).
+[ -r "${BASH_SOURCE[0]%/*}/statusline-board.sh" ] && . "${BASH_SOURCE[0]%/*}/statusline-board.sh"

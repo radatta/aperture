@@ -31,11 +31,12 @@ import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
 import { PrCache, ghFetch, type Fetch } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
-import { boardLine, parseMainSync, staleFile, SYNC_SILENT_MS } from '../stale.ts';
+import { boardLine, parseMainSync, staleFile, SYNC_SILENT_MS, type UsageLine } from '../stale.ts';
 import { createHandler, serve } from './server.ts';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../..');
 const TICK_MS = 5000;
+const USAGE_MS = 300000;
 const DEVLOCK_MS = 60000;
 
 // NEEDS YOU's command when the Mac stats agent is missing (tools/macstats/install.sh; TOWER.md → Mac stats).
@@ -248,8 +249,32 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     return list;
   };
 
+  // `pnpm usage line` (docs/ops/USAGE-METER.md) for the header and the status line: a subprocess every 5 min, never a
+  // transcript scan (--no-scan: the meter rows only), never on fixtures. A failed run keeps the last good line.
+  let usage: UsageLine | null = null;
+  let usageTried = -Infinity;
+  let usageBusy = false;
+  const pollUsage = (now: number) => {
+    if (fx || usageBusy || now - usageTried < USAGE_MS) return;
+    usageBusy = true;
+    usageTried = now;
+    execFile(
+      'node',
+      [join(REPO, 'scripts/src/usage/cli.ts'), 'line', '--no-scan'],
+      { timeout: 20000, maxBuffer: 1 << 16 },
+      (err, out) => {
+        usageBusy = false;
+        const text = String(out ?? '')
+          .split('\n')[0]!
+          .trim();
+        if (!err && text) usage = { at: clock(), text: text.slice(0, 120) };
+      },
+    );
+  };
+
   // GitHub, in the background: never awaited by a request, never two of one kind at once.
   async function poll(now: number) {
+    pollUsage(now);
     await Promise.all([prs?.poll(now), runs.poll(now)]);
     for (const p of prs?.list ?? []) {
       if (p.state !== 'OPEN' || !p.sha) continue;
@@ -258,9 +283,12 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     }
   }
 
-  function view(
-    history: boolean,
-  ): View & { history?: unknown; sparks: Record<string, (number | null)[]>; startedAt: number } {
+  function view(history: boolean): View & {
+    history?: unknown;
+    sparks: Record<string, (number | null)[]>;
+    startedAt: number;
+    usage: UsageLine | null;
+  } {
     const now = clock();
     const tower = source.refresh(now);
     const lanes = readLanes(paths.boardDir);
@@ -297,11 +325,12 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
         now,
       ),
     };
-    if (!history) return { ...v, sparks, startedAt };
+    if (!history) return { ...v, sparks, startedAt, usage };
     return {
       ...v,
       sparks,
       startedAt,
+      usage,
       history: {
         container: tower.points.map((p) => [p.t, p.anon, p.cpu]),
         mac: macHist.map((m) => [m.t, m.usedMiB, m.totalMiB]),
@@ -321,14 +350,14 @@ const readMainSync = (dir: string) => {
 
 // The derived files beside queue.json (stale.ts → board.line, stale.json): tmp + rename, so a reader never sees half.
 const DERIVED_MS = 30000;
-export function writeDerived(dir: string, v: View) {
+export function writeDerived(dir: string, v: View & { usage?: UsageLine | null }) {
   const put = (name: string, text: string) => {
     const tmp = join(dir, `.${name}.tmp.${process.pid}`);
     writeFileSync(tmp, text);
     renameSync(tmp, join(dir, name));
   };
   put('stale.json', JSON.stringify(staleFile(v.board, v.now)) + '\n');
-  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm));
+  put('board.line', boardLine(v.board, v.next.table, v.now, hhmm, v.usage ?? null));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).

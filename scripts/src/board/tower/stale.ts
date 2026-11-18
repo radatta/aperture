@@ -278,13 +278,17 @@ export function boardTone(
 // The tower's derived files in the board dir, written on its tick (web/main.ts), read by the status line
 // (statusline-board.sh: builtins only) and `pnpm board stale`. board.line:
 //   <writtenEpoch> <boardEpoch|-> <count>[?] <tone>
-//   <atEpoch> <HH:MM> <what>          the next merge row not done (derived), due no more than 2 h ago; absent when none
+//   merge <atEpoch> <HH:MM> <what>    the next merge row not done (derived), due no more than 2 h ago; absent when none
+//   usage <atEpoch> <text>            `pnpm usage line`'s last good answer; absent when none
 export const NEXT_MERGE_PAST_MS = 2 * 3600e3; // next-merge.sh's window
+export type UsageLine = { at: number; text: string };
+const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 export function boardLine(
   b: Board,
   table: PlanRow[],
   now: number,
   hhmm: (t: number) => string,
+  usage: UsageLine | null = null,
 ): string {
   const sec = (t: number) => Math.floor(t / 1000);
   const head = `${sec(now)} ${b.updatedAt === null ? '-' : sec(b.updatedAt)} ${b.items.length}${b.unsure ? '?' : ''} ${b.tone}`;
@@ -294,9 +298,14 @@ export function boardLine(
     )
     .sort((x, y) => x.at! - y.at!)[0];
   // one line each: the status line reads it with `read`, so no tab or newline may survive
-  return next
-    ? `${head}\n${sec(next.at!)} ${hhmm(next.at!)} ${next.what.replace(/\s+/g, ' ')}\n`
-    : `${head}\n`;
+  return [
+    head,
+    next ? `merge ${sec(next.at!)} ${hhmm(next.at!)} ${oneLine(next.what)}` : null,
+    usage ? `usage ${sec(usage.at)} ${oneLine(usage.text)}` : null,
+  ]
+    .filter((l) => l !== null)
+    .map((l) => `${l}\n`)
+    .join('');
 }
 
 export type StaleFile = { v: 1; t: number } & Board;

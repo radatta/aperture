@@ -285,7 +285,11 @@ describe('the derived files', () => {
         NOW,
         hm,
       ),
-    ).toBe(`${s(NOW)} - 1? warn\n${s(NOW - 30 * MIN)} 19:30 Merge G2 now\n`);
+    ).toBe(`${s(NOW)} - 1? warn\nmerge ${s(NOW - 30 * MIN)} 19:30 Merge G2 now\n`);
+    // the usage line rides last, one line whatever it was given
+    expect(boardLine(board(), [], NOW, hm, { at: NOW - MIN, text: 'usage 41% ·\n0.8%/h' })).toBe(
+      `${s(NOW)} ${s(NOW - 12 * MIN)} 0 dim\nusage ${s(NOW - MIN)} usage 41% · 0.8%/h\n`,
+    );
   });
   it('pnpm board stale: age, count, tone and each item with its fix; missing and unreadable say so', () => {
     const it = {
