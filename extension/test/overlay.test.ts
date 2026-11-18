@@ -27,12 +27,31 @@ import {
 } from './load';
 
 // Fake timers: every wait the scripts pay (retry ladders, intervals, Start's step timeouts, the debug flush) runs
-// on a fake clock, and `until`/`settle` advance it in 10 ms steps (load.ts's real-time poll). Each step first
-// gives one real turn (`io`), so the relay's webcrypto sign and verify, which finish on node's threadpool rather
-// than as microtasks, land as they would in real time; a "nothing within N ms" check is then as strong as before.
-// Budgets are fake milliseconds, so each `until` bound is exact.
+// on a fake clock, and `until`/`settle` advance it in 10 ms steps (load.ts's real-time poll). The relay's
+// webcrypto (importKey, sign, verify) finishes on node's threadpool, not as a microtask, so each step first waits
+// in real time (`io`) until none is in flight: the fake clock never runs ahead of a sign or verify, however slow
+// the threadpool (F242: under load it ran seconds ahead, and timers fired that real time never would). Crypto
+// takes no fake time, so a "nothing within N ms" check is as strong as before, and each `until` bound is exact.
 const realSetTimeout = setTimeout;
-const io = () => new Promise<void>((r) => realSetTimeout(r, 0));
+let cryptoInFlight = 0;
+{
+  const subtle = globalThis.crypto.subtle as unknown as Record<
+    string,
+    (...a: unknown[]) => Promise<unknown>
+  >;
+  for (const k of ['importKey', 'sign', 'verify']) {
+    const real = subtle[k]!.bind(subtle);
+    subtle[k] = (...a: unknown[]) => {
+      cryptoInFlight++;
+      return real(...a).finally(() => cryptoInFlight--);
+    };
+  }
+}
+const turn = () => new Promise<void>((r) => realSetTimeout(r, 0));
+const io = async () => {
+  do await turn();
+  while (cryptoInFlight > 0);
+};
 const STEP = 10;
 async function until<T>(fn: () => T | null | undefined | false, ms = 3000): Promise<T> {
   for (let t = 0; ; t += STEP) {
