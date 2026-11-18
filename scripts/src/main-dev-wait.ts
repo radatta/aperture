@@ -16,10 +16,10 @@
 // concurrency keeps one pending run and cancels the one it replaces before any job starts, so its commit rides here)
 // and the holder's taking of the lock (`takenAt`, as first read; a lock an older bot wrote has none, so its TTL as
 // first read is honoured instead). So a lane that took the slot after the merge gets its full turn, and a lock renewed
-// for hours holds the merges queued behind it an hour in all, not an hour a run. Never under FLOOR_MS from this wait's
-// start (MAX_ERRORS' tries at a failing read), never over CEILING_MS from it. A re-run, or a runs listing that fails,
-// counts CEILING_MS from this wait's start (the old rule), the second with a ::warning:: (CI-BOT.md → Dev deploys →
-// A merge waits for the lock).
+// or re-taken for hours holds each merge an hour from its merge, not each run an hour from its wait. Never under
+// FLOOR_MS from this wait's start (MAX_ERRORS' tries at a failing read), never over CEILING_MS from it. A re-run, a runs
+// listing that fails or a holder read that fails counts CEILING_MS from this wait's start (the old rule), the listing
+// with a ::warning:: (CI-BOT.md → Dev deploys → A merge waits for the lock).
 //
 // The holder JSON is anyone-with-contents-write's text printed to a public log: every line is stripped of control
 // characters, and the annotation and summary carry only the branch through a name charset and a 7-hex sha.
@@ -102,6 +102,14 @@ export const mainRuns = (api: Api) =>
   listRuns(api, 'deploy.yml', `per_page=${RUNS}&event=push&branch=main`);
 
 export type CapBy = 'start' | 'merge' | 'taken' | 'ttl' | 'floor';
+// Why a held lock was still there at the cap, for the gave-up warning.
+const why: Record<CapBy, string> = {
+  start: 'held past an hour of waiting',
+  merge: 'a turn held past an hour after the merge',
+  taken: 'a turn held past an hour after its taking',
+  ttl: "an older bot's lock (no taken time), held past its expiry as first read",
+  floor: "held past the merges' hour, renewed or re-taken",
+};
 // The wait's deadline, and what set it. No anchor (a re-run, a failed listing): CEILING_MS from the start. Else CEILING_MS
 // from the later of the oldest riding merge and the live holder's `takenAt` (a holder without one: its expiry as first
 // read), within [start + FLOOR_MS, start + CEILING_MS]. Times in the future (a runner clock behind GitHub's) count as
@@ -128,7 +136,7 @@ export function deadlineOf(
 }
 
 const utc = (ms: number) => `${new Date(ms).toISOString().slice(11, 16)} UTC`;
-const PROBE_MS = 60_000; // the whole --once probe: verify's job has 5 min for everything
+export const PROBE_MS = 30_000; // the whole --once probe (13 small reads): verify's 5 min also hold three deploy-base runs and checked-tree
 
 export interface Deps {
   argv: string[];
@@ -137,9 +145,10 @@ export interface Deps {
   clock: Clock;
   log: (line: string) => void;
   summary: (markdown: string) => void;
+  probeMs?: number; // PROBE_MS
 }
 
-export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: Deps) {
+export async function run({ argv, env, fetchImpl, clock, log: raw, summary, probeMs }: Deps) {
   const log = (s: string) => raw(clean(s));
   const [slotArg, flag] = argv;
   const slot = SLOTS.find((x) => x === slotArg);
@@ -166,7 +175,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
     );
     return 0;
   }
-  const budget = flag === '--once' ? AbortSignal.timeout(PROBE_MS) : null;
+  const budget = flag === '--once' ? AbortSignal.timeout(probeMs ?? PROBE_MS) : null;
   const api = makeApi(token, (url, init) => {
     const own = AbortSignal.timeout(REQUEST_MS);
     return fetchImpl(url, { ...init, signal: budget ? AbortSignal.any([own, budget]) : own });
@@ -175,7 +184,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
     try {
       const cur = await readLock(api, slot);
       log(
-        `${slot} lock probe: ${!cur ? 'free' : `${who(cur.holder)}${isExpired(cur.holder, clock.now()) ? ' (expired)' : ''}`} — read with the job token`,
+        `${slot} lock probe: ${!cur ? 'free' : `${who(cur.holder)}${isExpired(cur.holder, clock.now()) ? ' (expired)' : ''}, ${cur.holder?.takenAt && !Number.isNaN(Date.parse(cur.holder.takenAt)) ? `taken ${new Date(Date.parse(cur.holder.takenAt)).toISOString().slice(0, 16)}Z` : 'no taken time'}`} — read with the job token`,
       );
     } catch (err) {
       log(`::warning title=${slot} lock probe failed::${clean((err as Error).message)}`);
@@ -225,13 +234,16 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
       );
     }
   // The holder whose turn this is: read once before waiting (main-pending.ts keeps the slot from changing hands while
-  // this wait runs). A failed read leaves it unknown — the merge's cap and the floor still hold, waitForLock retries.
+  // this wait runs). A failed read can't tell a lane's fresh turn from a long one, so it counts from the start.
   let first: Holder | null = null;
   if (anchor)
     try {
       first = (await readLock(api, slot))?.holder ?? null;
-    } catch {
-      first = null;
+    } catch (err) {
+      log(
+        `${slot}: the holder read failed (${clean((err as Error).message)}) — the cap counts from this wait's start`,
+      );
+      anchor = null;
     }
   const { deadline, by } = deadlineOf(anchor?.at ?? null, start, first);
   const merge = anchor
@@ -253,7 +265,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
   const mins = () => Math.round((clock.now() - start) / 60_000);
   try {
     const r = await waitForLock(api, 'main', timed, {
-      maxMs: deadline - clock.now(), // > 0: the floor outlasts the runs listing (11 reads at most)
+      maxMs: deadline - clock.now(), // > 0: the floor outlasts the listing and the holder read (13 requests at most)
       slots: [slot],
       maxErrors: MAX_ERRORS,
       log,
@@ -261,7 +273,7 @@ export async function run({ argv, env, fetchImpl, clock, log: raw, summary }: De
     if (r.outcome === 'gave-up')
       loud(
         `${slot} deploy waited ${mins()} min and went anyway`,
-        `The ${slot} lock was still held by ${who(r.holder)} at this run's cap, ${cap} — a turn renewed past an hour: this deploy replaces that branch on ${slot} mid-test. Its devcheck's build-marker check will say so; re-run its \`pnpm bot deploy-dev\` after this run's ${slot} job.`,
+        `The ${slot} lock was still held by ${who(r.holder)} at this run's cap, ${cap} — ${why[by]}: this deploy replaces that branch on ${slot} mid-test. Its devcheck's build-marker check will say so; re-run its \`pnpm bot deploy-dev\` after this run's ${slot} job (it restores the branch, not the turn: the next queued merge waits only its own hour from its merge, or 15 min).`,
       );
     else if (!slept && r.outcome === 'free') log(`${slot} lock free — deploying`);
     else

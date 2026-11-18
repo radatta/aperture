@@ -109,6 +109,21 @@ describe('dev lock', () => {
     expect(h.expiresAt).toBe(new Date(NOW + TTL_MS).toISOString());
   });
 
+  it('re-acquiring its own live lock keeps when it was taken; a lapsed one is a fresh take', async () => {
+    const taken = new Date(NOW - 50 * 60_000).toISOString();
+    const g = github({ ...live('ci-bot'), takenAt: taken });
+    const h = await acquire(g.api, 'ci-bot', SHA, NOW);
+    expect(h.takenAt).toBe(taken); // a redeploy never restarts the turn main's wait counts from
+    expect(h.expiresAt).toBe(new Date(NOW + TTL_MS).toISOString());
+    expect(g.holder()).toEqual(h);
+    const lapsed = github({ ...expired('ci-bot'), takenAt: taken });
+    expect((await acquire(lapsed.api, 'ci-bot', SHA, NOW)).takenAt).toBe(
+      new Date(NOW).toISOString(),
+    );
+    const old = github(live('ci-bot')); // an older bot's lock: no takenAt to keep
+    expect((await acquire(old.api, 'ci-bot', SHA, NOW)).takenAt).toBe(new Date(NOW).toISOString());
+  });
+
   it('loses the race when someone else re-takes it between attempts', async () => {
     // Every create collides; after the delete, a third session wins the ref before our retry.
     let deletes = 0;

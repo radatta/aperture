@@ -197,7 +197,7 @@ describe('main-dev-wait', () => {
     expect(h.reads()).toBe(1);
     expect(h.clock.t).toBe(T0);
     expect(h.lines).toEqual([
-      'dev lock probe: lane-x @ aaaaaaa — read with the job token',
+      'dev lock probe: lane-x @ aaaaaaa, no taken time — read with the job token',
       'wait-cap probe: no main Deploy runs listed — read with the job token',
     ]);
   });
@@ -509,7 +509,7 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
       'dev: cap 20:55 UTC — 60 min from lane-y @ aaaaaaa taking the lock at 19:55 UTC (after the oldest merge riding here, ccccc96 at 19:29 UTC (4 superseded runs ride here))',
     );
     expect(h.lines.find((l) => l.startsWith('::warning '))).toContain(
-      'a turn renewed past an hour',
+      'a turn held past an hour after its taking',
     );
   });
 
@@ -524,7 +524,7 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
     );
   });
 
-  it('a failed holder read before the wait falls back to the merge cap, and the wait retries', async () => {
+  it("a failed holder read before the wait counts from the start: it can't tell a lane's fresh turn", async () => {
     const h = harness(
       (n, now) => (n === 0 ? { status: 502 } : holder('lane-y', now + 40 * MIN, T0 - 5 * MIN)),
       ['dev'],
@@ -532,7 +532,51 @@ describe('main-dev-wait: the cap counts from the oldest merge riding in the run'
       { runs: tonight() },
     );
     expect(await h.go()).toBe(0);
-    expect(h.clock.t).toBe(T0 - 31 * MIN + CEILING_MS);
+    expect(
+      h.lines.some(
+        (l) =>
+          l.startsWith('dev: the holder read failed (') &&
+          l.endsWith("the cap counts from this wait's start"),
+      ),
+    ).toBe(true);
+    expect(h.clock.t).toBe(START + CEILING_MS);
+  });
+
+  it('--once prints when the lock was taken, as the job token reads it back', async () => {
+    const h = harness(
+      (_n, now) => holder('lane-x', now + 40 * MIN, T0 - 12 * MIN),
+      ['dev', '--once'],
+      ENV,
+      { runs: tonight() },
+    );
+    expect(await h.go()).toBe(0);
+    expect(h.lines[0]).toBe(
+      'dev lock probe: lane-x @ aaaaaaa, taken 2026-11-17T19:48Z — read with the job token',
+    );
+  });
+
+  it('--once gives up on a hung API within its budget, and still exits 0', async () => {
+    const hung = ((_url: string | URL, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        const stop = () => reject(new Error('aborted: probe budget'));
+        if (init?.signal?.aborted)
+          stop(); // as fetch does with a signal already spent
+        else init?.signal?.addEventListener('abort', stop);
+      })) as typeof fetch;
+    const lines: string[] = [];
+    const code = await run({
+      argv: ['dev', '--once'],
+      env: ENV,
+      fetchImpl: hung,
+      clock: fakeClock(T0),
+      log: (l) => lines.push(l),
+      summary: () => undefined,
+      probeMs: 50,
+    });
+    expect(code).toBe(0);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^::warning title=dev lock probe failed::/);
+    expect(lines[1]).toMatch(/^::warning title=wait-cap probe failed::/);
   });
 
   it("falls back, with a warning, when a superseded run's jobs read fails mid-walk", async () => {
