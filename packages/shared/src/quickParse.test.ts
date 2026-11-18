@@ -894,3 +894,33 @@ describe('spokenFallbackDue (a spoken line saved without the model)', () => {
     expect(spokenFallbackDue('call mum', c)).toBeNull();
   });
 });
+
+describe('validateParsedTask — notes on a short line (F232)', () => {
+  const now = Date.UTC(2026, 10, 18, 0, 41); // Tue 2026-11-17, 16:41 in LA
+  const run = (line: string, over: Record<string, unknown>) =>
+    validateParsedTask(
+      fields({ title: 'call the dentist', dueDay: '2026-11-18', dueTime: '17:00', ...over }),
+      { ...ctx, categories: [], today: '2026-11-17', now, line },
+    )!.input;
+
+  it("the line's own words the model moved to notes go back into the title", () => {
+    expect(
+      run('devcheck aaebaafull call the dentist typed tomorrow at 5 pm', {
+        notes: 'devcheck aaebaafull typed',
+      }),
+    ).toEqual({
+      title: 'devcheck aaebaafull call the dentist typed',
+      dueDay: '2026-11-18',
+      dueTime: '17:00',
+    });
+  });
+
+  it('notes with a word the line never had, or that would overflow the title, stand', () => {
+    expect(
+      run('call the dentist typed tomorrow at 5 pm', { notes: 'bring the insurance card' }),
+    ).toMatchObject({ title: 'call the dentist', notes: 'bring the insurance card' });
+    const long = `call the dentist ${'about the crown and the bridge and the cleaning '.repeat(3)}tomorrow at 5 pm`;
+    const rest = long.slice('call the dentist '.length, long.indexOf(' tomorrow'));
+    expect(run(long, { notes: rest })).toMatchObject({ title: 'call the dentist', notes: rest });
+  });
+});

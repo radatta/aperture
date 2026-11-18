@@ -30,6 +30,11 @@ const verbatim = (m: string): Sample[] => [
   { line: 'book the vet note at 11 am', title: 'book the vet note' },
   { line: 'ping the plumber asap at 4 pm', title: 'ping the plumber asap' },
   { line: 'renew passport online at 9 am', title: 'renew passport online' },
+  // F232 (dev, 2026-11-18): the model put the marker and "typed" in notes; they go back.
+  {
+    line: `devcheck ${m} call the dentist typed tomorrow at 5 pm`,
+    title: `devcheck ${m} call the dentist typed`,
+  },
 ];
 const dueOut: Sample[] = [
   {
@@ -67,6 +72,13 @@ const dueOut: Sample[] = [
 // Through the capture route — spoken (the Shortcut's body: the lead-in, the said time and the day go) and typed
 // (Raycast's) — every other word stays. Real tasks, so each carries the run's marker.
 const captured = (m: string): Sample[] => [
+  // F232 (dev, 2026-11-18): a marker prefix and a trailing word beside "tomorrow at <clock>", typed — the model put
+  // both in notes and titled it "call the dentist".
+  {
+    line: `devcheck ${m} call the dentist typed tomorrow at 5 pm`,
+    title: `devcheck ${m} call the dentist typed`,
+    typed: true,
+  },
   {
     line: `remind me to devcheck ${m} call the bank typed at 5 PM`,
     title: `devcheck ${m} call the bank typed`,

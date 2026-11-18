@@ -323,8 +323,34 @@ export function validateParsedTask(
   if (line !== undefined) {
     const meta = titleMeta(line, input, p.dueDay, ctx, categoryLabel, spoken);
     if (meta) input.title = keepTitleWords(line, input.title, meta);
+    else if (input.notes)
+      titleBackFromNotes(line, input, (i) =>
+        titleMeta(line, i, p.dueDay, ctx, categoryLabel, spoken),
+      );
   }
   return { input, categoryLabel, dropped };
+}
+
+const wordsOf = (t: string) => t.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+// Notes are for a line too long for its title. On a short one the model sometimes moves words it read as noise
+// there instead ("devcheck <nonce> call the dentist typed tomorrow at 5 pm" → "call the dentist", notes
+// "devcheck <nonce> typed" — dev, 2026-11-18, F232): when every notes word is the line's own and the title with them
+// put back still fits, they go back, in place, and the notes go. Otherwise the notes stand, words and all.
+function titleBackFromNotes(
+  line: string,
+  input: CreateTaskInput,
+  metaFor: (input: CreateTaskInput) => TitleMeta | null,
+): void {
+  const lineWords = new Set(wordsOf(line));
+  const noteWords = wordsOf(input.notes!);
+  if (!noteWords.length || !noteWords.every((w) => lineWords.has(w))) return;
+  const meta = metaFor({ ...input, notes: undefined });
+  if (!meta) return;
+  const title = keepTitleWords(line, input.title, meta);
+  const titleWords = new Set(wordsOf(title));
+  if (title.length > PARSE_TITLE_MAX || !noteWords.every((w) => titleWords.has(w))) return;
+  input.title = title;
+  delete input.notes;
 }
 
 // A word the parse used is often led by one that goes with it: "before 3pm", "due by fri", "the 20th", "~30m",
