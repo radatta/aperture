@@ -261,6 +261,11 @@ describe('conflicts (TOWER.md → Conflicts)', () => {
       oldMin: null,
     });
     expect(lane('india-branch')!.conflicts).toBeNull();
+    // the dev slot's holder carries its lane's conflicts; a free or unknown slot none
+    const dev = v.slots.find((x) => x.slot === 'dev')!;
+    expect(dev.branch).toBe('bravo-branch');
+    expect(dev.conflicts).toEqual(lane('bravo-branch')!.conflicts);
+    expect(v.slots.find((x) => x.slot === 'devb')!.conflicts).toBeNull();
     expect(v.needs.some((n) => /✗|conflict/.test(n.what))).toBe(false);
   });
 });

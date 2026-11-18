@@ -400,6 +400,12 @@ function nowPanel(v) {
       const who = el('div', 'who', `${s.branch}${s.session ? ` · ${s.session}` : ''}`);
       if (s.ctx !== null && s.ctx !== undefined) who.append(' ', ctxMeta(s.ctx));
       c.append(who);
+      // its own line: the who line is cut with an ellipsis on the desktop, and the chip must show whole
+      if (s.conflicts) {
+        const line = el('div', 'what cf-line');
+        line.append(cfMeta(s.conflicts));
+        c.append(line);
+      }
       const what = el(
         'div',
         'what',
@@ -419,6 +425,7 @@ function nowPanel(v) {
     if (busy && s.detail && short(s.detail, 40) !== s.detail)
       more.append(el('div', null, s.detail));
     if (s.why) more.append(el('div', null, s.why));
+    if (busy) for (const m of cfMore(s.conflicts)) more.append(el('div', null, m));
     if (s.failed && s.state !== 'unknown')
       more.append(el('div', null, 'the last refresh failed; this read stands'));
     if (more.childNodes.length) c.append(more);

@@ -337,14 +337,16 @@ marked, amber, as a warning only: it never changes the lane's state, its tone or
 red.
 
 - **Terminal:** the SESSIONS row's branch ends `✗main` (against main) and `✗N` (against N other lanes); the branch
-  is cut first, and a narrow panel shows a bare `✗`.
-- **Page:** the NOW row's first meta is `✗ main, <lane>` (two names, then `+n`), each target's files in its tooltip
-  and, for phones, in the row's details (`conflicts with main: …`). It wraps on a phone rather than overflow.
+  is cut first, and the mark becomes a bare `✗` when the full one would leave the branch under 4 columns.
+- **Page:** a lane's chip, `✗ main, <lane>` (two names, then `+n`), is the first meta of its row wherever a lane row
+  shows (NOW, and NEXT's merge queue and landing order) and follows the holder on a dev slot card. Each target's files
+  are in its tooltip and, for phones, in the details (`conflicts with main: …`). It wraps on a phone rather than
+  overflow.
 - **Old:** from 10 min (the file's own `t`; `board.sh` uses the same line) the mark dims and the first detail line
   adds `(N min old: is the sampler running?)`. Nothing is hidden: an old conflict is still likely real.
-- **No file,** one written before the check (no `conflicts` list), or one that isn't JSON shows nothing; an unreadable
-  rewrite keeps the last list. The fixture board's `overlap.json` puts bravo-branch against main and charlie-branch, and
-  echo-branch (a NOW row) against main.
+- **No file,** or one written before the check (no `conflicts` list), shows nothing; one that isn't JSON (a torn
+  read) keeps the last list, and an entry with no files is dropped. The fixture board's `overlap.json` puts
+  bravo-branch (the dev slot's holder) against main and charlie-branch, and echo-branch (a NOW row) against main.
 
 ### Main sync
 

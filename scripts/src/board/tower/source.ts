@@ -123,7 +123,8 @@ export function parseConflicts(text: string): Conflicts | null | undefined {
   const str = (x: unknown): x is string => typeof x === 'string';
   const list = conflicts.flatMap((c: unknown) => {
     const { a, b, files } = (c ?? {}) as { a?: unknown; b?: unknown; files?: unknown };
-    if (!str(a) || !str(b) || !Array.isArray(files) || !files.every(str)) return [];
+    if (!str(a) || !str(b) || !Array.isArray(files) || !files.length || !files.every(str))
+      return []; // a conflict names its files: an empty list would mark a lane with nothing to show
     return [{ a: clean(a), b: clean(b), files: files.map(clean) }];
   });
   const at = str(t) ? Date.parse(t) : NaN;

@@ -94,6 +94,7 @@ export type SlotCard = {
   failed: boolean;
   deploying: boolean; // dev with no live holder, a dispatch still running (a lock released mid-deploy): not free
   ctx: number | null; // the holder session's context use, %
+  conflicts: LaneConflicts | null; // the holder branch's, as a lane row's (TOWER.md → Conflicts)
 };
 export type SourceRow = {
   name: string;
@@ -634,6 +635,7 @@ function orderRow(
     quiet: false,
     phase: null,
     ctx: ctxOf(i.ctx, i.sessionsByBranch[o.branch] ?? null, i.now),
+    conflicts: conflictsOf(i.tower.conflicts, o.branch, i.now),
   };
 }
 
@@ -845,6 +847,7 @@ export function derive(i: Inputs): View {
       failed: lock?.failed ?? false,
       deploying: slot === 'dev' && !live && !!unattributedDispatch(i),
       ctx: null as number | null,
+      conflicts: conflictsOf(i.tower.conflicts, live ? lock.branch : null, i.now),
     };
   });
   for (const c of slots) c.ctx = ctxOf(i.ctx, c.session, i.now);

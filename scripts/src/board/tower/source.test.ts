@@ -208,6 +208,7 @@ describe('parseConflicts (overlap.json)', () => {
             { a: 'x', b: 'main' },
             { a: 'x', b: 2, files: [] },
             { a: 'x', b: 'y', files: ['ok.ts', 3] },
+            { a: 'x', b: 'main', files: [] }, // a conflict with no files marks nothing
             { a: 'x\u001b[31m', b: 'y\tz', files: ['f\u0007.ts'] },
           ],
         }),

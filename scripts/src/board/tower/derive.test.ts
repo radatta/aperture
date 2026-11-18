@@ -1566,4 +1566,15 @@ describe('conflict-tools: merge-tree conflicts on a lane (TOWER.md → Conflicts
     expect(vb.active[0]!.conflicts!.lanes.map((x) => x.branch)).toEqual(['alpha', 'zulu']);
     expect({ ...vb.active[0]!, conflicts: null }).toEqual(va.active[0]);
   });
+  it('a dev slot card carries its live holder’s, and a NOT STARTED order row its own', () => {
+    const v = derive(inputs({ conflicts: cf(), lock: lock('echo') }));
+    expect(v.slots[0]!.conflicts!.main).toEqual(['docs/x.md']);
+    expect(v.slots[1]!.conflicts).toBeNull();
+    const o = derive(
+      inputs({ conflicts: cf(), mergeOrder: [{ branch: 'kilo', pr: null, note: null }] }),
+    ).next.order;
+    expect(o.map((x) => [x.row.branch, x.row.label, x.row.conflicts?.main])).toEqual([
+      ['kilo', 'NOT STARTED', ['k.ts']],
+    ]);
+  });
 });
