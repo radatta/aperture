@@ -46,7 +46,7 @@ It refuses, changing nothing, on any of these:
   `pnpm board sync-main`) held the main-checkout lock past its 120 s wait (below)
 
 **The pace gate.** Before the main-checkout lock, start reads `<board>/pace.json`, which the hub's pace watcher
-(`pace-watch.sh` in the board dir, untracked) rewrites every minute, the hub's `<board>/pace-control.json`, and
+(`scripts/board/pace-watch.sh`, `docs/ops/SESSION-BOARD.md` → _Watchers_) rewrites every minute, the hub's `<board>/pace-control.json`, and
 `<board>/lane-last-start.json`. It starts only when all of these hold, else it refuses with exit 75 and one line naming
 each reason:
 
@@ -61,9 +61,9 @@ each reason:
 - the file is fresh: `heartbeat` at most 180 s old (and at most 60 s ahead)
 - the last start was at least 120 s ago (a junk or future stamp is ignored, so spacing never blocks for good)
 
-The limits are `scripts/board/limits.json` → `pace`, each falling back to the default above. The CPU PSI limit matches
-the watcher's own CPU trip (40, lowered from 60 on 2026-11-17); change both together until the watcher reads this
-block (F239). A missing, stale or unreadable `pace.json` **fails closed**: a dead watcher is the silent failure the
+The limits are `scripts/board/limits.json` → `pace`, each falling back to the default above. The watcher reads the
+same `psiCpuBelow`, `psiMemFullMax`, `anonMiBBelow` and `minSamples` for its trip, recovery and floor, so the gate and
+the trip move together; its own trip lines (cores 8.5 against the gate's 7.5) are `watchers.pace`. A missing, stale or unreadable `pace.json` **fails closed**: a dead watcher is the silent failure the
 gate exists for, and `--over-pace` always goes past it, so the hub is never stranded; the line names the watcher to
 restart. The board dir moves with `APERTURE_BOARD_DIR`, and no watcher writes anywhere else, so a start against
 another board dir needs `--over-pace`.

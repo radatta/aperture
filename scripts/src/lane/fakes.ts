@@ -198,7 +198,7 @@ export const macStats = (now: number, power: object = {}) =>
     },
   });
 
-// pace.json as the hub's watcher writes it (pace-watch.sh), calm and fresh at `now`; `over` replaces top-level fields.
+// pace.json as the hub's watcher writes it (scripts/board/pace-watch.sh), calm and fresh at `now`; `over` replaces top-level fields.
 export const pace = (now: number, over: object = {}) =>
   JSON.stringify({
     state: 'calm',

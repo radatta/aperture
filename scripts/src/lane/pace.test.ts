@@ -87,7 +87,7 @@ describe('paceReasons', () => {
     expect(paceReasons(null, null, null, NOW, PACE_DEFAULTS, '/b')).toEqual([
       {
         key: 'missing',
-        text: 'no pace.json in /b: the watcher is not running, restart /b/pace-watch.sh',
+        text: 'no pace.json in /b: the watcher is not running, restart scripts/board/pace-watch.sh (docs/ops/HUB.md → Watchers)',
       },
     ]);
   });

@@ -1,6 +1,7 @@
-// The pace gate `lanes start` runs before it makes anything: the hub's pace watcher (pace-watch.sh in the board dir)
-// writes pace.json each minute, and a start waits for calm, the CPU (cores, PSI), anon and memory-PSI readings under their
-// limits, a fresh and warmed-up file, and the spacing since the last start (docs/ops/LANES.md → Start → The pace gate). A
+// The pace gate `lanes start` runs before it makes anything: the hub's pace watcher (scripts/board/pace-watch.sh)
+// writes pace.json to the board dir each minute, and a start waits for calm, the CPU (cores, PSI), anon and
+// memory-PSI readings under their limits, a fresh and warmed-up file, and the spacing since the last start
+// (docs/ops/LANES.md → Start → The pace gate). A
 // missing, stale or unreadable file fails closed: a dead watcher is the silent failure the gate exists for, and
 // --over-pace always goes past it.
 import type { Deps, Env } from './state.ts';
@@ -70,7 +71,7 @@ export function paceReasons(
   boardDir: string,
 ): { key: string; text: string }[] {
   const now = nowMs / 1000;
-  const restart = `restart ${boardDir}/pace-watch.sh`;
+  const restart = 'restart scripts/board/pace-watch.sh (docs/ops/HUB.md → Watchers)';
   const out: { key: string; text: string }[] = [];
   const p = parse(pace) as Record<string, unknown> | null | undefined;
   const avg = p && typeof p === 'object' ? (p.avg as Record<string, unknown> | undefined) : null;

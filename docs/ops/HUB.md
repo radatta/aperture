@@ -137,7 +137,7 @@ no script writes it: the Mac never runs anything from the shared folder.
   `pnpm lanes start <branch> --kickoff /workspace/localNotes/kickoffs/<branch>.md`. It keeps active lanes under the
   cap (`limits.json` `lanes.maxActive`); a refused start names who is active. Start enforces the pace rule itself
   (`docs/ops/LANES.md` → _The pace gate_), so the hub never reads `pace.json` by hand. After any watcher exit, restart
-  the watcher (in the background) before the next start; run a `--wait` start in the background too. `--over-pace
+  the watcher (in the background, _Watchers_ below) before the next start; run a `--wait` start in the background too. `--over-pace
 "<reason>"` is the hub's own call only to start past a dead or missing watcher it is restarting; past a busy box it
   needs the maintainer's word.
 - **Lanes on battery** (F120). With the Mac on battery under 30% or in Low Power Mode, keep **at most 3 lanes**
@@ -175,6 +175,32 @@ touch <area>; whichever merges second rebases — agree an order.`
   keeps, with the reason: CI-BOT.md → _Commands_. A branch admitted to the `dev` environment still needs the user's removal command
   (`docs/ops/FEATURE-WORKFLOW.md` → phase 11).
 - **Relay** to the user what they ask for, not every message.
+
+## Watchers
+
+The hub runs the three board watchers (`docs/ops/SESSION-BOARD.md` → _Watchers_: what each reads, its thresholds) from
+the main checkout, each in the background so its exit wakes the hub:
+
+```
+timeout 65m /workspace/scripts/board/pace-watch.sh
+timeout 65m /workspace/scripts/board/usage-watch.sh
+timeout 65m /workspace/scripts/board/context-watch.sh
+```
+
+**Restart a watcher after every exit**, after acting on it — one copy of each at a time. What each exit asks:
+
+| Exit | Watcher | Act                                                                            |
+| ---- | ------- | ------------------------------------------------------------------------------ |
+| 3    | pace    | trip: mark `pace-control.json` hot with `since`, hold or park lanes            |
+| 0    | pace    | recovered: mark it calm, resume held lanes                                     |
+| 5    | pace    | a held lane's trigger met: resume that lane                                    |
+| 4    | pace    | hot an hour: tell the user, decide                                             |
+| 6    | pace    | idle capacity and a ready `autoStart` lane: start it, or tell the user why not |
+| 7    | usage   | soft stop; restart it with `--hard-only`                                       |
+| 8    | usage   | hard stop                                                                      |
+| 9    | context | a session at the urgent line: tell the user at once                            |
+| 124  | any     | an hour with nothing to report: just restart                                   |
+| 78   | any     | a `limits.json` key is missing or bad: fix it, then restart                    |
 
 ## Lock etiquette
 
