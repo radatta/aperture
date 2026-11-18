@@ -7,7 +7,11 @@
 #                              for the next turn's context
 #   board-hub-nudge.sh check   stdin: one turn's transcript lines; env TURN_PROMPT (the turn's prompt) and TURN_REPLY
 #                              (its final reply; else the transcript's last text) → the ids that fire. The fixtures and
-#                              the false-positive budget use this, the same matcher stop uses.
+#                              the false-positive budget use this, the same matcher stop uses. HUB_NUDGE_LOG=1 also
+#                              logs them, as stop does (the fixtures).
+# Every nudge shown is logged (F258): one line per check fired in $BOARD_DIR/history/nudges-<day>.jsonl,
+# {t, check, match, session}: `match` is what fired it, at most 60 characters of the reply (the tag, for pace), never
+# the prompt's text. A count of how often each fired, for weighing the hook's help against its cost.
 # Text (prompts, replies) reaches jq through the environment, never argv: COI reads every process's argv.
 # Registered in user settings, not the repo's (.claude/hooks/README.md → Board hooks): the main checkout's copy.
 # Stop takes the reply from `last_assistant_message`: the transcript may lag the final message (hooks docs).
@@ -32,7 +36,7 @@ read -r -d '' CHECKS <<'JSON'
 ]
 JSON
 
-# A turn's lines → the ids that fire.
+# A turn's lines → the ids that fire; with HUB_NUDGE_MATCH=1, "<id>\t<what matched>" instead.
 check() {
   jq -R 'fromjson? // empty' | TURN_PROMPT="${TURN_PROMPT:-}" TURN_REPLY="${TURN_REPLY:-}" CHECKS="$CHECKS" jq -rs '
     ($ENV.CHECKS | fromjson) as $checks | $ENV.TURN_PROMPT as $prompt
@@ -51,10 +55,27 @@ check() {
     | $checks[] as $c
     | select(if $c.re then ($reply | test($c.re; "i")) else ($prompt | test($c.prompt; "i")) end)
     | select($did[$c.clear] | not)
-    | $c.id'
+    | if $ENV.HUB_NUDGE_MATCH == "1" then
+        "\($c.id)\t\((if $c.re then $reply | match($c.re; "i") else $prompt | match($c.prompt; "i") end).string
+          | gsub("[\\t\\n\\r]"; " ") | .[0:60])"
+      else $c.id end'
 }
 
-if [ "${1:-}" = check ]; then printf '%s\n' "$INPUT" | check; exit 0; fi
+# "<id>\t<what matched>" lines → one history line each (text through the environment: COI reads argv)
+nudge_log() {
+  local id m
+  while IFS=$'\t' read -r id m; do
+    [ -n "$id" ] || continue
+    sb_append nudges "$(T="$(sb_now)" ID="$id" M="$m" S="${1:-}" jq -nc '{t: $ENV.T, check: $ENV.ID, match: $ENV.M, session: $ENV.S}')"
+  done
+}
+
+if [ "${1:-}" = check ]; then
+  hits=$(printf '%s\n' "$INPUT" | HUB_NUDGE_MATCH=1 check)
+  [ "${HUB_NUDGE_LOG:-}" = 1 ] && printf '%s\n' "$hits" | nudge_log "${HUB_NUDGE_SESSION:-}"
+  printf '%s\n' "$hits" | cut -f1 | grep -v '^$'
+  exit 0
+fi
 
 [ -r "$CG/memory.stat" ] || exit 0 # container only
 PID=$(sb_claude_pid "$PPID") || exit 0
@@ -81,14 +102,16 @@ case "${1:-}" in
     read -r off q0 < <(jq -r '"\(.size) \(.queue)"' "$turn" 2>/dev/null)
     [[ "$off" =~ ^[0-9]+$ ]] || exit 0
     slice=$(tail -c +"$((off + 1))" "$tp" 2>/dev/null)
-    mapfile -t ids < <(printf '%s\n' "$slice" | TURN_PROMPT=$(jq -r '.prompt // ""' "$turn") \
-      TURN_REPLY=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""') check 2>/dev/null)
+    mapfile -t hits < <(printf '%s\n' "$slice" | TURN_PROMPT=$(jq -r '.prompt // ""' "$turn") \
+      TURN_REPLY=$(printf '%s' "$INPUT" | jq -r '.last_assistant_message // ""') HUB_NUDGE_MATCH=1 check 2>/dev/null)
     # the board: lanes messaged (or a merge relayed) and queue.json not written this turn — at most once in 10 min
     if [ "$(qmt)" = "$q0" ] && printf '%s\n' "$slice" | grep -qF '"name":"SendMessage"'; then
       last=$(stat -c %Y "$pending.board" 2>/dev/null || echo 0)
-      [ $(($(sb_epoch) - last)) -ge 600 ] && { ids+=(board); touch "$pending.board"; }
+      [ $(($(sb_epoch) - last)) -ge 600 ] && { hits+=($'board\tSendMessage, queue.json untouched'); touch "$pending.board"; }
     fi
-    [ "${#ids[@]}" -gt 0 ] || exit 0
+    [ "${#hits[@]}" -gt 0 ] || exit 0
+    ids=("${hits[@]%%$'\t'*}")
+    printf '%s\n' "${hits[@]}" | nudge_log "$hub"
     msg=$(for id in "${ids[@]}"; do
       if [ "$id" = board ]; then echo "- board: you messaged lanes this turn and queue.json is untouched: does the plan, devQueue or mergeOrder need the news?"
       else jq -r --arg id "$id" '.[] | select(.id == $id) | "- \(.id): \(.say)"' <<<"$CHECKS"; fi

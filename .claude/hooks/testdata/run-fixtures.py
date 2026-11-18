@@ -575,7 +575,9 @@ def run_compaction_suite(root: str) -> tuple[int, int]:
 
 # --- Hub self-check (hub-nudge-fixtures.jsonl) ---
 # board-hub-nudge.sh check: a case's turn (its "tools" as assistant tool_use lines, or "lines", or "raw" text) on
-# stdin, TURN_PROMPT / TURN_REPLY in the environment, and the ids it prints compared with "expect" in order.
+# stdin, TURN_PROMPT / TURN_REPLY in the environment, and the ids it prints compared with "expect" in order. A case
+# with "log" runs with HUB_NUDGE_LOG=1 on a temp board: its history lines' {check, match}, in order, and the prompt's
+# own text nowhere in them.
 
 
 def hub_nudge_turn(case: dict) -> str:
@@ -599,6 +601,9 @@ def run_hub_nudge_suite() -> tuple[int, int]:
         total += 1
         case = json.loads(line)
         env = {**os.environ, "TURN_PROMPT": case.get("prompt", ""), "TURN_REPLY": case.get("reply", "")}
+        board = tempfile.mkdtemp(prefix="hub-nudge-")
+        if "log" in case:
+            env.update(HUB_NUDGE_LOG="1", HUB_NUDGE_SESSION="dispatch", APERTURE_BOARD_DIR=board)
         r = subprocess.run(
             ["bash", str(HERE.parent / "board-hub-nudge.sh"), "check"],
             input=hub_nudge_turn(case), capture_output=True, text=True, env=env, timeout=20,
@@ -606,6 +611,14 @@ def run_hub_nudge_suite() -> tuple[int, int]:
         got = [x for x in r.stdout.splitlines() if x]
         problems = [f"rc={r.returncode} {r.stderr.strip()[:120]}"] if r.returncode or r.stderr else []
         problems += [] if got == case["expect"] else [f"want {case['expect']}, got {got}"]
+        if "log" in case:
+            text = "".join(f.read_text(encoding="utf-8") for f in pathlib.Path(board, "history").glob("nudges-*.jsonl"))
+            rows = [json.loads(x) for x in text.splitlines() if x]
+            logged = [{"check": x["check"], "match": x["match"]} for x in rows]
+            problems += [] if logged == case["log"] else [f"log {logged}, want {case['log']}"]
+            problems += [f"row lacks t/session: {x}" for x in rows if not x.get("t") or x.get("session") != "dispatch"]
+            problems += ["the prompt's text was logged"] if "private words" in text else []
+        shutil.rmtree(board, ignore_errors=True)
         failures += bool(problems)
         print(f"{'FAIL' if problems else 'ok  '}  {case['why'][:88]}")
         for problem in problems:
