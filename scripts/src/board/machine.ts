@@ -23,7 +23,7 @@ export function macLine(read: MacRead): string {
 }
 
 export function machine(read: MacRead, jobs: Job[], now: number): Machine {
-  const s = slowdown(jobs, now);
+  const s = slowdown(jobs, now, hhmm);
   return {
     mac: { state: read.state, power: powerSummary(read) },
     slowdown: s,

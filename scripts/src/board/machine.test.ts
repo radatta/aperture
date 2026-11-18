@@ -66,8 +66,24 @@ describe('cli.ts machine', () => {
     ];
     expect(main(['machine', board(stats(calm), jobs)], () => '').split('\n')).toEqual([
       'mac: battery 18% discharging (1:15 left) · no thermal limit — RED: battery 18% — suggest ≤ 3 lanes (on battery under 30% or Low Power Mode)',
-      'slowdown (30 min vs 24 h): typecheck – (0 recent) · lint ×2.0 (2/5) · test – (0 recent) · ui – (0 recent)',
+      'slowdown (30 min vs 24 h): typecheck – (no data in 7 d) · lint ×2.0 (2/5) · test – (no data in 7 d) · ui – (no data in 7 d) · gate-lint – (no data in 7 d) · gate-narrow – (no data in 7 d) · gate-wide – (no data in 7 d)',
     ]);
+  });
+
+  it('reads the gate classes from history, and --json carries the status line cut and each last run', () => {
+    const jobs = [
+      ...[60, 120, 180, 240, 300].map((m) => job('gate-wide', m, 200)),
+      job('gate-wide', 3, 300),
+      job('gate-wide', 4, 300),
+      job('lint', 200, 4),
+    ];
+    const j = JSON.parse(main(['machine', board(null, jobs), '--json'], () => ''));
+    const wide = j.slowdown.classes.find((c: { cls: string }) => c.cls === 'gate-wide');
+    expect(wide).toMatchObject({ ratio: 1.5, stale: false, lastAt: T - 3 * 60_000 });
+    expect(j.slowdown.short).toMatch(
+      /^slow 30m gw×1\.5 · tc, lint, gl, gn no data since \d\d:\d\d$/,
+    );
+    expect(j.slowdown.worst).toBeNull();
   });
 
   it('--json carries the power summary and the ratios; a missing mac-stats.json and an empty history say so', () => {
@@ -77,6 +93,7 @@ describe('cli.ts machine', () => {
       power: { known: false, line: '', alerts: [], advice: null },
     });
     expect(j.slowdown.worst).toBeNull();
+    expect(j.slowdown.short).toBe('slow: no data in 7 d');
     expect(j.lines[0]).toBe('mac: no stats (agent not installed: tower NEEDS YOU)');
   });
 

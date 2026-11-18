@@ -230,6 +230,20 @@ describe('the derived files (board.line, stale.json)', () => {
       writeDerived(dir, v);
       const line = readFileSync(join(dir, 'board.line'), 'utf8').split('\n');
       expect(line[0]).toMatch(/^\d+ (\d+|-) \d+\?? (dim|warn|bad)$/);
+      // the slowdown's status line cut, with the view's own tone, and the container's cores
+      expect(line).toContain(`slow ${v.health.slowdown.tone} ${v.health.slowdown.short}`);
+      expect(line).toContain(`vm ${v.health.container!.cores}`);
+      // the fixture's Mac read (load 3.21 2.75 2.4 over 12) is a row only while fresh
+      const withMac = (state: 'ok' | 'stale') =>
+        writeDerived(dir, { ...v, health: { ...v.health, mac: { ...v.health.mac, state } } });
+      const macRow = () =>
+        readFileSync(join(dir, 'board.line'), 'utf8')
+          .split('\n')
+          .filter((l) => l.startsWith('mac '));
+      withMac('ok');
+      expect(macRow()).toEqual(['mac 3 3 2 12']);
+      withMac('stale');
+      expect(macRow()).toEqual([]);
       const f = JSON.parse(readFileSync(join(dir, 'stale.json'), 'utf8')) as V;
       expect(f).toMatchObject({ v: 1, t: v.now, tone: v.board.tone });
       expect(f.items).toHaveLength(v.board.items.length);

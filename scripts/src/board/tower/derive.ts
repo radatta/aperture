@@ -1077,7 +1077,7 @@ export function derive(i: Inputs): View {
       mac: i.mac,
       macReady: i.macInstallReady,
       power: powerSummary(i.mac),
-      slowdown: slowdown(t.jobs, i.now),
+      slowdown: slowdown(t.jobs, i.now, hhmm),
       aws: i.aws,
     },
     slipping,
