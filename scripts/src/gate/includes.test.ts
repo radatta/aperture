@@ -1,6 +1,6 @@
 // PACKAGES[].projects against vitest itself: per package, `vitest list --filesOnly` (globs only, runs no test) must
 // find exactly the files, project for project, that the registry check's static globs select from the same tree. So
-// the ~1 s pre-check (registry.ts) can't drift from what the suite runs. Its rule runs it on any vitest config change.
+// the ~1–2 s pre-check (registry.ts) can't drift from what the suite runs. Its rule runs it on any vitest config change.
 import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

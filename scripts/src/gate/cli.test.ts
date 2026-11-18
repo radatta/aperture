@@ -65,9 +65,12 @@ const INNER = { GATE_INNER: '1', GATE_WIDE: '0', HEAVY_WRAPPER: '4242', PATH: '/
 const noSignal = () => () => {};
 // A macrotask: every promise callback already queued has run, however many hops the scheduler takes.
 const flush = () => new Promise((r) => setImmediate(r));
-// A stand-in heavy.sh in a temp dir.
+// A stand-in heavy.sh in a temp dir, removed after the file.
+const stubs: string[] = [];
+afterAll(() => stubs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 const stub = (body: string) => {
   const dir = mkdtempSync(join(tmpdir(), 'gate-cli-'));
+  stubs.push(dir);
   const f = join(dir, 'heavy.sh');
   writeFileSync(f, `#!/usr/bin/env bash\n${body}\n`);
   chmodSync(f, 0o755);
@@ -851,7 +854,7 @@ describe('main: the registry check, first', () => {
       await main(['--dry-run'], { run, exec, outer: never, log: (l) => out.push(l), env: {} }),
     ).toBe(0);
     expect(out.join('\n')).toMatch(
-      /registry check skipped: couldn't read the tree \(git ls-files failed: index locked\)/,
+      /registry check skipped: couldn't list files \(git ls-files failed: index locked\)/,
     );
   });
 
@@ -875,7 +878,9 @@ describe('main: the registry check, first', () => {
       await said(tree({ 'scripts/src/a.ts': '' }).run, () => {
         throw eacces;
       }),
-    ).toMatch(/registry check skipped: couldn't read the tree \(EACCES: permission denied\)/);
+    ).toMatch(
+      /registry check skipped: couldn't read scripts\/src\/a\.ts \(EACCES: permission denied\)/,
+    );
     // A file gone since the listing (ENOENT) is skipped, not the check.
     const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     expect(

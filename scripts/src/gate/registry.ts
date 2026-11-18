@@ -1,5 +1,5 @@
 // @aperture/scripts — the gate's registry check, pure: given every tracked and untracked file, which test files the
-// gate can't pick up. `pnpm gate:fast` runs it first (~1 s), so a lane's unregistered test fails before tsc, eslint
+// gate can't pick up. `pnpm gate:fast` runs it first (~1–2 s), so a lane's unregistered test fails before tsc, eslint
 // and the tests, not after them; rules.test.ts runs it on the real tree, so CI still catches what a gate skipped.
 // Each problem names the file, why, and the rules.ts list or config to edit (docs/ops/GATE.md → The rules).
 // Plain `node` (cli.ts imports it): erasable syntax, node: builtins only.

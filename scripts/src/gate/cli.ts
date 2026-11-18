@@ -22,7 +22,7 @@ export const USAGE = `pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait
   --dry-run  print the plan; run nothing
   --wait     how long heavy.sh waits for a slot before giving up with 75 (default 90 s)
   Exit: 1 before any step when the registry check finds a test file the gate can't pick up (every mode, --dry-run
-  too); 2 for a bad argument, or a diff that widened past its slot; else the first failing step's code in the order
+  too); 2 for a bad argument, the inner pass outside heavy.sh, or a diff that widened past its slot; else the first failing step's code in the order
   printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted.`;
 
 export interface Opts {
@@ -93,23 +93,26 @@ export function registryCheck(
   const skipped = (why: string) => ({
     note: `  registry check skipped: ${why}; the Branch run's rules.test.ts still checks`,
   });
+  let files: string[];
+  try {
+    files = listFiles(run, root);
+  } catch (err) {
+    return skipped(`couldn't list files (${(err as Error).message.split('\n')[0]})`);
+  }
+  if (!files.length) return skipped('git listed no files');
+  // Only a read is caught: a bug in the check itself still crashes the gate, never reads as a skip.
+  let unreadable: string | undefined;
   const gone = (p: string) => {
     try {
       return read(`${root}/${p}`);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return '';
-      throw err;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
+        unreadable ??= `${p} (${(err as Error).message.split('\n')[0]})`;
+      return '';
     }
   };
-  let files: string[];
-  let ps: ReturnType<typeof checkRegistry>;
-  try {
-    files = listFiles(run, root);
-    if (!files.length) return skipped('git listed no files');
-    ps = checkRegistry(files, gone);
-  } catch (err) {
-    return skipped(`couldn't read the tree (${(err as Error).message.split('\n')[0]})`);
-  }
+  const ps = checkRegistry(files, gone);
+  if (unreadable) return skipped(`couldn't read ${unreadable}`);
   const sec = ((Date.now() - t0) / 1000).toFixed(1);
   const tests = files.filter(isTest).length;
   if (!ps.length)
