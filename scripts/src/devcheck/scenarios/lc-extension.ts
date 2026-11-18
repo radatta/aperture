@@ -946,10 +946,10 @@ export const lcExtension: Scenario = {
       id: 'ext-note-click-no-request',
       entry: 'extension',
       kind: 'edge',
-      what: 'A real click on Submit that sends no submit gets no note, nor does a page marking <html> or our own badge host with the old selector',
+      what: 'A real click on Submit that sends no submit gets no note: the note reads the request, never the button',
       offDev: {
         file: 'extension/test/overlay.test.ts',
-        test: 'a real click on Submit that sends no submit gets no note; nor does a page marking <html>, or our badge, with the old selector',
+        test: 'a real click on Submit that sends no submit gets no note',
         why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
@@ -968,11 +968,44 @@ export const lcExtension: Scenario = {
       id: 'ext-note-repeat-response',
       entry: 'extension',
       kind: 'edge',
-      what: 'A repeated /submit/ response for one submission says nothing twice; one with no id, an unreadable body, or a Run says nothing',
+      what: 'A repeated /submit/ response for one submission says nothing twice',
       offDev: {
         file: 'extension/test/wire.test.ts',
         test: 'a repeated /submit/ response for an id still pending, or already judged, says nothing twice',
-        why: `${noStep}; the parse is a pure function (wire.test.ts also: 'says nothing for a /submit/ with no id or an unreadable body, or for a Run')`,
+        why: `${noStep}; the parse is a pure function`,
+      },
+    },
+    {
+      id: 'ext-note-invalid',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A /submit/ with no submission id or an unreadable body, or a Run, says nothing',
+      offDev: {
+        file: 'extension/test/wire.test.ts',
+        test: 'says nothing for a /submit/ with no id or an unreadable body, or for a Run',
+        why: `${noStep}; the parse is a pure function`,
+      },
+    },
+    {
+      id: 'ext-note-early',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A submit requested before the last failed verdict landed gets no note, though LeetCode answers it after (logged `early`)',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a submit requested before the last failed verdict landed gets no note, though LeetCode answers it after',
+        why: `${noStep}, and dev can’t make LeetCode answer late; both worlds’ real scripts run over the fake page in jsdom`,
+      },
+    },
+    {
+      id: 'ext-note-ended',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A sitting that ended after a failed verdict: the next submit gets no note',
+      offDev: {
+        file: 'extension/test/overlay.test.ts',
+        test: 'a sitting that ended after a failed verdict: the next submit gets no note',
+        why: `${noStep}; both worlds’ real scripts run over the fake page in jsdom`,
       },
     },
     {
@@ -1023,7 +1056,7 @@ export const lcExtension: Scenario = {
       id: 'ext-selectors-submit-retired',
       entry: 'extension',
       kind: 'edge',
-      what: 'Opening Options drops a saved `submit` selector; a `null` one (the note off, before 2.2.1) turns the Coach switch off',
+      what: 'Opening Options drops a saved `submit` selector; a `null` one (the note off, before 2.2.1) turns the Coach switch off — and tabs read it as off before Options is opened',
       offDev: {
         file: 'extension/test/options.test.ts',
         test: 'opening Options drops the retired submit selector from a saved override; a null one turns the note’s switch off',
@@ -1031,10 +1064,32 @@ export const lcExtension: Scenario = {
       },
     },
     {
+      id: 'ext-selectors-submit-paste',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A paste of only the retired `submit` saves nothing and leaves the note as it was',
+      offDev: {
+        file: 'extension/test/options.test.ts',
+        test: 'a paste of only the retired submit saves nothing and leaves the defaults; the note stays as it was',
+        why: `${noStep}; the real Options page runs in jsdom`,
+      },
+    },
+    {
+      id: 'ext-submit-null-before-options',
+      entry: 'extension',
+      kind: 'edge',
+      what: 'A stored `selectors.submit: null` reads as the note off in a tab before Options carries it over',
+      offDev: {
+        file: 'extension/test/coach.test.ts',
+        test: 'reads the note’s switch as on unless stored false, or a saved submit: null; the retired card’s switches change nothing',
+        why: `${noStep}; the switch is a pure function the tabs and Options both read`,
+      },
+    },
+    {
       id: 'ext-submit-how-probe',
       entry: 'extension',
       kind: 'edge',
-      what: 'Debug mode logs how each submit was made (click or ⌘↵, trusted or not, ms before) and what the note did, flags only; nothing with it off',
+      what: 'Debug mode logs how each submit was made (click or ⌘↵, trusted or not, ms before, keydowns heard), fresh per submit, and what the note did, flags only; nothing with it off',
       offDev: {
         file: 'extension/test/overlay.test.ts',
         test: 'Debug mode logs how a submit was made — a click or ⌘↵, trusted or not, and how long before — and nothing with it off',

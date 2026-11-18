@@ -10,12 +10,16 @@ let n = 0;
 const mint = () => `id${n++}`;
 
 describe('settings', () => {
-  it('reads the note’s switch as on unless stored false; the retired card’s switches change nothing', () => {
+  it('reads the note’s switch as on unless stored false, or a saved submit: null; the retired card’s switches change nothing', () => {
     expect(ON).toEqual({ nudge: true });
     expect(coach.settingsOf({})).toEqual(ON);
     expect(coach.settingsOf({ coachNudge: 0 })).toEqual(ON); // only `false` turns it off
     expect(coach.settingsOf({ coachNudge: false })).toEqual({ nudge: false });
     expect(coach.settingsOf({ coachTrace: true, coachHold: true })).toEqual(ON);
+    // The retired `submit: null` (the note off before 2.2.1) still reads as off until Options carries it over.
+    expect(coach.settingsOf({ selectors: { submit: null } })).toEqual({ nudge: false });
+    expect(coach.settingsOf({ selectors: { submit: '#s' } })).toEqual(ON);
+    expect(coach.settingsOf({ selectors: '{"submit": null}' })).toEqual(ON); // only a stored object counts
     expect(coach.KEYS).toEqual({ nudge: 'coachNudge' });
     expect(coach.RETIRED_KEYS).toEqual(['coachTrace', 'coachHold']);
   });

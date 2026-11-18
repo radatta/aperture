@@ -187,4 +187,17 @@ describe('the Options page', () => {
     o.click('resetSelectors');
     await until(() => !('selectors' in ext.local.data));
   });
+
+  it('a paste of only the retired submit saves nothing and leaves the defaults; the note stays as it was', async () => {
+    const ext = fakeExtension();
+    await ext.local.set({ selectors: { editorReset: '#r' } });
+    const o = await loaded(ext);
+    o.$<HTMLTextAreaElement>('selectors').value = '{"submit": "#s"}';
+    o.click('saveSelectors');
+    await until(() => o.status('selectorStatus').includes('submit is retired'));
+    expect(ext.local.data.selectors).toBeUndefined();
+    expect(o.$<HTMLTextAreaElement>('selectors').value).toBe('');
+    expect(ext.local.data.coachNudge).toBeUndefined();
+    expect(o.$('coachNudge').checked).toBe(true);
+  });
 });

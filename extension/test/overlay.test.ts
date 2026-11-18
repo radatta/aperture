@@ -267,8 +267,13 @@ function open(
     w.document.dispatchEvent(new w.Event('DOMContentLoaded'));
   };
   const lc = createServer();
+  let submitDelay = 0; // LeetCode answers a /submit/ this late (fake ms), set by delaySubmit
   const fetchFake = async (input: string | Request, init?: RequestInit) => {
     const url = new URL(typeof input === 'string' ? input : input.url, w.location.href);
+    if (submitDelay && /\/submit\/$/.test(url.pathname)) {
+      const ms = submitDelay;
+      await new Promise((r) => setTimeout(r, ms));
+    }
     const body = init?.body != null ? String(init.body) : null;
     const r = lc.respond(url.pathname, init?.method ?? 'GET', body) ?? { status: 404, body: '{}' };
     return new FetchedResponse(r.body, {
@@ -327,8 +332,10 @@ function open(
   const style = () => root()?.querySelector('style')?.textContent ?? '';
   const submitBtn = () =>
     w.document.querySelector('button[data-e2e-locator=console-submit-button]') as HTMLElement;
+  const delaySubmit = (ms: number) => (submitDelay = ms);
   return {
     w,
+    delaySubmit,
     phase,
     text,
     button,
@@ -1733,25 +1740,50 @@ describe('the debug log’s submit probe', () => {
     p.submitBtn().click(); // a page script's
     await judged(2);
     await settle(5000);
+    trustedKey(code, { key: 'a' }); // typing: heard, not the shortcut
     trustedKey(code, { key: 'Enter', metaKey: true });
     await judged(3);
-    await until(() => hows(ext).length === 3, 6000);
-    const [a, b, c] = hows(ext);
+    await settle(5000);
+    trustedKey(code, { key: 'Enter', ctrlKey: true, repeat: true });
+    await judged(4);
+    await until(() => hows(ext).length === 4, 6000);
+    const [a, b, c, d] = hows(ext);
     expect(a).toMatchObject({ click: 'trusted', key: null, open: true, note: 'no-verdict' });
-    expect(b).toMatchObject({ click: 'untrusted', key: null, note: 'shown' });
-    expect(c).toMatchObject({ key: 'trusted', mod: 'meta', repeat: false, note: 'shown' });
+    expect(b).toMatchObject({ click: 'untrusted', key: null, keys: 0, enters: 0, note: 'shown' });
+    // Each submit starts fresh: c's ⌘↵ carries no click from b, 5 s before it.
+    expect(c).toMatchObject({
+      click: null,
+      clickMs: null,
+      key: 'trusted',
+      mod: 'meta',
+      repeat: false,
+      inEditor: true,
+      keys: 2,
+      enters: 1,
+      note: 'shown',
+    });
+    expect(d).toMatchObject({
+      click: null,
+      key: 'trusted',
+      mod: 'ctrl',
+      repeat: true,
+      keys: 1,
+      enters: 1,
+    });
     for (const e of [a, b]) expect(e!.clickMs).toEqual(expect.any(Number));
     expect(c!.keyMs).toEqual(expect.any(Number));
     expect(c!.keyMs as number).toBeLessThan(1000);
-    // Flags, fixed words and ms only.
-    for (const e of [a, b, c])
+    // Flags, fixed words, counts and ms only.
+    for (const e of [a, b, c, d])
       expect(Object.keys(e!).sort()).toEqual(
         [
           'click',
           'clickMs',
+          'enters',
           'inEditor',
           'key',
           'keyMs',
+          'keys',
           'mod',
           'note',
           'open',
@@ -1965,18 +1997,29 @@ describe('the resubmit note, and no trace card', () => {
     expect(shown!.gapMs).toBeGreaterThanOrEqual(10_000);
   }, 30_000);
 
-  it('a real click on Submit that sends no submit gets no note; nor does a page marking <html>, or our badge, with the old selector', async () => {
+  it('a real click on Submit that sends no submit gets no note', async () => {
     const { p, ext } = await failedOnce();
     p.fake().submitInert = true;
     trustedClick(p.submitBtn());
-    p.w.document.documentElement.setAttribute('data-e2e-locator', 'console-submit-button');
-    trustedClick(p.w.document.querySelector('[data-fake=code]')!); // anywhere on the page
-    const host = p.badgeHost()!;
-    host.setAttribute('data-e2e-locator', 'console-submit-button');
-    host.setAttribute('role', 'button');
-    trustedClick(host);
     await noNote(p, ext);
     expect(p.fake().submits).toBe(1);
+  }, 30_000);
+
+  it('a submit requested before the last failed verdict landed gets no note, though LeetCode answers it after', async () => {
+    const { p, ext } = await sitting({ local: { debug: true } });
+    const code = p.w.document.querySelector('[data-fake=code]') as HTMLTextAreaElement;
+    code.value += '# wrong\n';
+    trustedClick(p.submitBtn()); // judged within a few hundred ms
+    p.delaySubmit(3000);
+    trustedClick(p.submitBtn()); // requested now, answered 3 s on: after the first's Wrong Answer
+    await until(() => sentEvents(ext).filter((e) => e.type === 'submit').length === 2, 10_000);
+    await noNote(p, ext);
+    const hows = () =>
+      ((ext.local.data.debugLog as DebugEntry[] | undefined) ?? []).filter(
+        (e) => e.type === 'submit.how',
+      );
+    await until(() => hows().length === 2, 6000);
+    expect(hows().map((e) => e.note)).toEqual(['no-verdict', 'early']);
   }, 30_000);
 
   it('two submits inside the minute get one note', async () => {
@@ -1997,7 +2040,6 @@ describe('the resubmit note, and no trace card', () => {
     p.w.history.back();
     await until(() => p.phase() === 'active', 6000);
     await noNote(p, ext);
-    expect(sentEvents(ext).some((e) => (e.type as string) === 'submitted')).toBe(false);
   }, 30_000);
 
   it('a reload forgets the last verdict: the next submit gets no note', async () => {
@@ -2025,6 +2067,16 @@ describe('the resubmit note, and no trace card', () => {
     await settle(4000);
     expect(messages(ext, 'enqueue')).toEqual([]);
     noCard(p);
+  }, 30_000);
+
+  it('a sitting that ended after a failed verdict: the next submit gets no note', async () => {
+    const { p, ext } = await failedOnce(); // the Wrong Answer is the open sitting's
+    const { sittingId } = bound(ext);
+    await ext.local.set({ 'sync:two-sum': { sittingId, status: 'ended', at: Date.now() } });
+    await until(() => p.phase() !== 'active', 8000);
+    trustedClick(p.submitBtn());
+    await until(() => p.fake().submits === 2, 6000);
+    await noNote(p, ext);
   }, 30_000);
 
   it('a note clears on leaving the problem, and the nudge switch off shows none', async () => {

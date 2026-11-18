@@ -180,8 +180,17 @@
         kind === 'run'
           ? { interpretId: id, slug, request: p ? p.request : null, result }
           : { submissionId: id, slug, request: p ? p.request : null, result };
-      // `page`: the page the run or submit was made from, not the one polling for its verdict.
-      return { kind, slug, questionId: null, at: p ? p.at : at, payload, page: p ? p.page : null };
+      // `page`: the page the run or submit was made from, not the one polling for its verdict. `judgedAt`: when the
+      // verdict came (the check's response, on the page's clock like `at`) — read in the page, never sent.
+      return {
+        kind,
+        slug,
+        questionId: null,
+        at: p ? p.at : at,
+        judgedAt: at,
+        payload,
+        page: p ? p.page : null,
+      };
     };
 
     // A finished request: its URL, the page it was made from, request text, response text (null when unread

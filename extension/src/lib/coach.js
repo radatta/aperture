@@ -15,8 +15,12 @@
   const NOTE_MS = 8000; // how long a badge note shows
   const ACCEPTED = 10; // LeetCode's raw status_code for Accepted; no other verdict logic here
 
-  // The switch from storage: anything but `false` is on.
-  const settingsOf = (got) => ({ nudge: !got || got[KEYS.nudge] !== false });
+  // The switch from storage: anything but `false` is on. A saved selector override's `submit: null` (the note off,
+  // before 2.2.1 retired the key) still counts as off until Options carries it over to the switch.
+  const retiredOff = (o) => !!o && typeof o === 'object' && o.submit === null;
+  const settingsOf = (got) => ({
+    nudge: !got || (got[KEYS.nudge] !== false && !retiredOff(got.selectors)),
+  });
 
   // A judged submit's verdict from its raw result: 'accepted', 'failed', or null (unjudged or unreadable).
   function verdictOf(payload) {
