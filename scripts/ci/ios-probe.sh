@@ -18,9 +18,11 @@ RUNS=3 # shards above this exit at once: the workflow's matrix is fixed at 3, th
 # save (cache the signed-out device) | rows (sign in, run the plans). One run tries three variants side by side.
 variant() {
   case "$SHARD" in
-    1) echo "restore rows macmatch" ;; # round 1, H1/H7: Device Hub on (no pgrep shim), AXe 1.8.0, host daemons as the Mac
-    2) echo "seed rows nohub,axe2mix,hostlog,nospot" ;; # H3: a device made on this runner, only the web clip planted
-    *) echo "restore rows nohub,axe2mix,hostlog,nospot" ;; # control: rows run 5's config
+    # round 2 (ci-signin-round1.md): each arm changes one thing against round 1's Mac-match shard (restore, Device Hub
+    # opened in the background, AXe 1.8.0, host daemons untouched), which stalled with the login overlay in front
+    1) echo "restore rows hubfg" ;; # R2 display: Device Hub in front with this device's window, the window counted
+    2) echo "seed rows macmatch" ;; # R3: a device made on this runner, only the web clip planted
+    *) echo "restore rows hostlog,nospot,quiet,idle" ;; # R1 CPU: host hogs off, and the Sign in tap waits for load1 < 10
   esac
 }
 KEY="ios-probe-dev-27.2-v1" # the cached device; bump to re-save (cache keys are immutable)
@@ -322,12 +324,39 @@ s_hub() {
   local i
   [ "${XCODE_MAJOR:-0}" -ge 27 ] || { note "Xcode < 27: no Device Hub"; return 0; }
   case ",$OPTS," in *,nohub,*) note "Device Hub left off (nohub)"; return 0 ;; esac
-  cap 30 open -g -b com.apple.dt.Devices >/dev/null 2>&1 || note "open -g -b com.apple.dt.Devices failed"
+  case ",$OPTS," in
+    *,hubfg,*) cap 30 open -b com.apple.dt.Devices >/dev/null 2>&1 || note "open -b com.apple.dt.Devices failed" ;;
+    *) cap 30 open -g -b com.apple.dt.Devices >/dev/null 2>&1 || note "open -g -b com.apple.dt.Devices failed" ;;
+  esac
   for i in $(seq 1 15); do
-    if pgrep -x DeviceHub >/dev/null 2>&1; then HUB=up; note "Device Hub up after ${i} s"; return 0; fi
+    if pgrep -x DeviceHub >/dev/null 2>&1; then HUB=up; note "Device Hub up after ${i} s"; break; fi
     sleep 1
   done
-  note "Device Hub didn't start in 15 s: sim.sh gets the shim"
+  [ "$HUB" = up ] || { note "Device Hub didn't start in 15 s: sim.sh gets the shim"; return 0; }
+  # round 2, R2: Expo opens a device's window with devices://device/open?id=<udid> (panel 2; not Apple-documented)
+  case ",$OPTS," in *,hubfg,*)
+    cap 30 open "devices://device/open?id=$U" >/dev/null 2>&1 || note "devices:// open failed"
+    sleep 5 ;;
+  esac
+  note "windows: $(hub_windows)"
+}
+# Device Hub's on-screen, layer-0 windows, by owner pid (an owner name can be redacted without screen-recording
+# consent): "<n> on screen, <m> over 300 pt tall, <t> on screen in all". Counts only.
+hub_windows() {
+  local pid
+  pid="$(pgrep -x DeviceHub | head -1)"
+  cat >"$WORK/win.swift" <<'SWIFT'
+import CoreGraphics
+let pid = Int(CommandLine.arguments[1]) ?? -1
+let l = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+var n = 0, big = 0
+for w in l where (w[kCGWindowOwnerPID as String] as? Int) == pid && (w[kCGWindowLayer as String] as? Int) == 0 {
+  n += 1
+  if let b = w[kCGWindowBounds as String] as? [String: Any], let h = b["Height"] as? Double, h > 300 { big += 1 }
+}
+print("\(n) on screen, \(big) over 300 pt tall, \(l.count) on screen in all")
+SWIFT
+  cap 60 xcrun swift "$WORK/win.swift" "${pid:--1}" 2>/dev/null | tr -cd 'A-Za-z0-9 ,' | head -c 120 || printf 'unread'
 }
 # quiet (run 16): run 14's CPU went to diagnosticd, kernel_task and iOS 27's widget extensions on 3 cores. simslim's
 # (pkg.go.dev/github.com/mobai-app/simslim) labels for what no row touches: widgets, Siri, search, health, photos,
@@ -825,11 +854,30 @@ run_sim_ci() (
     local i
     [ $# -lt 2 ] || { ci_orig_on_cognito "$@"; return; }
     for i in 1 2 3 4 5 6 7 8 9 10; do
-      ci_orig_on_cognito "$@" && return 0
+      if ci_orig_on_cognito "$@"; then
+        ci_pre_type
+        return 0
+      fi
       [ ! -e "$SIM_P.late" ] && [ ! -e "$SIM_P.over" ] || return 1
       sleep 3
     done
     return 1
+  }
+  # Round 2, on the login page before a key is typed (signed out, public): its luminance grid for ci_stall's diff. The
+  # host check before the password stays sim.sh's own single read, after this.
+  ci_pre_type() { [ -e "$WORK/grid0" ] || printf '%s\t%s\tlogin page\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$(ci_frame "$WORK/grid0")" >>"$OUT/stall.tsv"; }
+  # Round 2, R1 (`idle` shards): before the Sign in tap, wait until the host's 1-min load is under 10 (5 min at most),
+  # so the login, submit and hand-back run on a quieter host. Logged with the load reached or the timeout.
+  ci_idle_wait() {
+    local i l end=timeout
+    case ",$OPTS," in *,idle,*) ;; *) return 0 ;; esac
+    for i in $(seq 1 31); do
+      l="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')"
+      awk -v l="${l:-99}" 'BEGIN { exit !(l < 10) }' && { end=reached; break; }
+      [ "$i" -lt 31 ] && [ ! -e "$SIM_P.late" ] && [ ! -e "$SIM_P.over" ] || break
+      sleep 10
+    done
+    printf '%s\t%s\tidle wait\t%s, load %s after %s s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "$end" "$(tr -cd '0-9.' <<<"$l")" "$(((i - 1) * 10))" >>"$OUT/stall.tsv"
   }
   eval "ci_orig_landmark() $(declare -f sim_landmark | sed 1d)"
   # Rows run 3: past Cognito on all 3 shards, then the app sat blank (no labels, empty host) through all 12 Home reads.
@@ -864,9 +912,56 @@ run_sim_ci() (
   #   wc: WebContent pids now, born since the sign-in began, gone since then; gpu, net: those processes' counts
   #   log: the sim's WebKit log lines in the last 4 min, counted per pattern; load: the host's 1-min load
   #   origin: dev's "/" from the host, status and ms
+  # Round 2 adds (panel 2): frame, the same stats plus a hash of the downscaled frame and its luminance grid's mean
+  # difference from the login page's (ci_pre_type), taken twice 5 s apart (same hash: nothing is drawing); cpu, the
+  # host CPU seconds SafariViewService, SpringBoard and the web app spent over those 5 s; plog, the sim's log lines
+  # per process (SafariViewService, SpringBoard, Web, backboardd) in the last 4 min, and how many say dismiss,
+  # invalidat or transition. After look 1 a swipe down from the top edge (a live sheet moves), then the same reads.
   # Runs inside the landmark's $(...) subshell, so nothing here can leak into sim.sh's state.
+  # ci_frame <grid out> [grid to diff]: one screenshot, downscaled on the runner and removed at once. Prints the mean
+  # RGB, spread, shares near white / the app surface / black, a short hash of the frame below the status bar (its clock
+  # would change the hash: review), and, given a grid,
+  # the mean luminance difference from it; writes this frame's 10x20 luminance grid (numbers only) to <grid out>.
+  ci_frame() {
+    local png="$WORK/f.png" small="$WORK/f.bmp" st=-
+    if cap 15 xcrun simctl io "$U" screenshot "$png" >/dev/null 2>&1 && cap 15 sips -Z 160 -s format bmp "$png" --out "$small" >/dev/null 2>&1; then
+      st="$(python3 - "$small" "$1" "${2:-}" <<'BMP' 2>/dev/null
+import os, struct, sys
+d = open(sys.argv[1], 'rb').read()
+off, w, h, bpp = struct.unpack_from('<I', d, 10)[0], struct.unpack_from('<i', d, 18)[0], abs(struct.unpack_from('<i', d, 22)[0]), struct.unpack_from('<H', d, 28)[0] // 8
+row = (w * bpp + 3) & ~3
+px = [(d[off + y * row + x * bpp + 2], d[off + y * row + x * bpp + 1], d[off + y * row + x * bpp]) for y in range(h) for x in range(w)]
+n = len(px); m = [sum(p[i] for p in px) / n for i in range(3)]
+sd = (sum(sum((p[i] - m[i]) ** 2 for i in range(3)) for p in px) / (3 * n)) ** 0.5
+near = lambda c, t: sum(1 for p in px if all(abs(p[i] - c[i]) <= t for i in range(3))) * 100 // n
+lum = lambda p: 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]
+grid = []
+for gy in range(20):
+    for gx in range(10):
+        cell = [lum(px[y * w + x]) for y in range(gy * h // 20, (gy + 1) * h // 20) for x in range(gx * w // 10, (gx + 1) * w // 10)]
+        grid.append(sum(cell) / max(1, len(cell)))
+open(sys.argv[2], 'w').write(' '.join('%.1f' % g for g in grid))
+out = '%d/%d/%d sd %.0f white %d surface %d black %d' % (m[0], m[1], m[2], sd, near((255, 255, 255), 12), near((47, 66, 60), 12), near((0, 0, 0), 12))
+if sys.argv[3] and os.path.exists(sys.argv[3]):
+    g0 = [float(v) for v in open(sys.argv[3]).read().split()]
+    if len(g0) == len(grid): out += ' vs login %.0f' % (sum(abs(a - b) for a, b in zip(grid, g0)) / len(grid))
+import hashlib
+out += ' hash ' + hashlib.sha1(d[off + row * (h // 10):off + row * (h - h // 10)] if struct.unpack_from('<i', d, 22)[0] > 0 else d[off + row * (h // 10):]).hexdigest()[:8]
+print(out)
+BMP
+)" || st=-
+    fi
+    rm -f "$png" "$small"
+    st="$(tr -cd 'A-Za-z0-9./ ' <<<"$st")"
+    case "$st" in *" hash "*) printf '%s' "$st" ;; *) printf '%s hash ' "$st" ;; esac
+  }
+  # host CPU seconds a sim process has used so far ("-" when it isn't running)
+  ci_cpu() { local p; p="$(pgrep -f "$1" 2>/dev/null | head -1)"; [ -n "$p" ] || { printf -- -; return 0; }; ps -o time= -p "$p" 2>/dev/null | awk -F: '{s = 0; for (i = 1; i <= NF; i++) s = s * 60 + $i; printf "%.2f", s}' | grep . || printf -; }
+  ci_cpus() { printf '%s %s %s' "$(ci_cpu 'SafariViewService.app/SafariViewService')" "$(ci_cpu 'CoreServices/SpringBoard.app/SpringBoard')" "$(ci_cpu 'RuntimeRoot/Applications/Web.app/Web')"; }
+  # "<name> +<s>" per process between two ci_cpus samples
+  ci_cpu_delta() { awk -v a="$1" -v b="$2" 'BEGIN { split(a, x, " "); split(b, y, " "); split("svs springboard web", nm, " "); for (i = 1; i <= 3; i++) printf "%s %s%s", nm[i], (x[i] == "-" || y[i] == "-") ? "-" : sprintf("%+.2f", y[i] - x[i]), (i < 3 ? ", " : "") }'; }
   ci_stall() {
-    local n t els roles web title form pids own="" p r2 px wc lg load org png="$WORK/stall.png" small="$WORK/stall.bmp" lf="$WORK/stall.log"
+    local n t els roles web title form pids own="" p r2 px px2 h1 h2 fh c0 c1 wc lg pl load org lf="$WORK/stall.log"
     n=$(($(cat "$SIM_P.ciblank" 2>/dev/null || echo 0) + 1))
     echo "$n" >"$SIM_P.ciblank"
     [ "$n" = 3 ] || [ "$n" = 8 ] || return 0
@@ -880,44 +975,52 @@ run_sim_ci() (
     pids="$(jq -r '[.[] | .pid | numbers] | unique | .[]' <<<"$t" 2>/dev/null | tr -cd '0-9\n' | head -6)"
     t=""
     for p in $pids; do own="$own,$(ps -o comm= -p "$p" 2>/dev/null | sed 's#.*/##' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"; done
-    px=-
-    if cap 30 xcrun simctl io "$U" screenshot "$png" >/dev/null 2>&1 && cap 30 sips -Z 160 -s format bmp "$png" --out "$small" >/dev/null 2>&1; then
-      px="$(python3 - "$small" <<'BMP' 2>/dev/null
-import struct, sys
-d = open(sys.argv[1], 'rb').read()
-off, w, h, bpp = struct.unpack_from('<I', d, 10)[0], struct.unpack_from('<i', d, 18)[0], abs(struct.unpack_from('<i', d, 22)[0]), struct.unpack_from('<H', d, 28)[0] // 8
-row = (w * bpp + 3) & ~3
-px = [(d[off + y * row + x * bpp + 2], d[off + y * row + x * bpp + 1], d[off + y * row + x * bpp]) for y in range(h) for x in range(w)]
-n = len(px); m = [sum(p[i] for p in px) / n for i in range(3)]
-sd = (sum(sum((p[i] - m[i]) ** 2 for i in range(3)) for p in px) / (3 * n)) ** 0.5
-near = lambda c, t: sum(1 for p in px if all(abs(p[i] - c[i]) <= t for i in range(3))) * 100 // n
-print('%d/%d/%d sd %.0f white %d surface %d black %d bpp %d comp %d' % (m[0], m[1], m[2], sd, near((255, 255, 255), 12), near((47, 66, 60), 12), near((0, 0, 0), 12), bpp * 8, struct.unpack_from('<I', d, 30)[0]))
-BMP
-)" || px=-
-      px="$(tr -cd 'A-Za-z0-9./ ' <<<"$px")"
-    fi
-    rm -f "$png" "$small"
+    c0="$(ci_cpus)"
+    px="$(ci_frame "$WORK/grid1" "$WORK/grid0")"
+    sleep 5
+    px2="$(ci_frame "$WORK/grid2" "$WORK/grid0")"
+    c1="$(ci_cpus)"
+    h1="${px##*hash }" h2="${px2##*hash }" fh="${px2##*hash }"
+    if [ -z "$h1" ] || [ -z "$h2" ]; then h2=unread; elif [ "$h1" = "$h2" ]; then h2=same; else h2=changed; fi
+    px="$px; 5 s later $h2 frame; cpu $(ci_cpu_delta "$c0" "$c1")"
     wc="$(ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort)"
     wc="$(printf '%s now, %s born, %s gone' "$(grep -c . <<<"$wc")" "$(comm -13 "$WORK/wc0" - <<<"$wc" | grep -c .)" "$(comm -23 "$WORK/wc0" - <<<"$wc" | grep -c .)")"
     wc="$wc; gpu $(ps -Ao comm= 2>/dev/null | grep -c 'WebKit.GPU'), net $(ps -Ao comm= 2>/dev/null | grep -c 'WebKit.Networking')"
     lg=-
-    if cap 60 xcrun simctl spawn "$U" log show --last 4m --info --debug --style compact --predicate 'subsystem BEGINSWITH "com.apple.WebKit" OR process CONTAINS "WebContent"' >"$lf" 2>/dev/null; then
+    [ ! -e "$SIM_P.late" ] || lg=late
+    if [ "$lg" = - ] && cap 60 xcrun simctl spawn "$U" log show --last 4m --info --debug --style compact --predicate 'subsystem BEGINSWITH "com.apple.WebKit" OR process CONTAINS "WebContent"' >"$lf" 2>/dev/null; then
       lg="lines $(grep -c . "$lf")"
       for p in 'processDidTerminateOrFailedToLaunch' 'didClose' 'failed to launch|Error launching process|libxpc connection' 'didBecomeUnresponsive' 'GPUProcessConnection' 'XPC_ERROR_CONNECTION_INVALID' 'didCompletePageTransition' 'freez' 'didCommitLoad|commitLoad' 'didFailProvisional' 'ProcessSuspended|suspend' 'jetsam'; do
         lg="$lg, ${p%%|*} $(grep -ciE "$p" "$lf")"
       done
     fi
     rm -f "$lf"
+    pl=-
+    [ ! -e "$SIM_P.late" ] || pl=late
+    if [ "$pl" = - ] && cap 60 xcrun simctl spawn "$U" log show --last 4m --info --debug --style compact --predicate 'process == "SafariViewService" OR process == "SpringBoard" OR process == "Web" OR process == "backboardd"' >"$lf" 2>/dev/null; then
+      pl="lines $(grep -c . "$lf")"
+      for p in SafariViewService SpringBoard Web backboardd; do pl="$pl, $p $(grep -c " $p\[" "$lf")"; done
+      for p in dismiss invalidat transition; do pl="$pl, $p $(grep -ci "$p" "$lf")"; done
+    fi
+    rm -f "$lf"
     load="$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}' | tr -cd '0-9.')"
     org="$(curl -s -o /dev/null -w '%{http_code} %{time_total}' --max-time 15 "$ORIGIN/" 2>/dev/null | tr -cd '0-9. ')" || org=000
-    printf '%s\t%s\tels %s\troles %s\tweb %s\ttitle %s\t%s\town %s\tpx %s\twc %s\tlog %s\tload %s\torigin %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" "${roles:--}" "${web:-x}" "${title:-x}" "${form:-x}" "${own#,}" "${px:--}" "$wc" "$lg" "${load:--}" "${org:-000}" >>"$OUT/stall.tsv"
+    printf '%s\t%s\tels %s\troles %s\tweb %s\ttitle %s\t%s\town %s\tpx %s\twc %s\tlog %s\tplog %s\tload %s\torigin %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" "${roles:--}" "${web:-x}" "${title:-x}" "${form:-x}" "${own#,}" "${px:--}" "$wc" "$lg" "$pl" "${load:--}" "${org:-000}" >>"$OUT/stall.tsv"
     if [ "$n" = 3 ]; then
-      # nudge (panel, H1/H2): a 40 pt drag on the page makes WebKit commit a layer tree. More elements after it: the
-      # document was there but frozen; the same count: nothing to show. A drag, not a tap, so nothing activates.
-      ax swipe --start-x "$SIM_X" --start-y 600 --end-x "$SIM_X" --end-y 560 --duration 0.3 >/dev/null 2>&1 || true
+      # round 2 (panel 2): a swipe down from the top edge, the sheet-dismiss gesture. A live overlay moves (the frame
+      # changes, the Home point's owner may change); a frozen one doesn't. A swipe, not a tap: nothing activates.
+      [ ! -e "$SIM_P.late" ] || { printf '%s\t%s\tswipe down\tskipped: deadline\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" >>"$OUT/stall.tsv"; return 0; }
+      px="$(ci_frame "$WORK/grid3" "$WORK/grid0")"
+      fh="${px##*hash }"
+      ax swipe --start-x "$SIM_X" --start-y 110 --end-x "$SIM_X" --end-y 760 --duration 0.5 >/dev/null 2>&1 || true
       sleep 3
       els="$(SIM_AX_CAP=15 ax describe-ui 2>/dev/null | jq '[.. | objects | select(((.role? // .type? // "") | tostring) != "")] | length' 2>/dev/null | tr -cd '0-9')"
-      printf '%s\t%s\tnudge\tels %s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" >>"$OUT/stall.tsv"
+      own="$(SIM_AX_CAP=8 ax describe-ui --point "$SIM_X,$SIM_Y_HOME" 2>/dev/null | jq -r '(if type == "array" then (.[0] // {}) else . end) | .pid // empty' 2>/dev/null | tr -cd '0-9')"
+      [ -z "$own" ] || own="$(ps -o comm= -p "$own" 2>/dev/null | sed 's#.*/##' | tr -cd 'A-Za-z0-9._-' | cut -c1-40)"
+      px2="$(ci_frame "$WORK/grid4" "$WORK/grid0")"
+      h1="${px2##*hash }"
+      if [ -z "$h1" ] || [ -z "$fh" ]; then h1=unread; elif [ "$h1" = "$fh" ]; then h1=same; else h1=changed; fi
+      printf '%s\t%s\tswipe down\tels %s\tpoint %s\tframe %s vs before\t%s\n' "$((SECONDS - ${CI_SIGNIN_T0:-$SECONDS}))" "${CI_JOB_TAG:-?}" "${els:-x}" "${own:--}" "$h1" "$px2" >>"$OUT/stall.tsv"
     else
       # cold relaunch (panel, H2): a home press only resumes, so the web app's own process is killed, then its icon
       # tapped. Signed-in Home after it: the callback ran and only the view stuck. The card: the callback never ran,
@@ -974,7 +1077,7 @@ BMP
     printf '%s\t%s\t%s\t%s\t%s\n' "$((SECONDS - CI_SIGNIN_T0))" "$c" "$(cat "$SIM_P.probes" 2>/dev/null || echo 0)" "${own:--}" "$wc" >>"$OUT/landmark.tsv"
   }
   eval "ci_orig_sign_in() $(declare -f sim_sign_in | sed 1d)"
-  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; rm -f "$SIM_P.ciblank"; ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort >"$WORK/wc0"; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
+  sim_sign_in() { local rc=0; CI_SIGNIN_T0=$SECONDS; rm -f "$SIM_P.ciblank"; ps -Ao pid=,comm= 2>/dev/null | awk '/WebContent/ {print $1}' | sort >"$WORK/wc0"; printf '# %s\n' "${CI_JOB_TAG:-?}" >>"$OUT/landmark.tsv"; ci_idle_wait; ci_orig_sign_in "$@" || rc=$?; CI_SIGNIN_T0=""; return "$rc"; }
   sim_boot() { sx 300 bootstatus "$SIM_U" -b >/dev/null 2>&1 || { sim_err SIM_UNAVAILABLE BOOT_FAILED "bootstatus failed or took over 300 s"; return 1; }; SIM_STATE=Booted; }
   local bad
   bad="$(validate_sim "$1" 2>/dev/null)" || true
@@ -1056,7 +1159,7 @@ s_rows() {
     # IOS-CHECK.md → Failures: these are dropped input ("rerun the step"), so a job that ends on one runs once more
     for try in 1 2; do
     left=$((DEADLINE - SECONDS - 60)) # per try, so a rerun can't run past the deadline (review S2)
-    [ "$left" -le 1200 ] || left=1200 # the launch job: ~6 min to submit, ~9 min of Home reads, ci_stall's two looks
+    [ "$left" -le 1500 ] || left=1500 # the launch job: ~6 min to submit, an idle wait (5 min max), ~9 min of Home reads, ci_stall's two looks
     [ "$left" -ge 60 ] || { st=error rs=BUDGET js="{}"; break; }
     jq -e --arg n "$j" --arg sha "$sha" --argjson to "$([ "$left" -le 600 ] && echo "$left" || echo 600)" --argjson last "$([ "$j" = "$last" ] && echo true || echo false)" \
       '. as $p | ($p.jobs[] | select(.name == $n)) as $j
