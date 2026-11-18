@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
 import {
   DAY_REMINDER_TIME,
+  RITUAL_TIMES,
   fmtClock12,
   PUSH_NO_DEVICE_ERROR,
   PUSH_UNCONFIGURED_ERROR,
@@ -57,6 +58,16 @@ const KINDS: { key: ReminderSettingKey; label: string; hint: string }[] = [
     key: 'remindPlanned',
     label: `Planned tasks at ${AT}`,
     hint: 'On the day you planned them for.',
+  },
+  {
+    key: 'nudgeMorning',
+    label: `Plan your day at ${fmtClock12(RITUAL_TIMES.ritualMorning)}`,
+    hint: 'How many tasks are planned for today.',
+  },
+  {
+    key: 'nudgeNight',
+    label: `Close the day at ${fmtClock12(RITUAL_TIMES.ritualNight)}`,
+    hint: 'How many of today’s planned tasks are done and still open.',
   },
 ];
 

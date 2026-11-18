@@ -39,28 +39,47 @@ export const PUSH_ENDPOINT_ERROR = "That push endpoint isn't a known push servic
 export const PUSH_UNCONFIGURED_ERROR = "Reminders aren't set up on this stage yet";
 export const PUSH_NO_DEVICE_ERROR = 'Turn on reminders on a device first';
 
-export type ReminderSettingKey = 'remindTimed' | 'remindDueDay' | 'remindPlanned';
+export type ReminderSettingKey =
+  | 'remindTimed'
+  | 'remindDueDay'
+  | 'remindPlanned'
+  | 'nudgeMorning'
+  | 'nudgeNight';
 export const REMINDER_SETTINGS_DEFAULTS: Pick<Settings, ReminderSettingKey> = {
   remindTimed: true,
   remindDueDay: true,
   remindPlanned: true,
+  nudgeMorning: true,
+  nudgeNight: true,
 };
 
 // timed = a deadline with a clock time, dueDay = a day-only deadline, planned = on a day's plan,
-// test = Settings' Send test.
-export type ReminderKind = 'timed' | 'dueDay' | 'planned' | 'test';
+// test = Settings' Send test, ritualMorning / ritualNight = the day's two ritual nudges (RITUAL_TIMES).
+export type ReminderKind = 'timed' | 'dueDay' | 'planned' | 'test' | RitualKind;
+export type RitualKind = 'ritualMorning' | 'ritualNight';
 
-const SETTING_OF: Record<Exclude<ReminderKind, 'test'>, ReminderSettingKey> = {
+export const SETTING_OF_KIND: Record<Exclude<ReminderKind, 'test'>, ReminderSettingKey> = {
   timed: 'remindTimed',
   dueDay: 'remindDueDay',
   planned: 'remindPlanned',
+  ritualMorning: 'nudgeMorning',
+  ritualNight: 'nudgeNight',
 };
+
+// The ritual nudges' wall-clock times (user's zone): plan the day, close the day. Constants like
+// DAY_REMINDER_TIME — each nudge's toggle is the off switch. No auto-mute (the maintainer, 11-18).
+export const RITUAL_TIMES: Record<RitualKind, string> = {
+  ritualMorning: '08:30',
+  ritualNight: '21:30',
+};
+export const RITUAL_KINDS = Object.keys(RITUAL_TIMES) as RitualKind[];
+export const isRitual = (kind: ReminderKind): kind is RitualKind => kind in RITUAL_TIMES;
 
 // Rows written before the toggles existed read back undefined — on, like the defaults.
 export const reminderEnabled = (
   kind: ReminderKind,
   settings: Partial<Pick<Settings, ReminderSettingKey>>,
-): boolean => kind === 'test' || settings[SETTING_OF[kind]] !== false;
+): boolean => kind === 'test' || settings[SETTING_OF_KIND[kind]] !== false;
 
 const isOpen = (t: Pick<Task, 'status' | 'deletedAt'>): boolean =>
   t.deletedAt === null && t.status !== 'done' && t.status !== 'cancelled';
@@ -86,13 +105,47 @@ export const planFireAt = (
   epoch: DueEpoch,
 ): number | null => (p.deletedAt === null ? epoch(p.day, DAY_REMINDER_TIME) : null);
 
+// The ritual nudges that fall in [from, to]: each kind's time on the day keys `from` and `to` fall on,
+// as epochs (DST-safe through `epoch`), oldest first. `dayKeyOf` maps an epoch to its day key in the
+// user's zone.
+export function ritualFireAts(
+  from: number,
+  to: number,
+  epoch: DueEpoch,
+  dayKeyOf: (at: number) => string,
+): { kind: RitualKind; day: string; fireAt: number }[] {
+  const days = [...new Set([dayKeyOf(from), dayKeyOf(to)])];
+  return days
+    .flatMap((day) => RITUAL_KINDS.map((kind) => ({ kind, day, fireAt: epoch(day, RITUAL_TIMES[kind]) })))
+    .filter((r) => r.fireAt >= from && r.fireAt <= to)
+    .sort((a, b) => a.fireAt - b.fireAt);
+}
+
 // One thing to ping about, as the poller found it.
 export interface ReminderCandidate {
   kind: ReminderKind;
   fireAt: number;
-  taskId: string | null; // null for test
+  taskId: string | null; // null for test and the rituals
   title: string;
   dueTime: string | null; // timed only
+  body?: string; // a ritual's count line, set by the poller
+}
+
+// A ritual's count line — counts only, never "missed" (the maintainer, 11-03). `open` and `done` are
+// the day's planned tasks (cancelled ones left out).
+export function ritualCopy(
+  kind: RitualKind,
+  counts: { open: number; done: number },
+): { title: string; body: string } {
+  if (kind === 'ritualMorning') {
+    const n = counts.open + counts.done;
+    return { title: 'Plan your day', body: n > 0 ? `${n} planned today` : 'Nothing planned yet' };
+  }
+  const parts = [
+    ...(counts.open > 0 ? [`${counts.open} left open`] : []),
+    ...(counts.done > 0 ? [`${counts.done} done`] : []),
+  ];
+  return { title: 'Close the day', body: parts.length > 0 ? parts.join(' · ') : 'Nothing on today’s plan' };
 }
 
 // By code points, so an emoji at the cut isn't split into half a surrogate pair.
@@ -113,6 +166,8 @@ const BODY_OF: Record<ReminderKind, (c: ReminderCandidate) => string> = {
   dueDay: () => 'Due today',
   planned: () => 'Planned for today',
   test: () => 'Reminders reach this device',
+  ritualMorning: (c) => c.body ?? '',
+  ritualNight: (c) => c.body ?? '',
 };
 
 // What the notification says. Several candidates in one tick become one notification — what keeps
@@ -128,9 +183,12 @@ export function reminderCopy(cands: readonly ReminderCandidate[]): { title: stri
 }
 
 // The notification's tag (a later one with the same tag replaces it) and the push Topic header: the task
-// id (a ULID — 26 chars, inside Topic's 32), or a batch's minute.
-export const reminderTag = (cands: readonly ReminderCandidate[]): string =>
-  cands.length === 1 ? (cands[0]!.taskId ?? 'test') : `b${Math.floor(cands[0]!.fireAt / 60_000)}`;
+// id (a ULID — 26 chars, inside Topic's 32), the ritual's kind, or a batch's minute.
+export const reminderTag = (cands: readonly ReminderCandidate[]): string => {
+  if (cands.length > 1) return `b${Math.floor(cands[0]!.fireAt / 60_000)}`;
+  const c = cands[0]!;
+  return c.taskId ?? (c.kind === 'test' ? 'test' : c.kind);
+};
 
 // Where a tap lands: the task's modal on Today, or Today for a batch. `n` is the notification's tag (for
 // PR 3's "opened" signal; ignored today).
@@ -151,20 +209,19 @@ export interface DeclarativePush {
   };
 }
 
-// The plaintext a send encrypts. `appUrl` is the stage's origin (config), never stored data.
-export function reminderPayload(
-  cands: readonly ReminderCandidate[],
+function declarative(
+  title: string,
+  body: string,
+  path: string,
+  tag: string,
   appUrl: string,
 ): DeclarativePush {
-  const { title, body } = reminderCopy(cands);
-  const tag = reminderTag(cands);
-  const taskId = cands.length === 1 ? cands[0]!.taskId : null;
   const payload: DeclarativePush = {
     web_push: 8030,
     notification: {
       title,
       body,
-      navigate: `${appUrl.replace(/\/+$/, '')}${taskPushPath(taskId, tag)}`,
+      navigate: `${appUrl.replace(/\/+$/, '')}${path}`,
       tag,
       silent: false,
       lang: 'en-US',
@@ -173,6 +230,37 @@ export function reminderPayload(
   if (new TextEncoder().encode(JSON.stringify(payload)).length > PUSH_PAYLOAD_MAX)
     throw new Error('push payload too large');
   return payload;
+}
+
+// The plaintext a send encrypts. `appUrl` is the stage's origin (config), never stored data. A retry
+// passes the tag its first try went out under, so the push service replaces an undelivered first copy
+// (RFC 8030 §5.4 Topic). A ritual is always alone in its notification and opens Home, whose clock mode
+// is the ritual's (morning at 08:30, night at 21:30).
+export function reminderPayload(
+  cands: readonly ReminderCandidate[],
+  appUrl: string,
+  tag: string = reminderTag(cands),
+): DeclarativePush {
+  const { title, body } = reminderCopy(cands);
+  const only = cands.length === 1 ? cands[0]! : null;
+  const path = only && isRitual(only.kind) ? '/' : taskPushPath(only?.taskId ?? null, tag);
+  return declarative(title, body, path, tag, appUrl);
+}
+
+// The one catch-up after reminders that never reached a device (retries ran out, or the poller was down
+// past the window): "N reminders didn't reach you", their titles, opening Today. Its tag is its minute.
+export const catchUpTag = (now: number): string => `c${Math.floor(now / 60_000)}`;
+export function catchUpPayload(
+  cands: readonly ReminderCandidate[],
+  appUrl: string,
+  now: number,
+): DeclarativePush {
+  if (cands.length === 0) throw new Error('catchUpPayload needs a candidate');
+  const n = cands.length;
+  const title = n === 1 ? '1 reminder didn’t reach you' : `${n} reminders didn’t reach you`;
+  const body = clip(cands.map((c) => clip(titleOf(c), PUSH_TITLE_MAX)).join(' · '), PUSH_BODY_MAX);
+  const tag = catchUpTag(now);
+  return declarative(title, body, taskPushPath(null, tag), tag, appUrl);
 }
 
 const hostAllowed = (host: string): boolean =>

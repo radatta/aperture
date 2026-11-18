@@ -6,10 +6,12 @@ import { encryptAes128Gcm, publicKeyOf, PushKeysError, vapidAuthorization } from
 // The live push gateway: one POST per device to its stored endpoint, encrypted (RFC 8291) and signed
 // (RFC 8292) with the stage's VAPID private key from SSM SecureString
 // `/aperture/<stage>/push/vapid_private_key`, held for the warm container and dropped on a 403 (a rotated
-// key). Wired only in pushDispatch.ts; testMode never reaches it. One attempt, no retries (fail-closed,
-// D3), a 5 s cap, and redirects are never followed — the POST goes to the allowlisted host or nowhere.
+// key). Wired only in pushDispatch.ts; testMode never reaches it. One attempt per call (the poller's
+// retries are its own, push/deliver.ts), a 10 s cap — FCM asks for at least 10 s, and a shorter abort
+// turns more slow-but-accepted sends into retries (U6) — and redirects are never followed: the POST goes to
+// the allowlisted host or nowhere.
 
-const SEND_TIMEOUT_MS = 5000;
+export const SEND_TIMEOUT_MS = 10_000;
 
 type SsmLike = Pick<SSMClient, 'send'>;
 
