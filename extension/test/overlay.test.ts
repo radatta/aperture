@@ -32,7 +32,11 @@ import {
 // in real time (`io`) until none is in flight: the fake clock never runs ahead of a sign or verify, however slow
 // the threadpool (F242: under load it ran seconds ahead, and timers fired that real time never would). Crypto
 // takes no fake time, so a "nothing within N ms" check is as strong as before, and each `until` bound is exact.
+// EXT_CRYPTO_JITTER_MS=90 makes every call settle 0–90 real ms late, at random: the stress run that found F242.
 const realSetTimeout = setTimeout;
+const JITTER_MS = Number(process.env.EXT_CRYPTO_JITTER_MS) || 0;
+const late = <T,>(v: T) =>
+  new Promise<T>((r) => realSetTimeout(() => r(v), Math.floor(Math.random() * (JITTER_MS + 1))));
 let cryptoInFlight = 0;
 {
   const subtle = globalThis.crypto.subtle as unknown as Record<
@@ -43,7 +47,8 @@ let cryptoInFlight = 0;
     const real = subtle[k]!.bind(subtle);
     subtle[k] = (...a: unknown[]) => {
       cryptoInFlight++;
-      return real(...a).finally(() => cryptoInFlight--);
+      const p = JITTER_MS ? real(...a).then(late) : real(...a);
+      return p.finally(() => cryptoInFlight--);
     };
   }
 }
