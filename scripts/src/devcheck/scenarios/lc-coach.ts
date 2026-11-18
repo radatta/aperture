@@ -2509,7 +2509,9 @@ export const lcCoach: Scenario = {
           .filter({ hasText: `with ${label}` })
           .filter({ hasText: 'Code 3 · Solve 2' }); // the Log it one is Code 4 · Solve 3
         await item.getByText('Code 3 · Solve 2', { exact: true }).waitFor({ timeout: 15_000 });
-        await item.getByText(/^(First try that week \d+ of \d+|No first try that week)$/).waitFor();
+        await item
+          .getByText(/^(First try that week \d+ of \d+( \(\d+%\))?|No first try that week)$/)
+          .waitFor();
         await ctx.shot('lc-coach-mock-patterns');
         // Delete the logged-from-planned one there: asks once, Yes removes it.
         const gone = ctx.page
