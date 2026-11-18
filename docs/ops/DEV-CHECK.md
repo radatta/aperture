@@ -164,16 +164,18 @@ describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureA
 [ -n "$claude" ] && [ "$pool" != None ] && [ "$client" != None ] && [ "$claude" != None ] && { aws cognito-idp admin-get-user --profile aperture-dev --region us-west-1 --user-pool-id
 "$pool" --username "$em" >/dev/null 2>&1 || aws cognito-idp admin-create-user --profile aperture-dev --region
 us-west-1 --user-pool-id "$pool" --username "$em" --message-action SUPPRESS --user-attributes Name=email,Value="$em"
-Name=email_verified,Value=true >/dev/null; } && pw="$(openssl rand -base64 24)Aa1_" && printf
-'{"UserPoolId":"%s","Username":"%s","Password":"%s","Permanent":true}' "$pool" "$em" "$pw" | aws cognito-idp
-admin-set-user-password --profile aperture-dev --region us-west-1 --cli-input-json file:///dev/stdin && sub=$(aws
+Name=email_verified,Value=true >/dev/null; } && pw="$(openssl rand -base64 24)Aa1_" && t=$(mktemp) && printf
+'{"UserPoolId":"%s","Username":"%s","Password":"%s","Permanent":true}' "$pool" "$em" "$pw" >| "$t" && aws
+cognito-idp admin-set-user-password --profile aperture-dev --region us-west-1 --cli-input-json "file://$t"; r=$?;
+rm -f "$t"; [ "$r" = 0 ] && sub=$(aws
 cognito-idp admin-get-user --profile aperture-dev --region us-west-1 --user-pool-id "$pool" --username "$em" --query
 "UserAttributes[?Name=='sub'].Value" --output text) && umask 077 && printf
 'DEVCHECK_EMAIL=%s\nDEVCHECK_PASSWORD=%s\nDEVCHECK_SUB=%s\nDEVCHECK_COGNITO_HOST=%s\nDEVCHECK_CLIENT_ID=%s\nDEVCHECK_POOL_ID=%s\nDEVCHECK_CLAUDE_CLIENT_ID=%s\n'
 "$em" "$pw" "$sub" "aperture-dev-$acct.auth.us-west-1.amazoncognito.com" "$client" "$pool" "$claude" >
 .secrets/devcheck.dev.web.env && echo done ); fi`. It refuses an existing file (up front, and `set -C` at the
-   write), runs nothing if the `cd` fails, reuses a user a failed earlier try made, keeps the password off every argv (zsh's builtin `printf` into stdin; `_` is the guaranteed symbol, `!`
-   would trip zsh) and prints nothing secret; the subshell keeps `umask` and `pw` out of the operator's shell.
+   write), runs nothing if the `cd` fails, reuses a user a failed earlier try made, keeps the password off every argv (zsh's builtin `printf` into a mode-600 `mktemp` file, `>|` past
+   `set -C`, removed right after the call — `file:///dev/stdin` fails on macOS with "Invalid JSON received"; `_` is
+   the guaranteed symbol, `!` would trip zsh) and prints nothing secret; the subshell keeps `umask` and `pw` out of the operator's shell.
    Until the file exists, slot A runs one user. One more user in the pool costs nothing: Cognito's free tier on the Lite and Essentials plans is
    10,000 monthly active users with no end date ([pricing](https://aws.amazon.com/cognito/pricing/); the pool sets
    no feature plan, so never Plus), the admin calls that create it carry no charge, and the claude client signs in
