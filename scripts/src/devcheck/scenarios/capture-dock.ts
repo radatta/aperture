@@ -46,7 +46,7 @@ export const captureDock: Scenario = {
       what: '⌘Enter while composing neither reviews nor saves',
       offDev: {
         file: CAPTURE_BAR,
-        test: '⌘Enter mid-composition never reviews or saves',
+        test: 'Enter or ⌘Enter mid-composition never reviews or saves a task',
         why: NO_IME,
       },
     },
