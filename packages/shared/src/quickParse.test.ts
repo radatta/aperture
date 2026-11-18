@@ -503,6 +503,22 @@ describe('validateParsedTask — voice (capture.md → Time rules)', () => {
     ).toMatchObject({ title: 'send the report', dueTime: '09:00' });
   });
 
+  it('a day-part beside a day with no clock leaves the title, as does one beside a grammar-filled clock', () => {
+    for (const line of [
+      'remind me tomorrow evening to call mum',
+      'call mum friday afternoon',
+      'call mum tomorrow night',
+    ])
+      expect(voice(line, { dueDay: '2026-11-17' }).input.title).toBe('call mum');
+    // The model gave no clock: the grammar fills it, and "evening" goes with it.
+    expect(
+      voice('call mum at 5 pm tomorrow evening', { dueDay: '2026-11-17' }).input,
+    ).toMatchObject({
+      title: 'call mum',
+      dueTime: '17:00',
+    });
+  });
+
   it('words the model kept in its title were not a time', () => {
     const v = voice('look at one of the leases', { title: 'look at one of the leases' });
     expect(v.input).toEqual({ title: 'look at one of the leases' });

@@ -292,7 +292,8 @@ export function validateParsedTask(
     // keeps its words.
     // On the model path that's its half (or a lone day-part the grammar read); the grammar's own bare-hour part
     // reads "morning" anywhere, so it counts only where the grammar placed the time.
-    dayPartsTime = grammar?.kind === 'part' || (grammar?.kind === 'bare' && grammar.part !== null);
+    // A day with no clock ("tomorrow evening") keeps the default: its day-part words are the due's.
+    dayPartsTime = !(grammar?.kind === 'bare' && grammar.part === null);
     if (grammar?.kind === 'relative') resolve(grammar);
     else if (modelClock && (!grammar || !kept || due)) {
       dayPartsTime = grammar?.kind === 'part' || half !== 'none';

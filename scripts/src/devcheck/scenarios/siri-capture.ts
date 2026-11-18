@@ -1183,15 +1183,17 @@ export const siriCapture: Scenario = {
           );
           lands(r, want, 'the stated half');
         }
-        // 2. "tomorrow at 1 … the morning report": a bare hour on a named day is the daytime one, 13:00 — "morning"
-        // belongs to the task. Read as a stated half it would be 01:00. Any hour of the run.
+        // 2. "<weekday three days on> at 1 … the morning report": a bare hour on a named day is the daytime one,
+        // 13:00 — "morning" belongs to the task. Read as a stated half it would be 01:00. A weekday, not "tomorrow":
+        // before the 4am rollover "tomorrow" is the calendar's today, not a named day.
         {
+          const day = S.addDays(laDay(new Date()), 3);
+          const weekday = S.fmtWeekday(day).toLowerCase();
           const r = await parsed(
-            `remind me tomorrow at 1 to ${marker(ctx.nonce)} send the morning report`,
+            `remind me ${weekday} at 1 to ${marker(ctx.nonce)} send the morning report`,
             'the day-part noun',
           );
-          if (r.due?.time !== '13:00')
-            throw new Error(`the day-part noun: due ${JSON.stringify(r.due)}, want 13:00`);
+          lands(r, { day, time: '13:00' }, 'the day-part noun');
           const title = (await getTask(ctx, r.id!)).title;
           if (!/morning report/.test(title))
             throw new Error(`the title lost its words: “${title}”`);
@@ -1529,6 +1531,11 @@ export const siriCapture: Scenario = {
           // later. A raw save on the way (a missed deadline) still spent its claim, so it counts like a parse.
           let raws = 0;
           const spentB = parsedB.filter((d) => d === day).length;
+          // With none spent, a per-token cap would refuse at the same count: the row proves nothing.
+          if (spentB === 0)
+            throw new Error(
+              'no token-B parse today: run the earlier api rows first, or the cap stays unproven',
+            );
           const latest = S.CAPTURE_PARSE_DAILY_CAP - spentB + 1;
           for (let i = 1; i <= latest; i++) {
             const text = `${line(ctx, `parse ${i} call the vet`)} at ${at}`;

@@ -132,7 +132,7 @@ Per UTC day — guards, not UX:
 - **Leaked tokens:** 40 × about $0.003–0.006 (Sonnet, 512 output tokens at most, 600 characters in; about $0.008 at most a
   parse) ≈ $0.12–0.24 a day, about $3.60–7.20 a month, however many tokens leak, plus junk tasks. The hard ceiling,
   with all five tokens racing their claims at once, is 5 × 40 = 200 parses a day (about $1.60). It sits inside the maintainer's Claude
-  API credit, which his about-$1 rogue-cost rule doesn't cover (2026-11-17). Revoke in Settings stops it at once. Not
+  API credit, which the maintainer's about-$1 rogue-cost rule doesn't cover (2026-11-17). Revoke in Settings stops it at once. Not
   capped: the request floor (a missing or malformed header costs nothing, an unknown token one GetItem);
   reserved concurrency would cap the whole shared BFF.
 
