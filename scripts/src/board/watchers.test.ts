@@ -10,15 +10,25 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { PACE_DEFAULTS, paceReasons } from '../lane/pace.ts';
 
 // Every case is a few dozen bash/jq forks per tick: well under a second idle, slower beside a full gate.
-vi.setConfig({ testTimeout: 30_000 });
+// A test runs several watchers back to back; one run is capped at 25 s below.
+vi.setConfig({ testTimeout: 120_000 });
+const made: string[] = [];
+afterAll(() => made.forEach((d) => rmSync(d, { recursive: true, force: true })));
+const tmp = (prefix: string) => {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  made.push(d);
+  return d;
+};
 
 const ROOT = join(import.meta.dirname, '../../..');
 const BOARD = join(ROOT, 'scripts/board');
@@ -53,7 +63,7 @@ type Run = {
 
 // A fake root: tick 0's files at the root, tick n's under ticks/<n>/ (applied by the n-th sleep).
 function fake(t0: number, ticks: Files[]) {
-  const dir = mkdtempSync(join(tmpdir(), 'watch-'));
+  const dir = tmp('watch-');
   const put = (base: string, files: Files) => {
     for (const [p, text] of Object.entries(files)) {
       mkdirSync(join(base, p, '..'), { recursive: true });
@@ -67,6 +77,7 @@ function fake(t0: number, ticks: Files[]) {
   mkdirSync(join(dir, 'usage'));
   writeFileSync(join(dir, 'clock'), `${t0}\n`);
   writeFileSync(join(dir, 'tick'), '0\n');
+  writeFileSync(join(dir, 'nticks'), `${ticks.length}\n`);
   put(dir, ticks[0] ?? {});
   ticks.slice(1).forEach((f, i) => {
     mkdirSync(join(dir, 'ticks', String(i + 1)), { recursive: true }); // an empty tick still ticks
@@ -79,6 +90,7 @@ function run(dir: string, script: string, args: string[] = [], env: NodeJS.Proce
   const r = spawnSync('bash', [join(BOARD, script), ...args], {
     encoding: 'utf8',
     timeout: 25_000,
+    killSignal: 'SIGKILL', // a hung watcher must never read as the shim's SIGTERM
     env: {
       PATH: `${dir}/bin:${process.env.PATH}`,
       HOME: process.env.HOME,
@@ -92,7 +104,12 @@ function run(dir: string, script: string, args: string[] = [], env: NodeJS.Proce
   });
   return {
     status: r.status,
-    quiet: r.signal === 'SIGTERM',
+    // quiet: killed by the shim once every tick ran, and nothing on stderr on the way
+    quiet:
+      r.signal === 'SIGTERM' &&
+      !r.error &&
+      r.stderr === '' &&
+      readFileSync(join(dir, 'tick'), 'utf8') === readFileSync(join(dir, 'nticks'), 'utf8'),
     tick: Number(readFileSync(join(dir, 'tick'), 'utf8')),
     stdout: r.stdout,
     stderr: r.stderr,
@@ -170,8 +187,22 @@ describe('pace-watch.sh', () => {
   });
 
   it('restarts the CPU hold when the average cools', () => {
-    // 9 cores, one idle tick at 7: the 5-sample average sits at 7.2 from tick 7 to 11, so no trip by tick 10
-    expect(pace(T10, 10, (i) => ({ cores: i === 7 ? 0 : 9 })).quiet).toBe(true);
+    // 9 cores, one idle tick at 7: the 5-sample average sits at 7.2 from tick 7 to 11, hot again at 12, so the hold
+    // restarts there and trips at 17 (an un-reset hold from tick 3 would trip at 12)
+    const cool = (i: number) => ({ cores: i === 7 ? 0 : 9 });
+    expect(pace(T10, 16, cool).quiet).toBe(true);
+    expect(pace(T10, 20, cool)).toMatchObject({ status: 3, tick: 17 });
+  });
+
+  it('restarts the CPU hold after a hot spell the hub ends', () => {
+    // hold from tick 3; the hub marks it hot at 5 and calm at 7: the hold restarts at 7 and trips at 12 (one carried
+    // over from tick 3 would trip at 8)
+    const r = pace(T10, 15, (i) => ({
+      cores: 9,
+      ...(i === 5 && { ctl: hot(T10 + 300) }),
+      ...(i === 7 && { ctl: { state: 'calm', since: T10 + 420 } }),
+    }));
+    expect([r.status, r.tick]).toEqual([3, 12]);
   });
 
   it('while hot: a lane trigger exits 5 before recovery is judged', () => {
@@ -179,6 +210,7 @@ describe('pace-watch.sh', () => {
     const r = pace(T10, 6, all({ ctl, l5: 15 }));
     expect([r.status, r.tick]).toEqual([5, 3]);
     expect(r.stdout).toContain('TRIGGER x');
+    expect(json(r, 'board/pace.json').state).toBe('hot'); // the hub's state reaches the gate's file
     expect(pace(T10, 6, all({ ctl, l5: 25 })).quiet).toBe(true);
     // load5 5 would also recover, but not before 10 min: the trigger still wins at the floor
     expect(pace(T10, 6, all({ ctl: { ...ctl, since: T10 - 3000 }, l5: 5 }))).toMatchObject({
@@ -204,6 +236,34 @@ describe('pace-watch.sh', () => {
     expect(pace(T10, 3, all({ ctl: hot(T10 - 3360), l5: 30 })).quiet).toBe(true);
   });
 
+  it('a since that isn’t a whole past epoch: a fraction floors, milliseconds or a string count as 0', () => {
+    expect(pace(T10, 8, all({ ctl: hot(T10 - 299.5) }))).toMatchObject({ status: 0, tick: 5 });
+    expect(pace(T10, 6, all({ ctl: hot(T10 * 1000), l5: 30 }))).toMatchObject({
+      status: 4,
+      tick: 3,
+    });
+    expect(pace(T10, 6, all({ ctl: hot('yesterday' as unknown as number), l5: 30 }))).toMatchObject(
+      {
+        status: 4,
+        tick: 3,
+      },
+    );
+  });
+
+  it('an empty or torn pace-control.json keeps the last view: hot stays hot', () => {
+    // hot from tick 0; the file is caught empty from tick 2 on; anon over the trip line would trip a calm reading
+    const r = pace(T10, 6, (i) => ({
+      anon: 11000,
+      l5: 30,
+      ...(i === 0 && { ctl: hot(T10) }),
+      ...(i === 2 && { files: { 'board/pace-control.json': '' } }),
+    }));
+    expect(r.quiet).toBe(true);
+    expect(json(r, 'board/pace.json').state).toBe('hot');
+    // no file at all is calm
+    expect(pace(T10, 6, all({ anon: 11000 }))).toMatchObject({ status: 3, tick: 3 });
+  });
+
   it('exits 6 on 10 min of idle with a ready lane, and stamps idle-fired', () => {
     const r = pace(T10, 15, all({ queue: ready }));
     expect([r.status, r.tick]).toEqual([6, 13]); // idle from the floor (tick 3), held 600 s
@@ -212,10 +272,13 @@ describe('pace-watch.sh', () => {
     expect(pace(T10, 12, all({ queue: ready })).quiet).toBe(true);
   });
 
-  it('idle only from 07:00: quiet at 06:53, fires at 07:00, never from 05:00', () => {
+  it('idle only from 07:00: quiet at 06:53, fires at 07:00 and at 09:03, never from 05:00', () => {
     const r = pace(at('2026-11-17T06:40:00-08:00'), 25, all({ queue: ready }));
     expect([r.status, r.tick]).toEqual([6, 20]);
     expect(r.stdout).toMatch(/^07:00 /);
+    const nine = pace(at('2026-11-17T08:50:00-08:00'), 15, all({ queue: ready })); // "09" is not octal
+    expect([nine.status, nine.tick]).toEqual([6, 13]);
+    expect(nine.stdout).toMatch(/^09:03 /);
     expect(pace(at('2026-11-17T05:00:00-08:00'), 20, all({ queue: ready })).quiet).toBe(true);
   });
 
@@ -244,10 +307,8 @@ describe('pace-watch.sh', () => {
     expect(pace(T10, 15, all({ queue: ready, files: { 'board/idle-fired': '\n' } }))).toMatchObject(
       { tick: 13 },
     );
-    expect(
-      pace(T10, 15, all({ queue: ready, ctl: hot(T10, { triggers: [] }), l5: 30, anon: 9500 }))
-        .quiet,
-    ).toBe(true);
+    // idle-level readings while hot (the hub re-stamps since each tick, so it never recovers): never idle
+    expect(pace(T10, 15, (i) => ({ queue: ready, ctl: hot(T10 + 60 * i) })).quiet).toBe(true);
     expect(pace(T10, 20, (i) => ({ queue: ready, l5: i === 8 ? 9 : 3 }))).toMatchObject({
       status: 6,
       tick: 19,
@@ -274,6 +335,10 @@ describe('pace-watch.sh', () => {
     expect(h.map((x) => x.samples)).toEqual([1, 2, 3, 4, 5, 5, 5]);
     expect(h[0].t).toBe('2026-11-17T10:01:00-08:00');
     expect(hist(r, 'mac-load')).toEqual([]);
+    // what the watcher writes, the start gate passes (scripts/src/lane/pace.ts)
+    expect(
+      paceReasons(read(r, 'board/pace.json'), null, null, p.heartbeat * 1000, PACE_DEFAULTS, 'b'),
+    ).toEqual([]);
     const mac = JSON.stringify({ t: 'x', load: [1, 2, 3], cpus: 12, mem: { freePct: 30 } });
     const m = pace(T10, 2, all({ files: { 'board/mac-stats.json': mac } }));
     const ml = lines(m, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l));
@@ -288,10 +353,25 @@ describe('pace-watch.sh', () => {
     expect(hist(r, 'vm-pace')).toEqual(['vm-pace-2026-11-18.jsonl']);
   });
 
-  it('an unreadable loadavg skips the tick: no pace.json, no history', () => {
-    const r = pace(T10, 3, all({ files: { loadavg: 'garbage\n' } }));
-    expect(r.quiet).toBe(true);
-    expect(existsSync(join(r.dir, 'board/pace.json'))).toBe(false);
+  it.each([
+    ['loadavg', { loadavg: 'garbage\n' }],
+    ['memory PSI', { 'cg/memory.pressure': 'some avg10=0.00 avg60=0.00 avg300=0.00 total=0\n' }],
+    ['CPU PSI', { 'cg/cpu.pressure': '' }],
+    ['anon', { 'cg/memory.stat': 'file 0\n' }],
+  ])(
+    'an unreadable %s skips the tick: no pace.json, no history — the gate fails closed',
+    (_, files) => {
+      const r = pace(T10, 3, (i) => ({ anon: 11000, ...(i > 0 && { files }) }));
+      expect(r.quiet).toBe(true);
+      expect(existsSync(join(r.dir, 'board/pace.json'))).toBe(false);
+      expect(existsSync(join(r.dir, 'board/history'))).toBe(true);
+      expect(hist(r, 'vm-pace')).toEqual([]);
+    },
+  );
+
+  it('takes no arguments', () => {
+    const r = run(fake(T10, []), 'pace-watch.sh', ['--help']);
+    expect([r.status, r.stderr]).toEqual([2, expect.stringContaining('usage: pace-watch.sh')]);
   });
 });
 
@@ -328,10 +408,15 @@ describe('usage-watch.sh', () => {
   it('--hard-only skips the soft line; SOFT / HARD in the env override limits.json', () => {
     expect(usage([meter([meterRow(T10 - 30, 59)])], ['--hard-only']).quiet).toBe(true);
     expect(usage([meter([meterRow(T10 - 30, 60)])], ['--hard-only']).status).toBe(8);
-    expect(usage([meter([meterRow(T10 - 30, 20)])], [], { SOFT: '13' }).status).toBe(7);
-    expect(usage([meter([meterRow(T10 - 30, 20)])], [], { HARD: '20' }).status).toBe(8);
+    expect(usage([meter([meterRow(T10 - 30, 20)])], [], { APERTURE_USAGE_SOFT: '13' }).status).toBe(
+      7,
+    );
+    expect(usage([meter([meterRow(T10 - 30, 20)])], [], { APERTURE_USAGE_HARD: '20' }).status).toBe(
+      8,
+    );
+    expect(usage([meter([meterRow(T10 - 30, 20)])], [], { SOFT: '13' }).quiet).toBe(true); // a generic name is ignored
     expect(usage([], ['--soft']).status).toBe(2);
-    expect(usage([], [], { SOFT: 'x' }).status).toBe(2);
+    expect(usage([], [], { APERTURE_USAGE_SOFT: 'x' }).status).toBe(2);
   });
 
   it('ignores rows older than freshSec; a row that lands later is seen at the next check', () => {
@@ -345,6 +430,9 @@ describe('usage-watch.sh', () => {
 
   it('no meter file is quiet; a torn last line hides nothing', () => {
     expect(usage([{}, {}]).quiet).toBe(true);
+    // a row of the wrong shape is dropped alone, not the whole reading
+    const odd = [JSON.stringify({ ts: 5, rl: 1 }), JSON.stringify({ ts: ts(T10), rl: 'x' })];
+    expect(usage([meter([...odd, meterRow(T10 - 30, 59)])]).status).toBe(7);
     const torn = {
       'usage/meter-2026-11-17.jsonl': meterRow(T10 - 30, 59) + '\n{"ts":"2026-11-17T09:59:5',
     };
@@ -427,11 +515,31 @@ describe('context-watch.sh', () => {
     expect(json(corrupt, 'board/ctx-alerted.json')).toEqual({ a: T10 });
   });
 
-  it('URGENT / WINDOW in the env override limits.json', () => {
-    expect(context([meter([ctxRow(T10 - 30, 'a', 300_000)])], { URGENT: '30' }).status).toBe(9);
-    expect(context([meter([ctxRow(T10 - 30, 'a', 300_000)])], { WINDOW: '500000' }).stdout).toBe(
-      '10:00 URGENT a 60%\n',
-    );
+  it('two sessions urgent at once alert together, both stamped', () => {
+    const r = context([meter([ctxRow(T10 - 30, 'c', 500_000), ctxRow(T10 - 30, 'a', 600_000)])]);
+    expect([r.status, r.stdout]).toEqual([9, '10:00 URGENT a 60%, c 50%\n']);
+    expect(json(r, 'board/ctx-alerted.json')).toEqual({ a: T10, c: T10 });
+  });
+
+  it('a row of the wrong shape is dropped alone', () => {
+    const odd = [
+      JSON.stringify({ ts: ts(T10 - 30), name: 'x', ctx: 'big' }),
+      JSON.stringify({ ts: ts(T10 - 30), name: 7, ctx: tok(900_000) }),
+    ];
+    const r = context([meter([...odd, ctxRow(T10 - 30, 'a', 510_000)])]);
+    expect([r.status, json(r, 'board/ctx.json').map((e: { name: string }) => e.name)]).toEqual([
+      9,
+      ['a'],
+    ]);
+  });
+
+  it('APERTURE_CTX_URGENT / _WINDOW in the env override limits.json; a bad one is exit 2', () => {
+    const rows = [meter([ctxRow(T10 - 30, 'a', 300_000)])];
+    expect(context(rows, { APERTURE_CTX_URGENT: '30' }).status).toBe(9);
+    expect(context(rows, { APERTURE_CTX_WINDOW: '500000' }).stdout).toBe('10:00 URGENT a 60%\n');
+    expect(context(rows, { WINDOW: '1' }).quiet).toBe(true); // screen's WINDOW is ignored
+    expect(context(rows, { APERTURE_CTX_WINDOW: '0' }).status).toBe(2);
+    expect(run(fake(T10, []), 'context-watch.sh', ['x']).status).toBe(2);
   });
 });
 
@@ -441,17 +549,20 @@ function limitsWithout(path: string[]) {
   let o = l;
   for (const k of path.slice(0, -1)) o = o[k];
   delete o[path.at(-1)!];
-  const f = join(mkdtempSync(join(tmpdir(), 'limits-')), 'limits.json');
+  const f = join(tmp('limits-'), 'limits.json');
   writeFileSync(f, JSON.stringify(l));
   return f;
 }
 
 describe('limits.json and the scripts themselves', () => {
+  const keys = (w: string) => Object.keys(LIMITS.watchers[w]).map((k) => ['watchers', w, k]);
   it.each([
-    ['pace-watch.sh', ['watchers', 'pace', 'tripCores']],
-    ['pace-watch.sh', ['pace', 'psiCpuBelow']],
-    ['usage-watch.sh', ['watchers', 'usage', 'hardPct']],
-    ['context-watch.sh', ['watchers', 'context', 'realertSec']],
+    ...keys('pace').map((p) => ['pace-watch.sh', p] as const),
+    ...['psiMemFullMax', 'psiCpuBelow', 'anonMiBBelow', 'minSamples'].map(
+      (k) => ['pace-watch.sh', ['pace', k]] as const,
+    ),
+    ...keys('usage').map((p) => ['usage-watch.sh', p] as const),
+    ...keys('context').map((p) => ['context-watch.sh', p] as const),
   ])('%s exits 78 naming a missing key (%j)', (script, path) => {
     const r = run(fake(T10, []), script, [], { APERTURE_LIMITS_JSON: limitsWithout(path) });
     expect(r.status).toBe(78);
@@ -462,7 +573,7 @@ describe('limits.json and the scripts themselves', () => {
     const bad = (edit: (l: typeof LIMITS) => void) => {
       const l = structuredClone(LIMITS);
       edit(l);
-      const f = join(mkdtempSync(join(tmpdir(), 'limits-')), 'limits.json');
+      const f = join(tmp('limits-'), 'limits.json');
       writeFileSync(f, JSON.stringify(l));
       return { APERTURE_LIMITS_JSON: f };
     };
@@ -470,6 +581,8 @@ describe('limits.json and the scripts themselves', () => {
       run(fake(T10, []), script, [], bad(edit));
     expect(go('usage-watch.sh', (l) => (l.watchers.usage.intervalSec = 1.5)).status).toBe(78);
     expect(go('pace-watch.sh', (l) => (l.watchers.pace.idleFromHour = 24)).status).toBe(78);
+    expect(go('pace-watch.sh', (l) => (l.pace.minSamples = 6)).status).toBe(78); // above windowSamples
+    expect(go('context-watch.sh', (l) => (l.watchers.context.windowTokens = 0)).status).toBe(78);
     const flag = go('context-watch.sh', (l) => (l.watchers.context.flagPct = 60));
     expect([flag.status, flag.stderr]).toEqual([
       78,

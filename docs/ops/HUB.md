@@ -187,20 +187,30 @@ timeout 65m /workspace/scripts/board/usage-watch.sh
 timeout 65m /workspace/scripts/board/context-watch.sh
 ```
 
-**Restart a watcher after every exit**, after acting on it — one copy of each at a time. What each exit asks:
+**Restart a watcher after every exit**, once the state that woke it has changed — else exits 4, 5 and 8 fire again
+at once — with the same arguments. One copy of each at a time: stop a running copy by the PID its background task
+gives, never by pattern (a singleton lock is follow-up F274). What each exit asks:
 
-| Exit | Watcher | Act                                                                            |
-| ---- | ------- | ------------------------------------------------------------------------------ |
-| 3    | pace    | trip: mark `pace-control.json` hot with `since`, hold or park lanes            |
-| 0    | pace    | recovered: mark it calm, resume held lanes                                     |
-| 5    | pace    | a held lane's trigger met: resume that lane                                    |
-| 4    | pace    | hot an hour: tell the user, decide                                             |
-| 6    | pace    | idle capacity and a ready `autoStart` lane: start it, or tell the user why not |
-| 7    | usage   | soft stop; restart it with `--hard-only`                                       |
-| 8    | usage   | hard stop                                                                      |
-| 9    | context | a session at the urgent line: tell the user at once                            |
-| 124  | any     | an hour with nothing to report: just restart                                   |
-| 78   | any     | a `limits.json` key is missing or bad: fix it, then restart                    |
+| Exit  | Watcher | Act, then restart                                                                                                |
+| ----- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| 3     | pace    | trip: write `pace-control.json` hot with `since` (a whole epoch), hold or park lanes                             |
+| 0     | pace    | recovered: write it calm, resume held lanes                                                                      |
+| 5     | pace    | a held lane's trigger met: resume that lane and drop its trigger                                                 |
+| 4     | pace    | hot an hour: tell the user and decide; re-stamp `since`                                                          |
+| 6     | pace    | idle capacity and a ready `autoStart` lane: start it, or tell the user why not                                   |
+| 7     | usage   | soft stop (below); restart with `--hard-only`, dropped once usage is back under the soft line (the weekly reset) |
+| 8     | usage   | hard stop (below); no restart until usage is under the line                                                      |
+| 9     | context | a session at the urgent line: tell the user at once                                                              |
+| 124   | any     | an hour with nothing to report: restart with the same arguments                                                  |
+| 78    | any     | a `limits.json` key is missing or bad (stderr and `<board>/<watcher>.log` name it): fix it, then restart         |
+| other | any     | 2 (a bad argument or override), 1, 126 …: read stderr and the watcher's log, fix the cause — never restart blind |
+
+**Soft and hard stop** (the user's rule, 2026-11-17). Soft: no new lane starts, and running lanes park at a clean
+checkpoint (committed, status file written), never mid-step. Hard: every lane stops after its current command and
+releases any dev lock.
+
+`autoStart` entries in `queue.json` (`SESSION-BOARD.md` → _Control tower_ → `queue.json`) are lanes the user has
+already approved to start; exit 6 only finds capacity for one, it never adds approval.
 
 ## Lock etiquette
 

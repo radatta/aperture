@@ -478,6 +478,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "note": ""
     }
   ],
+  "autoStart": [{ "branch": "", "note": "<LOW… / HOLD… keep it waiting>", "after": ["<branch>"] }],
   "maintainer": [{ "text": "", "since": "<YYYY-MM-DD>" }],
   "wave": {
     "name": "Wave 2",
@@ -561,7 +562,7 @@ Three no-AI loops the hub runs in the background (`docs/ops/HUB.md` → _Watcher
 tick and **exits only when the hub should wake**, so the hub spends nothing while they're quiet. They source
 `watch-lib.sh` (on `lib.sh`), read every threshold from `limits.json` → `watchers` at startup (an edit takes effect at
 the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
-has one home. History files are named by local day with local-offset `t`. Tests: `scripts/src/board/watchers.test.ts`
+has one home. A bad argument or env override is exit 2. History files are named by local day with local-offset `t`. Tests: `scripts/src/board/watchers.test.ts`
 (PATH shims for `sleep` and `date` drive a file clock over a fake cgroup, loadavg and meter dir).
 
 | Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                     | Exits                                                              |
@@ -581,18 +582,24 @@ midnight, at most once per `idleEverySec` (1800), and an `autoStart` lane is rea
 `HOLD`, and none of its `after` lanes is still in `devQueue` or `autoStart`). The four `pace.*` keys are the start
 gate's own, so the gate and the trip move together; the gate's `coresBelow` (7.5) sits under the trip on purpose — a
 start needs headroom, a trip needs a real overload. Every hold restarts with the watcher (the earliest CPU trip after a
-restart is ~8 min), and a hot `pace-control.json` without `since` reads as hot since 1970: exit 4 at once.
+restart is ~8 min). An unreadable cgroup, PSI or loadavg reading skips the tick — no `pace.json`, no history — so the
+start gate fails closed on the stale file rather than reading a stand-in 0 as an idle box. `pace-control.json` is read
+once a tick: missing is calm; empty or unparseable (a write caught mid-way) keeps the last tick's view; a `since` that
+isn't a whole epoch at or before now (a fraction floors; milliseconds, a string) counts as 0 — hot since 1970, so the
+first judged tick exits 0 (readings under the recovery lines) or 4.
 
 **usage**: the account % is the max weekly `used_percentage` among meter rows from the last `freshSec` (600): a stale
 session reports an old value, a fresh row the live one. ≥ `hardPct` (60) → 8, else ≥ `softPct` (58) → 7, checked every
 `intervalSec` (60). After a soft stop the hub restarts it with `--hard-only` (the soft line would re-fire at once);
-`SOFT` / `HARD` in the env override the lines.
+`APERTURE_USAGE_SOFT` / `_HARD` in the env override the lines. No fresh row at all is quiet, not an exit: overnight, with
+no session active, that is the normal state, and an exit would wake the hub every restart; `usage-now.json`'s `at` shows
+the last reading's age. A row of the wrong shape (a torn line, a non-string `ts`) is dropped alone.
 
 **context**: every `intervalSec` (300), each session's latest fresh row: tokens = input + cache creation + cache read,
 pct = tokens / `windowTokens` (1M, the lanes' model's window), sorted into `ctx.json`. A session at ≥ `urgentPct` (50)
 exits 9 unless `ctx-alerted.json` stamped it within `realertSec` (6 h); only the sessions alerted now are stamped.
-`flagPct` (40) is the tower's warn line; the watcher only checks it sits at or under `urgentPct`. `WINDOW` / `URGENT`
-in the env override.
+`flagPct` (40) is the tower's warn line; the watcher only checks it sits at or under `urgentPct`.
+`APERTURE_CTX_WINDOW` / `_URGENT` in the env override (not `WINDOW`: GNU screen exports it).
 
 ## Script-shape rules (COI monitor)
 

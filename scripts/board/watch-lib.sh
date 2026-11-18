@@ -30,6 +30,15 @@ wl_int() {
 }
 wl_num() { [[ "${1:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; }
 
+# PSI avg10 of line $2 (some|full) in $CG/$1.pressure, or nothing when the file or line is missing — unlike lib.sh's
+# cg_psi, whose 0 would read as "no pressure" to a watcher that must fail closed.
+wl_psi() {
+  local kind a rest
+  while read -r kind a rest || [ -n "$kind" ]; do
+    [ "$kind" = "$2" ] && { printf '%s' "${a#avg10=}"; return; }
+  done 2>/dev/null <"$CG/$1.pressure"
+}
+
 wl_at() { date -d "@$now" "$@"; }                    # a format of this tick's clock
 wl_say() { echo "$2" | tee -a "$BOARD_DIR/$1.log"; } # a wake line: the hub reads stdout, the log keeps it
 wl_hist() { printf '%s\n' "$2" >>"$BOARD_DIR/history/$1-$(wl_at +%F).jsonl"; }
