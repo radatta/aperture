@@ -1,5 +1,5 @@
-import { PATTERNS } from '@aperture/shared';
-import type { PatternId, PatternStat, Rate } from '@aperture/shared';
+import { isoWeekKey, PATTERNS } from '@aperture/shared';
+import type { Mock, PatternId, PatternStat, Rate } from '@aperture/shared';
 
 // The Patterns tab's pure helpers (PatternsSection.tsx). Every rate reads as counts; a percentage joins only from
 // MIN_PCT tries, so a week of data stays honest.
@@ -33,4 +33,19 @@ export function patternRows(
     const i = ranking.indexOf(pattern);
     return { pattern, rank: i < 0 ? null : i + 1, stat: byPattern.get(pattern) ?? null };
   });
+}
+
+// The Patterns tab's mock rows: each done mock, newest first, with the first-try rate of its ISO week beside it (null
+// when that week had no first try, re-solves only included), so the outcome metric reads next to the practice one.
+export function mockRows(
+  mocks: readonly Mock[],
+  weeks: readonly { week: string; firstTry: Rate }[],
+): { mock: Mock; firstTry: Rate | null }[] {
+  const byWeek = new Map(weeks.map((w) => [w.week, w.firstTry]));
+  return mocks
+    .filter((m) => m.status === 'done' && m.scores)
+    .map((mock) => {
+      const rate = byWeek.get(isoWeekKey(mock.day));
+      return { mock, firstTry: rate && rate.of > 0 ? rate : null }; // a week of re-solves only has none
+    });
 }

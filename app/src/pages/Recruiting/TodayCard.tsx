@@ -1,7 +1,13 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
-import { PATTERN_NAMES, PATTERNS } from '@aperture/shared';
-import type { CoachSlot, CoachToday, PatternId } from '@aperture/shared';
+import {
+  fmtPastDay,
+  fmtSpokenDay,
+  MOCK_KIND_NAMES,
+  PATTERN_NAMES,
+  PATTERNS,
+} from '@aperture/shared';
+import type { CoachSlot, CoachToday, MockBrief, PatternId } from '@aperture/shared';
 import { Button } from '../../components/Button';
 import { Card } from '../../components/Card';
 import { LoadError } from '../../components/LoadError';
@@ -9,12 +15,17 @@ import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import {
   useCoachToday,
+  mockListed,
+  useDeleteMock,
+  useMockListed,
   useSetCoachFloor,
   useSetCoachFocus,
   useSetCoachSlot,
 } from '../../data/hooks/useCoach';
+import { isTransientRead } from '../../data/retry';
 import { cx } from '../../lib/cx';
 import { returnFocus, useDisclosure } from '../../lib/useDisclosure';
+import { MockForm } from './MockForm';
 import { dueBeyondSlots, dueLabel, SLOT_KIND_LABEL, slotState } from './recruitingHelpers';
 
 const sittingPath = (id: string) => `/recruiting/sittings/${id}`;
@@ -109,6 +120,8 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
   const ai = today.ai;
   const { picking } = aiStatus(today, startFailed);
   const queue = picking ? today.next48h : [...dueBeyondSlots(today), ...today.next48h];
+  const upcoming = today.mock?.upcoming ?? [];
+  const mocks = useMockState();
 
   return (
     <div className="flex flex-col gap-4">
@@ -223,12 +236,21 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
         </Text>
       )}
 
-      {queue.length > 0 && (
-        <section aria-label="Re-solves coming up" className="flex flex-col gap-1">
+      {(queue.length > 0 || upcoming.length > 0) && (
+        <section aria-label="Next 48 hours" className="flex flex-col gap-1">
           <Text size="sm" weight="semibold" tone="muted">
-            Re-solves, next 48 hours
+            Next 48 hours
           </Text>
           <ul className="flex flex-col gap-0.5">
+            {upcoming.map((m) => (
+              <PlannedMockRow
+                key={m.id}
+                mock={m}
+                today={today.day}
+                onLog={() => mocks.openLog(m)}
+                onCancel={() => void mocks.cancel(m)}
+              />
+            ))}
             {queue.map((q) => (
               <li key={q.slug} className="flex items-baseline justify-between gap-3">
                 <Text size="sm" className="min-w-0 truncate">
@@ -248,10 +270,174 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
         </section>
       )}
 
+      {today.mock && <MockBlock today={today} state={mocks} />}
+
       <Text size="xs" tone="muted" tabular>
         {today.momentum.activeDays} of {today.momentum.of} days practised this week
       </Text>
     </div>
+  );
+}
+
+// The card's mock state, shared by the 48-hour rows (Log it, Cancel) and the mock block (its line, Log a mock and
+// the form). The form opens in the block either way; closing it hands focus back to Log a mock, and a row cancelled
+// while a form stays open hands it to the mock section.
+function useMockState() {
+  const del = useDeleteMock();
+  const listed = useMockListed();
+  const [form, setForm] = useState<{ mock: MockBrief | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect). A cancel
+  // names its mock, so the effect waits for the render where that row has gone — when the read after the delete
+  // dropped it; a failed read leaves the row, and nothing waits on it.
+  const refocus = useRef<{ id?: string } | null>(null);
+  const close = () => {
+    refocus.current = {};
+    setForm(null);
+  };
+  return {
+    form,
+    error,
+    trigger,
+    refocus,
+    close,
+    openNew: () => {
+      setError(null);
+      setForm({ mock: null });
+    },
+    openLog: (m: MockBrief) => {
+      setError(null);
+      setForm({ mock: m });
+    },
+    cancel: async (m: MockBrief) => {
+      if (del.isPending) return;
+      setError(null);
+      try {
+        await del.mutateAsync(m.id);
+        refocus.current = listed(m.id) ? null : { id: m.id }; // the row and its buttons go
+        setForm((f) => (f?.mock?.id === m.id ? null : f)); // a Log it opened on it meanwhile closes too
+      } catch (e) {
+        setError(
+          isTransientRead(e)
+            ? 'Couldn’t confirm the mock was cancelled — the card shows what stands.'
+            : `${(e as Error).message || 'Couldn’t cancel the mock'}. Nothing changed.`,
+        );
+      }
+    },
+  };
+}
+type MockState = ReturnType<typeof useMockState>;
+
+const mockWho = (m: Pick<MockBrief, 'kind' | 'partner'>) =>
+  m.partner ? `with ${m.partner}` : MOCK_KIND_NAMES[m.kind].toLowerCase();
+
+function PlannedMockRow({
+  mock: m,
+  today,
+  onLog,
+  onCancel,
+}: {
+  mock: MockBrief;
+  today: string;
+  onLog: () => void;
+  onCancel: () => void;
+}) {
+  const when = m.day < today ? fmtPastDay(m.day, today) : fmtSpokenDay(m.day, today);
+  const named = `mock ${when}, ${mockWho(m)}`; // as the row reads: the who tells two the same day apart
+  return (
+    <li className="flex flex-col">
+      <div className="flex items-baseline justify-between gap-3">
+        <Text size="sm" className="min-w-0 truncate">
+          Mock interview
+          <Text as="span" size="xs" tone="subtle">
+            {' '}
+            · {mockWho(m)}
+          </Text>
+        </Text>
+        <Text size="xs" tone="muted" className="shrink-0">
+          {when}
+        </Text>
+      </div>
+      <div className="-ml-2 flex flex-wrap gap-1">
+        {/* From its day on: a mock not yet held has nothing to log. */}
+        {m.day <= today && (
+          <Button variant="quiet" size="sm" onClick={onLog} aria-label={`Log it — ${named}`}>
+            Log it
+          </Button>
+        )}
+        <Button variant="quiet" size="sm" onClick={onCancel} aria-label={`Cancel — ${named}`}>
+          Cancel
+        </Button>
+      </div>
+    </li>
+  );
+}
+
+// The week's mock in one line (muted when there's none yet — never a count of missed weeks), Log a mock, and the
+// form when open.
+function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
+  const none = today.mock.thisWeek === 'none' && !today.mock.upcoming.length;
+  const unlogged = today.mock.unlogged ?? [];
+  // Back to Log a mock; while a form stays open (a row cancelled beside it), the section itself.
+  const section = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const pending = state.refocus.current;
+    const to = state.trigger.current ?? section.current;
+    if (!pending || !to) return;
+    if (mockListed(today.mock, pending.id)) return; // its row hasn't gone yet: wait for that render
+    state.refocus.current = null; // decided once, here
+    // Only focus that was lost: never pull it out of a form the user went on to while the write ran.
+    const at = document.activeElement;
+    if (at && at !== document.body && at.isConnected) return;
+    returnFocus(to);
+  });
+  return (
+    <section
+      ref={section}
+      tabIndex={-1}
+      aria-label="Mock interviews"
+      className="flex flex-col gap-2 outline-offset-2"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-x-2">
+        <Text size="sm" tone={none ? 'muted' : 'ink'} data-testid="mock-line">
+          {today.mock.line}
+        </Text>
+        {!state.form && (
+          <Button ref={state.trigger} variant="quiet" size="sm" onClick={state.openNew}>
+            Log a mock
+          </Button>
+        )}
+      </div>
+      {/* Planned for a day already past: still to log, or to cancel — never left dangling. */}
+      {unlogged.length > 0 && (
+        <ul aria-label="Planned mocks not logged yet" className="flex flex-col gap-0.5">
+          {unlogged.map((m) => (
+            <PlannedMockRow
+              key={m.id}
+              mock={m}
+              today={today.day}
+              onLog={() => state.openLog(m)}
+              onCancel={() => void state.cancel(m)}
+            />
+          ))}
+        </ul>
+      )}
+      {state.error && (
+        <p role="alert" className="text-sm text-danger">
+          {state.error}
+        </p>
+      )}
+      {state.form && (
+        <MockForm
+          key={state.form.mock?.id ?? 'new'}
+          today={today.day}
+          mock={state.form.mock}
+          onSaved={state.close}
+          onCancel={state.close}
+        />
+      )}
+    </section>
   );
 }
 

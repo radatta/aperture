@@ -183,6 +183,8 @@ SK (type-prefixed range keys):
   lcs#<id>#rp#<ulid>            a sitting's replay chunks, raw (expiresAt)
   lcq#<slug>                    LeetCode's questionDetail for a problem, raw, one per slug
   lcstart                       the user's LeetCode Start gate: attempts/Starts a day, the open sitting it let through
+  lcc#<kind>#…                  the LeetCode coach's stored decisions: day rows, logged attempts, the focus, legacy voids,
+                                mocks ([coach](../areas/recruiting/coach.md) → _What's stored_ has the list)
   flux#<day>#<ulid>             Flux sets, day-bucketed; the client mints the ulid (idempotent put-if-absent; soft-delete tombstones)
   fluxnote#<weekStart>          Flux's weekly note cache (direct get, consistent): {text, fingerprint, generatedAt} — derived from the sets, rebuilt when they change, so no userId/ulid/updatedAt
   hcheck#<date>#<habitId>       habit checks (also enforces one-per-day)

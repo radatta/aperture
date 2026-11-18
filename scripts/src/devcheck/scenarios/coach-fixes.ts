@@ -1014,7 +1014,7 @@ export const coachFixes: Scenario = {
       async run(ctx) {
         const c = await todayCard(ctx);
         const row = c
-          .getByRole('region', { name: 'Re-solves coming up' })
+          .getByRole('region', { name: 'Next 48 hours' })
           .getByRole('listitem')
           .filter({ hasText: titleOf(ctx, 'peek') })
           .first();

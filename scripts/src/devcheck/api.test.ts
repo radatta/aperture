@@ -10,6 +10,8 @@ import {
   FINANCE_MARK_VIA,
   FINANCE_RULE_VIA,
   MCP_CATEGORY_VIA,
+  MOCK_VIA,
+  UI_MOCK_VIA,
   PLACE_TOKEN_VIA,
   HABIT_VIA,
   LOG_VIA,
@@ -127,6 +129,7 @@ describe('createApiClient', () => {
       'listHabits',
       'listLogEntries',
       'listLogRange',
+      'listMocks',
       'listPlaceTasks',
       'listPlaces',
       'listPlansForDay',
@@ -163,6 +166,7 @@ describe('createApiClient', () => {
       'deleteFinanceRule',
       'deleteFluxSet',
       'deleteLogEntry',
+      'deleteMock',
       'deletePlace',
       'deleteSeries',
       'deleteSitting',
@@ -309,6 +313,22 @@ describe('createApiClient', () => {
       await api.writes.startCoachPick({ off: true });
       expect(ledger.entries).toEqual([]);
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('a mock is the `mock` kind from either way it was made; deleteMock touches only one', async () => {
+      const ledger = memLedger();
+      ledger.append({ run: 'r0', op: 'created', id: 'M1', via: MOCK_VIA });
+      ledger.append({ run: 'r0', op: 'created', id: 'M2', via: UI_MOCK_VIA });
+      ledger.append({ run: 'r0', op: 'created', id: 'A1', via: COACH_ATTEMPT_VIA });
+      expect(ledgerKind(ledger.read(), 'M1')).toBe('mock');
+      expect(ledgerKind(ledger.read(), 'M2')).toBe('mock');
+      const fetch = vi.fn<FetchLike>(async () => reply(200, null));
+      const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+      await api.writes.deleteMock('M2');
+      await expect(api.writes.deleteMock('A1')).rejects.toThrow(/never recorded it as a mock/);
+      await expect(api.writes.deleteMock('M9')).rejects.toThrow(/never recorded it as a mock/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(fetch.mock.calls[0]![1].body as string)).toEqual({ args: ['M2'] });
     });
 
     it('logs attempts with an intent, then each id from the answer; a 4xx is a refusal', async () => {

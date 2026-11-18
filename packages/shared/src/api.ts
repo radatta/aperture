@@ -41,6 +41,7 @@ import type {
   CoachDay,
   CoachFocus,
   CoachVoid,
+  Mock,
   LegacyLeetcodeAttempt,
 } from './types';
 import type { Area } from './areas';
@@ -52,6 +53,7 @@ import type {
   CoachToday,
   CoachVoidInput,
   ClaudeNotesInput,
+  MockInput,
   LegacyGroup,
   ProblemRecord,
   SittingReviewPatch,
@@ -318,6 +320,7 @@ export interface ExportBundle {
   // The pre-sittings extension's submissions (read-only, folded as legacy attempts) and their void states.
   legacyLeetcodeAttempts: LegacyLeetcodeAttempt[];
   coachVoids: CoachVoid[];
+  mocks: Mock[]; // mock interviews (coach.md → Mocks)
   attachments: Attachment[]; // metadata only — the bytes stay in S3, not in the export
   fluxSets: FluxSet[];
   // Finances. Access tokens never leave SSM, so they're never exported.
@@ -692,6 +695,12 @@ export interface ApiClient {
   // Claude's notes on ended sittings, ≤ CLAUDE_NOTES_BATCH_MAX at once, all validated before any write; null or
   // blank text clears. Never touches the review. Returns the sittings after.
   setSittingClaudeNotes(items: ClaudeNotesInput[]): Promise<Sitting[]>;
+  // Mock interviews (coach.md → Mocks): their own rows, never tasks, so they never feed calibration or the plan.
+  // Upsert: no id → a new mock; an id → that mock, a field not sent kept (normalizeMock). A sittingId must name
+  // one of the user's sittings; a problemSlug left out takes the sitting's.
+  upsertMock(input: MockInput): Promise<Mock>;
+  listMocks(): Promise<Mock[]>; // newest day first
+  deleteMock(id: string): Promise<void>; // idempotent
   // The full LeetCode catalog (lcCatalog.ts), stage-wide, not the user's: its import status, and the import —
   // a classification part staged, or a job kicked (the last part in, or a call with none). Idempotent while a
   // job runs: a second kick just reads the status.

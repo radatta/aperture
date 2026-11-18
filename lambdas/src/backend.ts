@@ -140,6 +140,9 @@ import {
   applySlotChange,
   normalizeFocusPattern,
   normalizeCoachAttempts,
+  normalizeMock,
+  mockIdOf,
+  sortMocks,
   peekOf,
   focusHolds,
   focusRoomError,
@@ -172,6 +175,9 @@ import {
 } from '@aperture/shared';
 import type {
   CoachAttempt,
+  Mock,
+  MockInput,
+  NormalizedMock,
   CoachAttemptInput,
   CoachDay,
   CoachVoid,
@@ -1552,13 +1558,14 @@ export class BackendClient implements ApiClient {
     const settings = await this.ensureSettings();
     const { dayStartHour, leetcodePremium } = settings;
     const opts = { consistent };
-    const [sittings, attempts, days, focus, legacy, voids] = await Promise.all([
+    const [sittings, attempts, days, focus, legacy, voids, mocks] = await Promise.all([
       this.repo.listSittings(opts),
       this.repo.listCoachAttempts(opts),
       this.repo.listCoachDays(opts),
       this.repo.getCoachFocus(opts),
       this.repo.listLegacyLeetcode(opts),
       this.repo.listCoachVoids(opts),
+      this.repo.listMocks(opts),
     ]);
     const today = day ?? dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
     return {
@@ -1575,6 +1582,7 @@ export class BackendClient implements ApiClient {
       legacy,
       voids,
       planMode: settings.coachPlanMode ?? 'auto',
+      mocks,
     };
   }
   // Consistent: a read right after a coach write (a focus, a floor, a logged attempt) must see it.
@@ -1863,6 +1871,49 @@ export class BackendClient implements ApiClient {
         throw err;
       }
     return this.getCatalogStatus();
+  }
+  // Mocks (coach.md → Mocks). A sitting named must be the user's (read before the write); its slug fills a
+  // problemSlug left out. A change is a CAS on the stored row, normalized against the row it replaces.
+  async upsertMock(input: MockInput): Promise<Mock> {
+    const id = mockIdOf(input);
+    const { dayStartHour } = await this.ensureSettings();
+    const now = this.now();
+    const today = dayKeyInZone(now, USER_TIME_ZONE, dayStartHour);
+    const stored = id === null ? null : await this.repo.getMock(id, { consistent: true });
+    if (id !== null && !stored) throw new Error(`Not found: ${id}`);
+    const n = normalizeMock(input, today, stored);
+    // A sitting newly named: it must be the user's, and its problem fills a problemSlug the write didn't send.
+    let slug: string | null = null;
+    if (n.sittingId !== null && n.sittingId !== stored?.sittingId) {
+      const s = await this.repo.getSitting(n.sittingId, { consistent: true });
+      if (!s) throw new Error(`Not found: sitting ${n.sittingId}`);
+      if (input.problemSlug === undefined) slug = s.problemSlug;
+    }
+    const fill = (m: NormalizedMock): NormalizedMock => (slug ? { ...m, problemSlug: slug } : m);
+    if (!stored) return this.repo.putMock({ ...this.baseAt(now), ...fill(n) });
+    return this.repo.casUpdate(
+      this.repo.mockShape(stored.id),
+      stored.id,
+      (cur) => ({ ...cur, ...fill(normalizeMock(input, today, cur)) }),
+      now,
+    );
+  }
+  async listMocks(): Promise<Mock[]> {
+    return sortMocks(await this.repo.listMocks({ consistent: true }));
+  }
+  async deleteMock(id: string): Promise<void> {
+    const now = this.now();
+    try {
+      await this.repo.casUpdate(
+        this.repo.mockShape(id),
+        id,
+        (cur) => (cur.deletedAt === null ? { ...cur, deletedAt: now } : null),
+        now,
+        { allowDeleted: true },
+      );
+    } catch (err) {
+      if (!(err instanceof Error && err.message.startsWith('Not found'))) throw err; // idempotent
+    }
   }
   async deleteCoachAttempt(id: string): Promise<void> {
     const now = this.now();
@@ -3626,6 +3677,7 @@ export class BackendClient implements ApiClient {
       coachFocus: await this.repo.getCoachFocus(),
       legacyLeetcodeAttempts: await this.repo.listLegacyLeetcode(),
       coachVoids: await this.repo.listCoachVoids(),
+      mocks: await this.repo.listMocks(),
       attachments: (await this.repo.listAllAttachments()).filter((a) => a.status === 'ready'),
       fluxSets: inRange(await this.repo.listAllFluxSets()),
       ...(await this.finance.exportCollections()),

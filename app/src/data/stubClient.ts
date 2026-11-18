@@ -173,6 +173,9 @@ import {
   applySlotChange,
   normalizeFocusPattern,
   normalizeCoachAttempts,
+  normalizeMock,
+  mockIdOf,
+  sortMocks,
   peekOf,
   focusHolds,
   focusRoomError,
@@ -203,6 +206,8 @@ import {
 import type {
   CoachAttempt,
   CoachAttemptInput,
+  Mock,
+  MockInput,
   CoachPickResult,
   CoachDay,
   CoachVoid,
@@ -431,6 +436,7 @@ export interface Store {
   coachFocus: CoachFocus[]; // at most one alive row (id 'focus')
   legacyLeetcodeAttempts: LegacyLeetcodeAttempt[]; // the pre-sittings capture: read-only, no writer (seed and tests only)
   coachVoids: CoachVoid[];
+  mocks: Mock[];
   attachments: Attachment[];
   fluxSets: FluxSet[];
   fluxNotes: FluxWeekNoteRow[]; // the weekly note cache (D62) — the stub's note is the deterministic line
@@ -478,6 +484,7 @@ export function emptyStore(): Store {
     coachFocus: [],
     legacyLeetcodeAttempts: [],
     coachVoids: [],
+    mocks: [],
     attachments: [],
     fluxSets: [],
     fluxNotes: [],
@@ -1294,6 +1301,7 @@ class StubClient implements ApiClient {
       legacy: this.alive(this.store.legacyLeetcodeAttempts),
       voids: this.alive(this.store.coachVoids),
       planMode: settings.coachPlanMode ?? 'auto',
+      mocks: this.alive(this.store.mocks),
     };
   }
   async getCoachToday(day?: string): Promise<CoachToday> {
@@ -1490,6 +1498,27 @@ class StubClient implements ApiClient {
   async deleteCoachAttempt(id: string): Promise<void> {
     if (this.find(this.store.coachAttempts, id))
       this.writes.softDelete(this.store.coachAttempts, id);
+  }
+  // Mocks (coach.md → Mocks). A sitting named must be the user's; its slug fills a problemSlug left out.
+  async upsertMock(input: MockInput): Promise<Mock> {
+    const id = mockIdOf(input);
+    const stored = id === null ? null : this.mustFind(this.store.mocks, id);
+    const now = this.now();
+    const n = normalizeMock(input, dayKeyInZone(now, USER_TIME_ZONE, this.dayStartHour()), stored);
+    // A sitting newly named: it must be the user's, and its problem fills a problemSlug the write didn't send.
+    if (n.sittingId !== null && n.sittingId !== stored?.sittingId) {
+      const s = this.find(this.store.sittings, n.sittingId);
+      if (!s) throw new Error(`Not found: sitting ${n.sittingId}`);
+      if (input.problemSlug === undefined) n.problemSlug = s.problemSlug;
+    }
+    if (stored) return this.writes.patch(this.store.mocks, stored.id, n);
+    return this.writes.insert(this.store.mocks, { ...this.baseAt(now), ...n });
+  }
+  async listMocks(): Promise<Mock[]> {
+    return sortMocks(this.alive(this.store.mocks));
+  }
+  async deleteMock(id: string): Promise<void> {
+    if (this.find(this.store.mocks, id)) this.writes.softDelete(this.store.mocks, id);
   }
   // The full catalog builds only on the server (the import job fetches its source): the stub has none.
   async getCatalogStatus(): Promise<CatalogStatus> {
@@ -3318,6 +3347,7 @@ class StubClient implements ApiClient {
       coachFocus: this.alive(this.store.coachFocus)[0] ?? null,
       legacyLeetcodeAttempts: this.alive(this.store.legacyLeetcodeAttempts),
       coachVoids: this.alive(this.store.coachVoids),
+      mocks: this.alive(this.store.mocks),
       fluxSets: this.alive(this.store.fluxSets),
       attachments: this.alive(this.store.attachments).filter((a) => a.status === 'ready'),
       financeItems: this.alive(this.store.financeItems),

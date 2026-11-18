@@ -2263,6 +2263,7 @@ export function runApiContract(
           'leetcodeProblems',
           'legacyLeetcodeAttempts',
           'logEntries',
+          'mocks',
           'places',
           'plans',
           'rolls',
@@ -4479,6 +4480,198 @@ export function runApiContract(
         await expect(
           api.setSittingClaudeNotes([{ sittingId: 'nope', text: 'x' }]),
         ).rejects.toThrow();
+      });
+    });
+
+    describe('lc coach mocks', () => {
+      const TODAY = '2023-11-14'; // a Tuesday: the ISO week runs 11-13 to 11-19
+      const done = { code: 3, solve: 2 } as const;
+
+      it('a done mock logs, lists, shows on the day and exports; the plan never moves', async () => {
+        const before = await api.getCoachToday();
+        expect(before.mock).toEqual({
+          thisWeek: 'none',
+          last: null,
+          doneCount: 0,
+          upcoming: [],
+          unlogged: [],
+          line: 'No mock this week yet',
+        });
+        const m = await api.upsertMock({
+          scores: done,
+          partner: '  Study  group ',
+          notes: 'a\n\n\nb',
+        });
+        expect(m).toMatchObject({
+          day: TODAY,
+          status: 'done',
+          kind: 'human',
+          partner: 'Study group',
+          scores: { code: 3, solve: 2 },
+          notes: 'a\n\nb',
+          sittingId: null,
+          problemSlug: null,
+          deletedAt: null,
+        });
+        expect(await api.listMocks()).toEqual([m]);
+        const t = await api.getCoachToday();
+        expect(t.mock).toMatchObject({
+          thisWeek: 'done',
+          doneCount: 1,
+          last: { id: m.id, scores: { code: 3, solve: 2 } },
+          line: 'Mock this week: Code 3 · Solve 2',
+        });
+        // Not a slot, not an attempt, not a task: the plan, the records and the tasks are as they were.
+        expect(t.slots).toEqual(before.slots);
+        expect(t.momentum).toEqual(before.momentum);
+        expect(await api.listProblemRecords()).toEqual([]);
+        expect((await api.exportData()).mocks).toEqual([m]);
+        expect((await api.exportData()).tasks).toEqual([]);
+      });
+
+      it('a planned mock shows in the next 48 hours; logging it by id keeps what it isn’t sent', async () => {
+        const p = await api.upsertMock({
+          status: 'planned',
+          day: addDays(TODAY, 1),
+          kind: 'claude',
+          partner: 'Coach',
+        });
+        expect(p).toMatchObject({ status: 'planned', scores: null, kind: 'claude' });
+        expect((await api.getCoachToday()).mock).toMatchObject({
+          thisWeek: 'planned',
+          upcoming: [{ id: p.id, day: addDays(TODAY, 1), kind: 'claude', partner: 'Coach' }],
+          line: 'Mock planned tomorrow',
+        });
+        await expect(api.upsertMock({ id: p.id, status: 'done', scores: done })).rejects.toThrow(
+          /today or earlier/,
+        );
+        const logged = await api.upsertMock({ id: p.id, status: 'done', day: TODAY, scores: done });
+        expect(logged).toMatchObject({
+          id: p.id,
+          status: 'done',
+          kind: 'claude',
+          partner: 'Coach',
+          createdAt: p.createdAt,
+        });
+        expect(await api.listMocks()).toHaveLength(1);
+        expect((await api.getCoachToday()).mock).toMatchObject({ thisWeek: 'done', upcoming: [] });
+        const cleared = await api.upsertMock({ id: p.id, partner: null });
+        expect(cleared).toMatchObject({ partner: null, kind: 'claude', scores: done });
+      });
+
+      it('bad scores and fields are refused and write nothing', async () => {
+        const cases: [object, RegExp][] = [
+          [{ scores: { code: 5, solve: 2 } }, /scores\.code .*1 to 4/],
+          [{ scores: { code: 0, solve: 2 } }, /scores\.code .*1 to 4/],
+          [{ scores: { code: 2.5, solve: 2 } }, /scores\.code .*1 to 4/],
+          [{ scores: { solve: 2 } }, /scores\.code is required/],
+          [{ scores: { code: 2, solve: 2, communicate: 9 } }, /communicate must be/],
+          [{ scores: { code: 2, solve: 2, focus: 2 } }, /Unknown score: focus/],
+          [{}, /needs its scores/], // done, no scores
+          [{ status: 'planned', day: addDays(TODAY, 1), scores: done }, /no scores yet/],
+          [{ scores: done, day: addDays(TODAY, 1) }, /today or earlier/],
+          [{ scores: done, day: addDays(TODAY, -366) }, /last 365 days/],
+          [{ status: 'planned', day: addDays(TODAY, 61) }, /next 60 days/],
+          [{ scores: done, kind: 'phone' }, /kind must be/],
+          [{ scores: done, status: 'maybe' }, /planned or done/],
+          [{ scores: done, partner: 'x'.repeat(41) }, /partner is limited to 40/],
+          [{ scores: done, notes: 'x'.repeat(1001) }, /notes is limited to 1000/],
+          [{ scores: done, problemSlug: 'Two Sum' }, /problemSlug must be/],
+          [{ scores: done, day: '11/14/2023' }, /YYYY-MM-DD/],
+          [{ scores: done, extra: true }, /extra/],
+        ];
+        for (const [input, why] of cases)
+          await expect(api.upsertMock(input as never)).rejects.toThrow(why);
+        expect(await api.listMocks()).toEqual([]);
+        // At the caps it's fine.
+        const ok = await api.upsertMock({
+          scores: { code: 1, solve: 4, communicate: 4 },
+          partner: 'x'.repeat(40),
+          notes: 'y'.repeat(1000),
+          day: addDays(TODAY, -365),
+        });
+        expect(ok.scores).toEqual({ code: 1, solve: 4, communicate: 4 });
+        expect((await api.upsertMock({ status: 'planned', day: addDays(TODAY, 60) })).status).toBe(
+          'planned',
+        );
+      });
+
+      it('an old mock’s notes still change; only a day being set meets the window', async () => {
+        const m = await api.upsertMock({ scores: done, day: addDays(TODAY, -300) });
+        advance(100 * 86_400_000); // now 400 days after it
+        expect((await api.upsertMock({ id: m.id, notes: 'still mine' })).notes).toBe('still mine');
+        await expect(api.upsertMock({ id: m.id, day: addDays(m.day, -1) })).rejects.toThrow(
+          /last 365 days/,
+        );
+      });
+
+      it('logging a planned mock by id keeps its notes; moving it to another sitting takes that problem', async () => {
+        const p = await api.upsertMock({
+          status: 'planned',
+          day: TODAY,
+          notes: 'bring a timer',
+        });
+        const logged = await api.upsertMock({ id: p.id, status: 'done', scores: done });
+        expect(logged.notes).toBe('bring a timer');
+        const a = await startSitting(api, { problemSlug: 'two-sum', problemTitle: 'Two Sum' });
+        const m = await api.upsertMock({ id: p.id, sittingId: a.sitting.id });
+        expect(m.problemSlug).toBe('two-sum');
+        await api.transitionTask(a.sitting.repTaskId, 'cancelled');
+        advance(60_000);
+        const b = await startSitting(api, {
+          problemSlug: 'valid-anagram',
+          problemTitle: 'Valid Anagram',
+        });
+        expect((await api.upsertMock({ id: p.id, sittingId: b.sitting.id })).problemSlug).toBe(
+          'valid-anagram',
+        );
+      });
+
+      it('an id that isn’t one of yours is Not found; delete is idempotent', async () => {
+        await expect(api.upsertMock({ id: ulid(), scores: done })).rejects.toThrow(/Not found/);
+        const m = await api.upsertMock({ scores: done });
+        await api.deleteMock(m.id);
+        await api.deleteMock(m.id);
+        await api.deleteMock(ulid());
+        expect(await api.listMocks()).toEqual([]);
+        await expect(api.upsertMock({ id: m.id, scores: done })).rejects.toThrow(/Not found/);
+        expect((await api.getCoachToday()).mock.doneCount).toBe(0);
+        expect((await api.exportData()).mocks).toEqual([]);
+      });
+
+      it('a sitting named must be yours; its problem fills a slug left out', async () => {
+        await expect(api.upsertMock({ scores: done, sittingId: ulid() })).rejects.toThrow(
+          /Not found/,
+        );
+        const { sitting } = await startSitting(api, {
+          problemSlug: 'two-sum',
+          problemTitle: 'Two Sum',
+        });
+        const m = await api.upsertMock({ scores: done, sittingId: sitting.id });
+        expect(m).toMatchObject({ sittingId: sitting.id, problemSlug: 'two-sum' });
+        const own = await api.upsertMock({
+          scores: done,
+          sittingId: sitting.id,
+          problemSlug: 'valid-anagram',
+        });
+        expect(own.problemSlug).toBe('valid-anagram');
+      });
+
+      it('newest day first; a past planned one this week waits to be logged; last week’s done one isn’t this week’s', async () => {
+        const old = await api.upsertMock({
+          day: addDays(TODAY, -7),
+          scores: { code: 2, solve: 1 },
+        });
+        const missed = await api.upsertMock({ status: 'planned', day: addDays(TODAY, -1) });
+        expect((await api.listMocks()).map((m) => m.id)).toEqual([missed.id, old.id]);
+        expect((await api.getCoachToday()).mock).toMatchObject({
+          thisWeek: 'planned',
+          doneCount: 1,
+          last: { id: old.id },
+          upcoming: [],
+          unlogged: [{ id: missed.id, day: addDays(TODAY, -1), status: 'planned' }],
+          line: 'Mock planned yesterday, not logged yet',
+        });
       });
     });
 

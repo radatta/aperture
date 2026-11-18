@@ -4,17 +4,20 @@
 // the app (PR A-app): the Today card, the review's cause and Peeked, F169, Home's morning line; then PR B's history,
 // stats, story and focus tools, delete_attempt, and the review draft's cause (one real Haiku call, slow tier).
 // Everything this run makes is ledgered by id and cleaned by the pipeline: sittings (with their reps), rolls and the
-// roll link, attempts (deleteCoachAttempt), slot changes (restored), the floor (off), the focus (cleared) and a story.
+// roll link, attempts (deleteCoachAttempt), slot changes (restored), the floor (off), the focus (cleared), a story and
+// mocks (deleteMock; the app's are recorded from its upsertMock response).
 // Problem slugs outside the catalog are synthetic; a sitting on a slot uses the slot's own (public) catalog slug. The
 // schedule step's backdated attempts change the plan for any read after it, so the app steps after it read the plan
 // live, never an earlier step's; PR B's reads run over what it logged. PR D's Patterns tab (its ranking, failed reads,
-// a refused write, Set as focus and back, 390 px) runs just before the schedule step.
+// a refused write, Set as focus and back, 390 px) runs just before the schedule step. PR E's mocks (the card's form,
+// a planned one in the next 48 hours, the Patterns list, log_mock and list_mocks) run last.
 import { PHONE } from '../browser';
 import { McpRpcError, PARAM_ERROR } from '../mcp';
 import type {
   DevCoachSlot,
   DevCoachStats,
   DevCoachToday,
+  DevMock,
   DevSittingEvent,
   DevSittingStart,
 } from '../api';
@@ -771,6 +774,90 @@ export const lcCoach: Scenario = {
         why: 'floor-focus and patterns-set-focus run setCoachFocus on dev; the room check is the pure focusRoomError over the same input',
       },
     },
+    // PR E: mock interviews (coach.md → Mocks).
+    {
+      id: 'mock-ui-log',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Log a done mock with Code and Solve on the Today card: it’s stored, and the card’s line shows its scores',
+    },
+    {
+      id: 'mock-ui-invalid',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Save with no Code score says why inline, keeps what was typed, and writes nothing',
+    },
+    {
+      id: 'mock-ui-plan',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Plan a mock for tomorrow: it shows in the card’s next 48 hours; Cancel there removes it',
+    },
+    {
+      id: 'mock-slots-unchanged',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A mock is not a slot: logging and planning one on the card leave the day’s slots as they were',
+    },
+    {
+      id: 'mock-patterns',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Recruiting › Patterns lists the done mock with its Code and Solve beside its week’s first tries',
+    },
+    {
+      id: 'mock-390',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'At 390 px, light and dark, the mock form’s score buttons sit on screen and the page never scrolls sideways',
+    },
+    {
+      id: 'mock-mcp',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'log_mock stores a done mock and reads back the week’s line; list_mocks lists it with its scores and trend',
+    },
+    {
+      id: 'mock-mcp-invalid',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'log_mock with a score out of 1–4, or no Code, is refused with why and writes nothing',
+    },
+    {
+      id: 'mock-ui-log-planned',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'Log it on a mock planned for today scores that same row done (an edit by id, no second mock)',
+    },
+    {
+      id: 'mock-patterns-delete',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Delete on the Patterns list asks once inline; Yes removes the mock',
+    },
+    {
+      id: 'mock-ui-unlogged',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A planned mock whose day passed waits under the card’s line with Log it and Cancel; Cancel removes it',
+    },
+    {
+      id: 'mock-delete-idempotent',
+      entry: 'api',
+      kind: 'edge',
+      what: 'deleteMock twice on the same mock: the second is a no-op, and it stays gone',
+    },
+    {
+      id: 'mock-ownership',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Another user’s mock is Not found to change or delete and stays as it was; their sitting can’t be named',
+      offDev: {
+        file: 'lambdas/src/backend.mocks.test.ts',
+        test: 'another user’s mock is Not found to read, change or delete, and stays as it was',
+        why: 'dev has one test user, so a second user’s rows can’t exist there (the partition key is the user)',
+      },
+    },
     {
       id: 'progress-focus-room-history',
       entry: 'api',
@@ -1357,7 +1444,7 @@ export const lcCoach: Scenario = {
         // The 48-hour list: a re-solve due beyond today's live slots is there (the scheduler step leaves some).
         const due = dueBeyond(t)[0];
         if (due) {
-          const list = c.getByRole('region', { name: 'Re-solves coming up' });
+          const list = c.getByRole('region', { name: 'Next 48 hours' });
           const title = (due as { title?: string }).title ?? fail('a due item with no title');
           await list.getByText(title).first().waitFor({ timeout: 5_000 }); // its row adds " · pattern"
         }
@@ -2286,6 +2373,251 @@ export const lcCoach: Scenario = {
           tapped = await causeNow();
         }
         if (tapped !== 'off-by-one') fail(`the tapped cause: ${String(tapped)}`);
+      },
+    },
+    // --- PR E: mock interviews. Labelled with the run's tag, so a leftover from another run is never read. ---
+    {
+      id: 'mocks-ui',
+      title:
+        'Mocks on the Today card: refused without Code, logged with scores, one planned for tomorrow; Patterns; 390 px',
+      entry: 'ui',
+      proves: [
+        'mock-ui-invalid',
+        'mock-ui-log',
+        'mock-slots-unchanged',
+        'mock-ui-plan',
+        'mock-ui-log-planned',
+        'mock-patterns',
+        'mock-patterns-delete',
+        'mock-ui-unlogged',
+        'mock-390',
+      ],
+      async run(ctx) {
+        const label = `dc ${tag(ctx)}`.slice(0, 40);
+        const mine = async (status: DevMock['status']) =>
+          (await ctx.api.reads.listMocks()).filter(
+            (m) => m.partner === label && m.status === status,
+          );
+        const before = await ctx.api.reads.getCoachToday();
+        let c = await todayCard(ctx);
+        const block = c.getByRole('region', { name: 'Mock interviews' });
+        await block.getByRole('button', { name: 'Log a mock' }).click();
+        let form = block.getByRole('form', { name: 'Log a mock' });
+        await form.getByRole('button', { name: 'Solve 2 of 4' }).click();
+        await form.getByLabel('Who ran it (optional)').fill(label);
+        await form.getByRole('button', { name: 'Save mock' }).click();
+        await form
+          .getByRole('alert')
+          .getByText(/Code and Solve/)
+          .waitFor({ timeout: 5_000 });
+        if ((await form.getByLabel('Who ran it (optional)').inputValue()) !== label)
+          fail('the refused form lost what was typed');
+        if ((await mine('done')).length) fail('a done mock with no Code was saved');
+        await ctx.shot('lc-coach-mock-refused');
+
+        // 390 px, light then dark, with the form open: the score buttons on screen, no sideways scroll.
+        await ctx.page.setViewportSize({ width: 390, height: 844 });
+        try {
+          for (const theme of ['light', 'dark'] as const) {
+            await ctx.ui.setTheme(theme);
+            const wide = await ctx.page.evaluate<boolean>(
+              '(() => document.documentElement.scrollWidth > window.innerWidth)()',
+            );
+            if (wide) fail(`${theme}: the page scrolls sideways at 390 with the mock form open`);
+            const four = form.getByRole('button', { name: 'Communication 4 of 4' });
+            await four.scrollIntoViewIfNeeded();
+            const box = await four.boundingBox();
+            if (!box || box.x < 0 || box.x + box.width > 390)
+              fail(`${theme}: the score buttons run off screen at 390`);
+            await ctx.ui.settle();
+            await ctx.shot(`lc-coach-mock-form-390-${theme}`);
+          }
+        } finally {
+          await ctx.ui.setTheme('light');
+          await ctx.page.setViewportSize(PHONE);
+        }
+
+        await form.getByRole('button', { name: 'Code 3 of 4' }).click();
+        await form.getByRole('button', { name: 'Save mock' }).click();
+        await block
+          .getByText('Mock this week: Code 3 · Solve 2', { exact: true })
+          .waitFor({ timeout: 15_000 });
+        const [done] = await mine('done');
+        if (!done || done.day !== before.day || done.scores?.code !== 3 || done.scores.solve !== 2)
+          fail(`the logged mock: ${JSON.stringify(done)}`);
+        await ctx.shot('lc-coach-mock-logged');
+
+        // Plan one for tomorrow: it joins the next 48 hours.
+        await block.getByRole('button', { name: 'Log a mock' }).click();
+        form = block.getByRole('form', { name: 'Log a mock' });
+        await form.getByRole('button', { name: 'Planned' }).click();
+        await form.getByLabel('Day').fill(addDays(before.day, 1));
+        await form.getByLabel('Who ran it (optional)').fill(label);
+        await form.getByRole('button', { name: 'Plan mock' }).click();
+        const row = () =>
+          c
+            .getByRole('region', { name: 'Next 48 hours' })
+            .getByRole('listitem')
+            .filter({ hasText: `with ${label}` });
+        await row().waitFor({ timeout: 15_000 });
+        if (!((await row().textContent()) ?? '').includes('tomorrow'))
+          fail(`the planned row reads “${await row().textContent()}”`);
+        const [planned] = await mine('planned');
+        if (planned?.day !== addDays(before.day, 1))
+          fail(`the planned mock: ${JSON.stringify(planned)}`);
+        await ctx.shot('lc-coach-mock-planned');
+
+        // One planned for today, then Log it on its row: the same id, now done.
+        await block.getByRole('button', { name: 'Log a mock' }).click();
+        form = block.getByRole('form', { name: 'Log a mock' });
+        await form.getByRole('button', { name: 'Planned' }).click();
+        await form.getByLabel('Day').fill(before.day);
+        await form.getByLabel('Who ran it (optional)').fill(label);
+        await form.getByLabel('Notes (optional)').fill(`planned ${ctx.nonce}`);
+        await form.getByRole('button', { name: 'Plan mock' }).click();
+        const todayRow = c
+          .getByRole('region', { name: 'Next 48 hours' })
+          .getByRole('listitem')
+          .filter({ hasText: `with ${label}` })
+          .filter({ hasText: 'today' });
+        await todayRow.getByRole('button', { name: /^Log it — mock today/ }).click();
+        form = block.getByRole('form', { name: 'Log the planned mock' });
+        await form.getByRole('button', { name: 'Code 4 of 4' }).click();
+        await form.getByRole('button', { name: 'Solve 3 of 4' }).click();
+        await form.getByRole('button', { name: 'Save mock' }).click();
+        await todayRow.waitFor({ state: 'hidden', timeout: 15_000 });
+        const plannedToday = (await ctx.api.reads.listMocks()).filter(
+          (m) => m.partner === label && m.notes === `planned ${ctx.nonce}`,
+        );
+        if (
+          plannedToday.length !== 1 ||
+          plannedToday[0]!.status !== 'done' ||
+          plannedToday[0]!.scores?.code !== 4
+        )
+          fail(`Log it: ${JSON.stringify(plannedToday)}`);
+        const loggedId = plannedToday[0]!.id;
+
+        const after = await ctx.api.reads.getCoachToday();
+        if (!same(slugs(after), slugs(before)))
+          fail(`a mock moved the slots: ${slugs(before).join(',')} → ${slugs(after).join(',')}`);
+
+        // Patterns: the done one, its scores beside its week's first tries.
+        await ctx.ui.goto('/recruiting/patterns');
+        const item = ctx.page
+          .getByRole('region', { name: 'Mock interviews' })
+          .getByRole('listitem')
+          .filter({ hasText: `with ${label}` })
+          .filter({ hasText: 'Code 3 · Solve 2' }); // the Log it one is Code 4 · Solve 3
+        await item.getByText('Code 3 · Solve 2', { exact: true }).waitFor({ timeout: 15_000 });
+        await item
+          .getByText(/^(First try that week \d+ of \d+( \(\d+%\))?|No first try that week)$/)
+          .waitFor();
+        await ctx.shot('lc-coach-mock-patterns');
+        // Delete the logged-from-planned one there: asks once, Yes removes it.
+        const gone = ctx.page
+          .getByRole('region', { name: 'Mock interviews' })
+          .getByRole('listitem')
+          .filter({ hasText: 'Code 4 · Solve 3' })
+          .filter({ hasText: `with ${label}` });
+        await gone.getByRole('button', { name: /^Delete the mock on / }).click();
+        await gone.getByRole('button', { name: /^Yes, delete the mock on / }).click();
+        await until(
+          'the deleted mock gone',
+          async () => !(await ctx.api.reads.listMocks()).some((m) => m.id === loggedId),
+        );
+
+        // Cancel the planned one from the card.
+        c = await todayCard(ctx);
+        await row()
+          .getByRole('button', { name: /^Cancel — mock tomorrow/ })
+          .click();
+        await until('the planned mock gone', async () => !(await mine('planned')).length);
+
+        // One planned for yesterday (over MCP: the form can't plan a past day) waits under the line; Cancel there.
+        const past = `${label} p`.slice(0, 40);
+        await ctx.mcp.writes.logMock({
+          status: 'planned',
+          day: addDays(before.day, -1),
+          partner: past,
+        });
+        c = await todayCard(ctx);
+        const waiting = c
+          .getByRole('list', { name: 'Planned mocks not logged yet' })
+          .getByRole('listitem')
+          .filter({ hasText: `with ${past}` });
+        await waiting.waitFor({ timeout: 15_000 });
+        if (!(await waiting.getByRole('button', { name: /^Log it — mock yesterday/ }).count()))
+          fail('a passed planned mock offers no Log it');
+        await ctx.shot('lc-coach-mock-unlogged');
+        await waiting.getByRole('button', { name: /^Cancel — mock yesterday/ }).click();
+        await until(
+          'the passed planned mock gone',
+          async () => !(await ctx.api.reads.listMocks()).some((m) => m.partner === past),
+        );
+        await row().waitFor({ state: 'hidden', timeout: 15_000 });
+      },
+    },
+    {
+      id: 'mocks-mcp',
+      title: 'log_mock refuses a bad score, then logs one; list_mocks reads it back',
+      entry: 'mcp',
+      proves: ['mock-mcp', 'mock-mcp-invalid'],
+      async run(ctx) {
+        const label = `dc mcp ${tag(ctx)}`.slice(0, 40);
+        const count = async () => (await ctx.api.reads.listMocks()).length;
+        const n0 = await count();
+        const refusal = /scores\.code is required, a whole number from 1 to 4/; // normalizeMock's
+        for (const [scores, why] of [
+          [{ code: 5, solve: 2 }, refusal],
+          [{ solve: 2 }, refusal],
+        ] as const) {
+          let took = false;
+          try {
+            await ctx.mcp.writes.logMock({ scores, partner: label });
+            took = true;
+          } catch (err) {
+            if (!why.test(String(err))) throw err;
+          }
+          if (took) fail(`log_mock took ${JSON.stringify(scores)}`);
+        }
+        if ((await count()) !== n0) fail('a refused log_mock wrote a mock');
+        const out = await ctx.mcp.writes.logMock({
+          scores: { code: 2, solve: 3 },
+          kind: 'claude',
+          partner: label,
+          notes: `devcheck ${ctx.nonce}`,
+        });
+        if (out.week === null) fail('log_mock saved, but its read of the week failed');
+        if (
+          out.mock.status !== 'done' ||
+          out.mock.scores?.solve !== 3 ||
+          !out.week!.startsWith('Mock this week')
+        )
+          fail(`log_mock: ${JSON.stringify(out)}`);
+        const list = await ctx.mcp.reads.listMocks({ from: today() });
+        const hit = list.mocks.find((m) => m.id === out.mock.id);
+        if (!hit || hit.partner !== label || hit.kind !== 'claude')
+          fail(`list_mocks: ${JSON.stringify(list.mocks)}`);
+        if (!list.trend.some((x) => x.code === 2 && x.solve === 3))
+          fail('list_mocks’ trend lacks it');
+        const t = await ctx.mcp.reads.leetcodeToday();
+        if (t.mock?.thisWeek !== 'done') fail(`leetcode_today’s mock: ${JSON.stringify(t.mock)}`);
+      },
+    },
+    {
+      id: 'mocks-delete',
+      title: 'deleteMock twice on the MCP step’s mock: the second is a no-op',
+      entry: 'api',
+      proves: ['mock-delete-idempotent'],
+      async run(ctx) {
+        const label = `dc mcp ${tag(ctx)}`.slice(0, 40);
+        const m =
+          (await ctx.api.reads.listMocks()).find((x) => x.partner === label) ??
+          fail('no mock from the mcp step to delete');
+        await ctx.api.writes.deleteMock(m.id);
+        await ctx.api.writes.deleteMock(m.id);
+        if ((await ctx.api.reads.listMocks()).some((x) => x.id === m.id))
+          fail('the mock is still listed after two deletes');
       },
     },
     noConsoleErrors,

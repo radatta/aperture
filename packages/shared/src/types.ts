@@ -545,6 +545,26 @@ export interface CoachVoid extends BaseEntity {
   slug: string;
   void: boolean;
 }
+// A mock interview (coach.md → Mocks): its own row, never a task or an attempt, so it never feeds calibration or
+// the plan. The interviewer's scores are the outcome metric: Code and Solve 1–4 required once done, communication
+// optional; a planned one has none yet.
+export type MockKind = 'human' | 'claude' | 'interview';
+export type MockScore = 1 | 2 | 3 | 4;
+export interface MockScores {
+  code: MockScore;
+  solve: MockScore;
+  communicate?: MockScore;
+}
+export interface Mock extends BaseEntity {
+  day: string; // the user's day it was (or will be) on
+  status: 'planned' | 'done';
+  kind: MockKind;
+  partner: string | null; // the user's own label for who ran it, ≤ MOCK_PARTNER_MAX
+  sittingId: string | null; // the sitting it ran as, when it was on LeetCode
+  problemSlug: string | null;
+  scores: MockScores | null; // null while planned
+  notes: string | null; // ≤ MOCK_NOTES_MAX, line breaks kept
+}
 // One submission the pre-sittings extension captured (until PR 147, 2026-11-10), under the legacy `lc#` SK.
 // Read-only: nothing writes these any more; the coach folds them as `legacy` attempts (coach.ts legacyAttempts).
 export interface LegacyLeetcodeAttempt extends BaseEntity {

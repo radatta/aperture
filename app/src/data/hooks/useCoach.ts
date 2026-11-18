@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import type { CoachSlotInput, CoachToday, PatternId } from '@aperture/shared';
+import type { CoachSlotInput, CoachToday, MockInput, PatternId } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 
@@ -75,5 +75,37 @@ export function useSetCoachFocus() {
   return useMutation({
     mutationFn: (pattern: PatternId | null) => api.setCoachFocus(pattern),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.coach() }),
+  });
+}
+
+// Mock interviews (coach.md → Mocks): the list, and the writes. Both writes read the day again (its mock line)
+// and the list, settled rather than on success: a failed write may still have landed (a 5xx).
+export function useMocks() {
+  const api = useApi();
+  return useQuery({ queryKey: qk.coachMocks(), queryFn: () => api.listMocks() });
+}
+export function useUpsertMock() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MockInput) => api.upsertMock(input),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.coach() }),
+  });
+}
+// Whether the cached plan still lists a planned mock — after a write's refetch settled, a failed refetch leaves it.
+export function useMockListed() {
+  const qc = useQueryClient();
+  return (id: string) => mockListed(qc.getQueryData<CoachToday>(qk.coachToday())?.mock, id);
+}
+// The card's planned-mock rows: the 48-hour list and the passed ones under the line.
+export const mockListed = (m: CoachToday['mock'] | undefined, id: string | undefined) =>
+  !!m && !!id && [...m.upcoming, ...(m.unlogged ?? [])].some((x) => x.id === id);
+
+export function useDeleteMock() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.deleteMock(id),
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.coach() }),
   });
 }

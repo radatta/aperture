@@ -18,8 +18,9 @@ decisions are stored; everything else is recomputed on every read.
 | the review's `cause`, `test` (on the head) | the one cause tag of a sitting, and the test-sitting flag (a void sitting)                                         |
 | `lcc#void#<day>#<slug>` (`CoachVoid`)      | a legacy day's void state, `void: true` or `false` (_Legacy history_)                                              |
 | the head's `claudeNotes`                   | Claude's own notes on an ended sitting (_Claude's notes_), never in the review                                     |
+| `lcc#mock#<ulid>` (`Mock`)                 | a mock interview, planned or done, with its scores (_Mocks_)                                                       |
 
-`lcc#mock#` and `lcc#imp#` are reserved for later rows. Derived on read: attempts, problem records, the re-solve
+`lcc#imp#` is reserved for a later row. Derived on read: attempts, problem records, the re-solve
 schedule, the focus pattern, the day's plan. At a few dozen sittings a month a read is two small Queries plus the
 day rows; no stored count can drift.
 
@@ -330,20 +331,21 @@ the working catalog from the user's own sittings, its pattern from the full cata
 | `catalog_status`                                                        | read   | `getCatalogStatus`                                                                                                                                                                                                                                                                           |
 
 Every write's description opens with the same ask-first sentence and says what it returns to read back. Leave all
-nine (these seven and the two below) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
+ten (these seven, the two below and `log_mock`, _Mocks_) on **Ask** in the connector. The coaching itself (the hint ladder, one push-back before a solution, the
 review's one cause) lives in the claude.ai project's instructions, kept outside the repo.
 
 ## RPCs
 
 `getCoachToday(day?)`, `startCoachPick()`, `listProblemRecords()`, `setCoachSlot({slug, action, toSlug?})`, `setCoachFloor(on)`,
 `setCoachFocus(pattern | null)`, `logCoachAttempts(inputs)`, `deleteCoachAttempt(id)`, `getCatalogStatus()`, `startCatalogImport({classes?, part?, parts?, limit?})`, `patchSittingReview(id,
-{cause?, help?, test?})`, `listLegacyGroups(slug?)`, `setCoachVoids(inputs)`, `setSittingClaudeNotes(items)` — JWT
+{cause?, help?, test?})`, `listLegacyGroups(slug?)`, `setCoachVoids(inputs)`, `setSittingClaudeNotes(items)`, `upsertMock(input)`, `listMocks()`,
+`deleteMock(id)` — JWT
 only, none an ingest method. Day-scoped writes act on the user's day as the server reads it. `ExportBundle` carries
-`coachDays`, `coachAttempts`, `coachFocus`, `coachVoids`, and the legacy rows (`legacyLeetcodeAttempts`, read-only).
+`coachDays`, `coachAttempts`, `coachFocus`, `coachVoids`, `mocks`, and the legacy rows (`legacyLeetcodeAttempts`, read-only).
 
 ## Not yet
 
-Mocks, a bulk import of LeetCode's own submission history, a second problem list with its picker, and countdown
+A bulk import of LeetCode's own submission history, a second problem list with its picker, and countdown
 mode — each its own PR. (History-only solves cover logging old solves by hand, in the thread.) `CoachToday.mode`,
 `target` and `arm` are already in the shape, and the gaps and cap are parameters, so countdown mode and an A/B arm
 (the AI pick against the rules) add rather than change.
@@ -367,6 +369,7 @@ mode — each its own PR. (History-only solves cover logging old solves by hand,
 | `scripts/src/devcheck/scenarios/lc-coach.ts`, `lc-coach-ai.ts`, `coach-fixes.ts`      | the dev check's rows                                                                       |
 | `app/src/pages/Recruiting/TodayCard.tsx`, `ReviewForm.tsx`, `Home/LeetcodeGlance.tsx` | the app: the Today card, the cause chips and Peeked, the morning line                      |
 | `app/src/pages/Recruiting/Progress*.tsx`, `SolvesList.tsx`, `ProblemPage.tsx`         | the Progress tab and a problem's page (helpers in `progressHelpers.ts`)                    |
+| `app/src/pages/Recruiting/MockForm.tsx`, `PatternsMocks.tsx`                          | mocks: the card's form, the Patterns tab's trend and list (_Mocks_)                        |
 | `app/src/pages/Recruiting/SittingDetail.tsx`, `app/src/pages/Settings/index.tsx`      | void (**Doesn’t count**), **Claude's notes**, Settings → Plan mode                         |
 
 ## In the app
@@ -408,7 +411,7 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
 
 ## The history, stats and story reads, and two more writes
 
-Added beside _Over MCP_'s table, in `coachTools.ts`; all nine writes stay on **Ask**:
+Added beside _Over MCP_'s table, in `coachTools.ts`; all ten writes (with `log_mock`) stay on **Ask**:
 
 | Tool                                                      | Kind  | Over                                                                                                                                                                                                   |
 | --------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -505,3 +508,45 @@ the URL, so a reload or Back keeps them.
   tried says so.
 - A failed records read is a `LoadError` with Retry, never an empty map; a failed plan read still draws the map,
   with one line saying no pattern is marked. Settings → LeetCode's **I have LeetCode Premium** re-reads the coach.
+
+## Mocks
+
+Mock interviews, logged with the interviewer's scores as the outcome metric, on a weekly cadence. A mock is its own
+row (`Mock`, `lcc#mock#<ulid>`), never a task or an attempt: it never feeds calibration, the plan, the re-solve
+queue or the stats, and the day's four slots are unchanged on a mock day.
+
+- **The row** (`packages/shared/src/types.ts`): `day`, `status` (`planned` or `done`), `kind` (`human`, `claude`,
+  `interview`), `partner` (the user's own label, ≤ 40), `sittingId` and `problemSlug` (when it ran as a sitting),
+  `scores`, `notes` (≤ 1000, line breaks kept). Scores are 1–4, the scorecard the thread already gives: `code` and
+  `solve` required once done, `communicate` optional; a planned mock has none.
+- **The write** (`normalizeMock`, `upsertMock`): no id is a new mock; an id changes that one — a field not sent
+  keeps its value, null clears it, `scores` replace whole — so "log the planned one" is `{id, status: 'done',
+scores}`. A done mock is dated today or earlier (≤ 365 days back), a planned one ≤ 60 days on. A `sittingId` must
+  be one of the user's sittings (read before the write), and its problem fills a `problemSlug` left out. Everything
+  is checked before the write; a refusal says why and writes nothing. `deleteMock` is a tombstone, idempotent; an id
+  that isn't the user's is Not found (the user's partition holds no other).
+- **The day's view** (`mockView`, `CoachToday.mock`): `thisWeek` (`done`, else `planned`, else `none`, over the ISO
+  week of today), `last` (the newest done), `doneCount`, `upcoming` (planned, today through 2 days on), `unlogged`
+  (planned for a day already past, newest first, ≤ 5) and one `line`: "Mock this week: Code 3 · Solve 2", "Mock
+  planned Thursday" (a passed one: ", not logged yet"), or "No mock this week yet" — never a count of weeks without
+  one. With none this week but one in `upcoming` (a Sunday's Monday mock), the line names that one while `thisWeek`
+  stays `none`. Re-solves keep `next48h`; planned mocks ride `upcoming` and `unlogged`, so no re-solve reader
+  changed.
+- **The Today card**: the line (muted only with none this week and none upcoming) and **Log a mock**, which opens
+  the form inline (Done or Planned, day, kind, who ran it, Code / Solve / Communication as 1–4 toggles, notes;
+  inputs at 16 px); focus moves into the form on open (its first button, or the form itself rather than a date
+  field). Save without Code and Solve says why and keeps every field; a refused save shows the server's reason, a
+  5xx "may have saved". The card's 48-hour list (**Next 48 hours**, re-solves and planned mocks) gives a planned
+  mock **Log it** on its day and **Cancel**; `unlogged` ones wait under the line with the same two. Log it saves onto
+  that row, its notes carried over. Closing the form hands focus back to Log a mock; a row cancelled while a form stays open hands it to the mock
+  section, unless focus already moved on.
+- **The Patterns tab** (`PatternsMocks.tsx`, after the ranking): Code and Solve over time (two lines, from two done
+  mocks), each done mock with its scores beside its ISO week's first-try rate (`mockRows`; a week of re-solves only
+  has none), newest first, ≤ 12, and **Delete** with an inline Yes / No (No returns focus to Delete, Yes to the
+  section's heading). One mock is noise; the trend is the signal.
+- **Over MCP**: `log_mock {id?, day?, status?, kind?, partner?, sittingId?, problemSlug?, scores?, notes?}` (a write,
+  ask-first; leave it on **Ask**) answers the stored mock and the week's line (null, with a note, when only that
+  read failed — the mock is saved); `list_mocks {from?, to?, limit?}`
+  (read) answers the mocks newest first with `doneCount` and `trend` (the done ones' Code and Solve, oldest first).
+  `leetcode_today` carries `mock`; its note asks for one suggestion when the week has none, and an offer to log
+  any `unlogged` one.

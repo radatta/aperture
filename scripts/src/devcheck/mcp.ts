@@ -7,6 +7,8 @@ import {
   COACH_ATTEMPT_VIA,
   COACH_FOCUS_VIA,
   COACH_SLOT_VIA,
+  MOCK_VIA,
+  type DevMock,
   coachFocusId,
   coachSlotId,
   MCP_SERIES_VIA,
@@ -63,6 +65,12 @@ export interface DevLiveSitting {
   trace?: string | null; // the trace comment before the first judged event (traced / none)
 }
 
+// What log_mock answers (coachTools.ts): `week` is null, with a note, when only the read after the save failed.
+export interface DevLoggedMock {
+  mock: DevMock;
+  week: string | null;
+  note?: string;
+}
 // What mark_peeked / log_attempt answer (coachTools.ts) — the fields the scenario reads.
 export interface DevPeeked {
   slug: string;
@@ -335,11 +343,11 @@ export function createMcpClient({
   }
 
   // A coach write the server refused before writing: a param error, or a normalizer's refusal (normalizeCoachAttempt
-  // checks the whole list before any row). Any other error may follow a write, so its intent stays open.
+  // checks the whole list before any row; normalizeMock the whole mock). Any other error may follow a write, so its intent stays open.
   const refusedBeforeWrite = (err: unknown) =>
     (err instanceof McpRpcError && err.code === PARAM_ERROR) ||
     (err instanceof Error &&
-      /^mcp (mark_peeked|log_attempt): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read|A solve from before the coach)/.test(
+      /^mcp (mark_peeked|log_attempt|log_mock): .*(must be|is limited|Unknown attempt field|At most \d+|A clean attempt|An attempt that read|A solve from before the coach|Unknown mock field|Unknown score|is required, a whole number|A done mock|A planned mock)/.test(
         err.message,
       ));
   // A write may only touch a row this harness created, through its own kind's methods — as api.ts.
@@ -440,6 +448,13 @@ export function createMcpClient({
       ),
     getProblem: (args: Record<string, unknown>) => data<DevProblemRead>('get_problem', args),
     catalogStatus: () => data<DevMcpCatalogStatus>('catalog_status', {}),
+    listMocks: (args: Record<string, unknown> = {}) =>
+      data<{
+        mocks: DevMock[];
+        total: number;
+        doneCount: number;
+        trend: { day: string; code: number; solve: number }[];
+      }>('list_mocks', args),
     coachStats: (args: Record<string, unknown> = {}) => data<DevCoachStats>('coach_stats', args),
     listStories: () =>
       data<{
@@ -709,6 +724,25 @@ export function createMcpClient({
     // delete_attempt on an id this run never logged: must write nothing (lc-coach mcp-b-bad-args).
     deleteAttemptUnknown: (unknownId: unknown) =>
       data<{ id: string; deleted: boolean }>('delete_attempt', { id: unknownId }),
+    // log_mock: a new mock is recorded from its answer (an intent first, a refusal before any write resolves it);
+    // one naming an id must name a mock this run recorded.
+    async logMock(input: Record<string, unknown>): Promise<DevLoggedMock> {
+      if (input.id !== undefined) {
+        assertLedger(String(input.id), 'mock');
+        return data<DevLoggedMock>('log_mock', input);
+      }
+      const title = `mock ${String(input.status ?? 'done')} ${String(input.day ?? 'today')}`;
+      ledger.append({ run, op: 'intent', via: MOCK_VIA, title });
+      let out: DevLoggedMock;
+      try {
+        out = await data<DevLoggedMock>('log_mock', input);
+      } catch (err) {
+        if (refusedBeforeWrite(err)) ledger.append({ run, op: 'refused', via: MOCK_VIA, title });
+        throw err;
+      }
+      ledger.append({ run, op: 'created', id: out.mock.id, via: MOCK_VIA, title });
+      return out;
+    },
     async logAttempt(
       attempts: Record<string, unknown>[],
     ): Promise<{ attempts: DevLoggedAttempt[] }> {

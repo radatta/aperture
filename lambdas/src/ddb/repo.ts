@@ -8,6 +8,7 @@ import type {
   FinanceSyncState,
   FinanceTransaction,
   CoachAttempt,
+  Mock,
   CoachDay,
   CoachFocus,
   FluxSet,
@@ -459,6 +460,27 @@ export class Repo {
       read: (i) => toEntity<CoachFocus>(i),
       toItem: (f) => entityItem(this.userId, sk.coachFocus(), f),
     };
+  }
+  async listMocks(opts?: { consistent?: boolean }): Promise<Mock[]> {
+    return alive(
+      (await this.doc.query(this.p(), sk.mockPrefix(), opts)).map((i) => toEntity<Mock>(i)),
+    );
+  }
+  async getMock(id: string, opts?: { consistent?: boolean }): Promise<Mock | null> {
+    const it = await this.doc.get(this.p(), sk.mock(id), opts);
+    const m = it ? toEntity<Mock>(it) : null;
+    return m && m.deletedAt === null ? m : null;
+  }
+  mockShape(id: string): CasShape<Mock> {
+    return {
+      sk: sk.mock(id),
+      read: (i) => toEntity<Mock>(i),
+      toItem: (m) => entityItem(this.userId, sk.mock(id), m),
+    };
+  }
+  async putMock(m: Mock): Promise<Mock> {
+    await this.writes.put(entityItem(this.userId, sk.mock(m.id), m));
+    return m;
   }
   async putCoachAttempt(a: CoachAttempt): Promise<CoachAttempt> {
     await this.writes.put(entityItem(this.userId, sk.coachAttempt(a.id), a));

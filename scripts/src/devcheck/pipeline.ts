@@ -589,6 +589,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       }
       case 'coachFocus': // the row, even once its block ran out: it still anchors the focus replay
         return (await client.reads.getCoachFocusRow()) !== null;
+      case 'mock':
+        return (await client.reads.listMocks()).some((m) => m.id === id);
       case 'placeToken':
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
@@ -653,6 +655,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'coachFocus':
         await client.writes.clearCoachFocus(id);
+        return true;
+      case 'mock':
+        await client.writes.deleteMock(id);
         return true;
       case 'placeToken':
         await client.writes.revokePlaceToken();

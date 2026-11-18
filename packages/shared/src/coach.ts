@@ -38,6 +38,10 @@ import type {
   HelpLevel,
   LeetcodeVerdict,
   LegacyLeetcodeAttempt,
+  Mock,
+  MockKind,
+  MockScore,
+  MockScores,
   Sitting,
   SlotKind,
 } from './types';
@@ -750,6 +754,7 @@ export interface CoachToday {
   unnoted: { sittingId: string; slug: string; title: string; day: string }[];
   ai: CoachAiView | null; // null: the AI pick is off, or nothing to pick from
   planMode: CoachPlanModeView;
+  mock: CoachMockView; // mocks this week, the last one's scores, the planned ones in the next 48 hours
 }
 // The day's slot mix: the setting, the mode it resolved to today, the due count it read, and the one line a
 // client shows ("Catch-up: 31 due").
@@ -794,6 +799,7 @@ export interface CoachInput {
   legacy?: readonly LegacyLeetcodeAttempt[]; // the pre-sittings capture (read-only), alive
   voids?: readonly CoachVoid[]; // legacy groups' stored void states
   planMode?: CoachPlanMode; // the setting; absent → auto
+  mocks?: readonly Mock[]; // for `CoachToday.mock` only — a mock never reaches the plan; absent → none
 }
 // The CoachInput fields attemptsOf reads beyond the sittings and logged attempts.
 const moreOf = (ci: Pick<CoachInput, 'legacy' | 'voids'>) => ({
@@ -1253,6 +1259,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
     unnoted,
     ai,
     planMode: dayMode(pools.planMode, ai?.status === 'ok' ? row?.ai : undefined),
+    mock: mockView(input.mocks ?? [], today),
   };
 }
 // A stored AI pick holds its day (one pick a day): the day's mix is the one it kept, and a setting changed since
@@ -1886,4 +1893,212 @@ export function normalizeClaudeNotes(v: unknown): ClaudeNotesInput[] {
     if (!('text' in r)) throw new Error('text is required — null clears the notes');
     return { sittingId: r.sittingId, text: claudeNotesText(r.text) };
   });
+}
+
+// --- Mocks (coach.md → Mocks): their own rows, never a task or an attempt, so nothing here touches the plan ---
+export const MOCK_KINDS: readonly MockKind[] = ['human', 'claude', 'interview'];
+export const MOCK_KIND_NAMES: Record<MockKind, string> = {
+  human: 'With a person',
+  claude: 'With Claude',
+  interview: 'A real interview',
+};
+export const MOCK_PARTNER_MAX = 40;
+export const MOCK_NOTES_MAX = 1000;
+export const MOCK_BACK_DAYS = 365; // a done mock's day, at most this far back
+export const MOCK_AHEAD_DAYS = 60; // a planned one's, at most this far on
+const MOCK_ID_MAX = 64;
+export interface MockInput {
+  id?: string; // an existing mock to change; absent → a new one
+  day?: string; // default today
+  status?: Mock['status']; // default done
+  kind?: MockKind; // default human
+  partner?: string | null;
+  sittingId?: string | null;
+  problemSlug?: string | null;
+  scores?: MockScores | null; // replaced whole when sent
+  notes?: string | null;
+}
+export type NormalizedMock = Pick<
+  Mock,
+  'day' | 'status' | 'kind' | 'partner' | 'sittingId' | 'problemSlug' | 'scores' | 'notes'
+>;
+// Every field a mock write takes — the one list: normalizeMock, log_mock's arguments and the RPC's key check.
+export const MOCK_INPUT_KEYS = [
+  'id',
+  'day',
+  'status',
+  'kind',
+  'partner',
+  'sittingId',
+  'problemSlug',
+  'scores',
+  'notes',
+] as const satisfies readonly (keyof MockInput)[];
+const MOCK_KEYS: ReadonlySet<string> = new Set(MOCK_INPUT_KEYS);
+const isMockScore = (v: unknown): v is MockScore => v === 1 || v === 2 || v === 3 || v === 4;
+function mockScores(v: unknown): MockScores | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) throw new Error('scores must be an object');
+  const r = v as Record<string, unknown>;
+  for (const k of Object.keys(r))
+    if (k !== 'code' && k !== 'solve' && k !== 'communicate')
+      throw new Error(`Unknown score: ${k} (code, solve, communicate)`);
+  for (const k of ['code', 'solve'] as const)
+    if (!isMockScore(r[k])) throw new Error(`scores.${k} is required, a whole number from 1 to 4`);
+  if (r.communicate !== undefined && r.communicate !== null && !isMockScore(r.communicate))
+    throw new Error('scores.communicate must be a whole number from 1 to 4');
+  return {
+    code: r.code as MockScore,
+    solve: r.solve as MockScore,
+    ...(isMockScore(r.communicate) ? { communicate: r.communicate } : {}),
+  };
+}
+// Free text with its line breaks kept: runs of spaces folded, at most one blank line in a row, trimmed.
+function mockText(v: unknown, label: string, max: number, lines: boolean): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'string') throw new Error(`${label} must be text`);
+  const t = lines
+    ? v
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .map((l) => l.replace(/[ \t]+/g, ' ').trim())
+        .filter((l, i, all) => l !== '' || (i > 0 && all[i - 1] !== ''))
+        .join('\n')
+        .trim()
+    : v.replace(/\s+/g, ' ').trim();
+  if (t.length > max) throw new Error(`${label} is limited to ${max} characters`);
+  return t || null;
+}
+// The id a mock write names, checked before any read.
+export function mockIdOf(v: unknown): string | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('A mock must be an object');
+  const id = (v as Record<string, unknown>).id;
+  if (id === undefined) return null;
+  if (typeof id !== 'string' || !id || id.length > MOCK_ID_MAX)
+    throw new Error('id must be a mock id');
+  return id;
+}
+// One mock write, validated against the stored row it changes (null for a new one): a field it doesn't send keeps
+// the stored value, null clears it. A done mock carries Code and Solve (1–4) and is dated today or earlier; a
+// planned one has no scores yet. The day's window applies only to a day being set, so an old mock's notes can
+// still change. Throws with the reason; nothing is written on a throw.
+export function normalizeMock(v: unknown, today: string, stored: Mock | null): NormalizedMock {
+  mockIdOf(v);
+  const r = v as Record<string, unknown>;
+  for (const k of Object.keys(r))
+    if (!MOCK_KEYS.has(k)) throw new Error(`Unknown mock field: ${k}`);
+  const has = (k: string) => k in r && r[k] !== undefined;
+  const pick = <K extends keyof NormalizedMock>(k: K, dflt: NormalizedMock[K]): unknown =>
+    has(k) ? r[k] : stored ? stored[k] : dflt;
+
+  const status = pick('status', 'done');
+  if (status !== 'planned' && status !== 'done') throw new Error('status must be planned or done');
+  const kind = pick('kind', 'human');
+  if (!MOCK_KINDS.includes(kind as MockKind))
+    throw new Error(`kind must be one of ${MOCK_KINDS.join(', ')}`);
+  const day = pick('day', today);
+  if (typeof day !== 'string' || !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
+  const dayMoved = day !== stored?.day;
+  if (dayMoved && day < addDays(today, -MOCK_BACK_DAYS))
+    throw new Error(`day must be within the last ${MOCK_BACK_DAYS} days`);
+  if (dayMoved && day > addDays(today, MOCK_AHEAD_DAYS))
+    throw new Error(`day must be within the next ${MOCK_AHEAD_DAYS} days`);
+  if (status === 'done' && day > today)
+    throw new Error('A done mock is dated today or earlier — plan it (status planned) instead');
+  const scores = mockScores(pick('scores', null));
+  if (status === 'done' && !scores)
+    throw new Error('A done mock needs its scores: code and solve, 1 to 4');
+  if (status === 'planned' && scores)
+    throw new Error(
+      'A planned mock has no scores yet — send status done with them, or scores null',
+    );
+  const slug = pick('problemSlug', null);
+  if (slug !== null && !isProblemSlug(slug))
+    throw new Error(
+      'problemSlug must be a LeetCode problem slug (lowercase letters, digits, dashes)',
+    );
+  const sittingId = pick('sittingId', null);
+  if (
+    sittingId !== null &&
+    (typeof sittingId !== 'string' || !sittingId || sittingId.length > MOCK_ID_MAX)
+  )
+    throw new Error('sittingId must be a sitting id');
+  return {
+    day,
+    status,
+    kind: kind as MockKind,
+    partner: mockText(pick('partner', null), 'partner', MOCK_PARTNER_MAX, false),
+    sittingId: sittingId as string | null,
+    problemSlug: slug as string | null,
+    scores,
+    notes: mockText(pick('notes', null), 'notes', MOCK_NOTES_MAX, true),
+  };
+}
+// Newest day first, then the newest written.
+export const sortMocks = (mocks: readonly Mock[]): Mock[] =>
+  [...mocks].sort((a, b) => b.day.localeCompare(a.day) || b.createdAt - a.createdAt);
+
+export type MockBrief = Pick<
+  Mock,
+  'id' | 'day' | 'status' | 'kind' | 'partner' | 'scores' | 'notes'
+>;
+// The Today card's and leetcode_today's view of mocks. One line, never a count of weeks without one.
+export interface CoachMockView {
+  thisWeek: 'done' | 'planned' | 'none'; // the ISO week of today: a done one wins over a planned one
+  last: MockBrief | null; // the newest done mock, any week
+  doneCount: number;
+  upcoming: MockBrief[]; // planned from today through 2 days on, soonest first (the card's 48-hour list)
+  unlogged: MockBrief[]; // planned for a day already past, newest first, ≤ MOCK_UNLOGGED_MAX: to log or cancel
+  line: string;
+}
+export const MOCK_UNLOGGED_MAX = 5;
+const brief = (m: Mock): MockBrief => ({
+  id: m.id,
+  day: m.day,
+  status: m.status,
+  kind: m.kind,
+  partner: m.partner,
+  scores: m.scores,
+  notes: m.notes,
+});
+export const fmtMockScores = (s: MockScores): string =>
+  [
+    `Code ${s.code}`,
+    `Solve ${s.solve}`,
+    ...(s.communicate ? [`Communication ${s.communicate}`] : []),
+  ].join(' · ');
+export function mockView(mocks: readonly Mock[], today: string): CoachMockView {
+  const alive = sortMocks(mocks.filter((m) => m.deletedAt === null));
+  const done = alive.filter((m) => m.status === 'done' && m.scores);
+  const week = isoWeekKey(today);
+  const inWeek = (m: Mock) => isoWeekKey(m.day) === week;
+  const doneNow = done.find(inWeek);
+  // The planned one this week that's next (or, all passed, the latest that still waits to be logged).
+  const planned = alive.filter((m) => m.status === 'planned' && inWeek(m)); // newest day first
+  const plannedNow = planned.filter((m) => m.day >= today).at(-1) ?? planned[0];
+  const in48 = addDays(today, 2);
+  const upcoming = alive
+    .filter((m) => m.status === 'planned' && m.day >= today && m.day <= in48)
+    .sort((a, b) => a.day.localeCompare(b.day) || a.createdAt - b.createdAt);
+  // None this week but one booked in the next 48 hours (a Sunday's Monday mock): the line names it, so neither the
+  // card nor the thread suggests one already planned.
+  const named = plannedNow ?? upcoming[0];
+  const line = doneNow
+    ? `Mock this week: ${fmtMockScores(doneNow.scores!)}`
+    : named
+      ? named.day >= today
+        ? `Mock planned ${fmtSpokenDay(named.day, today)}`
+        : `Mock planned ${fmtSpokenDay(named.day, today)}, not logged yet`
+      : 'No mock this week yet';
+  return {
+    thisWeek: doneNow ? 'done' : plannedNow ? 'planned' : 'none',
+    last: done[0] ? brief(done[0]) : null,
+    doneCount: done.length,
+    upcoming: upcoming.map(brief),
+    unlogged: alive
+      .filter((m) => m.status === 'planned' && m.day < today)
+      .slice(0, MOCK_UNLOGGED_MAX)
+      .map(brief),
+    line,
+  };
 }
