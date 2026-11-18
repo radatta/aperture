@@ -189,11 +189,17 @@ export interface DevSubscribePushInput {
   keys: { p256dh: string; auth: string };
   label: string;
 }
-// The three reminder toggles — the only settings the check may write, so a restore can't touch the rest.
-export type DevReminderSettings = Partial<
-  Record<'remindTimed' | 'remindDueDay' | 'remindPlanned', boolean>
->;
-export const REMINDER_SETTING_KEYS = new Set(['remindTimed', 'remindDueDay', 'remindPlanned']);
+// The reminder and nudge toggles — the only settings the check may write, so a restore can't touch the
+// rest.
+export const REMINDER_KEYS = [
+  'remindTimed',
+  'remindDueDay',
+  'remindPlanned',
+  'nudgeMorning',
+  'nudgeNight',
+] as const;
+export type DevReminderSettings = Partial<Record<(typeof REMINDER_KEYS)[number], boolean>>;
+export const REMINDER_SETTING_KEYS = new Set<string>(REMINDER_KEYS);
 
 export interface DevCalibrationPoint {
   taskId: string;
@@ -641,10 +647,15 @@ export const UI_PUSH_SUB_VIA = 'ui:subscribePush';
 // The harness's push devices sit on fixed endpoints (one per slot, never issued by Apple), so a device's
 // id — the BFF's sha256(endpoint) prefix, lambdas/src/backend.ts pushDeviceId — repeats run to run and a
 // live one is known as the harness's own whatever the ledger says.
-export const HARNESS_PUSH_SLOTS = ['e2e', 'b', 'c', 'r', 'dup', 'banner'] as const;
+export const HARNESS_PUSH_SLOTS = ['e2e', 'b', 'c', 'r', 'dup', 'banner', 'nx'] as const;
 export type HarnessPushSlot = (typeof HARNESS_PUSH_SLOTS)[number];
+// `nx` is on an allowlisted push host (`*.notify.windows.com`) under a name that was never issued, so it
+// never resolves: every send to it is a network failure — the retry chain's transient fault, with no
+// request reaching anyone and no switch in shipped code.
 export const harnessPushEndpoint = (slot: HarnessPushSlot): string =>
-  `https://web.push.apple.com/devcheck-${slot}`;
+  slot === 'nx'
+    ? 'https://devcheck-nx.notify.windows.com/x'
+    : `https://web.push.apple.com/devcheck-${slot}`;
 export const harnessPushId = (slot: HarnessPushSlot): string =>
   createHash('sha256').update(harnessPushEndpoint(slot)).digest('hex').slice(0, 16);
 export const HARNESS_PUSH_IDS = new Set(HARNESS_PUSH_SLOTS.map(harnessPushId));
@@ -654,7 +665,10 @@ export const isHarnessPushId = (id: string): boolean => HARNESS_PUSH_IDS.has(id)
 // still leaves the next run's sweep to switch them back on. It exists while any toggle reads off.
 export const REMINDER_TOGGLES_VIA = 'api:setReminderSettings';
 export const reminderTogglesId = (run: string): string => `reminder-toggles:${run}`;
-export const REMINDERS_ON = { remindTimed: true, remindDueDay: true, remindPlanned: true } as const;
+export const REMINDERS_ON = Object.fromEntries(REMINDER_KEYS.map((k) => [k, true])) as Record<
+  (typeof REMINDER_KEYS)[number],
+  true
+>;
 
 // A bucket set, a refund link or a period mark on a fixture bank row. None has an id of its own, so, like the
 // token, a run records `finance-bucket:<run>:<row>` / `finance-link:<run>:<row>` / `finance-mark:<run>:<row>`

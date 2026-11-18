@@ -553,7 +553,7 @@ describe('push dispatch — retry and catch-up', () => {
     }
   });
 
-  it('400, 403, 413 and a send that throws are final: stamped, never retried', async () => {
+  it('400, 403 and 413 are final: stamped, never retried', async () => {
     for (const [status, why] of [
       [400, 'push service answered 400'],
       [403, 'push service answered 403'],
@@ -614,7 +614,7 @@ describe('push dispatch — retry and catch-up', () => {
     const w = world();
     await w.device('S1');
     await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
-    w.push.status = { status: 0, reason: 'timeout' };
+    w.push.status = () => ({ status: 0, reason: 'timeout' });
     for (let m = 0; m <= 3; m++) {
       w.set(TWO_PM + m * MIN);
       await w.tick();

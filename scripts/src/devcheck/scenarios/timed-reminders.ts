@@ -7,6 +7,10 @@
 //   endpoint that was never issued (`devcheck-e2e`), subscribed well before that minute so it's armed in time
 //   (§3); the reminder's tick encrypts, signs and POSTs to A — the one malformed POST to Apple a run makes
 //   (plan Q7, approved) — and Apple's refusal comes back on the health line. A goes the moment it's read.
+//   Beside A in that tick, N: real keys on an allowlisted push host under a name never issued
+//   (`devcheck-nx.notify.windows.com`), so its POST never resolves — a network failure, the retry chain's
+//   transient fault. N is retried on the next 3 ticks, runs out, and 5 minutes later its one catch-up fails
+//   the same way; each step is read off N's error. N goes once the catch-up's failure is read.
 // Batching a reminder and a test into one notification is a unit test only (the maintainer, review round 3).
 //
 // Devices sit on fixed endpoints (api.ts HARNESS_PUSH_SLOTS), so their ids repeat run to run: a re-subscribe
@@ -123,6 +127,22 @@ export function e2eOutcome(
 }
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+// N's state as push/deliver.ts writes it: its error and when. A send that never resolves reads as a network
+// failure (or, if the resolver stalls past the 10 s cap, a timeout) — both retried.
+const RETRYING =
+  /^Last reminder didn't reach this device \((network error|timed out)\) — retrying$/;
+const RAN_OUT =
+  /^Last reminder didn't reach this device \((network error|timed out)\) after 4 tries$/;
+const CAUGHT_UP =
+  /^Couldn't deliver the catch-up for 1 missed reminder \((network error|timed out)\)$/;
+async function nState(ctx: Ctx): Promise<{ error: string; at: number }> {
+  const s = await status(ctx);
+  if (stageFault(s)) throw new Error(`the stage can't send: ${s.poller.lastError}`);
+  const d = s.devices.find((x) => x.id === deviceN.id);
+  if (!d) throw new Error(`N is gone: ${JSON.stringify(s.poller)}`);
+  return { error: d.lastError ?? '', at: d.lastErrorAt ?? 0 };
+}
+
 // Steps share what earlier ones made; a failed step skips the rest, so these are set when read.
 let fireAt = 0; // the reminder's fire time: a minute boundary past the tick that takes the test
 let ping: DevTask; // the end-to-end reminder
@@ -132,6 +152,8 @@ let deviceB: DevPushDevice; // removed in Settings
 let deviceC: DevPushDevice; // the one device left for Send test
 let testAt = 0; // just before Send test was clicked
 let deviceR: DevPushDevice; // "this browser's" device, removed by the API as if from another device
+let deviceN: DevPushDevice; // the retry chain's device: real keys on a host that never resolves
+let ranOutAt = 0; // when N's retries ran out (read off its error)
 
 // The server (or the page) catches up: the poller's tick, a save the page already showed.
 async function until<T>(
@@ -176,6 +198,9 @@ async function alertTexts(ctx: Ctx): Promise<string[]> {
 const health = (ctx: Ctx) => ctx.page.getByRole('group', { name: 'Reminder health', exact: true });
 const toggle = (ctx: Ctx, name: string) => ctx.page.getByRole('checkbox', { name, exact: true });
 const TOGGLES = ['Timed deadlines', 'Day-only deadlines at 9am', 'Planned tasks at 9am'];
+// Where the off-dev rows' tests live.
+const DISPATCH_TEST = 'lambdas/src/push/dispatch.test.ts';
+const NUDGES = ['Plan your day at 8:30am', 'Close the day at 9:30pm'];
 const dialogOf = (ctx: Ctx, t: string) => ctx.page.getByRole('dialog', { name: `Task: ${t}` });
 // The tap-through's params leave the URL once handled (replaced, so Back doesn't reopen the task).
 const linkStripped = (ctx: Ctx) =>
@@ -230,6 +255,67 @@ export const timedReminders: Scenario = {
       what: 'Settings › Notifications shows the three toggles on; Timed deadlines off saves, survives a reload, and back on saves',
     },
     {
+      id: 'ui-nudge-toggles',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The two ritual nudges (Plan your day at 8:30am, Close the day at 9:30pm) read on; Close the day off saves and survives a reload while Plan your day stays on; back on saves',
+    },
+    {
+      id: 'nudge-toggle-invalid',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A nudge toggle that isn’t a real boolean is refused, and the saved value stands',
+      offDev: {
+        file: 'lambdas/src/backend.push.test.ts',
+        test: 'the nudge toggles: on by default, a boolean only, and one switched back on is armed from then',
+        why: 'the harness writes settings only as real booleans (a restore can’t touch the rest); the contract suite runs the same refusal against the stub too',
+      },
+    },
+    {
+      id: 'nudge-fires',
+      entry: 'api',
+      kind: 'nominal',
+      what: '08:30 “Plan your day · N planned today” and 21:30 “Close the day · N left open · M done”, once each, opening Home; zero still nudges by count; never “missed”',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: '08:30 says how many are planned; 21:30 how many are open and done — each once, opening Home',
+        why: 'an 08:30 or 21:30 fire needs the run at that minute LA, and a time switch in shipped code is ruled out (as nine-am)',
+      },
+    },
+    {
+      id: 'nudge-armed',
+      entry: 'api',
+      kind: 'edge',
+      what: 'Each nudge’s toggle silences only it; one switched on after its time stays quiet that day',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'each toggle silences its own nudge; one switched on after its time stays quiet that day',
+        why: 'needs a fire at 08:30 or 21:30 (nudge-fires)',
+      },
+    },
+    {
+      id: 'nudge-own-notification',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A nudge in the same minute as a reminder goes as its own notification',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'a nudge in the same minute as a reminder is its own notification',
+        why: 'needs a fire at 08:30 or 21:30 (nudge-fires)',
+      },
+    },
+    {
+      id: 'nudge-dst',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A nudge keeps its wall-clock time on a DST change day',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'keeps its wall-clock time across a DST change',
+        why: 'needs a DST change day at 08:30',
+      },
+    },
+    {
       id: 'ui-health',
       entry: 'ui',
       kind: 'nominal',
@@ -240,6 +326,12 @@ export const timedReminders: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'A reminder’s tap-through (/tasks?lens=today&task=<id>&n=<tag>) opens that task’s modal, and the link leaves the URL',
+    },
+    {
+      id: 'ui-link-clears-search',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A search typed on Tasks earlier is cleared by the tap-through, so closing the modal lands on Today',
     },
     {
       id: 'ui-deep-link-gone',
@@ -460,6 +552,75 @@ export const timedReminders: Scenario = {
       kind: 'edge',
       what: 'Dismiss on that note: it goes, and stays gone across a reload',
     },
+    {
+      id: 'retry-network',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A send that fails in transit (a network failure) is retried on the next ticks — the device reads “— retrying” — and after 4 tries says so',
+    },
+    {
+      id: 'retry-neighbour',
+      entry: 'api',
+      kind: 'edge',
+      what: 'In the same tick, a neighbour device Apple refuses (404/410) is dropped as before; only the failed device is retried',
+    },
+    {
+      id: 'catch-up',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Retries that ran out leave the reminder for one catch-up, “1 reminder didn’t reach you”, 5 minutes on — tried once, its outcome on the device',
+    },
+    {
+      id: 'retry-statuses',
+      entry: 'api',
+      kind: 'edge',
+      what: '429, 500, 502, 503 and a timeout are retried under the same Topic, and the retry lands; 400, 403 and 413 stay final',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'a timeout, a network failure, 429 or a 5xx is retried on the next tick, under the same Topic',
+        why: 'no push service answers a status on demand, and an accepting endpoint is a real device (ios-nudge-banner); final statuses: “400, 403 and 413 are final: stamped, never retried”',
+      },
+    },
+    {
+      id: 'retry-quiet',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A task finished or re-dated before its retry stays quiet',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'a task finished or re-dated before its retry stays quiet',
+        why: 'finishing the task mid-chain would leave nothing to retry, losing retry-network and catch-up for the run',
+      },
+    },
+    {
+      id: 'retry-deadline',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A device the tick’s deadline skipped goes on the next tick, no try spent',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'a device the deadline skipped goes on the next tick, with no try spent',
+        why: 'a tick running out of time on dev can’t be arranged',
+      },
+    },
+    {
+      id: 'gap-catch-up',
+      entry: 'api',
+      kind: 'edge',
+      what: 'After a poller outage, what fell due in it (12 h back, open tasks only) goes once as a catch-up',
+      offDev: {
+        file: DISPATCH_TEST,
+        test: 'after a poller gap, what fell due in it goes once as a catch-up (12 h back, open tasks only)',
+        why: 'dev’s schedule can’t be stopped from the harness',
+      },
+    },
+    {
+      id: 'ios-nudge-banner',
+      entry: 'ios',
+      kind: 'nominal',
+      what: 'At 8:30am (or 9:30pm) a “Plan your day” (“Close the day”) banner with today’s count; tapping it opens the PWA on Home',
+      needsYou: 'a real APNs delivery at that minute and iOS’s tap-through',
+    },
   ],
   steps: [
     {
@@ -495,6 +656,44 @@ export const timedReminders: Scenario = {
           'Timed deadlines back on',
           () => ctx.api.reads.getSettings(),
           (s) => s.remindTimed === true,
+        );
+      },
+    },
+    {
+      id: 'ui-nudge-toggles',
+      entry: 'ui',
+      proves: ['ui-nudge-toggles'],
+      title:
+        'The two nudge toggles read on; Close the day off saves and survives a reload, Plan your day untouched; back on saves',
+      async run(ctx) {
+        await ctx.ui.goto('/settings');
+        for (const name of NUDGES) {
+          await toggle(ctx, name).waitFor({ state: 'visible', timeout: 15_000 });
+          if (!(await toggle(ctx, name).isChecked())) throw new Error(`${name} reads off`);
+        }
+        ctx.api.writes.recordReminderToggles(); // before the flip: cleanup turns it back on regardless
+        await toggle(ctx, NUDGES[1]!).click();
+        await until(
+          'Close the day off',
+          () => ctx.api.reads.getSettings(),
+          (s) => s.nudgeNight === false && s.nudgeMorning && s.remindTimed,
+        );
+        await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+        await toggle(ctx, NUDGES[1]!).waitFor({ state: 'visible', timeout: 15_000 });
+        await until(
+          'the reload',
+          () => toggle(ctx, NUDGES[1]!).isChecked(),
+          (c) => !c,
+          10_000,
+        );
+        if (!(await toggle(ctx, NUDGES[0]!).isChecked()))
+          throw new Error('Plan your day went off with Close the day');
+        await ctx.shot('nudge-night-off');
+        await toggle(ctx, NUDGES[1]!).click();
+        await until(
+          'Close the day back on',
+          () => ctx.api.reads.getSettings(),
+          (s) => s.nudgeNight === true,
         );
       },
     },
@@ -735,6 +934,31 @@ export const timedReminders: Scenario = {
       },
     },
     {
+      id: 'ui-link-clears-search',
+      entry: 'ui',
+      proves: ['ui-link-clears-search'],
+      title:
+        'A search typed on Tasks is gone after a reminder’s tap-through; closing the modal shows Today',
+      async run(ctx) {
+        await ctx.ui.goto('/tasks');
+        const search = ctx.page.getByRole('searchbox', { name: 'Search tasks', exact: true });
+        await search.fill(title(ctx, 'no such task'));
+        // Sticky for the session (sessionStorage), so it survives the navigation the tap is.
+        await ctx.ui.goto(linkTo(linked.id));
+        await dialogOf(ctx, linked.title).waitFor({ state: 'visible', timeout: 15_000 });
+        await linkStripped(ctx);
+        await until(
+          'the search cleared',
+          () => search.inputValue(),
+          (v) => v === '',
+          10_000,
+        );
+        await ctx.page.keyboard.press('Escape');
+        await dialogOf(ctx, linked.title).waitFor({ state: 'hidden', timeout: 10_000 });
+        await ctx.shot('link-cleared-search');
+      },
+    },
+    {
       id: 'ui-deep-link-gone',
       entry: 'ui',
       proves: ['ui-deep-link-gone'],
@@ -860,6 +1084,7 @@ export const timedReminders: Scenario = {
           ctx.log(`reminder moved to ${due.toISOString()}`);
         }
         deviceA = await ctx.api.writes.subscribeHarnessPush('e2e', pushKeys(), label(ctx, 'A'));
+        deviceN = await ctx.api.writes.subscribeHarnessPush('nx', pushKeys(), label(ctx, 'N'));
       },
     },
     {
@@ -887,6 +1112,72 @@ export const timedReminders: Scenario = {
         const o = outcome as ReturnType<typeof e2eOutcome>;
         if (!o || !o.ok) throw new Error(o ? o.why : 'no outcome');
         ctx.log(o.how);
+      },
+    },
+    {
+      id: 'retry-first',
+      cost: 'slow',
+      entry: 'api',
+      proves: ['retry-network', 'retry-neighbour'],
+      title:
+        'The same tick failed N in transit: its error reads “— retrying”, and it is still listed while A was dropped',
+      async run(ctx) {
+        const v = await until(
+          'N’s first try',
+          () => nState(ctx),
+          (x) => x.at >= fireAt - CLOCK_SLACK_MS,
+          Math.max(fireAt + TICK_WAIT_MS - Date.now(), 10_000),
+          3_000,
+        );
+        if (!RETRYING.test(v.error))
+          throw new Error(`N’s first failure isn’t a retrying network failure: ${v.error}`);
+        ctx.log(`N: ${v.error}`);
+      },
+    },
+    {
+      id: 'retry-ran-out',
+      cost: 'slow',
+      entry: 'api',
+      proves: ['retry-network'],
+      title: 'N is retried on the next 3 ticks, then its error says “after 4 tries”',
+      async run(ctx) {
+        const v = await until(
+          'N’s retries running out',
+          () => nState(ctx),
+          (x) => RAN_OUT.test(x.error) || !RETRYING.test(x.error),
+          4 * TICK_MS + TICK_WAIT_MS,
+          5_000,
+        );
+        if (!RAN_OUT.test(v.error)) throw new Error(`N’s retries ended otherwise: ${v.error}`);
+        ranOutAt = v.at;
+        ctx.log(`N: ${v.error}`);
+      },
+    },
+    {
+      id: 'catch-up-sent',
+      cost: 'slow',
+      entry: 'api',
+      proves: ['catch-up'],
+      title:
+        'Five minutes on, N’s one catch-up went (and failed in transit): “Couldn’t deliver the catch-up for 1 missed reminder”',
+      async run(ctx) {
+        try {
+          const v = await until(
+            'N’s catch-up',
+            () => nState(ctx),
+            (x) => x.at > ranOutAt + CLOCK_SLACK_MS,
+            Math.max(ranOutAt + 5 * TICK_MS + TICK_WAIT_MS - Date.now(), 10_000),
+            5_000,
+          );
+          if (!CAUGHT_UP.test(v.error))
+            throw new Error(`N’s next error isn’t its catch-up: ${v.error}`);
+          if (v.at < ranOutAt + 5 * TICK_MS - CLOCK_SLACK_MS)
+            throw new Error('the catch-up went before its 5 minutes settled');
+          ctx.log(`N: ${v.error}`);
+        } finally {
+          if ((await status(ctx)).devices.some((d) => d.id === deviceN.id))
+            await ctx.api.writes.unsubscribePush(deviceN.id);
+        }
       },
     },
     noConsoleErrors,

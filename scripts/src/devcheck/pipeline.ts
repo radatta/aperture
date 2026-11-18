@@ -2,7 +2,14 @@
 //   run-start → deploy-wait → sign in → sweep earlier runs' leftovers → in-page build check → scenarios
 //   → finally: cleanup by ledger id, verify nothing's left, dev's build unchanged → report → run-end.
 // Cleanup runs whatever happened before it. Exit: 0 PASS, 1 FAIL (any reason code), 2 CRASH.
-import { DEV_WORK_MIN, coachSlotOf, financeRowOf, ledgerKind, type ApiClient } from './api';
+import {
+  DEV_WORK_MIN,
+  REMINDER_KEYS,
+  coachSlotOf,
+  financeRowOf,
+  ledgerKind,
+  type ApiClient,
+} from './api';
 import { targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
@@ -670,7 +677,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.getPushStatus()).devices.some((d) => d.id === id);
       case 'reminderToggles': {
         const st = await client.reads.getSettings();
-        return !st.remindTimed || !st.remindDueDay || !st.remindPlanned;
+        // A row from before a toggle existed reads undefined: on.
+        return REMINDER_KEYS.some((k) => st[k] === false);
       }
       case 'scopedToken':
         return (await client.reads.listScopedTokens()).some((t) => t.id === id);

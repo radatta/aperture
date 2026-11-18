@@ -82,6 +82,8 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     remindTimed: true,
     remindDueDay: true,
     remindPlanned: true,
+    nudgeMorning: true,
+    nudgeNight: true,
   };
   const tasks = new Map<string, DevTask>(
     (opts.existing ?? []).map((id) => [id, { id, title: id }]),
@@ -113,7 +115,13 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   };
   const pushDevices = new Set<string>();
   const pushRemoved: string[] = [];
-  const reminders = { remindTimed: true, remindDueDay: true, remindPlanned: true };
+  const reminders = {
+    remindTimed: true,
+    remindDueDay: true,
+    remindPlanned: true,
+    nudgeMorning: true,
+    nudgeNight: true,
+  };
   const reminderWrites: unknown[] = [];
   const listeners: ((r: PwRequest) => void)[] = [];
   const responseListeners: ((r: PwResponse) => void)[] = [];
@@ -642,7 +650,13 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       restoreReminderToggles: async () => {
-        const on = { remindTimed: true, remindDueDay: true, remindPlanned: true };
+        const on = {
+          remindTimed: true,
+          remindDueDay: true,
+          remindPlanned: true,
+          nudgeMorning: true,
+          nudgeNight: true,
+        };
         reminderWrites.push(on);
         Object.assign(reminders, on);
       },
@@ -1736,10 +1750,28 @@ describe('runPipeline', () => {
     const r = await runPipeline(deps(w, [sc], ledger));
     expect(r.swept).toEqual(['reminder-toggles:run0']);
     expect(w.reminderWrites).toEqual([
-      { remindTimed: true, remindDueDay: true, remindPlanned: true },
-      { remindTimed: true, remindDueDay: true, remindPlanned: true },
+      {
+        remindTimed: true,
+        remindDueDay: true,
+        remindPlanned: true,
+        nudgeMorning: true,
+        nudgeNight: true,
+      },
+      {
+        remindTimed: true,
+        remindDueDay: true,
+        remindPlanned: true,
+        nudgeMorning: true,
+        nudgeNight: true,
+      },
     ]);
-    expect(w.reminders).toEqual({ remindTimed: true, remindDueDay: true, remindPlanned: true });
+    expect(w.reminders).toEqual({
+      remindTimed: true,
+      remindDueDay: true,
+      remindPlanned: true,
+      nudgeMorning: true,
+      nudgeNight: true,
+    });
     expect(r.created.map((c) => [c.id, c.final])).toEqual([['reminder-toggles:run1', 'deleted']]);
     expect(r.status).toBe('PASS');
   });

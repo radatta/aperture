@@ -1367,7 +1367,15 @@ describe('createApiClient', () => {
         `${DEV_ORIGIN}/api/updateSettings`,
         expect.objectContaining({
           body: JSON.stringify({
-            args: [{ remindTimed: true, remindDueDay: true, remindPlanned: true }],
+            args: [
+              {
+                remindTimed: true,
+                remindDueDay: true,
+                remindPlanned: true,
+                nudgeMorning: true,
+                nudgeNight: true,
+              },
+            ],
           }),
         }),
       );
