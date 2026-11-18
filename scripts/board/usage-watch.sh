@@ -1,5 +1,5 @@
 #!/bin/bash
-# The hub's usage stop watcher (the maintainer, 2026-11-17: soft stop everything at 58 %, hard stop at 60). Reads the
+# The hub's usage stop watcher (the maintainer's lines, 2026-11-17: a soft stop at 58 %, a hard stop at 60). Reads the
 # usage meter every intervalSec and exits ONLY on a line, so the hub wakes just then:
 #   7 = soft stop (>= softPct)   8 = hard stop (>= hardPct, checked first)   78 = a limits.json key is missing or bad
 #   2 = a bad argument or override

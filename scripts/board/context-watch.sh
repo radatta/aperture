@@ -1,5 +1,5 @@
 #!/bin/bash
-# The hub's context watcher (the maintainer, 2026-11-17: flag any session over 40 % context, tell him URGENTLY at 50).
+# The hub's context watcher (the maintainer's lines, 2026-11-17: a session over 40 % context is flagged, 50 is urgent).
 # Every intervalSec: each session's latest meter row from the last freshSec (the status-line logger writes
 # ctx = current_usage), tokens = input + cache_creation + cache_read, pct = tokens / windowTokens. Writes ctx.json
 # (every session, sorted by pct: the hub and the web tower read it) and a history line. Exits:
