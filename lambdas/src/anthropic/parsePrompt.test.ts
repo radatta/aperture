@@ -61,6 +61,22 @@ describe('parseOutputSchema', () => {
     });
   });
 
+  it('a spoken line also asks whether the words gave the half of the day; a typed one does not', () => {
+    const voice = parseOutputSchema(['c1'], { voice: true }) as {
+      required: string[];
+      properties: Record<string, unknown>;
+    };
+    expect(voice.required.at(-1)).toBe('dueTimeHalf');
+    expect(voice.properties.dueTimeHalf).toMatchObject({
+      anyOf: [{ type: 'string', enum: ['stated', 'night', 'none'] }, { type: 'null' }],
+    });
+    const typed = parseOutputSchema(['c1']) as { properties: Record<string, unknown> };
+    expect(typed.properties.dueTimeHalf).toBeUndefined();
+    const prompt = parseSystemPrompt('2026-11-17', [], { voice: true });
+    expect(prompt).toContain('"at 5 send this morning\'s notes"');
+    expect(prompt).toContain('"at 1 friday night" is friday, 01:00');
+  });
+
   it('with no categories, categoryId can only be null', () => {
     const s = parseOutputSchema([]) as { properties: Record<string, unknown> };
     expect(s.properties.categoryId).toEqual({ type: 'null' });

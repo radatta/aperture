@@ -191,6 +191,8 @@ against the typed words; then:
 
 ## Decision log (2026-11-17, the maintainer)
 
+- **A spoken clock's half of the day is the model's reading** (`dueTimeHalf`, voice only — typed, app and MCP
+  schemas are unchanged): [capture → Time rules](capture.md#4-time-rules) and its decision log.
 - **A clock with no day lands on its next occurrence, typed or spoken.** A typed time already past rolls
   forward as a spoken one does: "call 9am" at 3pm → tomorrow 9am; "1 am" at 02:01 (the app's day still
   yesterday) → the coming night's 01:00, not the hour just gone. Found by the voice-capture dev check at 02:01,

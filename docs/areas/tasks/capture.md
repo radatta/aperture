@@ -82,7 +82,7 @@ in under 8 s with a one-sentence `say`; the `api-latency` dev row logs p50 / p95
 
 **Logging:** one line per request, `{event: 'capture', ok, reason, ms, raw?, duplicate?, voice?, parseMs?,
 fallback?}` (`fallback` why the model's reading wasn't used: `long`, `cap`, or the parse's failure reason), with fixed reason
-codes. Never the text, header, token, hash or an error message. The parse's own line logs only `chars` and
+codes. Never the text, header, token, hash or an error message. The parse's own line logs only `chars`, `half` (the voice enum) and
 token counts.
 
 ## 3. Token
@@ -146,22 +146,31 @@ maintainer, 2026-11-16):
 1. A bare "at N" is the next N o'clock, wrapping: 2 AM + "at 5" → 5 AM; 6 AM + "at 5" → 5 PM.
 2. A spoken time already past rolls forward to its next occurrence, and `say` names the day.
 3. "morning" is 9 AM, "tonight" 8 PM; "in N minutes/hours" is computed from the server clock, never by the
-   model. A bare hour takes its half of the day from words beside it in any form ("at 8 tonight", "tomorrow
-   morning at 9", "at 1 friday night" — "<day> night" is that night's, so a small hour lands after the day), or
-   from a time phrase anywhere ("remind me tonight to call mum at 9"; "this", "in the" or a day before morning…
-   evening). A day-part noun elsewhere is no time: "at 5 send the morning report" is a bare 5 (2026-11-17).
+   model. Whether the words said a clock's half of the day is the model's reading (`dueTimeHalf`, below), not a
+   word list: "at 8 tonight" or "remind me tonight to call mum at 9" is the night's, "at 5 in the evening" or
+   "at 8 tomorrow evening" stated, "at 5 send the morning report" a bare 5 — the word belongs to the task.
 
-**The model reads the clock, the code places it** (since 2026-11-17, Sonnet; before, the grammar read it and the
-model's time was ignored). Every spoken line gets the voice rules on top of the typed prompt — strip spoken times
-and a leading "remind me to" from the title; `dueTime` the clock as said ("at 5" → 05:00, the hour as said;
-"5 pm" → 17:00; "tonight" alone → 20:00, "morning" → 09:00; a delay → null); a day only when one was said. The
-code then places it (`validateParsedTask`, `spokenTime.ts`): a delay ("in 20 minutes") is always the server
-clock's; a model clock that agrees with the grammar's reading takes the grammar's placement (a bare hour wraps,
-"at 1 tonight" is the small hours); one that disagrees wins — a bare hour when no half of the day is said (am/pm, a 24-hour
-clock, noon, or a day-part beside the clock or as a time phrase anywhere, rule 3: "at 8 tomorrow evening",
-"remind me this evening to call mum at 6"; "at 9 book the night bus" says none), else as stated — and rolls forward like any time. With
-no model clock the grammar's reading fills, as before. The grammar on its own (precedence: relative → a stated
-clock → a bare hour → a day-part) is the fallback when the model doesn't run (§2 _Flow_).
+**The model reads the clock and its half of the day; the code places it** (since 2026-11-17, Sonnet; before, the
+grammar read it and the model's time was ignored). Every spoken line gets the voice rules on top of the typed
+prompt — strip spoken times and a leading "remind me to" from the title; `dueTime` the clock as said ("at 5" →
+05:00, the hour as said; "5 pm" → 17:00; "at 5 in the evening" → 17:00; "tonight" alone → 20:00, "morning" →
+09:00; a delay → null); a day only when one was said ("at 1 friday night" is Friday — the server moves it); and
+`dueTimeHalf`: `night` (a night phrase about that time, anywhere: "tonight", "at night", "friday night"),
+`stated` (am/pm, 24-hour, noon, midnight, a morning…evening phrase about it) or `none` (a bare hour; a day-part
+word that belongs to the task says nothing). The code then places it (`validateParsedTask` → `placeModelClock`,
+`spokenTime.ts` `resolveSpoken`):
+
+1. a delay ("in 20 minutes") is always the server clock's;
+2. a lone day-part the grammar read ("tonight", "tomorrow morning") at its rule time keeps the grammar's reading;
+3. `night`: a bare hour of the night — 4–11 the evening, 12 and 1–3 the small hours after the day;
+4. a stated clock the grammar read the same ("at 9 am") keeps the grammar's reading (its due phrase leaves the
+   title);
+5. `stated`: the clock as said; `none` — or a missing or unknown value — a bare hour (rule 1, the daytime hour
+   with a named day). A wrong `none` rings early, never late.
+
+Every time rolls forward when past. With no model clock the grammar's reading fills, as before. The grammar on its
+own (precedence: relative → a stated clock → a bare hour → a day-part) is the fallback when the model doesn't run
+(§2 _Flow_); it knows "morning" and "tonight" (anywhere in the line), not "afternoon", "evening" or "<day> night".
 
 Two checks keep the grammar honest:
 
@@ -186,8 +195,8 @@ Two checks keep the grammar honest:
 | same                                         | 6 PM        | tomorrow 5 AM                                    |
 | at 9 am / today at 9 am                      | 3 PM        | tomorrow 9 AM (rolled)                           |
 | at 8 tonight / at 8 in the morning           | any         | the day-part picks PM / AM, then next occurrence |
-| at 1 friday night                            | any         | Saturday 1 AM (the small hours after Friday)     |
-| at 5 … the morning report                    | 6 AM        | today 5 PM (the noun is no day-part)             |
+| at 1 friday night                            | any         | Saturday 1 AM (without AI: no time, a weekday)   |
+| at 5 … the morning report                    | 6 AM        | today 5 PM (without AI: tomorrow 5 AM)           |
 | tonight                                      | 3 PM / 9 PM | today 8 PM / tomorrow 8 PM                       |
 | this morning / tomorrow morning              | 10 AM       | tomorrow 9 AM                                    |
 | friday at 5 (a named day, a bare hour)       | any         | Friday 5 PM — the daytime hour, 07:00–18:59      |
@@ -275,6 +284,12 @@ Get Contents of URL hands a non-2xx body on (so a 401's `say` is spoken) rather 
   time and says "without AI"; a lost token-row race retries with jitter, then 409 "say it again" (F224); the
   parse cap is per user, 40 a day (the maintainer); lines over 600 characters skip the model. The Shortcut is
   unchanged.
+- **2026-11-17 (the maintainer, after review round 4):** the model says whether the words gave the clock's half of
+  the day (`dueTimeHalf`); the phrase rules that decided it in code left the model path — three review rounds each
+  found a twin in them ("this morning's notes", "one twenty friday night"). An enum, not a boolean: `night` keeps
+  the small-hours rule in code ("at 1 friday night" → Saturday 1 AM) without the model doing date arithmetic.
+  Missing → `none`. The grammar fallback is main's again (it reads "morning" anywhere, so "at 5 … the morning
+  report" is 5 AM without AI — accepted, said out loud). A task that names "the tonight show" is the model's call.
 
 ## 8. Build record
 

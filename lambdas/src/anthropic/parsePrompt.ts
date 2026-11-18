@@ -10,14 +10,19 @@ export const PARSE_MODEL = 'claude-sonnet-5-5';
 export const PARSE_THINKING = 'between_tools';
 export const PARSE_EFFORT = 'low';
 
-// A spoken line (voice capture, capture.md) adds VOICE_RULES: the model reads the clock as said, and the
-// server places it (a bare hour's morning or evening, a past clock rolled forward, "in 20 minutes" from its
-// own clock — quickParse.ts validateParsedTask).
+// A spoken line (voice capture, capture.md) adds VOICE_RULES: the model reads the clock as said and says whether
+// the words gave its half of the day (dueTimeHalf); the server places it (a bare hour's morning or evening, a
+// night's small hours after its day, a past clock rolled forward, "in 20 minutes" from its own clock —
+// quickParse.ts validateParsedTask).
 const VOICE_RULES = `
 The line was spoken, not typed:
 - Also remove from the title any spoken time ("at 5", "five o'clock", "at 8 tonight", "in 20 minutes", "in an hour", "tonight", "this morning", "tomorrow morning") and a leading "remind me to" or "remind me".
-- dueTime, instead of the rule above: the clock the user said, HH:MM 24h, read as said. "at 5" or "five o'clock" with no am/pm is 05:00 — give the hour as said; the server picks morning or evening. "5 pm" is 17:00, "quarter past five pm" 17:15, "half past 6 in the morning" 06:30, "at 8 tonight" 20:00, "at 1 tonight" 01:00, "noon" 12:00. "tonight" with no clock is 20:00; "this morning" or "tomorrow morning" with no clock is 09:00. A delay ("in 20 minutes", "in an hour") is not a clock: null, the server works it out. No time said: null.
-- dueDay: only for a day the user said ("tomorrow", "friday", "next monday"). A spoken time alone, "today", "tonight" or "this morning" is not a day: null.`;
+- dueTime, instead of the rule above: the clock the user said, HH:MM 24h, read as said. "at 5" or "five o'clock" with no am/pm is 05:00 — give the hour as said; the server picks morning or evening. "5 pm" is 17:00, "quarter past five pm" 17:15, "half past 6 in the morning" 06:30, "at 8 tonight" 20:00, "at 1 tonight" 01:00, "noon" 12:00. "tonight" with no clock is 20:00; "this morning" or "tomorrow morning" with no clock is 09:00. A delay ("in 20 minutes", "in an hour") is not a clock: null, the server works it out. No time said: null. "at 12 tonight" is 00:00. When the words say the half of the day, give the 24h time: "at 5 in the evening" 17:00, "at 8 tomorrow evening" 20:00.
+- dueDay: only for a day the user said ("tomorrow", "friday", "next monday"). A spoken time alone, "today", "tonight" or "this morning" is not a day: null. For "friday night" or "tomorrow night" give that day even for a small hour ("at 1 friday night" is friday, 01:00) — never move the day yourself; the server does.
+- dueTimeHalf: whether the user's words say which half of the day dueTime is in. null when dueTime is null.
+  "night": a night phrase about that time, anywhere in the line — "tonight", "at night", "friday night", "tomorrow night" ("at 8 tonight", "at 1 friday night", "remind me tonight to call mum at 9", "1 am friday night"), or "tonight" with no clock. It wins over "stated".
+  "stated": am/pm ("5 pm"), a 24-hour clock ("17:30"), noon or midnight, or a morning / afternoon / evening phrase about that time, anywhere in the line ("at 5 in the evening", "at 8 tomorrow evening", "remind me this afternoon to call mum at 4"), or "this morning" / "tomorrow morning" with no clock.
+  "none": a clock with nothing saying which half — "at 5", "five o'clock", "at 5:30", "quarter past five", "friday at 5". A day-part word that belongs to the task says nothing: "at 5 send the morning report", "at 5 send this morning's notes", "at 9 book the night bus", "at 9 book the tonight show tickets" are all "none".`;
 
 export function parseSystemPrompt(
   today: string,
@@ -41,12 +46,34 @@ Rules:
 }
 
 // Structured outputs can't carry numeric, length or calendar constraints — validateParsedTask checks those.
-export function parseOutputSchema(categoryIds: readonly string[]): Record<string, unknown> {
+export function parseOutputSchema(
+  categoryIds: readonly string[],
+  opts: { voice?: boolean } = {},
+): Record<string, unknown> {
   const nullable = (s: Record<string, unknown>) => ({ anyOf: [s, { type: 'null' }] });
+  // A spoken line also says whether its words gave the clock's half of the day (quickParse.ts placeModelClock).
+  const half = opts.voice
+    ? {
+        dueTimeHalf: nullable({
+          type: 'string',
+          enum: ['stated', 'night', 'none'],
+          description:
+            'Whether the words say which half of the day dueTime is in. null when dueTime is null.',
+        }),
+      }
+    : {};
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['title', 'notes', 'categoryId', 'dueDay', 'dueTime', 'estimateMin'],
+    required: [
+      'title',
+      'notes',
+      'categoryId',
+      'dueDay',
+      'dueTime',
+      'estimateMin',
+      ...(opts.voice ? ['dueTimeHalf'] : []),
+    ],
     properties: {
       title: { type: 'string' },
       notes: nullable({ type: 'string' }),
@@ -56,6 +83,7 @@ export function parseOutputSchema(categoryIds: readonly string[]): Record<string
       dueDay: nullable({ type: 'string', format: 'date' }),
       dueTime: nullable({ type: 'string', description: 'HH:MM, 24h' }),
       estimateMin: nullable({ type: 'integer' }),
+      ...half,
     },
   };
 }

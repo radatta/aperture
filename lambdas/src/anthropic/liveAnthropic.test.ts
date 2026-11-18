@@ -98,6 +98,20 @@ describe('createLiveAnthropic', () => {
     expect(JSON.parse(calls[0]!.init.body as string).max_tokens).toBe(512);
   });
 
+  it("a spoken line's schema asks for the half of the day, and the log carries the model's value", async () => {
+    const { gw, calls, logs } = setup(() =>
+      message(JSON.stringify({ ...FIELDS, dueTimeHalf: 'night' })),
+    );
+    await gw.parseTask({ ...req, voice: true });
+    await gw.parseTask(req);
+    const schema = (i: number) =>
+      JSON.parse(calls[i]!.init.body as string).output_config.format.schema;
+    expect(schema(0).required).toContain('dueTimeHalf');
+    expect(schema(1).properties.dueTimeHalf).toBeUndefined();
+    expect(JSON.parse(logs[0]!)).toMatchObject({ voice: true, half: 'night' });
+    expect(JSON.parse(logs[1]!).half).toBeUndefined();
+  });
+
   it('reads the key once per warm container', async () => {
     const { gw, gets } = setup(() => message(JSON.stringify(FIELDS)));
     await gw.parseTask(req);

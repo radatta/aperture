@@ -22,8 +22,6 @@ import type { Category } from './types';
 import {
   DAY_PART_TIME,
   DAY_WORD,
-  HALF_PHRASE,
-  NEAR_DAY,
   dueClock,
   resolveSpoken,
   spokenTimeIn,
@@ -67,6 +65,7 @@ export interface ParsedTaskFields {
   dueDay: string | null;
   dueTime: string | null;
   estimateMin: number | null;
+  dueTimeHalf?: DueTimeHalf | null; // voice only: whether the words say dueTime's half of the day
 }
 
 export type ParseCategory = Pick<Category, 'id' | 'label'>;
@@ -102,55 +101,30 @@ const rangesOf = (line: string, re: RegExp): Range[] =>
 const SPOKEN_CLOCK_HINT =
   /\d|\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|noon|midnight|quarter|half)\b/i;
 
-// A spoken clock with its half of the day said: in its own words or right beside them ("5 pm", "17:30", "noon",
-// "at 5 in the evening", "at 8 tomorrow evening", "tonight at 9"), or as a time phrase anywhere in the line
-// ("remind me this evening to call mum at 6": HALF_PHRASE). Without one, the model's clock is a bare hour and the
-// server picks morning or evening. A day-part noun elsewhere says nothing: "at 9 book the night bus". "5:30" is
-// 12-hour, so only a 24-hour form ("17:30", "08:15") counts.
-const HALF_IN =
-  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
-const HALF_AFTER = new RegExp(
-  `^\\s*(?:o['’]?\\s?clock\\s*)?(?:a\\.?m\\b|p\\.?m\\b|tonight\\b|at night\\b|(?:${NEAR_DAY}\\s+)?(?:(?:in the|this)\\s+)?(?:morning|afternoon|evening|night)\\b)`,
-  'i',
-);
-const HALF_BEFORE =
-  /\b(?:tonight|this (?:morning|afternoon|evening)|morning|afternoon|evening|night)\s*,?\s*(?:at|by|around)?\s*$/i;
-// No clock the grammar could find ("at five twenty"): only the plain markers count, wherever they are — a
-// day-part word alone ("the night bus") isn't one.
-const HALF_LOOSE =
-  /(?:\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|clock))\s*(?:a\.?m|p\.?m)\b|\b(?:0\d|1[3-9]|2[0-3]):\d{2}\b|\b(?:noon|midnight)\b/i;
-const HALF_ANYWHERE = new RegExp(HALF_PHRASE, 'i');
-const halfSaid = (line: string, said: string): boolean => {
-  if (HALF_ANYWHERE.test(line)) return true;
-  const at = said ? saidAt(line, said) : null;
-  if (!at) return HALF_LOOSE.test(line);
-  return (
-    HALF_IN.test(said) ||
-    HALF_AFTER.test(line.slice(at[1])) ||
-    HALF_BEFORE.test(line.slice(0, at[0]))
-  );
-};
+// Whether the words say which half of the day the model's clock is in — the model's reading of the line
+// (`dueTimeHalf`, voice only; the maintainer 2026-11-17: the model is the parser, after phrase rules kept
+// finding twins). "night" is a night phrase about that time ("at 8 tonight", "at 1 friday night"); "stated" any
+// other half (am/pm, 24h, noon, "in the evening"); "none" a bare hour. Missing or unknown: none — a wrong bare
+// hour rings early, never late.
+export type DueTimeHalf = 'stated' | 'night' | 'none';
+const dueTimeHalf = (v: unknown): DueTimeHalf => (v === 'stated' || v === 'night' ? v : 'none');
 
-// Where the model's spoken clock lands: the grammar's own reading when the two agree (it keeps the rules a bare
-// hour, "tonight" and "morning" carry), else the model's — a bare hour when the line says no half of the day.
-function placeModelClock(hhmm: string, spoken: SpokenTime | null, line: string): SpokenTime {
+// Where the model's spoken clock lands, placed by the voice rules (spokenTime.ts resolveSpoken):
+//   1. a lone day-part the grammar read ("tonight", "tomorrow morning") at its rule time: the grammar's reading;
+//   2. a night: a bare hour of the night — 4–11 the evening, 12 and 1–3 the small hours after the day;
+//   3. a stated clock the grammar read the same ("at 9 am"): the grammar's reading (the due-phrase title fix);
+//   4. any other stated half: the clock as said, rolled forward if past;
+//   5. none: a bare hour, wrapping (rule 1), the daytime hour with a named day.
+// The grammar's bare hour and its day-part are never consulted here.
+function placeModelClock(hhmm: string, half: DueTimeHalf, spoken: SpokenTime | null): SpokenTime {
   const [h, m] = hhmm.split(':').map(Number) as [number, number];
-  const agrees =
-    spoken?.kind === 'clock'
-      ? spoken.hhmm === hhmm
-      : spoken?.kind === 'bare'
-        ? spoken.hour % 12 === h % 12 &&
-          spoken.minute === m &&
-          // a bare hour where the line says its half ("at 5 in the evening") is the grammar missing it
-          (spoken.part !== null || !halfSaid(line, spoken.said))
-        : spoken?.kind === 'part'
-          ? DAY_PART_TIME[spoken.part] === hhmm
-          : false;
-  if (spoken && agrees) return spoken;
+  if (spoken?.kind === 'part' && DAY_PART_TIME[spoken.part] === hhmm) return spoken;
   const said = spoken?.said ?? '';
-  return halfSaid(line, said)
-    ? { said, kind: 'clock', hhmm }
-    : { said, kind: 'bare', hour: h % 12 || 12, minute: m, part: null };
+  if (half === 'night')
+    return { said, kind: 'bare', hour: h % 12 || 12, minute: m, part: 'tonight' };
+  if (spoken?.kind === 'clock' && spoken.hhmm === hhmm) return spoken;
+  if (half === 'stated') return { said, kind: 'clock', hhmm };
+  return { said, kind: 'bare', hour: h % 12 || 12, minute: m, part: null };
 }
 
 // The model's outcome, as the flow sees it. A failure never throws — every one is a raw save.
@@ -296,9 +270,9 @@ export function validateParsedTask(
       str(clock) && isTimeKey(clock) && SPOKEN_CLOCK_HINT.test(line ?? '') ? clock : null;
     if (spoken?.kind === 'relative') resolve(spoken);
     else if (modelClock && (!spoken || !kept || due)) {
-      const placed = placeModelClock(modelClock, spoken, line ?? '');
-      resolve(placed);
-      if (due && placed === spoken) input.title = due.title;
+      resolve(placeModelClock(modelClock, dueTimeHalf(p.dueTimeHalf), spoken));
+      // The due phrase ("at 1 am") leaves the title when the grammar read the model's clock in it.
+      if (due && spoken?.kind === 'clock' && spoken.hhmm === modelClock) input.title = due.title;
     } else if (spoken && (!kept || due)) {
       resolve(spoken);
       if (due) input.title = due.title;
@@ -400,11 +374,8 @@ function led(line: string, [s, e]: Range, lead: RegExp): Range {
 const CLOCKS = new RegExp(CLOCK_IN_LINE.source, 'gi');
 const DURATIONS = new RegExp(DURATION_IN_LINE.source, 'gi');
 const DAY_WORDS = /\b(today|tdy|tonight)\b|(?<!\bday\s+after\s+)\b(tomorrow|tmrw?|tmw)\b/gi;
-// The words of a half of the day said as a time: a phrase anywhere (HALF_PHRASE), or a bare day-part word beside a
-// clock (BESIDE_CLOCK). "the night bus" is neither, so its words never count as the due's.
-const DAY_PARTS = new RegExp(HALF_PHRASE, 'gi');
-const DAY_PART_WORDS = /\b(?:morning|afternoon|evening|night)\b/gi;
-const BESIDE_CLOCK = /^\s*(?:o['’]?\s?clock)?\s*(?:in the|this)?\s*$/i;
+const DAY_PARTS =
+  /\b(?:(?:this|tomorrow|in the)\s+)?(?:morning|afternoon|evening|night)\b|\btonight\b/gi;
 // A clock or day the task is about, not when it's due: "move standup to 5pm", "prep for this friday 5pm".
 const OBJECT_OF = /\b(?:to|for|of|about|from|than)\s+$/i;
 // A clock used as a noun is the task's too: "prep notes for the 3pm", "skip my 9am".
@@ -445,15 +416,16 @@ function titleMeta(
       clocks.push([s0, e0 + (MORE_CLOCK.exec(line.slice(e0))?.[0].length ?? 0)]);
     const said =
       spoken && (ctx.voice || spoken.kind === 'clock') ? saidAt(line, spoken.said) : null;
+    // A due time with no clock words of its own — the grammar couldn't read the clock ("at half past eight"), or
+    // read only a day-part whose rule time it isn't — has none to show: the model's title stands. Day-part words
+    // alone ("tonight", "the night bus") never vouch for another clock's words.
+    if (
+      !clocks.length &&
+      (!said || (spoken?.kind === 'part' && DAY_PART_TIME[spoken.part] !== input.dueTime))
+    )
+      return null;
     if (said) clocks.push(said);
-    // Beside a clock: only spaces, "o'clock", "in the" or "this" between ("at 5 in the evening", "9 morning").
-    const beside = (r: Range) =>
-      clocks.some(
-        ([c0, c1]) =>
-          (c1 <= r[0] && BESIDE_CLOCK.test(line.slice(c1, r[0]))) ||
-          (r[1] <= c0 && BESIDE_CLOCK.test(line.slice(r[1], c0))),
-      );
-    clocks.push(...rangesOf(line, DAY_PARTS), ...rangesOf(line, DAY_PART_WORDS).filter(beside));
+    clocks.push(...rangesOf(line, DAY_PARTS));
   }
   if (input.dueTime && !clocks.length) return null;
   // A clock the task is about isn't the due's: "move standup to 5pm" keeps "to 5pm".

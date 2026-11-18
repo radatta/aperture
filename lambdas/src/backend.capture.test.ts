@@ -71,6 +71,29 @@ describe('captureForToken — a spoken line', () => {
     expect(anthropic.calls[0]!.timeoutMs).toBeLessThanOrEqual(CAPTURE_PARSE_DEADLINE_MS);
   });
 
+  it("the model's half of the day places it: stated as said, a night's small hour after its day", async () => {
+    const { anthropic, mint, capture } = setup();
+    const token = await mint();
+    // 06:00 Monday: "at 7 in the evening", stated 19:00 → today 7 PM (as a bare 7 it would be 7 AM).
+    anthropic.next = {
+      ok: true,
+      fields: fields({ title: 'call mum', dueTime: '19:00', dueTimeHalf: 'stated' }),
+    };
+    const pm = await capture(token, 'call mum at 7 in the evening');
+    expect(pm).toMatchObject({ due: { day: '2026-11-16', time: '19:00' }, raw: false });
+    anthropic.next = {
+      ok: true,
+      fields: fields({
+        title: 'call dad',
+        dueDay: '2026-11-20',
+        dueTime: '01:00',
+        dueTimeHalf: 'night',
+      }),
+    };
+    const night = await capture(token, 'call dad at 1 friday night');
+    expect(night).toMatchObject({ due: { day: '2026-11-21', time: '01:00' }, raw: false });
+  });
+
   it('a time already past rolls to tomorrow, and the answer names the day', async () => {
     const { anthropic, clock, mint, capture } = setup();
     clock.now = zonedEpoch('2026-11-16', '15:00', USER_TIME_ZONE);

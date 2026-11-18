@@ -182,6 +182,11 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
     return { ok: true, fields, meta };
   }
 
+  const halfOf = (f: unknown): string | null => {
+    const v = (f as { dueTimeHalf?: unknown }).dueTimeHalf;
+    return v === 'stated' || v === 'night' || v === 'none' ? v : null;
+  };
+
   return {
     async parseTask(req) {
       const started = Date.now();
@@ -189,7 +194,10 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
         model: PARSE_MODEL,
         system: parseSystemPrompt(req.today, req.categories, { voice: req.voice }),
         user: req.text,
-        schema: parseOutputSchema(req.categories.map((c) => c.id)),
+        schema: parseOutputSchema(
+          req.categories.map((c) => c.id),
+          { voice: req.voice },
+        ),
         // Room for the longest app line (2,500 characters) copied whole into notes, dense text included (a
         // token a character at worst); unused room costs nothing. The capture route asks for 512.
         maxTokens: req.maxTokens ?? 2048,
@@ -209,6 +217,8 @@ export function createLiveAnthropic(cfg: LiveAnthropicConfig): AnthropicGateway 
           ms: Date.now() - started,
           model: PARSE_MODEL,
           voice: req.voice === true,
+          // the model's half-of-day reading, a fixed enum value — its spread on dev shows the field's variance
+          half: out.ok && req.voice ? halfOf(out.fields) : undefined,
           chars: req.text.length,
           input_tokens: meta?.usage?.input_tokens,
           output_tokens: meta?.usage?.output_tokens,

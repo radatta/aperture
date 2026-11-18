@@ -513,6 +513,24 @@ export const siriCapture: Scenario = {
       what: 'A bare hour already past today is the next N o’clock, ~11 h on',
     },
     {
+      id: 'half-stated',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A clock with its half of the day said (“at 5 in the morning”) lands as said — not the bare hour’s nearer reading (the model’s dueTimeHalf, 2026-11-17)',
+    },
+    {
+      id: 'half-noun',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A day-part word that belongs to the task (“…send the morning report”) says nothing: the bare hour wraps, and the words stay in the title',
+    },
+    {
+      id: 'half-night',
+      entry: 'api',
+      kind: 'edge',
+      what: '“at 1 <weekday> night” is the small hours after that day, as “at 1 tonight” is',
+    },
+    {
       id: 'roll',
       entry: 'api',
       kind: 'edge',
@@ -1126,6 +1144,75 @@ export const siriCapture: Scenario = {
         const due = await expectSpokenDue(ctx, S, text, r, t0, Date.now());
         if (due.at <= t0 + 10 * HOUR)
           throw new Error(`due ${Math.round((due.at - t0) / MIN)} min on — it didn’t wrap`);
+      },
+    },
+    {
+      id: 'api-half',
+      entry: 'api',
+      cost: 'slow',
+      proves: ['half-stated', 'half-noun', 'half-night'],
+      title:
+        'The model’s half of the day, three real parses: a stated half, a day-part noun, a weekday night',
+      async run(ctx) {
+        const S = await loadShared();
+        await clearOfMidnight(ctx, untilLaMidnight, 'LA midnight', 3 * MIN);
+        const parsed = async (text: string, what: string) => {
+          const r = await capture(ctx, tokenB, text, what);
+          if (r.raw) throw new Error(`${what}: saved without the model — ${r.detail}`);
+          return r;
+        };
+        const lands = (r: DevCaptureResult, want: { day: string; time: string }, what: string) => {
+          if (r.due?.day !== want.day || r.due?.time !== want.time)
+            throw new Error(`${what}: due ${JSON.stringify(r.due)}, want ${JSON.stringify(want)}`);
+        };
+        // 1. The half said for the hour 15 h on: its bare reading (3 h on) would come first.
+        {
+          const t0 = Date.now();
+          const { hour } = laClock(t0);
+          const h = h12((hour + 15) % 24) === 12 ? (hour + 16) % 24 : (hour + 15) % 24;
+          const half = h < 12 ? 'in the morning' : h < 17 ? 'in the afternoon' : 'in the evening';
+          const text = `${line(ctx, 'feed the cat')} at ${h12(h)} ${half}`;
+          const r = await parsed(text, 'the stated half');
+          const want = S.resolveSpoken(
+            { said: '', kind: 'clock', hhmm: `${String(h).padStart(2, '0')}:00` },
+            null,
+            { now: t0, today: laDay(new Date(t0)) },
+          );
+          lands(r, want, 'the stated half');
+        }
+        // 2. A PM hour whose bare reading is the next one (its AM already past): "morning" in the task says nothing.
+        {
+          const t0 = Date.now();
+          const { hour } = laClock(t0);
+          const pm = Math.max(13, hour + 2);
+          if (pm > 23 || pm > hour + 12)
+            ctx.log(`the noun row needs a PM hour ahead; none at ${hour}:xx — skipped`);
+          else {
+            const text = `remind me at ${h12(pm)} to ${marker(ctx.nonce)} send the morning report`;
+            const r = await parsed(text, 'the day-part noun');
+            const want = S.resolveSpoken(
+              { said: '', kind: 'bare', hour: h12(pm), minute: 0, part: null },
+              null,
+              { now: t0, today: laDay(new Date(t0)) },
+            );
+            lands(r, want, 'the day-part noun');
+            const title = (await getTask(ctx, r.id!)).title;
+            if (!/morning report/.test(title))
+              throw new Error(`the title lost its words: “${title}”`);
+          }
+        }
+        // 3. "at 1 <weekday three days on> night": that night's small hours, the day after.
+        {
+          const day = S.addDays(laDay(new Date()), 3);
+          const weekday = new Date(`${day}T12:00:00Z`)
+            .toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' })
+            .toLowerCase();
+          const r = await parsed(
+            `${line(ctx, 'call the vet')} at 1 ${weekday} night`,
+            'the weekday night',
+          );
+          lands(r, { day: S.addDays(day, 1), time: '01:00' }, 'the weekday night');
+        }
       },
     },
     {

@@ -1,6 +1,6 @@
-// Voice capture's clock (capture.md → Time rules). A spoken line's time comes from here, never from the
-// model: the model only says which day was named, this module finds the time in the words and resolves it
-// against the server clock. The rules (the maintainer, 2026-11-16):
+// Voice capture's clock (capture.md → Time rules). The grammar here reads a spoken line's time from its words —
+// the fallback when the model doesn't run, and a check beside the model's reading when it does (quickParse.ts
+// placeModelClock) — and resolveSpoken places either against the server clock. The rules (the maintainer, 2026-11-16):
 //   - a bare "at N" / "N o'clock" is the next N o'clock, wrapping (2am + "at 5" → 5am; 6am → 5pm);
 //   - a time already past rolls forward to its next occurrence (3pm + "at 9am" → tomorrow 9am);
 //   - "morning" is 9 AM, "tonight" is 8 PM;
@@ -84,36 +84,6 @@ const MORE_NUMBER =
 export const DAY_WORD =
   /\b(tomorrow|tmrw?|tmw|today|days?|mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday|weekend|week|month|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december|\d{1,2}(st|nd|rd|th)|\d{1,2}\/\d{1,2})\b/i;
 const TONIGHT = /\btonight\b/i;
-const WEEKDAY =
-  'mon(?:day)?|tue(?:s(?:day)?)?|wed(?:nesday)?|thu(?:r(?:s(?:day)?)?)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?';
-const NIGHT_DAY = `(?:tomorrow|tmrw?|tmw|${WEEKDAY})`; // "friday night", "tomorrow night": that night, the small hours after
-// A day said between a clock and its half of the day: "at 8 tomorrow evening", "at 9 on friday night".
-export const NEAR_DAY = `(?:on\\s+)?(?:today|${NIGHT_DAY})`;
-// A half of the day said as a time wherever it sits in the line: "tonight", "tomorrow morning", "this evening",
-// "in the afternoon", "friday night". A bare day-part noun ("the morning report", "the night bus") is not one.
-export const HALF_PHRASE = `\\btonight\\b|\\bat night\\b|\\b(?:this|in the|${NIGHT_DAY})\\s+(?:morning|afternoon|evening)\\b|\\b${NIGHT_DAY}\\s+night\\b`;
-// A bare hour's day-part (the grammar knows morning and tonight; "<day> night" is tonight's): beside the clock in
-// any form ("at 8 tonight", "tomorrow morning at 9", "at 1 friday night"), or anywhere as a time phrase ("remind
-// me tonight to call mum at 9") — never a noun elsewhere ("at 5 send the morning report" is a bare 5).
-const PART_AFTER = new RegExp(
-  `^\\s*(?:o['’]?\\s?clock\\s*)?(?:(?:${NEAR_DAY}\\s+)?(?:(?:in the|this)\\s+)?(morning)\\b|tonight\\b|at night\\b|${NEAR_DAY}\\s+night\\b)`,
-  'i',
-);
-const PART_BEFORE = new RegExp(
-  `(?:\\b(morning)|\\btonight|\\bat night|\\b${NIGHT_DAY}\\s+night)\\s*,?\\s*(?:at|by|around)?\\s*$`,
-  'i',
-);
-const PART_PHRASE = new RegExp(
-  `\\btonight\\b|\\b(?:this|in the|${NIGHT_DAY})\\s+(morning)\\b|\\b${NIGHT_DAY}\\s+night\\b`,
-  'i',
-);
-const bareHourPart = (line: string, start: number, end: number): DayPart | null => {
-  const m =
-    PART_AFTER.exec(line.slice(end)) ??
-    PART_BEFORE.exec(line.slice(0, start)) ??
-    PART_PHRASE.exec(line);
-  return m ? (m[1] ? 'morning' : 'tonight') : null;
-};
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 
@@ -170,7 +140,6 @@ export function spokenTimeIn(line: string): SpokenTime | null {
     return { said: h24[0], kind: 'clock', hhmm: `${pad2(Number(h24[1]))}:${h24[2]}` };
   const at = AT_HOUR.exec(line);
   const oclock = at ? null : OCLOCK.exec(line);
-  const hit = at ?? oclock ?? h24;
   const bare = at
     ? { said: at[0], hour: num(at[1]!), minute: minuteOf(at[2], at[3]) }
     : oclock
@@ -183,12 +152,8 @@ export function spokenTimeIn(line: string): SpokenTime | null {
   // No minute follows "o'clock": "at five o'clock one more time" is 5:00.
   if (at && !/clock$/i.test(at[0]) && MORE_NUMBER.test(line.slice(at.index + at[0].length)))
     return null;
-  if (bare && hit && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
-    return {
-      kind: 'bare',
-      ...bare,
-      part: bareHourPart(line, hit.index, hit.index + hit[0].length),
-    };
+  if (bare && bare.hour >= 1 && bare.hour <= 12 && bare.minute < 60)
+    return { kind: 'bare', ...bare, part };
   return partMatch && part ? { said: partMatch[0], kind: 'part', part } : null;
 }
 
