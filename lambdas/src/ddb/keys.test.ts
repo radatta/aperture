@@ -130,3 +130,42 @@ describe('single-table keys', () => {
     expect(gsi1.remindSk(1700)).toBe(1700);
   });
 });
+
+// repo.listPushRows reads `pq#` … `ptest#` in one range every minute: only the send queue, the dedup rows
+// and the Send-test rows may sort there, or the poller reads (and ignores) them each tick.
+describe('the poller’s one range read', () => {
+  it('holds only pq#, psent# and ptest# rows', () => {
+    const from = sk.pushQueuePrefix();
+    const to = `${sk.pushTestPrefix()}${SK_END}`;
+    const samples: string[] = [];
+    for (const v of Object.values(sk) as unknown[]) {
+      if (typeof v === 'string') {
+        samples.push(v);
+        continue;
+      }
+      const fn = v as (...a: unknown[]) => unknown;
+      const before = samples.length;
+      for (const args of [
+        ['2026-11-04', 1, 'id', 'x'],
+        [1_800_000_000_000, 'id', 'x'],
+        ['id', 'x', 1_800_000_000_000, 'k'],
+      ]) {
+        try {
+          const key = fn(...args);
+          if (typeof key === 'string') samples.push(key);
+        } catch {
+          // a shape these args don't fit
+        }
+      }
+      expect(samples.length, `sk.${fn.name}: no args shape fits it — add one`).toBeGreaterThan(
+        before,
+      );
+    }
+    const inside = samples.filter((k) => k >= from && k <= to);
+    expect(inside.length).toBeGreaterThan(0);
+    for (const k of inside) expect(k).toMatch(/^(pq#|psent#|ptest#)/);
+    expect(
+      samples.filter((k) => /^(pq#|psent#|ptest#)/.test(k) && !(k >= from && k <= to)),
+    ).toEqual([]);
+  });
+});

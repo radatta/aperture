@@ -29,6 +29,7 @@ import {
   UI_PUSH_SUB_VIA,
   UI_SCOPED_TOKEN_VIA,
   UI_SERIES_VIA,
+  harnessPushEndpoint,
   harnessPushId,
   isHarnessPushId,
   createApiClient,
@@ -1293,6 +1294,16 @@ describe('createApiClient', () => {
       expect(isHarnessPushId(harnessPushId('banner'))).toBe(true);
     });
 
+    it('the nx slot sits on an allowlisted push host, under a name of its own', () => {
+      // packages/shared/src/reminders.ts PUSH_ENDPOINT_HOSTS admits `*.notify.windows.com` (scripts can't
+      // import shared): the BFF takes the subscribe, and the name was never issued, so nothing answers.
+      const u = new URL(harnessPushEndpoint('nx'));
+      expect(u.protocol).toBe('https:');
+      expect(u.hostname.endsWith('.notify.windows.com')).toBe(true);
+      expect(u.hostname).toBe('devcheck-nx.notify.windows.com');
+      expect(isHarnessPushId(harnessPushId('nx'))).toBe(true);
+    });
+
     it('records a harness slot’s id before the subscribe, so a lost answer still leaves it to clean', async () => {
       const ledger = memLedger();
       const lost = vi.fn<FetchLike>(async () => {
@@ -1367,7 +1378,15 @@ describe('createApiClient', () => {
         `${DEV_ORIGIN}/api/updateSettings`,
         expect.objectContaining({
           body: JSON.stringify({
-            args: [{ remindTimed: true, remindDueDay: true, remindPlanned: true }],
+            args: [
+              {
+                remindTimed: true,
+                remindDueDay: true,
+                remindPlanned: true,
+                nudgeMorning: true,
+                nudgeNight: true,
+              },
+            ],
           }),
         }),
       );

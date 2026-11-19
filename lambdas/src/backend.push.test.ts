@@ -590,6 +590,22 @@ describe('reminder settings', () => {
       remindDueDay: false,
     });
   });
+
+  it('the nudge toggles: on by default, a boolean only, and one switched back on is armed from then', async () => {
+    const e = env();
+    const b = e.make();
+    expect(await b.getSettings()).toMatchObject({ nudgeMorning: true, nudgeNight: true });
+    await expect(b.updateSettings({ nudgeNight: 'false' as unknown as boolean })).rejects.toThrow(
+      /nudgeNight must be true or false/,
+    );
+    expect((await b.getSettings()).nudgeNight).toBe(true);
+    await b.updateSettings({ nudgeMorning: false });
+    expect(await b.getSettings()).toMatchObject({ nudgeMorning: false, nudgeNight: true });
+    const arm = () => new Repo(e.doc, liveWrites(e.doc), 'u1').getPushArm();
+    expect((await arm())?.nudgeMorning).toBeUndefined();
+    await b.updateSettings({ nudgeMorning: true });
+    expect((await arm())?.nudgeMorning).toBe(NOW);
+  });
 });
 
 describe('through handleRpc', () => {

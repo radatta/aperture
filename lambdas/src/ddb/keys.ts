@@ -183,6 +183,16 @@ export const sk = {
   pushHealth: () => `pushhealth`,
   // When each reminder kind's toggle was last switched back on: what fired while it was off stays quiet.
   pushArm: () => `pusharm`,
+  // The poller's send queue: a device's retry of a transient failure (`pq#r#`, by device and Topic) and its
+  // reminders waiting for a catch-up (`pq#m#`). `pq#` sorts just before `psent#` and `ptest#`, so a tick
+  // reads all three in one range (repo.listPushRows) — a new key sorting between `pq#` and `ptest#\uffff`
+  // would be read every minute (keys.test.ts guards it).
+  pushQueuePrefix: () => `pq#`,
+  pushRetry: (subId: string, topic: string) => `pq#r#${subId}#${topic}`,
+  pushRetryPrefix: () => `pq#r#`,
+  pushMiss: (subId: string, fireAt: number, key: string) =>
+    `pq#m#${subId}#${padEpoch(fireAt)}#${key}`,
+  pushMissPrefix: () => `pq#m#`,
 
   // Calendar two-way sync cursor, one per connected Google account (by `sub`).
   gcalSync: (sub: string) => `gcal#sync#${sub}`,

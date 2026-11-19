@@ -17,6 +17,10 @@ export interface PushRegistryUser {
 
 export interface PushPollerRow {
   lastRunAt: number | null;
+  // The last tick the stage could check (it could sign, read the registry, and started a user's tick, or
+  // had none): what a gap is measured from (push/dispatch.ts). Rows from before it read undefined →
+  // lastRunAt.
+  lastCheckedAt?: number | null;
   lastError: string | null; // stage-wide: no VAPID key, a tick that threw — a user's own errors are theirs
   lastErrorAt: number | null;
   updatedAt: number;

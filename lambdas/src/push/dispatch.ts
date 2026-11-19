@@ -1,21 +1,19 @@
 import {
   dayKeyInZone,
+  isRitual,
   planFireAt,
   PUSH_DAILY_GUARD,
-  PUSH_TTL_S,
   REMINDER_SETTINGS_DEFAULTS,
   REMINDER_WINDOW_MS,
   reminderEnabled,
   reminderKind,
-  reminderPayload,
   reminderTag,
+  SETTING_OF_KIND,
   taskFireAt,
-  timeDecidesDay,
   USER_TIME_ZONE,
   userDueEpoch,
 } from '@aperture/shared';
 import type {
-  PushSub,
   ReminderCandidate,
   ReminderKind,
   ReminderSettingKey,
@@ -24,18 +22,21 @@ import type {
 import { ConditionFailedError } from '../ddb/DocClient';
 import type { DocClient } from '../ddb/DocClient';
 import { CAS_ATTEMPTS, Repo } from '../ddb/repo';
-import type { PushArmRow, PushUserHealth, RemindRow } from '../ddb/repo';
+import type { PushArmRow, PushRows, PushUserHealth, RemindRow } from '../ddb/repo';
 import { PushRegistry } from '../ddb/pushRegistry';
 import type { PushRegistryUser } from '../ddb/pushRegistry';
 import type { Writes } from '../ddb/writes';
-import type { PushGateway, PushReadiness, PushResult } from './gateway';
+import type { PushGateway, PushReadiness } from './gateway';
+import { Deliverer, guardMessage, MISS_KEEP_MS, missable, plannable } from './deliver';
+import { ritualSource } from './rituals';
 
 // One poller tick (reminders.md → D2–D4, D10): every minute, for each user in the push registry, find what
 // fires in the last REMINDER_WINDOW_MS, drop what already went, and send the rest as ONE notification
-// per device. Fail-closed by design (D3): the dedup row and the daily guard's count are written BEFORE
-// the send and never refunded, so a transient push-service failure loses that one ping (logged, and on
-// the health line) rather than risking a double ping; no retries. DynamoDB writes go through `writes`,
-// sends through the PushGateway — testMode (noopWrites + noopPush) runs the selection and writes nothing.
+// per device (a ritual nudge as its own). The dedup row and the daily guard's count are written BEFORE
+// the send and never refunded (D3), so no reminder is ever found twice; a transient push-service failure
+// is retried on the next ticks and, past that, caught up once (deliver.ts). DynamoDB writes go through
+// `writes`, sends through the PushGateway — testMode (noopWrites + noopPush) runs the selection and
+// writes nothing.
 //
 // Armed before it fires (reminders.md → §3): the window catches up a reminder a failed tick missed, never
 // one that wasn't set yet. A task or plan pings only if its current fire time was set (remindArmedAt —
@@ -60,8 +61,8 @@ const STAGE_ERROR: Record<Exclude<PushReadiness, 'ok'>, { message: string; event
 
 type ReminderSettings = Partial<Pick<Settings, ReminderSettingKey>>;
 
-// A candidate as a source found it: the shared shape, plus its dedup key (the task id, `test-<id>` — PR 3's
-// rituals add `ritual-morning`) and, for a Send-test row, the row to drop once handled.
+// A candidate as a source found it: the shared shape, plus its dedup key (the task id, `test-<id>`,
+// `ritual-morning`) and, for a Send-test row, the row to drop once handled.
 export interface FoundCandidate extends ReminderCandidate {
   key: string;
   testId?: string;
@@ -71,10 +72,14 @@ export interface SourceContext {
   rows: RemindRow[]; // the window, read once per user
   settings: ReminderSettings;
   now: number;
+  from: number; // the window [from, to] the rows were read for
+  to: number;
+  catchUp: boolean; // the gap pass: reminders that fell out of the window while no tick ran
+  sent(fireAt: number, key: string): boolean; // its dedup row was there when the tick began
   // The earliest fire time a kind may still ping for: the user's reminders on, and that kind's toggle on.
   notBefore(kind: Exclude<ReminderKind, 'test'>): number;
 }
-// D10: PR 3 adds a ritual source here — no change to dedup, guard, send or health.
+// D10: the rituals are one more source (rituals.ts) — no change to dedup, guard, send or health.
 export type CandidateSource = (ctx: SourceContext) => Promise<FoundCandidate[]>;
 
 // The index is eventually consistent, so each hit is re-read strongly: a task completed, re-dated or
@@ -109,11 +114,12 @@ export const taskSource: CandidateSource = async ({ repo, rows, settings, notBef
   return out;
 };
 
-// A plan pings only while its task is open and untimed (a timed task is never planned — the check is
-// defensive), and only from its newest copy: a move writes the new key before deleting the old, so the old
-// one outlives it by a write, or for good when that delete failed. The app's reads keep the newest per id;
-// one consistent range read from the window's earliest plan day does the same here. A newest copy dated
-// before that day (or a removal's tombstone) reads as absent, so the row stays quiet.
+// A plan pings only while its task is open and its time doesn't decide its day (`plannable`: a timed task
+// is never planned, bar a series deadline occurrence — recurring.md D8), and only from its newest copy: a
+// move writes the new key before deleting the old, so the old one outlives it by a write, or for good when
+// that delete failed. The app's reads keep the newest per id; one consistent range read from the window's
+// earliest plan day does the same here. A newest copy dated before that day (or a removal's tombstone)
+// reads as absent, so the row stays quiet.
 export const planSource: CandidateSource = async ({ repo, rows, settings, notBefore }) => {
   if (!reminderEnabled('planned', settings)) return [];
   const reads = [];
@@ -139,9 +145,8 @@ export const planSource: CandidateSource = async ({ repo, rows, settings, notBef
     if (armedAt > row.fireAt || notBefore('planned') > row.fireAt) continue; // planned after 9:00
     const task = await repo.getTask(plan.taskId, { consistent: true });
     // A timed task is never planned (lenses.md D13) — bar a series deadline occurrence (recurring.md D8),
-    // which is planned on its work day like an untimed task, so it gets this ping too.
-    if (!task || task.status === 'done' || task.status === 'cancelled' || timeDecidesDay(task))
-      continue;
+    // which is planned on its work day like an untimed task, so it gets this ping too (plannable).
+    if (!task || !plannable(task)) continue;
     out.push({
       kind: 'planned',
       fireAt: row.fireAt,
@@ -172,7 +177,12 @@ export const testSource: CandidateSource = async ({ rows }) =>
       : [],
   );
 
-export const DEFAULT_SOURCES: readonly CandidateSource[] = [taskSource, planSource, testSource];
+export const DEFAULT_SOURCES: readonly CandidateSource[] = [
+  taskSource,
+  planSource,
+  testSource,
+  ritualSource,
+];
 
 // One ping per (fire time, key): a task due today (day-only) and planned today fire at the same 09:00 —
 // the deadline wins over the plan (D4).
@@ -198,9 +208,11 @@ export interface PushTickDeps {
 
 export interface PushTickReport {
   users: number;
-  notifications: number; // batches sent (one per user per tick at most)
+  notifications: number; // batches sent (reminders, each ritual, each catch-up)
   delivered: number; // device POSTs a push service accepted
   failed: number; // device POSTs that didn't land
+  retried: number; // of them, retries of an earlier tick's transient failure
+  caughtUp: number; // "N reminders didn't reach you" notifications
   guardTripped: number;
   deadline: boolean; // the tick stopped early
   error: string | null; // stage-wide
@@ -210,7 +222,6 @@ export interface PushTickReport {
 const coldStart = { logged: new Set<string>() };
 export const resetColdStart = (): void => coldStart.logged.clear();
 
-const subRef = (s: Pick<PushSub, 'id'>) => s.id.slice(0, 6); // a log line names a device by this only
 const errName = (err: unknown) => (err instanceof Error ? err.name : 'unknown');
 
 export async function runPushTick(
@@ -226,13 +237,29 @@ export async function runPushTick(
     notifications: 0,
     delivered: 0,
     failed: 0,
+    retried: 0,
+    caughtUp: 0,
     guardTripped: 0,
     deadline: false,
     error: null,
   };
   const faults: unknown[] = [];
+  const prev = await registry.getPoller();
+  // No tick the stage could check for longer than the window — an outage, a stalled schedule, a stage
+  // that couldn't sign, a registry it couldn't read, a deadline before the first user: what fell due in
+  // between, up to MISS_KEEP_MS back, is caught up once instead of lost. A user's own tick that throws,
+  // or a deadline that stops the loop after a user started, doesn't hold it back (a held cursor re-ran the
+  // 12 h pass for every user, every tick): that tick's gap is then lost for the users it didn't finish —
+  // the accepted trade (reminders.md §3), seen on prod by the Errors alarm when a tick throws.
+  const checked = prev?.lastCheckedAt ?? prev?.lastRunAt ?? null;
+  const gapFrom =
+    checked !== null && started - checked > REMINDER_WINDOW_MS
+      ? Math.max(checked, started - MISS_KEEP_MS)
+      : null;
+  let stageChecked = false;
 
-  // A user's tick: select → dedup → guard → send → stamp. Throws only on an infra fault (DynamoDB).
+  // A user's tick: select → dedup → guard → send → retries → catch-up → stamp. Throws only on an infra
+  // fault (DynamoDB).
   async function tickUser({ userId, createdAt }: PushRegistryUser): Promise<void> {
     const repo = new Repo(deps.doc, deps.writes, userId);
     // Consistent: a device added a moment ago must keep its user in the registry.
@@ -250,110 +277,93 @@ export async function runPushTick(
     const notBefore = (kind: Exclude<ReminderKind, 'test'>) =>
       Math.max(createdAt ?? 0, arm?.[SETTING_OF_KIND[kind]] ?? 0);
     const now = deps.now();
-    const rows = await repo.remindRowsInWindow(now - REMINDER_WINDOW_MS, now);
-    const found = dueWins(
-      (await Promise.all(sources.map((s) => s({ repo, rows, settings, now, notBefore })))).flat(),
-    );
+    // One read of the user's poller rows: the send queue, the dedup rows, the Send-test rows.
+    const own = await repo.listPushRows();
+    const went = new Set(own.sent.map((r) => `${r.fireAt}#${r.key}`));
+    const sent = (fireAt: number, key: string) => went.has(`${fireAt}#${key}`);
+    const find = async (from: number, to: number, catchUp: boolean) => {
+      const rows = await repo.remindRowsInWindow(from, to);
+      const ctx = { repo, rows, settings, now, from, to, catchUp, notBefore, sent };
+      return dueWins((await Promise.all(sources.map((s) => s(ctx)))).flat());
+    };
+    const found = await find(now - REMINDER_WINDOW_MS, now, false);
 
     // Dedup before anything leaves: a row that already exists means it went (or is going) once.
     const fresh: FoundCandidate[] = [];
     for (const c of found)
       if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now })) fresh.push(c);
-
-    if (fresh.length > 0) {
-      const health = await repo.getPushUserHealth();
-      // This tick's failures, every one: a batch that two devices refuse names both.
-      const fails: string[] = [];
-      const fail = (message: string) => void fails.push(message);
-      const tasks = fresh.flatMap((c) => (c.taskId ? [c.taskId] : []));
-      // The last time a push service ACCEPTED a notification for this user — an attempt it refused is an
-      // error, not a send (Settings' "last sent").
-      let sentAt = health?.lastSentAt ?? null;
-      let removed = 0;
-      if (!(await takeGuard(repo, now))) {
+    const send = new Deliverer(
+      {
+        repo,
+        push: deps.push,
+        appUrl: deps.appUrl,
+        now,
+        past,
+        log,
+        enabled: (kind) => reminderEnabled(kind, settings),
+      },
+      subs,
+      own.retries,
+    );
+    // The gap's reminders: each deduped, then queued as misses right away — before any send, so a fault
+    // later in this tick can't leave them deduped but never caught up. Only the one being queued can be: a
+    // kill or a throw between its dedup write and its misses (one per device).
+    if (gapFrom !== null && gapFrom < now - REMINDER_WINDOW_MS)
+      for (const c of (await find(gapFrom, now - REMINDER_WINDOW_MS - 1, true)).filter(missable))
+        if (await repo.putPushSentIf({ fireAt: c.fireAt, key: c.key, sentAt: now }))
+          await send.queueMisses(send.subIds(), [c], now);
+    const guard = () => takeGuard(repo, now);
+    // The reminders as one notification; each ritual as its own (its tap opens Home, not a task).
+    const batches = [
+      fresh.filter((c) => !isRitual(c.kind)),
+      ...fresh.filter((c) => isRitual(c.kind)).map((c) => [c]),
+    ].filter((b) => b.length > 0);
+    for (const batch of batches) {
+      if (!(await guard())) {
         report.guardTripped++;
-        fail(
-          `Daily reminder limit (${PUSH_DAILY_GUARD}) reached — the rest of today's were held back`,
-        );
-        log(JSON.stringify({ event: 'push_guard_tripped', tasks }));
-      } else {
-        report.notifications++;
-        const payload = JSON.stringify(reminderPayload(fresh, deps.appUrl));
-        const topic = reminderTag(fresh);
-        for (const sub of subs) {
-          if (past()) {
-            report.deadline = true;
-            fail('A reminder check ran out of time before reaching every device');
-            log(JSON.stringify({ event: 'push_deadline', sub: subRef(sub) }));
-            break;
-          }
-          let res: PushResult | { status: 0; reason: 'error'; name: string };
-          try {
-            res = await deps.push.send(sub, payload, {
-              topic,
-              ttlSeconds: PUSH_TTL_S,
-              urgency: 'high',
-            });
-          } catch (err) {
-            res = { status: 0, reason: 'error', name: errName(err) };
-          }
-          const ok = res.status >= 200 && res.status < 300;
-          const gone = res.status === 404 || res.status === 410 || res.reason === 'keys';
-          const line = {
-            event: ok ? 'push_sent' : 'push_failed',
-            status: res.status,
-            reason: res.reason,
-            ...('name' in res ? { name: res.name } : {}),
-            sub: subRef(sub),
-            tasks,
-          };
-          const stamp = { updatedAt: Math.max(now, sub.updatedAt + 1) };
-          if (ok) {
-            log(JSON.stringify(line));
-            report.delivered++;
-            sentAt = now;
-            await repo.putPushSubIf(
-              { ...sub, ...stamp, lastOkAt: now, lastError: null, lastErrorAt: null },
-              sub.updatedAt,
-            );
-            continue;
-          }
-          report.failed++;
-          const why = whyFailed(res);
-          if (gone) {
-            // The push service says this subscription is dead (or its keys never could work): drop it — the
-            // row as read only, so a removal (tombstone) or a revive that landed meanwhile stands. The app
-            // re-subscribes on its next launch (D7).
-            const deleted = await repo.deletePushSubIf(sub.id, sub.updatedAt);
-            log(JSON.stringify({ ...line, ...(deleted ? { removed: true } : { changed: true }) }));
-            if (deleted) removed++;
-            fail(
-              `${sub.label} stopped accepting reminders (${why}) — turn them on again on that device`,
-            );
-          } else {
-            log(JSON.stringify(line));
-            const message = `Last reminder didn't reach this device (${why})`;
-            await repo.putPushSubIf(
-              { ...sub, ...stamp, lastError: message, lastErrorAt: now },
-              sub.updatedAt,
-            );
-            fail(`${sub.label}: ${message}`);
-          }
-        }
-        // The last alive device went: off the registry, unless a subscribe raced it (dropUser re-reads).
-        if (removed > 0 && !(await alive())) await registry.dropUser(userId, alive, now);
+        send.fail(guardMessage(PUSH_DAILY_GUARD));
+        log(JSON.stringify({ event: 'push_guard_tripped', tasks: taskIds(batch) }));
+        continue;
       }
+      report.notifications++;
+      await send.sendBatch(batch, reminderTag(batch));
+    }
+    await send.runRetries(own.retries);
+    await send.runCatchUps(own.misses, guard);
+
+    report.notifications += send.tally.caughtUp;
+    report.delivered += send.tally.delivered;
+    report.failed += send.tally.failed;
+    report.retried += send.tally.retried;
+    report.caughtUp += send.tally.caughtUp;
+    if (send.tally.deadline) report.deadline = true;
+    // The last alive device went: off the registry, unless a subscribe raced it (dropUser re-reads).
+    if (send.removed > 0 && !(await alive())) await registry.dropUser(userId, alive, now);
+    if (send.attempted) {
+      // Read only when it's written: a quiet tick costs no read of it.
+      const health = await repo.getPushUserHealth();
       await repo.putPushUserHealth({
-        lastSentAt: sentAt,
-        lastError: fails.length > 0 ? fails.join(' · ') : (health?.lastError ?? null),
-        lastErrorAt: fails.length > 0 ? now : (health?.lastErrorAt ?? null),
+        lastSentAt: send.sentAt ?? health?.lastSentAt ?? null,
+        lastError: send.fails.length > 0 ? send.fails.join(' · ') : (health?.lastError ?? null),
+        lastErrorAt: send.fails.length > 0 ? now : (health?.lastErrorAt ?? null),
         updatedAt: now,
       } satisfies PushUserHealth);
     }
 
     // Send-test rows are one-shot: handled (sent, deduped or held back) means gone.
-    for (const c of found) if (c.testId) await repo.deletePushTest(c.testId);
-    await sweep(repo, now);
+    const handled = new Set<string>();
+    for (const c of found)
+      if (c.testId) {
+        await repo.deletePushTest(c.testId);
+        handled.add(c.testId);
+      }
+    await sweep(
+      repo,
+      now,
+      new Set(send.subIds()),
+      { ...own, misses: [...own.misses, ...send.queuedMisses()] },
+      handled,
+    );
   }
 
   let stageError: string | null = null;
@@ -364,12 +374,18 @@ export async function runPushTick(
       if (!coldStart.logged.has(ready)) log(JSON.stringify({ event: STAGE_ERROR[ready].event }));
       coldStart.logged.add(ready);
     } else {
-      for (const user of await registry.listUsers()) {
+      // Rotated a place each minute: a device that keeps timing out can hold the first users' ticks to
+      // the deadline, and the rest must not wait behind them every minute.
+      const users = await registry.listUsers();
+      if (users.length === 0) stageChecked = true;
+      const at = users.length > 0 ? Math.floor(started / 60_000) % users.length : 0;
+      for (const user of [...users.slice(at), ...users.slice(0, at)]) {
         if (past()) {
           report.deadline = true;
           log(JSON.stringify({ event: 'push_deadline' }));
           break;
         }
+        stageChecked = true; // a user's tick started: the cursor moves on (§3's trade covers one it doesn't finish)
         try {
           await tickUser(user);
         } catch (err) {
@@ -388,9 +404,9 @@ export async function runPushTick(
 
   // The heartbeat, every tick (Settings: "checked 1 min ago", red past PUSH_STALE_MS). `lastError` is the
   // stage's state now; `lastErrorAt` keeps when it last went wrong.
-  const prev = await registry.getPoller();
   await registry.putPoller({
     lastRunAt: started,
+    lastCheckedAt: stageChecked ? started : (checked ?? null),
     lastError: stageError,
     lastErrorAt: stageError ? started : (prev?.lastErrorAt ?? null),
     updatedAt: started,
@@ -399,22 +415,8 @@ export async function runPushTick(
   return report;
 }
 
-const SETTING_OF_KIND: Record<Exclude<ReminderKind, 'test'>, ReminderSettingKey> = {
-  timed: 'remindTimed',
-  dueDay: 'remindDueDay',
-  planned: 'remindPlanned',
-};
-
-const whyFailed = (res: { status: number; reason?: string; name?: string }): string =>
-  res.status > 0
-    ? `push service answered ${res.status}`
-    : res.reason === 'timeout'
-      ? 'timed out'
-      : res.reason === 'keys'
-        ? 'its keys are invalid'
-        : res.reason === 'error'
-          ? `couldn't send: ${res.name ?? 'unknown'}`
-          : 'network error';
+const taskIds = (cands: readonly ReminderCandidate[]) =>
+  cands.flatMap((c) => (c.taskId ? [c.taskId] : []));
 
 // The hidden guard (D3): one count per notification per user per LA day, a conditional write on the
 // version read, refused at PUSH_DAILY_GUARD. A write that keeps losing refuses too — fail closed.
@@ -436,14 +438,27 @@ async function takeGuard(repo: Repo, now: number): Promise<boolean> {
 }
 
 // The poller's own rows don't pile up (the table has no TTL — adding one touches the data stack): dedup
-// rows past PSENT_KEEP_MS, guard counters older than two days, and Send-test rows that fell out of the
-// window unsent.
-async function sweep(repo: Repo, now: number): Promise<void> {
-  for (const r of await repo.listPushSent())
-    if (r.fireAt < now - PSENT_KEEP_MS) await repo.deletePushSent(r);
+// rows past PSENT_KEEP_MS, Send-test rows that fell out of the window unsent, retry and miss rows of a
+// device that's gone, misses past MISS_KEEP_MS — all from the tick's one read of them — and, every
+// SWEEP_COUNTS_EVERY minutes, guard counters older than two days.
+export const SWEEP_COUNTS_EVERY = 10;
+async function sweep(
+  repo: Repo,
+  now: number,
+  alive: ReadonlySet<string>,
+  own: PushRows, // as the tick read it, plus the misses it queued (a device can 404 after its gap misses)
+  handled: ReadonlySet<string>, // Send-test rows this tick already deleted
+): Promise<void> {
+  for (const r of own.sent) if (r.fireAt < now - PSENT_KEEP_MS) await repo.deletePushSent(r);
+  for (const t of own.tests)
+    if (!handled.has(t.id) && t.createdAt < now - REMINDER_WINDOW_MS)
+      await repo.deletePushTest(t.id);
+  for (const r of own.retries)
+    if (!alive.has(r.subId)) await repo.deletePushRetry(r.subId, r.topic);
+  for (const m of own.misses)
+    if (!alive.has(m.subId) || m.cand.fireAt < now - MISS_KEEP_MS) await repo.deletePushMissIf(m);
+  if (Math.floor(now / 60_000) % SWEEP_COUNTS_EVERY !== 0) return;
   const keepDay = dayKeyInZone(now - PSENT_KEEP_MS, USER_TIME_ZONE, 0);
   for (const c of await repo.listPushCounts())
     if (c.day < keepDay) await repo.deletePushCount(c.day);
-  for (const t of await repo.listPushTests())
-    if (t.createdAt < now - REMINDER_WINDOW_MS) await repo.deletePushTest(t.id);
 }

@@ -297,6 +297,8 @@ export interface Settings extends BaseEntity {
   remindTimed: boolean; // default true — a deadline with a clock time, at that time
   remindDueDay: boolean; // default true — a day-only deadline, at 09:00
   remindPlanned: boolean; // default true — a task planned for the day, at 09:00
+  nudgeMorning: boolean; // default true — the 08:30 "plan your day" nudge (RITUAL_TIMES)
+  nudgeNight: boolean; // default true — the 21:30 "close the day" nudge
   // LeetCode coach: Opus picks the day's problems from the rules' candidates (coachAi.ts). Rows from before read
   // back undefined and count as on (coachAiPickOn). Off → the rule plan, no call.
   coachAiPick: boolean; // default true

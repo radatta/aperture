@@ -50,9 +50,9 @@ export async function handlePushTick(
 export interface TickContext {
   getRemainingTimeInMillis(): number;
 }
-// Start no send past this much before Lambda's own timeout: one send may take its full 5 s cap
-// (livePush.ts), then the stamps and the heartbeat.
-export const TICK_SAFETY_MS = 7_000;
+// Start no send past this much before Lambda's own timeout: one send may take its full 10 s cap
+// (livePush.ts), then the stamps and the heartbeat. A device the deadline skips is retried next tick.
+export const TICK_SAFETY_MS = 12_000;
 
 export const tickDeadline = (ctx: TickContext | undefined, now: number): number | undefined =>
   ctx ? now + ctx.getRemainingTimeInMillis() - TICK_SAFETY_MS : undefined;

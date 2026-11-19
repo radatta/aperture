@@ -356,6 +356,8 @@ export const SETTINGS_PATCH_KEYS = [
   'remindTimed',
   'remindDueDay',
   'remindPlanned',
+  'nudgeMorning',
+  'nudgeNight',
   'coachAiPick',
   'coachPlanMode',
 ] as const satisfies readonly (keyof Settings)[];

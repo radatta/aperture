@@ -422,6 +422,8 @@ export const RPC_ARGS = {
         remindTimed: opt(bool),
         remindDueDay: opt(bool),
         remindPlanned: opt(bool),
+        nudgeMorning: opt(bool),
+        nudgeNight: opt(bool),
         coachAiPick: opt(bool),
         coachPlanMode: opt(lit('auto', 'balanced', 'catch-up')),
       },

@@ -2109,6 +2109,15 @@ export function runApiContract(
           api.updateSettings({ remindDueDay: bad } as unknown as SettingsPatch),
         ).rejects.toThrow('remindDueDay must be true or false');
       expect((await api.getSettings()).remindDueDay).toBe(true);
+      // The ritual nudges: on by default, each its own switch, a real boolean only.
+      expect(s).toMatchObject({ nudgeMorning: true, nudgeNight: true });
+      const nights = await api.updateSettings({ nudgeMorning: false });
+      expect(nights).toMatchObject({ nudgeMorning: false, nudgeNight: true, remindDueDay: true });
+      expect((await api.getSettings()).nudgeMorning).toBe(false);
+      await expect(
+        api.updateSettings({ nudgeNight: 'false' } as unknown as SettingsPatch),
+      ).rejects.toThrow('nudgeNight must be true or false');
+      expect((await api.getSettings()).nudgeNight).toBe(true);
     });
 
     it('updateStory and updateSettings refuse a key outside their patch type, writing nothing', async () => {

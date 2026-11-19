@@ -200,9 +200,11 @@ SK (type-prefixed range keys):
   pushsub#<sha256(endpoint) prefix>  a device's Web Push subscription (a credential: never exported or returned;
                                 a user's Remove tombstones it keyless, a push-service 404/410 deletes it)
   psent#<fireAt 13d>#<key> · pcount#<LA day> · ptest#<ulid> · pushhealth · pusharm
+  pq#r#<subId>#<topic> · pq#m#<subId>#<fireAt 13d>#<key>
                                 the reminder poller's dedup rows (swept after 48 h), daily guard counter,
-                                Send-test candidates, this user's last send / error, and when each reminder
-                                toggle was last switched back on (tasks/reminders.md)
+                                Send-test candidates, this user's last send / error, when each reminder or
+                                nudge toggle was last switched back on, and the send queue: a device's retry
+                                of a transient failure and its misses waiting for a catch-up (tasks/reminders.md)
   (task# / plan# rows on the remind index also carry remindArmedAt — table-only, never on the entity: when
   their current fire time was set, for the armed-before-it-fires rule)
 PK = placetoken#<sha256hex> / SK = placetoken

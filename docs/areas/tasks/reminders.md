@@ -4,7 +4,8 @@
 
 **Status: building 2026-11-04.** PR 2 of the reminders feature (prod task "Reminders + notifications"; PR 1 was
 [places](places.md), PR 3 the morning/night ritual nudges). Plan, research and the full decision log: the branch's
-`localNotes/` (archived with the branch).
+`localNotes/` (archived with the branch). **2026-11-18, branch `reminders-retry-nudges`:** PR 3 — the ritual
+nudges — and the retry of transient send failures with a one-time catch-up (D17–D24).
 
 Permanent design-of-record: §6 is the decision log, §7 the build record. Where this doc and the code disagree,
 fix whichever is wrong and say so here.
@@ -19,18 +20,21 @@ timed events.
 
 ## 2. Shape
 
-Three kinds, one rule per kind (`packages/shared/src/reminders.ts`), each with its own toggle in Settings ›
+Five kinds, one rule per kind (`packages/shared/src/reminders.ts`), each with its own toggle in Settings ›
 Notifications:
 
-| Kind      | When it pings                                 | Toggle          |
-| --------- | --------------------------------------------- | --------------- |
-| `timed`   | a task's `dueDay` + `dueTime`, at that minute | `remindTimed`   |
-| `dueDay`  | a day-only deadline, at 09:00 that day        | `remindDueDay`  |
-| `planned` | a task on a day's plan, at 09:00 that day     | `remindPlanned` |
+| Kind            | When it pings                                 | Toggle          |
+| --------------- | --------------------------------------------- | --------------- |
+| `timed`         | a task's `dueDay` + `dueTime`, at that minute | `remindTimed`   |
+| `dueDay`        | a day-only deadline, at 09:00 that day        | `remindDueDay`  |
+| `planned`       | a task on a day's plan, at 09:00 that day     | `remindPlanned` |
+| `ritualMorning` | "Plan your day", 08:30 every day              | `nudgeMorning`  |
+| `ritualNight`   | "Close the day", 21:30 every day              | `nudgeNight`    |
 
 - Times are the user's zone (`userDueEpoch`), DST-safe. Only open tasks ping: not done, not cancelled, not
   tombstoned. Errands and parts ping like any task.
-- A task that is both due and planned on the same day pings once (due wins).
+- A task that is both day-only due and planned on the same day pings once (due wins). A series deadline
+  occurrence planned on its due day gets both: the 09:00 planned ping and its deadline minute.
 - **Armed before it fires.** A reminder pings only if it was set before its fire time. A task created or
   re-dated after its fire time stays quiet, and so does a plan made after 09:00 for that day (the 09:00–09:30
   planning case). So does anything that fell due while its kind's toggle was off, or before the user's first
@@ -46,9 +50,18 @@ Notifications:
     A timed occurrence due after its day is planned on that day like an untimed task, so it also gets the
     `planned` ping there (`timeDecidesDay`, recurring.md D8); any other timed task never does.
 - There is no user-facing cap and no quiet hours (both rejected).
+- **Ritual nudges** (`RITUAL_TIMES`, `push/rituals.ts`): counts only, never "missed" — morning "4 planned
+  today" or "Nothing planned yet"; night "3 left open · 2 done" (either half alone) or "Nothing on today's
+  plan". The counts are the day's plan as the app reads it (each plan's newest copy, its task not cancelled,
+  and not one whose time decides its day — a series deadline occurrence counts).
+  Each nudge is its own notification, tagged by its kind, and opens Home (`/`), whose clock mode is already
+  morning at 08:30 and night at 21:30 — for a day that starts by 08:30 (`dayStartHour` ≤ 8; the default is 4).
+  Its day is the calendar day of its fire time. Armed like any kind (the toggle's switch-on time, the registry row). No
+  auto-mute (the maintainer, 2026-11-18). A nudge is never caught up: one the window misses is gone.
 - **Same-tick batching:** several reminders in one minute become one notification ("3 reminders", titles joined).
 - **Tap-through:** `/tasks?lens=today&task=<id>&n=<tag>` opens the task's modal on Today. A batch opens Today.
-  `n` is the notification tag, kept for PR 3's "opened" signal.
+  `n` is the notification tag (nothing reads it: PR 3 dropped the auto-mute it was kept for). The tap also
+  clears a sticky Tasks search (`useTaskQuery`), so closing the modal lands on Today.
 
 ```
 Settings › Enable ──subscribePush──▶ BFF ── u#<uid> pushsub#<id> + push/user#<uid>
@@ -98,12 +111,52 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
   removal of the user's row (the last device removed, or deleted by the poller after a 404/410) then re-reads
   their devices strongly and puts the row back, keeping its `createdAt`, if one is alive. `getPushStatus` also
   re-adds it when a live device exists. The poller's 404/410 delete is conditional on the version it read, so a
-  removal (tombstone) or a re-subscribe that lands mid-send stands.
-- **Fail-closed:** dedup and guard rows are written before the send and never refunded. A transient push-service
-  error loses that one ping (logged, and shown in Settings) rather than risking a double ping. A reminder older
-  than the 30-minute window is missed, never fired late. Retrying is a logged follow-up (prod task
-  `01M6MXRGEDXWQG5E1T5X95YM1Q`).
-- **Hidden guard:** 50 notifications (batches, not device POSTs) per user per LA day. Past it the poller
+  removal (tombstone) or a re-subscribe that lands mid-send stands. That 404 counts as a transient failure
+  ("re-subscribed mid-send"): a fresh notification or a retry short of its last is retried (the last runs out
+  to the catch-up), and a catch-up's failure is said on the device and the health line. A device's id is its
+  endpoint's hash, so the re-subscribe re-sent the same endpoint — typically the app's launch resync — and the
+  retry most likely 404s again and deletes it a tick later: at most 1 + `RETRY_MAX` + 1 POSTs a notification,
+  each needing another racing write.
+- **Fail-closed dedup:** dedup and guard rows are written before the send and never refunded, so no reminder
+  is ever found twice.
+- **Retry and catch-up** (`push/deliver.ts`, D17–D22). Each device's answer is classified:
+  - delivered (2xx); gone (404, 410, unusable keys — the device is dropped, as before);
+  - **transient** — a timeout, a network failure, 429, 500, 503 (RFC 8030, Apple's and FCM's status
+    tables; a 429's `Retry-After` isn't read — the next tick is the retry), and 502/504, a gateway's fault of
+    the same kind (inference): a retry row `pq#r#<subId>#<topic>` holds the notification's candidates, and the next
+    `RETRY_MAX` = 3 ticks retry that device only, under the same Topic, so a first copy the service took but
+    never answered for is replaced while still undelivered (RFC 8030 §5.4). The device reads "… — retrying".
+    Each retry re-reads its tasks: one finished, deleted, re-dated or taken off that day's plan since stays
+    quiet, as does a planned one given a time that decides its day (`plannable`, the planned ping's own test
+    — a series deadline occurrence still goes). Retries take no guard unit. Each try is claimed (counted, on the version read) before its POST. A
+    device the tick's deadline skipped gets a retry row too, with no try spent. A slow device — its last
+    attempt failed, or (slower still) a retry of it has a try spent — goes last in a fresh batch, its retries
+    after the rest's and its catch-up after theirs, so one that keeps timing out (10 s) can't use up a tick before the others within one sender; a
+    fresh batch still goes before earlier ticks' retries, and retries before catch-ups, so a slow device's
+    retry can hold the others' catch-ups up to 4 ticks (nothing is lost — misses keep 12 h), and a skipped device's older retry can wait a tick more
+    (within the 5-minute expiry). A new failure under a Topic still retrying replaces that row;
+  - final — anything else (400, 403, 413, a fault of ours): the device's error, as before.
+
+  Retries that run out (or a retry older than 5 minutes: the poller stalled) leave the device "… after N
+  tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick the stage
+  could check (the poller's `lastCheckedAt`: it could sign, read the registry and start a user's tick, or had
+  none) for longer than the window — leaves misses too, for every device: what fell due in it, up to 12 h back, armed, enabled
+  and still open, deduped by its `psent#` row and queued before any send of that tick. A device's misses go out once, as "N reminders didn't reach you" with their
+  titles (opening Today), when all of them have settled (5 minutes after a run-out; at once after a gap) and
+  no retry is pending for it. The rows are claimed before the guard and the send; each device's catch-up is its
+  own notification against the guard (one refused is dropped and said, as a reminder past the guard is),
+  tried once, its failure on the device and the health line; one that lands clears the device's error like
+  any delivery. Tests and nudges are never missed. The gap pass runs on the one tick that
+  reads the old cursor; a user that tick doesn't finish (their own tick throws, or the deadline stops the loop
+  before them) loses that gap's catch-up, and a user whose tick keeps throwing past the window loses what fell
+  due meanwhile. That is the trade the maintainer chose (2026-11-18) over holding the cursor for every user;
+  a throwing tick fires prod's Errors alarm (dev has none), a deadline skip only logs `push_deadline`. Queue rows of a device removed later are swept by the
+  user's next tick; a user who leaves the registry leaves them behind, small and inert.
+  A rare duplicate is possible: a timed-out POST the service accepted and delivered before its retry arrived
+  shows twice (iOS doesn't replace by tag — WebKit bug 258922); a missed deadline was judged worse.
+
+- **Hidden guard:** 50 notifications (batches, each nudge and each catch-up — not device POSTs or retries) per
+  user per LA day. Past it the poller
   refuses and stamps the health error.
 - **Stage faults** are checked before anything is consumed: no `APP_URL` (the VAPID `sub`), no VAPID private
   key ("No VAPID key on this stage") or one that isn't a 32-octet P-256 key ("VAPID private key is malformed").
@@ -151,7 +204,8 @@ proves the whole chain. The BFF never holds the private key.
 ## 5. Security and cost
 
 - **SSRF:** `subscribePush` admits only https endpoints on `PUSH_ENDPOINT_HOSTS` (Apple, FCM, Mozilla, WNS)
-  with no credentials or port. The poller POSTs only to stored endpoints, with a 5 s timeout and no redirects.
+  with no credentials or port. The poller POSTs only to stored endpoints, with a 10 s timeout (FCM asks for at
+  least 10 s) and no redirects; no send starts in a tick's last 12 s (`TICK_SAFETY_MS`).
 - **Credentials:**
   - A subscription's endpoint, `p256dh` and `auth` let anyone push to the device. They are never in
     `exportData`, `getPushStatus`, logs or the dev-check ledger.
@@ -159,12 +213,20 @@ proves the whole chain. The BFF never holds the private key.
     the poller's role only.
   - The public key is in `vapid_public_key` (String) and is read by the BFF only.
 - **Logs:** one JSON line per send, error or skip: `push_sent`, `push_failed`, `push_guard_tripped`,
-  `push_deadline` (the tick ran out of time), `push_user_dropped` (a user with no live device left the
-  registry), and the once-per-container stage faults `push_no_key`, `push_bad_key`, `push_no_app_url`. A send
+  `push_deadline` (the tick ran out of time), `push_retry_exhausted` (a device's retries ran out),
+  `push_user_dropped` (a user with no live device left the registry), and the once-per-container stage faults `push_no_key`, `push_bad_key`, `push_no_app_url`. A send
   line carries the status, the task ids and a sub-id prefix — never the endpoint, the keys or the title.
 - **Cost bound:**
   - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
-    tiers. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
+    tiers. A tick reads a user's send queue, dedup and Send-test rows in one consistent range Query (`pq#` …
+    `ptest#`, which sort together — `keys.test.ts` pins it), reads the health row only when it writes it, and
+    sweeps guard counters every 10 minutes: fewer requests than before the queue existed (2026-11-18: 3 Queries
+    and 2 Gets per user per quiet tick, against 5 and 2). In read units that holds while the 48 h of dedup rows
+    stay under ~8 KB (the range is a consistent read; the sweep's `psent#` read wasn't), past which it's under a
+    cent a month more. The gap pass re-runs only while the heartbeat itself doesn't land (a tick killed before
+    its poller write) — its candidates already deduped, so only reads and refused conditional puts, inside the
+    stuck-tick bound below. Users are taken in an order rotated each
+    minute, so one whose device keeps timing out can't delay the others every tick. The nudges add a plan read twice a day. A quiet tick writes no log line of its own; Lambda's START/END/REPORT lines come to about 17 MB a month
     per stage, against CloudWatch's free 5 GB.
   - Worst case is a tick stuck at the 20 s timeout every minute: 1,440 × 20 s × 0.25 GB = 7,200 GB-s, about
     **$0.12/day of compute**, about $0.15/day with DynamoDB and logs, with pushes capped by the guard.
@@ -211,10 +273,21 @@ Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full lo
 - **D14 `Urgency: high`** for every kind.
 - **D15 Endpoint allowlist** (SSRF).
 - **D16 No model call in the send path.**
+- **D17 Retry transient failures** (timeouts, network failures, 429, 5xx) on the next 3 ticks, same Topic,
+  deduped; 404/410 stay final; 400/403/413 final too (the maintainer's 6.1, 2026-11-18; statuses from RFC 8030,
+  Apple's and FCM's docs).
+- **D18 One "N reminders didn't reach you" catch-up** per device after retries run out or a poller gap (6.1).
+- **D19 The 30-minute window stays** (6.2): a longer one would fire a task re-dated into the past at once.
+- **D20 A run-out miss stays visible** on the device and the health line (6.3) — and the catch-up says it too.
+- **D21 Send timeout 5 → 10 s** (FCM's minimum): fewer slow-but-accepted sends turn into retries.
+- **D22 Guard counts notifications:** retries free, a catch-up one unit.
+- **D23 Ritual nudges** at 08:30 and 21:30, counts only, each toggle on by default, no auto-mute (16.1 as
+  amended, 2026-11-18); each its own notification, opening Home.
+- **D24 A tap clears a sticky Tasks search** (the maintainer's yes, 2026-11-18).
 - **Deferred:**
   - per-task "remind me at";
   - `app_badge`;
-  - retrying transient send failures, a longer catch-up window, or a "missed N" ping (prod task above).
+  - a longer catch-up window (D19).
 
 ## 8. Build record
 

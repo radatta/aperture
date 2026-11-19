@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { todayKey } from '@aperture/shared';
 import { useSettings } from '../../data/hooks/useSettings';
@@ -64,7 +64,7 @@ export function useTaskQuery() {
   // The store a Places link points at (?place=<slug> — the Shortcut's tap-through, placeLensPath).
   const focusPlace = lens === 'places' ? params.get('place') : null;
   // A reminder's tap-through (reminders.ts taskPushPath): ?task=<id> opens that task once; ?n= is the
-  // notification's tag (PR 3 reads it). Both leave the URL once handled — replaced, so Back doesn't
+  // notification's tag (nothing reads it). Both leave the URL once handled — replaced, so Back doesn't
   // reopen the task.
   const linkedTaskId = params.get('task');
   const hasLink = linkedTaskId !== null || params.has('n');
@@ -104,6 +104,19 @@ export function useTaskQuery() {
     },
     [today, place],
   );
+
+  // A reminder's tap-through lands on Today unsearched: a sticky search from earlier would hide Today
+  // (and the list the task sits in) behind the modal it opens. Once per link: the link can stay in the
+  // URL while its task loads (or its read fails), and what's typed meanwhile stays typed.
+  const link = hasLink ? `${linkedTaskId ?? ''}#${params.get('n') ?? ''}` : null;
+  const cleared = useRef<string | null>(null);
+  useEffect(() => {
+    // The link left the URL: the next one clears again, the same link (a re-ping) included.
+    if (link === null) return void (cleared.current = null);
+    if (cleared.current === link) return;
+    cleared.current = link;
+    if (query.text !== '') setQuery({ ...query, text: '' });
+  }, [link, query, setQuery]);
 
   // Switching lens keeps what's typed and resets the rest to the new lens's preset.
   const setLens = useCallback(

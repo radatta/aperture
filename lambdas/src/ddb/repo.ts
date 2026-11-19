@@ -30,6 +30,7 @@ import type {
   Place,
   PomodoroSession,
   PushSub,
+  ReminderCandidate,
   Roll,
   GcalSyncState,
   Settings,
@@ -90,6 +91,8 @@ export interface PushArmRow {
   remindTimed?: number;
   remindDueDay?: number;
   remindPlanned?: number;
+  nudgeMorning?: number;
+  nudgeNight?: number;
   updatedAt: number;
 }
 
@@ -109,6 +112,36 @@ export interface PushCountRow {
   day: string;
   count: number;
   updatedAt: number;
+}
+// A device's retry of a transient send failure (push/deliver.ts): the notification's candidates (re-read
+// before each try) and its Topic, kept so a retry replaces an undelivered first copy. `tries` counts POSTs
+// made, `retries` the claims on later ticks; `updatedAt` is its conditional-write cursor.
+export interface PushRetryRow {
+  subId: string;
+  topic: string;
+  cands: (ReminderCandidate & { key: string })[];
+  tries: number;
+  retries: number;
+  firstAt: number;
+  why: string;
+  updatedAt: number;
+}
+// A reminder that never reached a device, waiting for that device's one catch-up from `readyAt`.
+export interface PushMissRow {
+  subId: string;
+  cand: ReminderCandidate & { key: string };
+  readyAt: number;
+  updatedAt: number;
+}
+export interface PushQueue {
+  retries: PushRetryRow[];
+  misses: PushMissRow[];
+}
+// What one poller tick reads of a user's own rows, in one Query: the send queue, the dedup rows and the
+// Send-test rows (pq#, psent#, ptest# sort next to each other; nothing else falls between).
+export interface PushRows extends PushQueue {
+  sent: PushSentRow[];
+  tests: PushTestRow[];
 }
 // This user's last send and last error, as Settings' health line shows them.
 export interface PushUserHealth {
@@ -1252,6 +1285,81 @@ export class Repo {
   }
   async deletePushCount(day: string): Promise<void> {
     await this.writes.delete(this.p(), sk.pushCount(day));
+  }
+
+  // The tick's one read of its own rows (PushRows), consistent: what it acts on was written by the last
+  // tick. A range over `pq#` … `ptest#` (keys.test.ts pins that nothing else sorts in it): one request
+  // where the sweep made two (psent#, ptest#).
+  async listPushRows(): Promise<PushRows> {
+    const out: PushRows = { retries: [], misses: [], sent: [], tests: [] };
+    const items = await this.doc.query(this.p(), 'p', {
+      consistent: true,
+      from: sk.pushQueuePrefix(),
+      to: `${sk.pushTestPrefix()}${SK_END}`,
+    });
+    for (const it of items) {
+      if (it.SK.startsWith(sk.pushRetryPrefix())) out.retries.push(toEntity<PushRetryRow>(it));
+      else if (it.SK.startsWith(sk.pushMissPrefix())) out.misses.push(toEntity<PushMissRow>(it));
+      else if (it.SK.startsWith(sk.pushSentPrefix())) out.sent.push(toEntity<PushSentRow>(it));
+      else if (it.SK.startsWith(sk.pushTestPrefix())) out.tests.push(toEntity<PushTestRow>(it));
+    }
+    return out;
+  }
+  async listPushQueue(): Promise<PushQueue> {
+    const { retries, misses } = await this.listPushRows();
+    return { retries, misses };
+  }
+  // A new retry replaces one still pending under the same device and Topic: that one is the same task's
+  // earlier fire (since re-dated — its own retry would drop it) or an earlier Send test.
+  async putPushRetry(row: PushRetryRow): Promise<void> {
+    await this.writes.put(entityItem(this.userId, sk.pushRetry(row.subId, row.topic), row));
+  }
+  // Lands only while the stored row is still at `expectedUpdatedAt` (null: none yet). false = lost.
+  async putPushRetryIf(row: PushRetryRow, expectedUpdatedAt: number | null): Promise<boolean> {
+    try {
+      await this.writes.putIf(
+        entityItem(this.userId, sk.pushRetry(row.subId, row.topic), row),
+        expectedUpdatedAt,
+      );
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async deletePushRetry(subId: string, topic: string): Promise<void> {
+    await this.writes.delete(this.p(), sk.pushRetry(subId, topic));
+  }
+  // Only the version read: a row a newer failure wrote under the same Topic stands. false = lost.
+  async deletePushRetryIf(
+    row: Pick<PushRetryRow, 'subId' | 'topic' | 'updatedAt'>,
+  ): Promise<boolean> {
+    try {
+      await this.writes.deleteIf(this.p(), sk.pushRetry(row.subId, row.topic), row.updatedAt);
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
+  }
+  async putPushMiss(row: PushMissRow): Promise<void> {
+    await this.writes.put(
+      entityItem(this.userId, sk.pushMiss(row.subId, row.cand.fireAt, row.cand.key), row),
+    );
+  }
+  // The catch-up's claim: only the version read. false = already claimed (or rewritten).
+  async deletePushMissIf(row: PushMissRow): Promise<boolean> {
+    try {
+      await this.writes.deleteIf(
+        this.p(),
+        sk.pushMiss(row.subId, row.cand.fireAt, row.cand.key),
+        row.updatedAt,
+      );
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionFailedError) return false;
+      throw err;
+    }
   }
 
   async getPushUserHealth(): Promise<PushUserHealth | null> {

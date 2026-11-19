@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { userDueEpoch } from './dates';
+import { dayKeyInZone, USER_TIME_ZONE, userDueEpoch } from './dates';
 import {
+  catchUpPayload,
   PUSH_BODY_MAX,
   PUSH_ENDPOINT_ERROR,
   PUSH_ENDPOINT_MAX,
@@ -16,6 +17,8 @@ import {
   reminderKind,
   reminderPayload,
   reminderTag,
+  ritualCopy,
+  ritualFireAts,
   taskFireAt,
   taskPushPath,
 } from './reminders';
@@ -167,6 +170,75 @@ describe('reminderPayload', () => {
   it('builds the tap path with or without a task', () => {
     expect(taskPushPath('a b', 'x')).toBe('/tasks?lens=today&task=a%20b&n=x');
     expect(taskPushPath(null, 'b1')).toBe('/tasks?lens=today&n=b1');
+  });
+});
+
+describe('ritual nudges', () => {
+  const dayKeyOf = (at: number) => dayKeyInZone(at, USER_TIME_ZONE, 0);
+  const at = (day: string, hhmm: string) => userDueEpoch(day, hhmm);
+
+  it('ritualFireAts finds each ritual inside the window, on either side of midnight', () => {
+    const m = at('2026-11-04', '08:30');
+    expect(ritualFireAts(m - 60_000, m, userDueEpoch, dayKeyOf)).toEqual([
+      { kind: 'ritualMorning', day: '2026-11-04', fireAt: m },
+    ]);
+    expect(ritualFireAts(m - 120_000, m - 60_000, userDueEpoch, dayKeyOf)).toEqual([]);
+    const n = at('2026-11-04', '21:30');
+    // A window that spans midnight still sees the evening before.
+    expect(ritualFireAts(n, at('2026-11-05', '00:10'), userDueEpoch, dayKeyOf)).toEqual([
+      { kind: 'ritualNight', day: '2026-11-04', fireAt: n },
+    ]);
+  });
+
+  it('ritualCopy counts, singular and zero, and never says "missed"', () => {
+    expect(ritualCopy('ritualMorning', { open: 3, done: 1 })).toEqual({
+      title: 'Plan your day',
+      body: '4 planned today',
+    });
+    expect(ritualCopy('ritualMorning', { open: 0, done: 0 }).body).toBe('Nothing planned yet');
+    expect(ritualCopy('ritualNight', { open: 2, done: 3 })).toEqual({
+      title: 'Close the day',
+      body: '2 left open · 3 done',
+    });
+    expect(ritualCopy('ritualNight', { open: 0, done: 3 }).body).toBe('3 done');
+    expect(ritualCopy('ritualNight', { open: 1, done: 0 }).body).toBe('1 left open');
+    expect(ritualCopy('ritualNight', { open: 0, done: 0 }).body).toBe('Nothing on today’s plan');
+  });
+
+  it('a ritual notification opens Home, tagged by its kind', () => {
+    const c = cand({ kind: 'ritualNight', taskId: null, title: 'Close the day', body: '1 done' });
+    expect(reminderTag([c])).toBe('ritualNight');
+    expect(reminderPayload([c], 'https://app.example/').notification).toMatchObject({
+      title: 'Close the day',
+      body: '1 done',
+      navigate: 'https://app.example/',
+      tag: 'ritualNight',
+    });
+  });
+
+  it('a retry keeps its first tag', () => {
+    expect(
+      reminderPayload([cand(), cand({ taskId: 'u' })], 'https://a.example', 'b1').notification.tag,
+    ).toBe('b1');
+  });
+});
+
+describe('catchUpPayload', () => {
+  it('counts what never arrived, lists the titles, opens Today, tagged by its minute', () => {
+    const now = 1_800_000_060_000;
+    expect(
+      catchUpPayload([cand({ title: 'A' }), cand({ title: 'B' })], 'https://a.example', now)
+        .notification,
+    ).toMatchObject({
+      title: '2 reminders didn’t reach you',
+      body: 'A · B',
+      navigate: `https://a.example/tasks?lens=today&n=c${now / 60_000}`,
+      tag: `c${now / 60_000}`,
+    });
+    expect(
+      catchUpPayload([cand({ title: 'A' })], 'https://a.example', now).notification.title,
+    ).toBe('1 reminder didn’t reach you');
+    expect(() => catchUpPayload([], 'https://a.example', now)).toThrow();
   });
 });
 
