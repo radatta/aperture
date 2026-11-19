@@ -313,7 +313,12 @@ function dAskItem(a) {
     sig: `${a.text}|${a.pick ?? ''}`,
     text: [short(a.text)],
     meta: [
-      a.needsPane ? `go in ${a.pane ?? a.lane ?? '?'}` : a.pick ? `pick ${a.pick}` : 'no pick',
+      // a meta chip never wraps: the pane is capped here, named in full in the details
+      a.needsPane
+        ? `go in ${short(a.pane ?? a.lane ?? '?', 20)}`
+        : a.pick
+          ? `pick ${a.pick}`
+          : 'no pick',
       a.asked ? timer(a.asked) : null,
     ],
     more: [
