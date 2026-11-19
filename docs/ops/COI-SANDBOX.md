@@ -1149,7 +1149,9 @@ Not blockers — the rig is fully operational without these. Polish, in rough pr
   skill (the only thing missing from `coi-default` for the full loop), and dropping
   `unattended-upgrades` removes the night-pause trigger we currently paper over with
   `[monitoring.nft] enabled=false`, so the night profile could re-enable the monitor — verify no
-  other benign egress trips it first.
+  other benign egress trips it first. One known: the session board's RTT probe (`SESSION-BOARD.md` →
+  _Perf fields_ → `net`), a plain-http HEAD to the dev domain, which an allowlist without it drops — once per 5 min
+  after its first miss.
 
 - **Verify nft network _alerting_ on Mac.** Containment (allowlist DROP rules) is proven; whether the
   monitor _daemon_ raises anomaly events on Mac is unconfirmed — we sidestepped it by disabling the

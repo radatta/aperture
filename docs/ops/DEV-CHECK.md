@@ -23,7 +23,8 @@ pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=
 
 From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy running (no `pnpm test`, no dev
 server — CLAUDE.md → COI ceilings) but another session's dev check on the other slot, which is fine (_Dev slots_). Wrapped as
-`HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …`, the run shows on the board with its peaks:
+`HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …`, the run shows on the board with its peaks, and its job event
+carries where the time went — the deploy wait, sign-in, each scenario, cleanup (SESSION-BOARD.md → _Perf fields_):
 
 ```bash
 pnpm devcheck --tier smoke                         # ~2 min: sign-in, main pages, an API read; creates nothing

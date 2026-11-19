@@ -50,6 +50,15 @@ export interface Failure {
   message: string;
 }
 
+// The pipeline's phases, ms: the deploy wait, the browser's launch, sign-in and baselines, the scenarios, cleanup.
+export interface RunPhases {
+  deployWaitMs: number;
+  openMs: number;
+  setupMs: number;
+  stepsMs: number;
+  cleanupMs: number;
+}
+
 export interface RunResult {
   runId: string;
   tier: string;
@@ -82,6 +91,7 @@ export interface RunResult {
   injected: string[]; // responses the harness itself served (ctx.intercept): `/api/<method> → <status>|dropped`, `(after the real call)` when forwarded
   shots: string[];
   durationMs: number;
+  phases?: RunPhases; // where durationMs went (pipeline.ts); absent from a report written before it
   crash?: string;
   // The iOS Simulator's jobs this run, and — when any iOS row came back "needs you" from the sim — why and how
   // many (the status line and the PR's first line say so: IOS-CHECK.md → Results).

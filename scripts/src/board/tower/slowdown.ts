@@ -68,7 +68,10 @@ const median = (xs: number[]) => {
 
 export function slowdown(jobs: Job[], now: number, hm: (t: number) => string): Slowdown {
   const from = now - SLOW_WINDOW_MIN * MIN;
-  const clean = jobs.filter((j) => j.exit === 0 && !j.excluded && j.wallSec > 0 && j.t <= now);
+  // A cold-cache run (F314) is the cache, not the box: out of both windows. Rows from before the field stay in.
+  const clean = jobs.filter(
+    (j) => j.exit === 0 && !j.excluded && !j.cold && j.wallSec > 0 && j.t <= now,
+  );
   const classes = SLOW_CLASSES.map((cls): SlowClass => {
     const mine = clean.filter((j) => j.cls === cls);
     const recent = mine.filter((j) => j.t > from).map((j) => j.wallSec);

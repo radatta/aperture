@@ -2,6 +2,8 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    // Run totals for heavy.sh's job event, only under heavy.sh (docs/ops/SESSION-BOARD.md → Perf fields).
+    globalSetup: process.env.HEAVY_DETAIL_DIR ? ['./src/board/vitest-stats.ts'] : [],
     environment: 'node',
     include: ['src/**/*.test.ts'],
     // CI's 2 vCPUs would default to one worker, and the fixture suite and board-cli's deliberate waits would run end to

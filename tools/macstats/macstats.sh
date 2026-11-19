@@ -23,7 +23,7 @@ collect() {
   SYSCTL=$(for o in hw.memsize hw.ncpu vm.loadavg vm.swapusage kern.memorystatus_vm_pressure_level; do
     printf '%s\n' "$(sysctl -n "$o" 2>/dev/null | head -n 1)"
   done)
-  PS=$(ps -axo pid=,rss=,comm=)
+  PS=$(ps -axo pid=,rss=,pcpu=,comm=) # pcpu: macOS's decaying average over about the last minute
   PM_BATT=$(pmset -g batt 2>/dev/null || true)
   PM_SET=$(pmset -g 2>/dev/null || true)
   PM_THERM=$(pmset -g therm 2>/dev/null || true)
@@ -65,7 +65,7 @@ power() {
 
 # render HOST T → the JSON on stdout, from $VM, $SYSCTL, $PS
 render() {
-  local page free active inactive spec wired comp mem ncpu load swap_total swap_used level vm pw
+  local page free active inactive spec wired comp mem ncpu load swap_total swap_used level vm pw top
   # An awk that exits early reads a here-string, never a pipe: bash's printf writes a line at a time, and one write
   # after awk exited is SIGPIPE, a failed render under pipefail (F205: seen under load).
   page=$(awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "of") { print $(i + 1); exit } }' <<<"$VM")
@@ -88,15 +88,26 @@ render() {
   level=$(printf '%s\n' "$SYSCTL" | sed -n 5p)
   case "$mem" in '' | *[!0-9]*) echo "macstats: unreadable hw.memsize" >&2; return 1 ;; esac
   # The VM: the largest resident process whose name is a hypervisor's (COI's VM on this Mac).
-  vm=$(printf '%s\n' "$PS" | awk '{ pid = $1; rss = $2; $1 = ""; $2 = ""; sub(/^ +/, ""); n = $0; sub(/.*\//, "", n)
-      if (n ~ /Virtualization|limactl|qemu|vfkit|krunkit/ && rss + 0 > best) { best = rss + 0; bp = pid; bn = n } }
-      END { if (bp != "") printf "%s\t%s\t%s\n", bp, best, bn }')
+  vm=$(printf '%s\n' "$PS" | awk '{ pid = $1; rss = $2; cpu = $3; $1 = ""; $2 = ""; $3 = ""; sub(/^ +/, ""); n = $0; sub(/.*\//, "", n)
+      if (n ~ /Virtualization|limactl|qemu|vfkit|krunkit/ && rss + 0 > best) { best = rss + 0; bp = pid; bn = n; bc = cpu } }
+      END { if (bp != "") printf "%s\t%s\t%s\t%s\n", bp, best, bn, bc }')
+  # What else the Mac is doing (SESSION-BOARD.md → Perf fields): the 5 busiest names by summed %CPU (≥ 1), a name
+  # being the executable's basename cut to 32 printable ASCII characters, then "S" and whether a Simulator device is
+  # booted (launchd_sim) or xcodebuild runs. One awk, no sort | head (a head that exits first is SIGPIPE: F205).
+  top=$(awk '{ cpu = $3 + 0; $1 = ""; $2 = ""; $3 = ""; sub(/^ +/, ""); n = $0; sub(/.*\//, "", n)
+      if (n == "launchd_sim" || n == "xcodebuild") sim = 1
+      gsub(/[^A-Za-z0-9 ._+-]/, "?", n); n = substr(n, 1, 32); if (n == "") next
+      if (!(n in c)) order[++k] = n; c[n] += cpu }
+      END { for (j = 1; j <= 5; j++) { best = ""; for (i = 1; i <= k; i++) { x = order[i]
+              if (!(x in used) && c[x] >= 1 && (best == "" || c[x] > c[best])) best = x }
+            if (best == "") break; used[best] = 1; printf "%s\t%.1f\n", best, c[best] }
+            printf "S\t%d\n", sim }' <<<"$PS")
   pw=$(power)
   jq -n --arg t "$2" --arg host "$1" --arg ver "$AGENT_VERSION" --arg pw "$pw" \
     --argjson page "$page" --argjson free "$free" --argjson active "$active" --argjson inactive "$inactive" \
     --argjson spec "${spec:-0}" --argjson wired "$wired" --argjson comp "$comp" --argjson mem "$mem" \
     --arg ncpu "$ncpu" --arg load "$load" --arg st "$swap_total" --arg su "$swap_used" --arg level "$level" \
-    --arg vm "$vm" '
+    --arg vm "$vm" --arg top "$top" '
     def mib(p): (p * $page / 1048576 | floor);
     def n(s): (s | tonumber? // null);
     def s(x): (if x == "" then null else x end);
@@ -111,7 +122,10 @@ render() {
       load: ($load | split(" ") | map(select(. != "") | tonumber? // empty) | if length == 3 then . else null end),
       cpus: n($ncpu),
       vm: (if $vm == "" then null else ($vm | split("\t")) as $v
-           | { pid: ($v[0] | tonumber), rssMiB: ($v[1] | tonumber / 1024 | floor), comm: $v[2] } end),
+           | { pid: ($v[0] | tonumber), rssMiB: ($v[1] | tonumber / 1024 | floor), comm: $v[2],
+               cpuPct: ($v[3] // "" | tonumber? // null) } end),
+      top: [$top | split("\n")[] | split("\t") | select(length == 2 and .[0] != "S") | {comm: .[0], cpuPct: (.[1] | tonumber)}],
+      sim: ([$top | split("\n")[] | split("\t") | select(.[0] == "S")][0][1] == "1"),
       power: (($pw | split("\t")) as $p
         | { source: s($p[0]), batteryPct: n($p[1]), state: s($p[2]), remainingMin: n($p[3]),
             lowPowerMode: (if $p[4] == "" then null else $p[4] == "true" end),

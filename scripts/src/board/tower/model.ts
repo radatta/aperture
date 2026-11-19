@@ -64,6 +64,7 @@ export type Job = {
   wallSec: number;
   verdict: string | null;
   excluded: boolean; // loadTest / guard: not a real job
+  cold?: boolean; // heavy.sh's cache.cold: a tsc or eslint cache was missing at the start (SESSION-BOARD.md → Perf fields)
 };
 
 export type Session = {

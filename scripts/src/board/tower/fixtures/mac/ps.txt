@@ -1,5 +1,7 @@
-    1  12000 /sbin/launchd
-  512 23068672 /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
-  600 512000 /Applications/Safari.app/Contents/MacOS/Safari
-  700 204800 /opt/homebrew/bin/limactl
-  800 1024 /usr/libexec/Some Helper With Spaces
+    1    12000   0.1 /sbin/launchd
+  512 23068672 312.4 /System/Library/Frameworks/Virtualization.framework/Versions/A/XPCServices/com.apple.Virtualization.VirtualMachine.xpc/Contents/MacOS/com.apple.Virtualization.VirtualMachine
+  600   512000  18.2 /Applications/Safari.app/Contents/MacOS/Safari
+  700   204800   0.1 /opt/homebrew/bin/limactl
+  800     1024   3.0 /usr/libexec/Some Helper With Spaces
+  900   4096   2.5 /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild
+  901   2048   1.5 /Applications/Safari.app/Contents/MacOS/Safari

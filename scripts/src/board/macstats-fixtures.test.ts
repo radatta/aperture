@@ -60,14 +60,51 @@ describe('macstats.sh --render', () => {
       swap: { totalMiB: 2048, usedMiB: 1024 },
       load: [3.21, 2.75, 2.4],
       cpus: 12,
-      vm: { pid: 512, rssMiB: 22528, comm: 'com.apple.Virtualization.VirtualMachine' },
+      vm: {
+        pid: 512,
+        rssMiB: 22528,
+        comm: 'com.apple.Virtualization.VirtualMachine',
+        cpuPct: 312.4,
+      },
     });
     expect(() => parseMacStats(JSON.stringify(j))).not.toThrow();
   });
 
+  it('top is the 5 busiest names by summed %CPU (≥ 1), basenames; sim is a booted device or xcodebuild', () => {
+    const j = render(FX);
+    // Safari's two processes sum (18.2 + 1.5); launchd and limactl (0.1) are under 1; the name is cut at 32
+    expect(j.top).toEqual([
+      { comm: 'com.apple.Virtualization.Virtual', cpuPct: 312.4 },
+      { comm: 'Safari', cpuPct: 19.7 },
+      { comm: 'Some Helper With Spaces', cpuPct: 3 },
+      { comm: 'xcodebuild', cpuPct: 2.5 },
+    ]);
+    expect(j.sim).toBe(true);
+    const many = render(
+      variant((f) => {
+        f['ps.txt'] = [
+          ...[1, 2, 3, 4, 5, 6].map((i) => `  ${i}   100  ${i}0.0 /usr/bin/job${i}`),
+          '  7   100  50.0 /Applications/Caf\u00e9.app/Contents/MacOS/Caf\u00e9 "x"',
+          '  8   100   9.0 /usr/libexec/launchd_sim',
+        ].join('\n');
+      }),
+    );
+    expect(many.top.map((t: { comm: string }) => t.comm)).toEqual([
+      'job6',
+      'job5',
+      'Caf?? ?x?',
+      'job4',
+      'job3',
+    ]);
+    expect(many.sim).toBe(true);
+    expect(many.vm).toBeNull();
+    const none = render(variant((f) => (f['ps.txt'] = '    1  12000   0.0 /sbin/launchd\n')));
+    expect(none).toMatchObject({ top: [], sim: false, vm: null });
+  });
+
   it('no hypervisor process is vm: null; pressure 4 is critical; 4 KiB pages', () => {
     const d = variant((f) => {
-      f['ps.txt'] = '    1  12000 /sbin/launchd\n';
+      f['ps.txt'] = '    1  12000   0.0 /sbin/launchd\n';
       f['sysctl.txt'] = f['sysctl.txt']!.replace(/\n2\n$/, '\n4\n');
       f['vm_stat.txt'] = f['vm_stat.txt']!.replace('16384', '4096');
     });
@@ -252,7 +289,7 @@ describe('macstats.sh --render: power', () => {
   });
 
   // macOS runs the one true awk, not this container's mawk/gawk: the same fixtures through it, when installed
-  it.skipIf(!ONE_TRUE_AWK)('BSD awk (original-awk) renders the same power', () => {
+  it.skipIf(!ONE_TRUE_AWK)('BSD awk (original-awk) renders the same power, vm, top and sim', () => {
     const t = mkdtempSync(join(tmpdir(), 'oawk-'));
     mkdirSync(join(t, 'bin'));
     symlinkSync(ONE_TRUE_AWK!, join(t, 'bin/awk'));
@@ -274,8 +311,10 @@ describe('macstats.sh --render: power', () => {
         f['pmset.txt'] = ' powermode 1\n';
       }),
     ]) {
-      const r = (agent: string) =>
-        JSON.parse(execFileSync('bash', [agent, '--render', d], { encoding: 'utf8' })).power;
+      const r = (agent: string) => {
+        const j = JSON.parse(execFileSync('bash', [agent, '--render', d], { encoding: 'utf8' }));
+        return { power: j.power, vm: j.vm, top: j.top, sim: j.sim };
+      };
       expect(r(join(t, 'macstats.sh'))).toEqual(r(AGENT));
     }
   });

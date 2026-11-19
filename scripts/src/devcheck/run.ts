@@ -46,6 +46,7 @@ import { globMatch } from './glob';
 import { createIos, iosSlotNote } from './ios';
 import { IOS_SLOW_PATHS } from './scenarios/ios-paths';
 import { exitCode, runPipeline } from './pipeline';
+import { writeHeavyDetail } from './heavy-detail';
 import { renderReport, statusLine } from './report';
 import { pickSlot } from './slot';
 import {
@@ -321,6 +322,7 @@ async function main(): Promise<number> {
     });
     writeFileSync(join(out, 'report.md'), renderReport(result));
     writeFileSync(join(out, 'report.json'), JSON.stringify(result, null, 2) + '\n');
+    writeHeavyDetail(result, join(out, 'report.json'));
     console.log(`\n${statusLine(result)}\nreport: ${join(out, 'report.md')}`);
     return exitCode(result);
   } finally {

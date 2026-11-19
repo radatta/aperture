@@ -30,7 +30,7 @@ import { coverageOf } from './matrix';
 import type { McpClient } from './mcp';
 import { mcpToken, type McpSession } from './mcp-login';
 import { CREATE_METHODS, idsFromCreateResponse, isCreateRequest, methodOf } from './recorder';
-import type { RunResult, StepResult } from './report';
+import type { RunPhases, RunResult, StepResult } from './report';
 import type { PwPage, PwRequest, PwResponse, PwRoute } from './pw-types';
 import {
   createUi,
@@ -138,6 +138,17 @@ const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous sh
 
 export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const t0 = d.now();
+  // Where the run's time went, for heavy.sh's job event (heavy-detail.ts; SESSION-BOARD.md → Perf fields): each
+  // enter() closes the phase before it.
+  const phases: RunPhases = { deployWaitMs: 0, openMs: 0, setupMs: 0, stepsMs: 0, cleanupMs: 0 };
+  let phase: keyof RunPhases = 'deployWaitMs';
+  let phaseAt = t0;
+  const enter = (next: keyof RunPhases) => {
+    const now = d.now();
+    phases[phase] += now - phaseAt;
+    phaseAt = now;
+    phase = next;
+  };
   const r: RunResult = {
     runId: d.runId,
     tier: d.tier,
@@ -231,7 +242,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     r.sittingStarts = startsToday(d.ledger.read(), d.now());
     if (d.waitForDeploy) r.deployUrl = (await d.waitForDeploy()).url;
 
+    enter('openMs');
     browser = await d.openBrowser();
+    enter('setupMs');
     const page = browser.page;
     page.on('console', (m) => {
       if (m.type() !== 'error') return;
@@ -383,6 +396,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       ios: NO_IOS,
       log: d.log,
     };
+    enter('stepsMs');
     for (const sc of d.scenarios) {
       ctx.ios = d.ios?.forScenario(sc.id) ?? NO_IOS;
       let failed = false;
@@ -478,6 +492,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       r.crash = err instanceof Error ? (err.stack ?? err.message) : String(err);
     }
   } finally {
+    enter('cleanupMs');
     await Promise.allSettled(pendingRecords);
     if (d.ios) {
       await d.ios.finish().catch(() => undefined);
@@ -517,6 +532,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
             : null,
       };
     await browser?.close().catch(() => undefined);
+    enter('cleanupMs');
+    r.phases = phases;
     r.durationMs = d.now() - t0;
     for (const e of killedOrphans)
       d.ledger.append({ run: d.runId, op: 'reported', of: e.run, via: e.via, title: e.title });

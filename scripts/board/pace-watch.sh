@@ -38,6 +38,32 @@ FLOOR=$(wl_int $W .pace.minSamples) || exit 78
 [ "$FLOOR" -le "$WINDOW" ] || { echo "$W: limits.json .pace.minSamples $FLOOR is above .watchers.pace.windowSamples $WINDOW" | tee -a "$BOARD_DIR/$W.log" >&2; exit 78; }
 sb_init_dirs
 OUT=$BOARD_DIR/pace.json CTL=$BOARD_DIR/pace-control.json
+# The mailroom's shared folder (docs/ops/MAILROOM.md): beside the real board's checkout, else only when named.
+HOSTJOBS=${APERTURE_HOSTJOBS:-}
+[ -n "$HOSTJOBS" ] || [ "$BOARD_DIR" != "$SB_HOME_BOARD" ] || HOSTJOBS=${BOARD_DIR%/localNotes/board}/.hostjobs
+HJ_REF="${TMPDIR:-/tmp}/aperture-pace-watch.$$.cut" # a stamp 15 min back: what a running job's dir is newer than
+trap 'rm -f "$HJ_REF"' EXIT
+
+# Mailroom jobs the Mac is running now, as JSON {ios, fx, other, queued}: a result dir the Mac made (its pickup) with
+# no result.json yet, touched in the last 15 min (the pickup, or a heartbeat's rename inside it), by lane name
+# (…Z-ios-…, …Z-fx-…), plus the inbox's waiting entries. Only ids stamped on today's UTC day, or on an hour ago's,
+# are looked at (a fixtures job waits up to 15 min for its pickup, then runs). null without the folder.
+hostjobs() {
+  local ref day today d n dirs ios=0 fx=0 other=0 q=0
+  [ -n "$HOSTJOBS" ] && [ -d "$HOSTJOBS/results" ] || { echo null; return; }
+  ref=$HJ_REF
+  touch -d "@$((now - 900))" "$ref" 2>/dev/null || { echo null; return; }
+  day=$(date -d "@$((now - 3600))" -u +%Y%m%d) today=$(date -d "@$now" -u +%Y%m%d)
+  dirs=("$HOSTJOBS"/results/"$day"T*)
+  [ "$today" = "$day" ] || dirs+=("$HOSTJOBS"/results/"$today"T*)
+  for d in "${dirs[@]}"; do
+    n=${d##*/}
+    [ -d "$d" ] && [ ! -e "$d/result.json" ] && ! [ "$ref" -nt "$d" ] || continue
+    case "$n" in *Z-ios-*) ios=$((ios + 1)) ;; *Z-fx-*) fx=$((fx + 1)) ;; *) other=$((other + 1)) ;; esac
+  done
+  for d in "$HOSTJOBS"/inbox/*.json; do [ -e "$d" ] && q=$((q + 1)); done
+  printf '{"ios":%d,"fx":%d,"other":%d,"queued":%d}\n' "$ios" "$fx" "$other" "$q"
+}
 
 anon=() cores=() pcpu=() cpuhot_at=0 idle_at=0 state=calm since=0
 avg() { printf '%s\n' "$@" | awk '{s+=$1} END{if(NR) printf "%.2f", s/NR; else print 0}'; }
@@ -60,7 +86,9 @@ while :; do
   push anon "$((an / 1048576))"
   push pcpu "$pc"
   # Mac load history (mac-stats.json keeps only the latest reading). Its fields: docs/ops/SESSION-BOARD.md → Watchers.
-  l=$(jq -c --arg l5 "$l5" '{t, mac:.load, cpus, memFreePct:.mem.freePct, vm:$l5, power}' "$BOARD_DIR/mac-stats.json" 2>/dev/null) &&
+  # vmCpuPct, top and sim are null from an agent older than them.
+  l=$(jq -c --arg l5 "$l5" --argjson jobs "$(hostjobs)" '{t, mac:.load, cpus, memFreePct:.mem.freePct, vm:$l5, power,
+    vmCpuPct:(.vm.cpuPct // null), top:(.top // null), sim:(if has("sim") then .sim else null end), jobs:$jobs}' "$BOARD_DIR/mac-stats.json" 2>/dev/null) &&
     wl_hist mac-load "$l"
   A=$(avg "${anon[@]}") C=$(avg "${cores[@]}") P=$(avg "${pcpu[@]}")
   # pace-control.json in one read: state, since and the held lanes whose trigger is met (a numeric load5Below above

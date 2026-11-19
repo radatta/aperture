@@ -96,6 +96,13 @@ describe('compact', () => {
     expect(compactJob({ kind: 'lease', t: '2026-11-08T05:01:00Z' })).toBeNull();
   });
 
+  it('marks a cold-cache run (heavy.sh cache.cold), and only that', () => {
+    const ev = { kind: 'job', t: '2026-11-08T05:01:00Z', class: 'typecheck', wallSec: 40 };
+    expect(compactJob({ ...ev, cache: { cold: true } })!.cold).toBe(true);
+    for (const cache of [{ cold: false }, null, undefined, 'x'])
+      expect(compactJob({ ...ev, cache })).not.toHaveProperty('cold');
+  });
+
   it('counts red tests and container kills as failures, not interrupts', () => {
     expect([0, 1, 130, 134, 137, 143, null].map((e) => failed(job(1, 1, 'test', e)))).toEqual([
       false,
