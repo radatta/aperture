@@ -50,7 +50,7 @@ Reply with: …    (only if needed)
 **Lane → hub:** the _Checkpoints_ below, plus `[ask-maintainer]` and `[info]` whenever they come up. An
 `[ask-maintainer]` for a go a relay can't give (_Approval_) says where it is typed: a `CLAUDE.md` / `.claude/` edit
 names its patch and "go in the hub's pane" (_Agent-rule edits_); secrets, MCP writes outside the standing approvals,
-prod or settings changes and destructive steps say "needs your go typed in `<branch>`'s pane", and the hub relays
+prod or repo-settings changes and destructive steps say "needs your go typed in `<branch>`'s pane", and the hub relays
 exactly that.
 
 ## Checkpoints
@@ -178,7 +178,7 @@ message>"` — it re-runs check's checks and refuses unless the showing file is 
    wrote, its diff exactly `B..T` (the hub then shows again) — then the three lines it prints, each its own Bash call
    (the commit guard reads the session's directory before the command runs; the commit line checks the directory,
    branch, `HEAD` and index first), then the `record` line it prints (it logs the commit and pins it under `refs/claude-edits/<branch>/<sha>` in
-   `/workspace/.git`: local, never pushed, safe to delete once the PR has merged). A commit the guard denies, or a go withdrawn,
+   `/workspace/.git`: local, never pushed; `close` deletes them). A commit the guard denies, or a go withdrawn,
    leaves `T` staged: the printed `unstage` line backs it out. The `[relay]` carries the go verbatim and the record;
    the lane copies it into its `decisions.md` (the report and PR paraphrase it: `docs/ops/PUBLIC-CONTENT.md`).
 7. **The lane re-reads the files**, runs the hook fixtures when a hook changed, and carries on.
@@ -187,27 +187,35 @@ message>"` — it re-runs check's checks and refuses unless the showing file is 
 go; a `record` refusal comes after the commit, so the hub fixes the call and runs it again. **Exit 3** means the worktree or a landed commit needs a person: the hub stops and reports, with no reset. **On
 a rebase** that conflicts in the hub's commit, the lane drops that commit whole (`git rebase --skip`, never a hand
 merge) and sends n+1 on the new base. **The ledger**, `/workspace/localNotes/claude-edits.jsonl`, is the hub's
-alone. After `git fetch origin`, `pnpm -C /workspace claude-edit verify <branch>` fails on any commit on it touching
-these paths that is neither a commit the hub recorded for that branch nor, whole tree equal, git's clean replay of
-one onto the commit's own parent (renames off, merge drivers and replace refs off). A clean rebase passes; an edit
-moved, altered, hand-merged, mixed with other files, or following a file main renamed fails, and the lane sends n+1.
-One approval covers one commit. It prints the head it verified and the merge line's agent-rules part: files and
-approved T8. The hub runs it at `[pr-open]`, before it writes a merge line and after any
-push to an open PR — these three, here only; the merge line carries `--match-head-commit <that head>` and, when the
-branch has agent-rule commits, says "changes agent rules: <files>, approved <T8>", so the user reads that part of the
-PR diff. A pending patch blocks phase 10. A commit approved under the earlier in-pane rule (before this section
-landed: this lane's own bootstrap patch and any branch cut before it) has no ledger row, so `verify` fails on it; the
-hub checks that commit by hand against the go its lane quoted in `decisions.md` and says so in the merge line. With
-no hub the patch waits (_Missing hub_). A rule change the hub itself wants is a lane like any other. Accepted
-residuals: an approval whose commit was dropped can still match a later replay of it, and a reused branch name
-inherits its old rows (the merge line's T8 and the PR diff catch both); and one class — any file or pane in the
-container can be written by any session: the ledger, the showing files, `refs/claude-edits/` and the rest of
-`/workspace/.git`, this section and `/workspace`'s CLI code (a showing file and its ledger row rewritten together, or a
-file swapped while the user reads it and swapped back, gets past `stage`); `~/.gitconfig` hooks still run on the
-hub's plain `git commit` (`record` catches a wrong tree after the fact, exit 3); and with the worktree as its
-directory the commit guard runs the lane's copy of the identifier and identity scans (push and `open-pr` rescan
-both). The user reading the PR diff before the merge is behind all of them. Secrets, MCP writes, prod or settings changes and destructive steps stay in
-the acting lane's pane: actions on live state, with no whole diff to show, no undo and no merge behind them.
+alone; lost, it can be rebuilt from the pins (`refs/claude-edits/<branch>/<commit>`) and the `recorded …` lines the
+hub relayed, and until then every agent-rule commit is checked by hand. After `git fetch origin`,
+`pnpm -C /workspace claude-edit verify <branch>` fails on any commit on it touching these paths that is neither a
+commit the hub recorded for that branch nor, whole tree equal, git's clean replay of one onto the commit's own parent
+(renames off, merge drivers, commit-graph and replace refs off). A clean rebase passes; an edit moved, altered,
+hand-merged, mixed with other files, or following a file main renamed fails, and the lane sends n+1. One approval
+covers one commit, and the newest approval must be on the branch (an older one a later approval replaced is only
+told). A commit to the root `.gitattributes` always fails: it sets how the agent files check out, and no showing
+covers it, so the hub checks it by hand. It prints the full head it verified and the merge line's agent-rules part:
+files and approved T8, each with its date. The hub runs it at `[pr-open]`, before it writes a merge line and after
+any push to an open PR — these three, here only; the merge line carries `--match-head-commit <that head>` and, when
+the branch has agent-rule commits, says "changes agent rules: <files>, approved <T8>", so the user reads that part of
+the PR diff. A pending patch blocks phase 10. **After the merge** (or when a lane is dropped), the hub runs
+`pnpm -C /workspace claude-edit close <branch>`: its approvals stop counting and its pins go, so a branch name used
+again starts with none. **Commits approved under the earlier in-pane rule** have no ledger row, so `verify` fails on
+them; the hub checks each by hand against the pane words it relayed itself at the time (never only the lane's
+`decisions.md`) and says so in the merge line. That covers only this lane's own bootstrap patch, the branches with an
+agent-rule commit in flight when this section landed (the hub lists them in `/workspace/localNotes/roadmap.md` when it lands), and a session outside a lane, which
+still takes its go in its own pane; the first two end when those branches merge or close. With no hub the patch waits
+(_Missing hub_). A rule change the hub itself wants is a lane like any other. Accepted residuals: before `close`, an
+approval whose commit was dropped can still match a later replay of it (the merge line's T8 and date and the PR diff
+catch it); and one class — any file or pane in the container can be written by any session: the ledger, the showing
+files, `refs/claude-edits/` and the rest of `/workspace/.git`, this section and `/workspace`'s CLI code (a showing file
+and its ledger row rewritten together, or a file swapped while the user reads it and swapped back, gets past
+`stage`); a config-defined git hook (`hook.<name>.command`) still runs on the hub's plain `git commit` (`record`
+catches a wrong tree after the fact, exit 3); and with the worktree as its directory the commit guard runs the lane's
+copy of the identifier and identity scans (push and `open-pr` rescan both). The user reading the PR diff before the
+merge is behind all of them. Secrets, MCP writes, prod or repo-settings changes and destructive steps stay in the
+acting lane's pane: actions on live state, with no whole diff to show, no undo and no merge behind them.
 
 ## The hub's duties
 
@@ -266,6 +274,9 @@ touch <area>; whichever merges second rebases — agree an order.`
 - **After every merge to main,** send each in-flight branch a `[rebase]`: read the merged PR and rebase
   (CLAUDE.md → _Claude behavior_). A merge that changes `CLAUDE.md` says so: a running session keeps the rules it
   started with until it restarts.
+- **Merge lines.** The hub writes each PR's merge as one Mac line for the user: the squash merge with an empty body
+  and `--match-head-commit <head>`, the head `claude-edit verify <branch>` printed, after its agent-rule commits are
+  green or checked by hand (_Agent-rule edits_). Once it has merged, `pnpm -C /workspace claude-edit close <branch>`.
 - **End of a wave,** on the user's word: `pnpm bot prune-branches --dry-run`, then without `--dry-run`. What it deletes and
   keeps, with the reason: CI-BOT.md → _Commands_. A branch admitted to the `dev` environment still needs the user's removal command
   (`docs/ops/FEATURE-WORKFLOW.md` → phase 11).

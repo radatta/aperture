@@ -9,7 +9,7 @@ import type { Spec } from '../bot/help.ts';
 import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, readMacRoot } from '../mac-root.ts';
 import { makeGit } from './git.ts';
 import { EXIT, Refusal, Stuck } from './rules.ts';
-import { check, record, stage, unstage, verify } from './steps.ts';
+import { check, close, record, stage, unstage, verify } from './steps.ts';
 import type { Deps } from './steps.ts';
 
 export const USAGE = `pnpm -C /workspace claude-edit <command>   (the hub, main's code; docs/ops/HUB.md → Agent-rule edits)
@@ -23,7 +23,10 @@ export const USAGE = `pnpm -C /workspace claude-edit <command>   (the hub, main'
   record <branch> --base <B> --tree <T>
         after the commit: HEAD is one commit of T on B; writes the ledger row, pins the commit under refs/claude-edits/ and prints the record for the [relay]
   verify <branch>
-        after git fetch origin: every commit on it touching CLAUDE.md or .claude/ is an approved commit or a clean replay of one
+        after git fetch origin: every commit on it touching CLAUDE.md, .claude/ or the root .gitattributes is an approved
+        commit or a clean replay of one, and its newest approval is on it; prints the merge line's part
+  close <branch>
+        after its PR merges (or it is dropped): its approvals stop counting and its pins are deleted
 exit: 0 ok · 1 refused (nothing changed; for record, fix the call and rerun) · 2 usage · 3 stuck, needs a person`;
 
 export const FLAGS: Record<string, Spec> = {
@@ -32,6 +35,7 @@ export const FLAGS: Record<string, Spec> = {
   unstage: { flags: ['base', 'tree'], args: 1 },
   record: { flags: ['base', 'tree'], args: 1 },
   verify: { args: 1 },
+  close: { args: 1 },
 };
 
 // This file's own checkout, and the main checkout its git common dir names.
@@ -74,6 +78,7 @@ export function main(argv: string[], deps: () => Deps = realDeps): number {
       return check(deps(), { branch, n, exec });
     }
     if (cmd === 'verify') return verify(deps(), { branch });
+    if (cmd === 'close') return close(deps(), { branch });
     const base = flags.base ?? '';
     const tree = flags.tree ?? '';
     if (!base || !tree) return usage(`${cmd}: needs --base <B> and --tree <T>`);

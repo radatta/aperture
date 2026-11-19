@@ -75,6 +75,10 @@ describe('pathAllowed', () => {
     ['.claude/WORKTREES/x', /worktree/],
     ['docs/x.md', /outside/],
     ['.claude/a b.md', /unsafe/],
+    ['.claude/hooks/Foo.mdX', /file name/],
+    ['.claude/agents/ReviewerX.md', /file name/],
+    ['.claude/hooks/1ABC.md', /file name/],
+    ['.claude/hooks/README.md.Sh', /file name/],
   ])('names why %s is refused', (p, why) => expect(pathProblem(p)).toMatch(why));
   it('names case twins: one file on a case-folding checkout', () => {
     expect(caseTwins(['CLAUDE.md', '.claude/a.md', '.claude/A.md'])).toEqual([
@@ -110,6 +114,7 @@ describe('judgeEntries', () => {
     ['a path outside', e('M', 'docs/x.md')],
     ['a worktree path', e('A', '.claude/worktrees/l/CLAUDE.md', '000000')],
     ['a symlink deleted', e('D', '.claude/link', '120000', '000000')],
+    ['a symlink retargeted', e('M', '.claude/link', '120000', '120000')],
   ])('refuses %s', (_, entry) => expect(judgeEntries([entry], [], [])).not.toEqual([]));
   it('refuses a binary file and an --exec path the patch does not add', () => {
     expect(judgeEntries([e('M', 'CLAUDE.md')], [{ added: '-', path: 'CLAUDE.md' }], [])).toEqual([
@@ -160,12 +165,16 @@ describe('flagsFor', () => {
         e('M', '.claude/Settings.local.json'),
         e('M', '.claude/skills/s/SKILL.md'),
         e('M', '.claude/HOOKS/g.sh'),
+        e('M', '.claude/Skills/s/x.md'),
+        e('M', '.claude/Commands/c.md'),
       ]),
     ).toEqual([
       'agent changed: .claude/Agents/x.md',
       'permissions or hook registration changed: .claude/Settings.local.json',
       'skill or command changed: .claude/skills/s/SKILL.md',
       'guard changed: .claude/HOOKS/g.sh',
+      'skill or command changed: .claude/Skills/s/x.md',
+      'skill or command changed: .claude/Commands/c.md',
     ]));
 });
 
@@ -351,8 +360,21 @@ describe('the go and the ledger', () => {
       applied('b', T2!, D!), // T2 never shown on b
       applied('other', T1!, D!), // another branch
       applied('b', T1!, 'short'), // not a sha
+      { ...applied('b', T1!, D!), base: 'B' }, // a base that is not a sha
+      { ...shown('other', T2!) },
+      applied('b', T2!, D!), // T2 shown only on another branch
+      { ...shown('b', T2!), base: C! },
+      applied('b', T2!, D!), // T2 shown on b, but on another base
     ];
     expect(approvedRows(ledger, 'b')).toEqual([ok]);
+    // Closed: nothing before it counts, a later approval does.
+    const closed: Row = { t: '', kind: 'closed', branch: 'b', n: 0, base: '', tree: '' };
+    const again = applied('b', T1!, D!);
+    expect(approvedRows([...ledger, closed], 'b')).toEqual([]);
+    expect(approvedRows([...ledger, closed, shown('b', T1!), again], 'b')).toEqual([again]);
+    expect(approvedRows([...ledger, { ...closed, branch: 'other' }], 'b')).toEqual([ok]);
+    expect(showingNumber([...ledger, closed], 'b', T1!)).toEqual({ showing: 1, trees: 1 });
+    expect(parseLedger(JSON.stringify(closed))).toEqual([closed]);
   });
   it('skips torn and foreign ledger lines', () => {
     const text = `${JSON.stringify(rows[0])}\n{"kind":"shown"\nnot json\n{"kind":"other","branch":"b","base":"B","tree":"T"}\n`;

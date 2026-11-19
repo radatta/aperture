@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -76,9 +76,9 @@ describe('claude-edit cli', () => {
   });
 });
 
-// An exact snapshot: dropping or changing any pin fails here. Which pins change behaviour, each with its control, is
-// in steps.test.ts (attributes, hooks, merge.default, replace objects); the rest can't change plumbing output by
-// construction (safe-charset paths read with -z, fixed prefixes) and are pinned so a git upgrade can't make them.
+// An exact snapshot: dropping or changing any pin fails here. The ones with a behavioural control beside it are in
+// steps.test.ts (attributes, hooks, merge.default, commit-graph, apply.whitespace, replace objects, renames); the rest
+// are pinned by this snapshot alone.
 describe('the hardened git', () => {
   it('pins attributes, hooks, external diff, the diff shape and the merge before every subcommand', () => {
     expect(GIT_PRE).toEqual([
@@ -87,6 +87,7 @@ describe('the hardened git', () => {
         'core.attributesFile=/dev/null',
         'core.hooksPath=/dev/null',
         'core.fsmonitor=false',
+        'core.commitGraph=false',
         'core.autocrlf=false',
         'core.safecrlf=false',
         'core.eol=lf',
@@ -100,6 +101,7 @@ describe('the hardened git', () => {
         'diff.suppressBlankEmpty=false',
         'diff.external=',
         'merge.default=text',
+        'merge.renormalize=false',
       ].flatMap((kv) => ['-c', kv]),
     ]);
     expect(DIFF_FLAGS).toEqual([
@@ -126,6 +128,20 @@ describe('the hardened git', () => {
   });
 });
 
+describe('the git it runs', () => {
+  it('is 2.43 or later: merge-tree -X and --attr-source with merge-tree need it', () => {
+    const v = /git version (\d+)\.(\d+)/.exec(
+      execFileSync('git', ['--version'], { encoding: 'utf8' }),
+    );
+    expect(v, 'git --version').not.toBeNull();
+    const [maj, min] = [Number(v![1]), Number(v![2])];
+    expect(
+      maj > 2 || (maj === 2 && min >= 43),
+      `git ${maj}.${min}: claude-edit needs 2.43 or later`,
+    ).toBe(true);
+  });
+});
+
 describe('hardenedEnv', () => {
   it('keeps PATH and drops every inherited GIT_*, HOME and XDG_*', () => {
     const env = hardenedEnv({
@@ -139,7 +155,7 @@ describe('hardenedEnv', () => {
       GIT_CONFIG_GLOBAL: '/evil',
     });
     expect(env).toEqual({
-      PATH: '/bin',
+      PATH: '/usr/bin:/bin',
       LC_ALL: 'C',
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_CONFIG_NOSYSTEM: '1',

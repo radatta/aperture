@@ -11,7 +11,7 @@ export const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 // GIT_INDEX_FILE …). GIT_CONFIG_GLOBAL covers ~/.gitconfig and the XDG file; the attributes file is a -c below.
 export function hardenedEnv(base: NodeJS.ProcessEnv, extra: Record<string, string> = {}) {
   const env: Record<string, string> = {
-    PATH: base.PATH ?? '/usr/bin:/bin',
+    PATH: '/usr/bin:/bin', // never the caller's: `pnpm -C` puts node_modules/.bin first, and any session writes it
     LC_ALL: 'C',
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_NOSYSTEM: '1',
@@ -32,6 +32,7 @@ export const GIT_PRE = [
     'core.attributesFile=/dev/null',
     'core.hooksPath=/dev/null',
     'core.fsmonitor=false',
+    'core.commitGraph=false', // a commit-graph file (like grafts) can say other parents, or hide paths from rev-list
     'core.autocrlf=false',
     'core.safecrlf=false',
     'core.eol=lf',
@@ -45,6 +46,7 @@ export const GIT_PRE = [
     'diff.suppressBlankEmpty=false',
     'diff.external=',
     'merge.default=text', // needs no attribute: `union` would turn a conflict into a clean replay
+    'merge.renormalize=false',
   ].flatMap((kv) => ['-c', kv]),
 ];
 
@@ -96,7 +98,8 @@ export function makeExec(base: NodeJS.ProcessEnv = process.env, pre: string[] = 
       maxBuffer: 64 << 20,
       timeout: 60_000,
     });
-    if (r.error) throw r.error;
+    // A git that can't start or runs past the timeout changed nothing the caller can see: a refusal.
+    if (r.error) throw new Refusal(`git ${args[0]}: ${r.error.message}`);
     return { status: r.status ?? 1, stdout: r.stdout, stderr: r.stderr.toString('utf8').trim() };
   };
 }

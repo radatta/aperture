@@ -9,8 +9,10 @@ import {
   fstatSync,
   mkdirSync,
   mkdtempSync,
+  lstatSync,
   openSync,
   readSync,
+  renameSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -18,11 +20,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Git } from './git.ts';
-import { DIFF_FLAGS, MERGE_FLAGS } from './git.ts';
+import { DIFF_FLAGS, EMPTY_TREE, MERGE_FLAGS } from './git.ts';
 import {
   BRANCH,
   Refusal,
   approvedRows,
+  liveRows,
   SHA,
   Stuck,
   caseTwins,
@@ -58,7 +61,7 @@ export interface Deps {
 
 const PATHS = [':(icase)CLAUDE.md', ':(icase).claude'];
 const MAX_PATCH = 1 << 20;
-const MAX_SHOWING = 4 << 20;
+const MAX_SHOWING = 16 << 20; // a 1 MiB patch's diff and its spans block
 const MAX_LEDGER = 16 << 20;
 const MAX_ATTRS = 64 << 10;
 export const ledgerPath = (d: Deps) => join(d.main, 'localNotes', 'claude-edits.jsonl');
@@ -130,7 +133,11 @@ function worktree(d: Deps, branch: string, offBranch: typeof Refusal = Refusal):
   const head = d.git.exec(['symbolic-ref', '--short', 'HEAD'], { cwd: w });
   if (head.status !== 0 || head.stdout.toString().trim() !== branch)
     throw new offBranch(`${w} is not on ${branch}`);
-  repoPlain(d, w);
+  try {
+    repoPlain(d, w);
+  } catch (e) {
+    throw e instanceof Refusal ? new offBranch(e.message) : e;
+  }
   return w;
 }
 
@@ -286,10 +293,14 @@ export function check(d: Deps, a: { branch: string; n: number; exec: string[] })
     return 0;
   }
   const md = renderFile(s);
-  if (Buffer.byteLength(md) > MAX_SHOWING)
-    throw new Refusal(`the showing file would be over ${MAX_SHOWING} bytes`);
-  mkdirSync(join(d.main, ...SHOWINGS), { recursive: true });
-  writeFileSync(showingPath(d, a.branch, tree), md);
+  // Written beside its name and renamed over it, so a link planted at the name is replaced, never followed.
+  const dir = join(d.main, ...SHOWINGS);
+  mkdirSync(dir, { recursive: true });
+  if (!lstatSync(dir).isDirectory()) throw new Refusal(`${dir} is not a directory`);
+  const at = showingPath(d, a.branch, tree);
+  const tmp = `${at}.${process.pid}.tmp`;
+  writeFileSync(tmp, md, { flag: 'wx' });
+  renameSync(tmp, at);
   const file = sha256(md);
   if (lastShownFile(rows, a.branch, base, tree) !== file)
     addRow(d, { kind: 'shown', branch: a.branch, n: a.n, base, tree, file });
@@ -441,13 +452,14 @@ export function record(d: Deps, a: { branch: string; base: string; tree: string 
     // moved ref is put back.
     const pin = `refs/claude-edits/${a.branch}/${head}`;
     d.git.out(['update-ref', pin, head], { cwd: d.main });
-    if (d.git.out(['rev-parse', '--verify', pin], { cwd: d.main }) !== head)
+    const at = d.git.exec(['rev-parse', '--verify', '--quiet', pin], { cwd: d.main });
+    if (at.status !== 0 || at.stdout.toString().trim() !== head)
       throw new Error(`${pin} does not point at ${head}`);
+    const live = liveRows(rows, a.branch);
     const n =
-      [...rows]
-        .reverse()
-        .find((r) => r.kind === 'shown' && r.branch === a.branch && r.tree === a.tree)?.n ?? 0;
-    if (!rows.some((r) => r.kind === 'applied' && r.branch === a.branch && r.commit === head))
+      live.findLast((r) => r.kind === 'shown' && r.branch === a.branch && r.tree === a.tree)?.n ??
+      0;
+    if (!live.some((r) => r.kind === 'applied' && r.branch === a.branch && r.commit === head))
       addRow(d, {
         kind: 'applied',
         branch: a.branch,
@@ -483,8 +495,10 @@ function replay(d: Deps, a: Row, parent: string): string | null {
   return SHA.test(t) ? t : null;
 }
 
-// What a commit changes, as `M path` items; a name the showing couldn't print is quoted.
-function changed(d: Deps, parent: string, c: string): { status: string; path: string }[] {
+// What a commit changes, as `M path` items, against its first parent (a root commit: the empty tree); a name the
+// showing couldn't print is quoted.
+function changed(d: Deps, c: string): { status: string; path: string }[] {
+  const parent = parentsOf(d, c)?.[0] ?? EMPTY_TREE;
   const z = d.git
     .raw(['diff-tree', '-r', '-z', '--no-renames', '--name-status', parent, c, '--'], {
       cwd: d.main,
@@ -499,16 +513,26 @@ function changed(d: Deps, parent: string, c: string): { status: string; path: st
   return out;
 }
 
-// Every commit on origin/<branch> past origin/main that touches CLAUDE.md or .claude/ must be an approved commit
-// (one the hub recorded for this branch) or git's clean replay of one onto the commit's own parent, whole tree
-// equal: a clean rebase passes, a moved, altered, hand-merged or mixed edit doesn't. One approval covers one
-// commit. Run after `git fetch origin`.
+// The root .gitattributes sets how CLAUDE.md and .claude/ check out (eol, encoding, ident), and no approval can
+// cover it: verify counts a commit that touches it as an agent-rule commit, always for a hand check.
+const VERIFY_PATHS = [...PATHS, ':(icase).gitattributes'];
+const day = (r: Row) => r.t.slice(0, 10) || 'undated';
+
+// Every commit on origin/<branch> past origin/main that touches CLAUDE.md, .claude/ or the root .gitattributes must
+// be an approved commit (one the hub recorded for this branch since it was last closed) or git's clean replay of one
+// onto the commit's own parent, whole tree equal: a clean rebase passes, a moved, altered, hand-merged or mixed edit
+// doesn't. One approval covers one commit, and an approval newer than every one on the branch must be on it.
+// Run after `git fetch origin`.
 export function verify(d: Deps, a: { branch: string }): number {
   mainOnly(d, 'verify');
   const b = a.branch;
   if (!BRANCH.test(b)) throw new Refusal(`bad branch name "${b}": claude-edit can't approve it`);
   const o = { cwd: d.main };
   repoPlain(d, d.main);
+  // A config merge driver runs in place of the built-in one, even under merge.default=text.
+  const drivers = d.git.exec(['config', '--get-regexp', '^merge\\..*\\.driver$'], o);
+  if (drivers.status === 0)
+    throw new Refusal(`a merge driver is configured: ${drivers.stdout.toString().trim()}`);
   const mainSha = d.git.out(['rev-parse', '--verify', 'refs/remotes/origin/main'], o);
   const ref = `refs/remotes/origin/${b}`;
   const r = d.git.exec(['rev-parse', '--verify', ref], o);
@@ -519,35 +543,38 @@ export function verify(d: Deps, a: { branch: string }): number {
   const merges = d.git.out(['rev-list', '--merges', range], o);
   if (merges) bad.push(`${b}: merge commits ${merges.split('\n').join(' ')}`);
   const touched = d.git
-    .out(['rev-list', '--reverse', range, '--', ...PATHS], o)
+    .out(['rev-list', '--reverse', range, '--', ...VERIFY_PATHS], o)
     .split('\n')
     .filter(Boolean);
   d.log(
-    `${b}: origin/main ${mainSha.slice(0, 8)}, head ${head.slice(0, 8)}, ${touched.length} agent-rule commit(s)`,
+    `${b}: origin/main ${mainSha.slice(0, 8)}, head ${head}, ${touched.length} agent-rule commit(s)`,
   );
   // The ledger's approvals, each confirmed by git: the commit exists and is exactly T on B.
   const approved: Row[] = [];
+  const named = (x: Row) =>
+    `approved commit ${x.commit!.slice(0, 8)} (claude-edit-${x.n}, T ${x.tree.slice(0, 8)}, ${day(x)})`;
   for (const row of approvedRows(readRows(d), b)) {
-    const at = `approved commit ${row.commit!.slice(0, 8)} (claude-edit-${row.n})`;
     const ps = d.git.ok(['cat-file', '-e', `${row.commit}^{commit}`], o)
       ? parentsOf(d, row.commit!)
       : null;
-    if (!ps) d.log(`  ${at} is missing: its pin is gone`);
+    if (!ps) d.log(`  ${named(row)} is missing: its pin is gone`);
     else if (
       ps.length !== 1 ||
       ps[0] !== row.base ||
       d.git.out(['rev-parse', `${row.commit}^{tree}`], o) !== row.tree
     )
-      d.log(`  ${at} is not T on B: ignored`);
+      d.log(`  ${named(row)} is not T on B: ignored`);
     else approved.push(row);
   }
   const used = new Set<Row>();
   const match = new Map<string, { row: Row; how: string }>();
+  const take = (c: string, row: Row, how: string) => {
+    used.add(row);
+    match.set(c, { row, how });
+  };
   for (const c of touched) {
     const row = approved.find((x) => !used.has(x) && x.commit === c);
-    if (!row) continue;
-    used.add(row);
-    match.set(c, { row, how: 'as committed' });
+    if (row) take(c, row, 'as committed');
   }
   for (const c of touched) {
     if (match.has(c)) continue;
@@ -555,28 +582,39 @@ export function verify(d: Deps, a: { branch: string }): number {
     if (ps?.length !== 1) continue;
     const ct = d.git.out(['rev-parse', `${c}^{tree}`], o);
     const row = approved.find((x) => !used.has(x) && replay(d, x, ps[0]!) === ct);
-    if (!row) continue;
-    used.add(row);
-    match.set(c, { row, how: `replayed onto ${ps[0]!.slice(0, 8)}` });
+    if (row) take(c, row, `replayed onto ${ps[0]!.slice(0, 8)}`);
   }
   const files = new Set<string>();
   const trees: string[] = [];
   for (const c of touched) {
-    const ch = changed(d, `${c}^`, c);
+    const ch = changed(d, c);
     const list = ch.map((x) => `${x.status} ${x.path}`).join('; ');
     const m = match.get(c);
-    if (!m) {
+    if (m) {
+      ch.forEach((x) => files.add(x.path));
+      trees.push(m.row.tree.slice(0, 8));
+      d.log(
+        `  ${c.slice(0, 8)} claude-edit-${m.row.n}, approved T ${m.row.tree.slice(0, 8)} (${day(m.row)}), ${m.how}: ${list}`,
+      );
+    } else if (ch.some((x) => x.path.toLowerCase() === '.gitattributes'))
+      bad.push(
+        `${b}: ${c} changes the root .gitattributes, which sets how the agent files check out (${list}): the hub checks it by hand`,
+      );
+    else
       bad.push(
         `${b}: ${c} is not an approved commit or a clean replay of one (${list}): send n+1, or check an old-rule commit by hand`,
       );
-      continue;
-    }
-    ch.forEach((x) => files.add(x.path));
-    trees.push(m.row.tree.slice(0, 8));
-    d.log(
-      `  ${c.slice(0, 8)} claude-edit-${m.row.n}, approved T ${m.row.tree.slice(0, 8)}, ${m.how}: ${list}`,
-    );
   }
+  // An approval missing from the branch: told when a later one is on it, red when it is the newest.
+  const last = approved.findLastIndex((x) => used.has(x));
+  approved.forEach((x, i) => {
+    if (used.has(x)) return;
+    if (i < last) d.log(`  ${named(x)} is not on the branch: a later approval is`);
+    else
+      bad.push(
+        `${b}: ${named(x)} is not on the branch, and no later approval is: check by hand, or close it with n+1`,
+      );
+  });
   if (bad.length) throw new Refusal(bad.join('\n'));
   d.log(
     `verify: every agent-rule commit on ${b} is an approved commit or a clean replay of one. Merge line: --match-head-commit ${head}` +
@@ -584,5 +622,25 @@ export function verify(d: Deps, a: { branch: string }): number {
         ? `; changes agent rules: ${[...files].join(', ')}, approved ${trees.join(', ')}`
         : ''),
   );
+  return 0;
+}
+
+// After a branch's PR merges (or it is abandoned): its approvals stop counting and its pins go, so a branch name used
+// again starts with none. Run from main; it only takes approvals away.
+export function close(d: Deps, a: { branch: string }): number {
+  mainOnly(d, 'close');
+  const b = a.branch;
+  if (!BRANCH.test(b)) throw new Refusal(`bad branch name "${b}"`);
+  const o = { cwd: d.main };
+  const refs = d.git
+    .out(['for-each-ref', '--format=%(refname) %(objectname)', `refs/claude-edits/${b}/`], o)
+    .split('\n')
+    .filter(Boolean);
+  addRow(d, { kind: 'closed', branch: b, n: 0, base: '', tree: '' });
+  for (const line of refs) {
+    const [name, sha] = line.split(' ');
+    d.git.out(['update-ref', '-d', name!, sha!], o);
+  }
+  d.log(`closed ${b}: its approvals no longer count; ${refs.length} pin(s) deleted`);
   return 0;
 }

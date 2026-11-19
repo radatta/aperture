@@ -293,10 +293,11 @@ export function extractDiff(md: string): string {
 
 export const showingFile = (branch: string, tree: string) => `${branch}-${tree.slice(0, 8)}.md`;
 
-// The hub's ledger, /workspace/localNotes/claude-edits.jsonl: one JSON row per showing and per applied commit.
+// The hub's ledger, /workspace/localNotes/claude-edits.jsonl: one JSON row per showing, per applied commit, and per
+// branch closed after its merge (base and tree empty on a closed row).
 export interface Row {
   t: string;
-  kind: 'shown' | 'applied';
+  kind: 'shown' | 'applied' | 'closed';
   branch: string;
   n: number;
   base: string;
@@ -311,8 +312,9 @@ export function parseLedger(text: string): Row[] {
     if (!line.trim()) continue;
     try {
       const r = JSON.parse(line) as Partial<Row>;
-      if ((r.kind === 'shown' || r.kind === 'applied') && r.branch && r.base && r.tree)
-        rows.push(r as Row);
+      const ok =
+        r.kind === 'closed' || ((r.kind === 'shown' || r.kind === 'applied') && r.base && r.tree);
+      if (ok && r.branch) rows.push(r as Row);
     } catch {
       // a torn or foreign line names nothing
     }
@@ -320,11 +322,18 @@ export function parseLedger(text: string): Row[] {
   return rows;
 }
 
-// A check of `tree` on `branch`: its showing number (distinct trees shown there, in first-shown order, this one
-// counted) and how many distinct trees that makes.
+// The rows since the branch was last closed: a branch name used again starts with nothing shown or approved.
+export function liveRows(rows: Row[], branch: string): Row[] {
+  const at = rows.findLastIndex((r) => r.kind === 'closed' && r.branch === branch);
+  return rows.slice(at + 1);
+}
+
+// A check of `tree` on `branch`: its showing number (distinct trees shown there since it was last closed, in
+// first-shown order, this one counted) and how many distinct trees that makes.
 export function showingNumber(rows: Row[], branch: string, tree: string) {
+  const live = liveRows(rows, branch);
   const trees = [
-    ...new Set(rows.filter((r) => r.kind === 'shown' && r.branch === branch).map((r) => r.tree)),
+    ...new Set(live.filter((r) => r.kind === 'shown' && r.branch === branch).map((r) => r.tree)),
   ];
   const i = trees.indexOf(tree);
   return i >= 0
@@ -333,7 +342,7 @@ export function showingNumber(rows: Row[], branch: string, tree: string) {
 }
 
 const shownRows = (rows: Row[], branch: string, base: string, tree: string) =>
-  rows.filter(
+  liveRows(rows, branch).filter(
     (r) => r.kind === 'shown' && r.branch === branch && r.base === base && r.tree === tree,
   );
 export const wasShown = (rows: Row[], branch: string, base: string, tree: string) =>
@@ -345,11 +354,12 @@ export const lastShownFile = (rows: Row[], branch: string, base: string, tree: s
 export const BRANCH = /^(?!(?:main|dev|master|HEAD)$)[A-Za-z0-9][A-Za-z0-9._-]*$/; // never a deploy branch
 export const SHA = /^[0-9a-f]{40}$/; // sha1 repos only: EMPTY_TREE is sha1's
 
-// The applied rows verify may match a branch's commits against: this branch's, well-formed, each of a B and T that
-// was shown there, one per commit in ledger order. git confirms each one before it counts (steps.ts → verify).
+// The applied rows verify may match a branch's commits against: this branch's since it was last closed,
+// well-formed, each of a B and T that was shown there, one per commit in ledger order. git confirms each one before
+// it counts (steps.ts → verify).
 export function approvedRows(rows: Row[], branch: string): Row[] {
   const seen = new Set<string>();
-  return rows.filter((r) => {
+  return liveRows(rows, branch).filter((r) => {
     if (r.kind !== 'applied' || r.branch !== branch) return false;
     if (!r.commit || !SHA.test(r.commit) || !SHA.test(r.base) || !SHA.test(r.tree)) return false;
     if (seen.has(r.commit) || !wasShown(rows, branch, r.base, r.tree)) return false;
