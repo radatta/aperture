@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DIFF_FLAGS, GIT_PRE, makeExec, makeGit } from './git.ts';
 import type { Git, GitExec, GitOpts, GitResult } from './git.ts';
-import { Stuck, renderFile } from './rules.ts';
+import { Refusal, Stuck, renderFile } from './rules.ts';
 import {
   check,
   close,
@@ -268,7 +268,7 @@ describe('check → stage → commit → record → verify', () => {
       `${head.slice(0, 8)} claude-edit-1, approved T ${tree.slice(0, 8)} (1970-01-01), as committed: M CLAUDE.md`,
     );
     expect(v).toContain(
-      `--match-head-commit ${head}; changes agent rules: CLAUDE.md, approved ${tree.slice(0, 8)}`,
+      `--match-head-commit ${head}; changes agent rules: CLAUDE.md, approved ${tree.slice(0, 8)} (1970-01-01)`,
     );
   });
 
@@ -501,6 +501,20 @@ describe('stage after the apply', () => {
     mkdirSync(join(wt, '.claude', 'worktrees'), { recursive: true });
     const ignored = () => writeFileSync(join(wt, '.claude', 'worktrees', 'new'), 'x\n');
     expect(() => stageIt(base, tree, deps({ git: failing(ignored) }))).toThrow(Stuck);
+  });
+  it('is stuck, not refused, when git can not run after a failed apply changed files', () => {
+    const { base, tree } = shown();
+    let tried = false;
+    const git = wrapped((args, o, real) => {
+      if (args[0] === 'apply' && args.includes('--index') && !args.includes('-R')) {
+        tried = true;
+        writeFileSync(join(wt, 'CLAUDE.md'), 'half\n');
+        return { status: 1, stdout: Buffer.alloc(0), stderr: 'boom' };
+      }
+      if (tried && args[0] === 'write-tree') throw new Refusal('git write-tree: spawnSync EAGAIN');
+      return real(args, o);
+    });
+    expect(() => stageIt(base, tree, deps({ git }))).toThrow(/could not read .* index/);
   });
   it('counts untracked and ignored files already there as unchanged', () => {
     const { base, tree } = shown();
@@ -1000,7 +1014,7 @@ describe('verify', () => {
       `${c.slice(0, 8)} claude-edit-1, approved T ${tree.slice(0, 8)} (1970-01-01), replayed onto ${m.slice(0, 8)}: M CLAUDE.md`,
     );
     expect(v).toContain(
-      `--match-head-commit ${c}; changes agent rules: CLAUDE.md, approved ${tree.slice(0, 8)}`,
+      `--match-head-commit ${c}; changes agent rules: CLAUDE.md, approved ${tree.slice(0, 8)} (1970-01-01)`,
     );
   });
   it('fails on a lane commit to .claude/ with no approval, listing its files', () => {
@@ -1109,7 +1123,10 @@ describe('verify', () => {
         .join(''),
     );
     logs = [];
-    expect(ok()).toBe(0);
+    // Newer than the approval on the branch: each one is red.
+    expect(ok).toThrow(
+      /ffffffff .* is not on the branch, and no later approval is: re-send the change as n\+1/,
+    );
     const v = logs.join('\n');
     expect(v).toContain(
       'approved commit ffffffff (claude-edit-9, T ' + tree.slice(0, 8) + ', undated) is missing',
@@ -1119,6 +1136,13 @@ describe('verify', () => {
         `approved commit ${c.slice(0, 8)} (claude-edit-9, T ${tree.slice(0, 8)}, undated) is not T on B`,
       );
     expect(v).toContain(`${hub.slice(0, 8)} claude-edit-1`);
+    // A later approval on the branch: the dropped ones are told once, not red.
+    applied(udiff('CLAUDE.md', CL0.replace('line two', 'line TWO'), CL0), 2);
+    push();
+    logs = [];
+    expect(ok()).toBe(0);
+    expect(logs.join('\n')).toContain('ffffffff (claude-edit-9, T');
+    expect(logs.join('\n')).not.toMatch(/ffffffff .* is not on the branch/);
   });
   it('the pin keeps the approved commit through gc; without it the rebased commit fails', () => {
     const hub = applied();
@@ -1238,7 +1262,10 @@ describe('verify', () => {
     expect(ok()).toBe(0);
     logs = [];
     expect(close(deps(), { branch: BR })).toBe(0);
-    expect(logs.join('\n')).toBe(`closed ${BR}: its approvals no longer count; 1 pin(s) deleted`);
+    const t8 = sh(main, ['rev-parse', `${hub}^{tree}`]).slice(0, 8);
+    expect(logs.join('\n')).toBe(
+      `  retired claude-edit-1, T ${t8}, commit ${hub.slice(0, 8)} (1970-01-01)\nclosed ${BR}: its approvals no longer count; 1 pin(s) deleted`,
+    );
     expect(sh(main, ['for-each-ref', `refs/claude-edits/${BR}/`])).toBe('');
     red();
     expect(close(deps(), { branch: BR })).toBe(0); // twice: nothing left to delete
@@ -1252,7 +1279,19 @@ describe('verify', () => {
     expect(logs.join('\n')).toContain('go names: the branch or');
     expect(() => close(deps({ fromMain: false }), { branch: BR })).toThrow(/main checkout/);
     expect(() => close(deps(), { branch: 'a/b' })).toThrow(/bad branch/);
-    void hub;
+  });
+  it('close: a torn last ledger line is Stuck with the pins kept; a link at the ledger refuses', () => {
+    const hub = applied();
+    const at = ledgerPath(deps());
+    writeFileSync(at, readFileSync(at, 'utf8') + '{"torn":');
+    expect(() => close(deps(), { branch: BR })).toThrow(Stuck);
+    expect(sh(main, ['for-each-ref', `refs/claude-edits/${BR}/`])).toContain(hub);
+    const target = join(tmp('ce-ledger-'), 'l');
+    writeFileSync(target, '');
+    rmSync(at);
+    symlinkSync(target, at);
+    expect(() => close(deps(), { branch: BR })).toThrow();
+    expect(readFileSync(target, 'utf8')).toBe('');
   });
   it('refuses a configured merge driver, a shallow repo', () => {
     applied();

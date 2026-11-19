@@ -314,7 +314,7 @@ export function parseLedger(text: string): Row[] {
       const r = JSON.parse(line) as Partial<Row>;
       const ok =
         r.kind === 'closed' || ((r.kind === 'shown' || r.kind === 'applied') && r.base && r.tree);
-      if (ok && r.branch) rows.push(r as Row);
+      if (ok && r.branch && typeof r.t === 'string') rows.push(r as Row);
     } catch {
       // a torn or foreign line names nothing
     }

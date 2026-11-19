@@ -1,9 +1,8 @@
 // `pnpm claude-edit` steps (docs/ops/HUB.md → Agent-rule edits). The hub runs them from /workspace, main's code: a
 // lane's patch becomes tree T on base commit B in a scratch index, the hub shows the diff git derives from those two
 // objects, and only an index that is exactly T is committed.
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import {
-  appendFileSync,
   closeSync,
   constants,
   fstatSync,
@@ -16,10 +15,11 @@ import {
   realpathSync,
   rmSync,
   writeFileSync,
+  writeSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Git } from './git.ts';
+import type { Git, GitResult } from './git.ts';
 import { DIFF_FLAGS, EMPTY_TREE, MERGE_FLAGS } from './git.ts';
 import {
   BRANCH,
@@ -96,8 +96,16 @@ export function readSmall(file: string, max: number): Buffer | null {
 
 const readRows = (d: Deps): Row[] =>
   parseLedger(readSmall(ledgerPath(d), MAX_LEDGER)?.toString('utf8') ?? '');
-const addRow = (d: Deps, r: Omit<Row, 't'>) =>
-  appendFileSync(ledgerPath(d), JSON.stringify({ t: d.now().toISOString(), ...r }) + '\n');
+const APPEND = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
+// Appended through O_NOFOLLOW, so a link planted at the ledger's name is refused, never written through.
+function addRow(d: Deps, r: Omit<Row, 't'>) {
+  const fd = openSync(ledgerPath(d), APPEND, 0o644);
+  try {
+    writeSync(fd, JSON.stringify({ t: d.now().toISOString(), ...r }) + '\n');
+  } finally {
+    closeSync(fd);
+  }
+}
 
 const real = (p: string) => {
   try {
@@ -298,7 +306,7 @@ export function check(d: Deps, a: { branch: string; n: number; exec: string[] })
   mkdirSync(dir, { recursive: true });
   if (!lstatSync(dir).isDirectory()) throw new Refusal(`${dir} is not a directory`);
   const at = showingPath(d, a.branch, tree);
-  const tmp = `${at}.${process.pid}.tmp`;
+  const tmp = `${at}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`;
   writeFileSync(tmp, md, { flag: 'wx' });
   renameSync(tmp, at);
   const file = sha256(md);
@@ -357,7 +365,15 @@ export function stage(
     const why = err ? ` (${err})` : '';
     if (settled(d, w, before, others))
       throw new Refusal(`apply did not give T${why}: nothing changed`);
-    const now = d.git.exec(['write-tree'], o);
+    let now: GitResult;
+    try {
+      now = d.git.exec(['write-tree'], o);
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      throw new Stuck(
+        `apply failed${why} and git could not read ${w}'s index after it (${m}): needs a person, no reset`,
+      );
+    }
     if (now.status === 0 && now.stdout.toString().trim() === before)
       throw new Stuck(
         `apply failed and left files changed in ${w}${why}: needs a person, no reset`,
@@ -516,7 +532,7 @@ function changed(d: Deps, c: string): { status: string; path: string }[] {
 // The root .gitattributes sets how CLAUDE.md and .claude/ check out (eol, encoding, ident), and no approval can
 // cover it: verify counts a commit that touches it as an agent-rule commit, always for a hand check.
 const VERIFY_PATHS = [...PATHS, ':(icase).gitattributes'];
-const day = (r: Row) => r.t.slice(0, 10) || 'undated';
+const day = (r: Row) => (typeof r.t === 'string' ? r.t.slice(0, 10) : '') || 'undated';
 
 // Every commit on origin/<branch> past origin/main that touches CLAUDE.md, .claude/ or the root .gitattributes must
 // be an approved commit (one the hub recorded for this branch since it was last closed) or git's clean replay of one
@@ -551,20 +567,25 @@ export function verify(d: Deps, a: { branch: string }): number {
   );
   // The ledger's approvals, each confirmed by git: the commit exists and is exactly T on B.
   const approved: Row[] = [];
+  const dropped = new Set<Row>();
+  const all = approvedRows(readRows(d), b);
   const named = (x: Row) =>
     `approved commit ${x.commit!.slice(0, 8)} (claude-edit-${x.n}, T ${x.tree.slice(0, 8)}, ${day(x)})`;
-  for (const row of approvedRows(readRows(d), b)) {
+  for (const row of all) {
     const ps = d.git.ok(['cat-file', '-e', `${row.commit}^{commit}`], o)
       ? parentsOf(d, row.commit!)
       : null;
-    if (!ps) d.log(`  ${named(row)} is missing: its pin is gone`);
-    else if (
+    if (!ps) {
+      d.log(`  ${named(row)} is missing: its pin is gone`);
+      dropped.add(row);
+    } else if (
       ps.length !== 1 ||
       ps[0] !== row.base ||
       d.git.out(['rev-parse', `${row.commit}^{tree}`], o) !== row.tree
-    )
+    ) {
       d.log(`  ${named(row)} is not T on B: ignored`);
-    else approved.push(row);
+      dropped.add(row);
+    } else approved.push(row);
   }
   const used = new Set<Row>();
   const match = new Map<string, { row: Row; how: string }>();
@@ -592,27 +613,29 @@ export function verify(d: Deps, a: { branch: string }): number {
     const m = match.get(c);
     if (m) {
       ch.forEach((x) => files.add(x.path));
-      trees.push(m.row.tree.slice(0, 8));
+      trees.push(`${m.row.tree.slice(0, 8)} (${day(m.row)})`);
       d.log(
         `  ${c.slice(0, 8)} claude-edit-${m.row.n}, approved T ${m.row.tree.slice(0, 8)} (${day(m.row)}), ${m.how}: ${list}`,
       );
     } else if (ch.some((x) => x.path.toLowerCase() === '.gitattributes'))
       bad.push(
-        `${b}: ${c} changes the root .gitattributes, which sets how the agent files check out (${list}): the hub checks it by hand`,
+        `${b}: ${c} changes the root .gitattributes, which sets how the agent files check out (${list}): the hub checks it by hand, and a line that can match CLAUDE.md or .claude/ needs the user's go (HUB.md → Agent-rule edits)`,
       );
     else
       bad.push(
         `${b}: ${c} is not an approved commit or a clean replay of one (${list}): send n+1, or check an old-rule commit by hand`,
       );
   }
-  // An approval missing from the branch: told when a later one is on it, red when it is the newest.
-  const last = approved.findLastIndex((x) => used.has(x));
-  approved.forEach((x, i) => {
+  // An approval not on the branch (missing, not T on B, or unused): told when a later one is on it, red when it is
+  // newer than every approval that is.
+  const last = all.findLastIndex((x) => used.has(x));
+  all.forEach((x, i) => {
     if (used.has(x)) return;
-    if (i < last) d.log(`  ${named(x)} is not on the branch: a later approval is`);
-    else
+    if (i < last) {
+      if (!dropped.has(x)) d.log(`  ${named(x)} is not on the branch: a later approval is`);
+    } else
       bad.push(
-        `${b}: ${named(x)} is not on the branch, and no later approval is: check by hand, or close it with n+1`,
+        `${b}: ${named(x)} is not on the branch, and no later approval is: re-send the change as n+1, or check by hand`,
       );
   });
   if (bad.length) throw new Refusal(bad.join('\n'));
@@ -632,11 +655,20 @@ export function close(d: Deps, a: { branch: string }): number {
   const b = a.branch;
   if (!BRANCH.test(b)) throw new Refusal(`bad branch name "${b}"`);
   const o = { cwd: d.main };
+  const retiring = approvedRows(readRows(d), b);
   const refs = d.git
     .out(['for-each-ref', '--format=%(refname) %(objectname)', `refs/claude-edits/${b}/`], o)
     .split('\n')
     .filter(Boolean);
   addRow(d, { kind: 'closed', branch: b, n: 0, base: '', tree: '' });
+  if (approvedRows(readRows(d), b).length)
+    throw new Stuck(
+      `the closed row for ${b} did not take (is the ledger's last line torn?): pins kept`,
+    );
+  for (const x of retiring)
+    d.log(
+      `  retired claude-edit-${x.n}, T ${x.tree.slice(0, 8)}, commit ${x.commit!.slice(0, 8)} (${day(x)})`,
+    );
   for (const line of refs) {
     const [name, sha] = line.split(' ');
     d.git.out(['update-ref', '-d', name!, sha!], o);

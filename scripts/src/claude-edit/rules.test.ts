@@ -377,7 +377,8 @@ describe('the go and the ledger', () => {
     expect(parseLedger(JSON.stringify(closed))).toEqual([closed]);
   });
   it('skips torn and foreign ledger lines', () => {
-    const text = `${JSON.stringify(rows[0])}\n{"kind":"shown"\nnot json\n{"kind":"other","branch":"b","base":"B","tree":"T"}\n`;
+    const noT = { ...rows[0], t: undefined };
+    const text = `${JSON.stringify(rows[0])}\n{"kind":"shown"\nnot json\n{"kind":"other","branch":"b","base":"B","tree":"T"}\n${JSON.stringify(noT)}\n${JSON.stringify({ ...rows[0], t: 5 })}\n`;
     expect(parseLedger(text)).toEqual([rows[0]]);
   });
 });

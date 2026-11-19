@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { usageKeys } from '../bot/help.ts';
 import { FLAGS, USAGE, main } from './cli.ts';
-import { DIFF_FLAGS, EMPTY_TREE, GIT_PRE, MERGE_FLAGS, hardenedEnv } from './git.ts';
+import { DIFF_FLAGS, EMPTY_TREE, GIT_PRE, MERGE_FLAGS, hardenedEnv, makeExec } from './git.ts';
 import type { Git } from './git.ts';
 import { Refusal, Stuck } from './rules.ts';
 import type { Deps } from './steps.ts';
@@ -131,7 +131,7 @@ describe('the hardened git', () => {
 describe('the git it runs', () => {
   it('is 2.43 or later: merge-tree -X and --attr-source with merge-tree need it', () => {
     const v = /git version (\d+)\.(\d+)/.exec(
-      execFileSync('git', ['--version'], { encoding: 'utf8' }),
+      execFileSync('/usr/bin/git', ['--version'], { encoding: 'utf8' }),
     );
     expect(v, 'git --version').not.toBeNull();
     const [maj, min] = [Number(v![1]), Number(v![2])];
@@ -139,6 +139,14 @@ describe('the git it runs', () => {
       maj > 2 || (maj === 2 && min >= 43),
       `git ${maj}.${min}: claude-edit needs 2.43 or later`,
     ).toBe(true);
+  });
+});
+
+describe('makeExec', () => {
+  it('a git that can not start is a Refusal naming the call', () => {
+    const gone = join(tmpdir(), 'ce-missing-dir', 'x');
+    expect(() => makeExec()(['status'], { cwd: gone })).toThrow(Refusal);
+    expect(() => makeExec()(['status'], { cwd: gone })).toThrow(/^git status: /);
   });
 });
 

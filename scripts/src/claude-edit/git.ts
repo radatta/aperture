@@ -98,7 +98,8 @@ export function makeExec(base: NodeJS.ProcessEnv = process.env, pre: string[] = 
       maxBuffer: 64 << 20,
       timeout: 60_000,
     });
-    // A git that can't start or runs past the timeout changed nothing the caller can see: a refusal.
+    // A git that can't start or runs past the timeout is a refusal here; a caller that may have changed files first
+    // (stage after its apply) turns it into Stuck.
     if (r.error) throw new Refusal(`git ${args[0]}: ${r.error.message}`);
     return { status: r.status ?? 1, stdout: r.stdout, stderr: r.stderr.toString('utf8').trim() };
   };

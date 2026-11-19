@@ -85,9 +85,11 @@ pick goes in `localNotes/decisions.md`. The triggered lenses are a floor: a kick
 rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_ 1). A pending
 `localNotes/claude-edit-<n>.patch` (`docs/ops/HUB.md` → _Agent-rule edits_) is part of the diff: its paths count
 here, each lens's prompt names it to read as if applied. A patch that is new or changed after its review (an n+1
-after a refusal, a change the user asked for, a rebase that skipped the hub's commit) gets `review-fixes` and
-`review-shell` on the patch-to-patch diff before the ask, both patch files named in the prompt, whatever the last
-round found: a patch is never a commit range, so no other recheck reads it.
+after a refusal, a change the user asked for, a rebase that skipped the hub's commit, a fix pass) gets
+`review-fixes` and `review-shell` on the patch-to-patch diff before the ask, plus each lens this section picks for the
+changed text (an approval rule's: infra), whatever the last round found: a patch is never a commit range, so no
+other recheck reads it. The lane keeps the old patch beside the new one; each prompt names both files as its range
+(it stands in for `review-fixes`' commit range), and a patch first written after the review is read whole.
 
 - **Docs only** — `code-reviewer` alone; plus shell if an operator command changed, infra if a deploy, slot, lock or
   approval rule changed.
