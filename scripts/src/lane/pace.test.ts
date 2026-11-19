@@ -5,6 +5,7 @@ import { deps, pace, world } from './fakes.ts';
 import {
   PACE_DEFAULTS,
   WAIT_DEFAULT_MIN,
+  calmBlock,
   lastStartText,
   paceLimits,
   paceReasons,
@@ -175,5 +176,18 @@ describe('waitForPace', () => {
     expect(await waitForPace(t.d, until, 1)).toMatch(/the container is hot/);
     expect(slept).toEqual([30_000, 30_000, 10_000]);
     expect(t.clock.now()).toBe(until);
+  });
+});
+
+describe('calmBlock', () => {
+  it('judges every pace rule but the spacing', () => {
+    const w = world();
+    const t = deps(w, []);
+    writeFileSync(join(w.board, 'lane-last-start.json'), lastStartText('just-now', t.clock.now()));
+    expect(calmBlock(t.d)).toBeNull();
+    writeFileSync(join(w.board, 'pace.json'), pace(t.clock.now(), avg({ psiCpu: 40 })));
+    expect(calmBlock(t.d)).toBe('CPU PSI avg 40, wants under 40');
+    writeFileSync(join(w.board, 'pace.json'), pace(t.clock.now() - 181_000));
+    expect(calmBlock(t.d)).toMatch(/pace.json is 181 s old/);
   });
 });

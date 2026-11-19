@@ -177,6 +177,10 @@ in a low-power window: typecheck ×1.8, lint ×2, test ×1.2.
 
 - **Class** from the command (`case` match, shared with the hook): `test`, `test-file` (a single-file run —
   measured, no slot), `typecheck`, `lint`, `build`, `dev`, `ui`, `other` (no slot). `HEAVY_CLASS` overrides;
+  `warm` is only ever set that way: `pnpm lanes start`'s cache warm (`docs/ops/LANES.md` → _Start_, step 9), whose
+  `CLAUDE_PID=0` makes the event's `pid` 0 and its `branch` the worktree's (no session owns it). It isn't a
+  slowdown class; since it takes the cold run off a lane's first typecheck and lint, those classes' baselines lose
+  most of their cold first runs from then on.
   `HEAVY_LABEL` names the run — **never on argv** (a `pkill -f <label>` once killed the wrong process).
   `test-fast` was the class of a pre-gate-parallel `pnpm gate:fast`'s per-package runs: the `tuning.test` worker
   cap unless the caller set `VITEST_MAX_WORKERS`, not the 2-suite cap, and not a slowdown class.
@@ -251,7 +255,7 @@ or start changes; the live rules stay the cap, the hard line and `lanes.maxActiv
   `lightKnown: false`) holding no slot, the requester excluded. It would admit while `committed + job ≤ jobUnits / k`
   (6.5). Units: `test` (a wide gate or a suite) 3.0, `test-fast` (narrow gate) 2.5, `ui` split by its command —
   `devcheck:local` 1.5, a deployed `devcheck` 0.5, a capture 1.0 (a slot from an older `lease.sh`, with no `cmd`,
-  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, anything else 1.0. `test-file`
+  counts 1.5 and says `guess`) — `dev` 0.75, `typecheck`/`lint` 1.0, `build` 1.5, `warm` (`lanes start`'s cache warm: tsc, then eslint) 1.0, anything else 1.0. `test-file`
   0.5 and `other` are in the block but reached by no admission yet: those runs take no slot, so they count only as
   their session's light 0.3. Written by
   `cli.ts decide-heavy` after its decision string is built, so its output is byte-identical with or without it; any
@@ -528,6 +532,37 @@ What it means:
   runs) is +4859 MiB / +469 pids: it mixes `shot.mjs` (~0.5–0.7 GiB), remote `pnpm devcheck` (~0.5–1.5 GiB) and
   local checks (2.4–6.9 GiB, partly neighbours' noise; a `--feature` local check is unmeasured solo)); `build`
   wasn't measured.
+
+**The warm-caches A/B** (2026-11-18, `pnpm lanes start`'s cache warm: `docs/ops/LANES.md` → _Start_, step 9). In a
+scratch clone on the `/workspace` mount (the lanes' filesystem), 8 merged PRs since the lockfile's last change: the
+cold arm clears the caches (each package's `node_modules/.tmp`, `packages/shared/dist`, the eslint cache) and runs
+`tsc -b` then `pnpm lint` at the PR's head; the warm arm runs the warm at the PR's parent, checks the head out (only
+the PR's files change, as a lane's edits do) and runs them again. Arm order alternated; every arm started on a calm
+`pace.json` (CPU PSI at start median 0.25). Seconds, wall:
+
+| PR       | cold tc / lint | the warm (tc + lint) | warmed tc (projects rebuilt) / lint | saved | net CPU vs cold |
+| -------- | -------------- | -------------------- | ----------------------------------- | ----- | --------------- |
+| ee4eddb0 | 35.5 / 19.0    | 46.1                 | 3.2 (1) / 3.2                       | 48.1  | +3 %            |
+| a5778716 | 21.6 / 13.4    | 42.5                 | 5.4 (2) / 9.5                       | 20.1  | +34 %           |
+| 78460c32 | 21.6 / 14.4    | 34.0                 | 15.4 (5) / 5.3                      | 15.3  | +56 %           |
+| 1ec67c6a | 21.6 / 13.5    | 34.0                 | 2.2 (1) / 3.2                       | 29.7  | +11 %           |
+| f21276b7 | 21.6 / 13.4    | 35.0                 | 13.4 (5) / 4.2                      | 17.4  | +48 %           |
+| c5797521 | 30.6 / 18.0    | 36.1                 | 7.3 (2) / 8.4                       | 32.9  | +8 %            |
+| ed18ecc6 | 26.2 / 13.5    | 40.6                 | 21.4 (4) / 5.3                      | 13.0  | +59 %           |
+| 6304cd23 | 20.6 / 13.4    | 33.0                 | 14.4 (5) / 4.2                      | 15.4  | +51 %           |
+
+- **Saved:** median 18.8 s of a lane's first typecheck + lint (mean 24, min 13): typecheck 12.2, lint 9.2. A
+  no-change repeat is 1.2 s. Lanes' history (since 11-17) has first runs at a median 27.5 s / 18.5 s and repeats at
+  5.3 / 5.6 (n = 42 / 52), so live first runs sit nearer the cold arm than the warm one.
+- **Added CPU:** median +41 % of the cold run (+19 CPU-s), almost all typecheck (+44 %; lint +18 %). The bad case is
+  an edit to `packages/shared`: 4–5 projects recheck after the warm anyway. The pre-set bar was +20 %; going past it was the maintainer's call, since the extra runs niced and only on a box judged calm (warm-caches `decisions.md` 15).
+- **After a rebase** onto a moved main (7 real ones): tc + lint median 20.8 s against ~4 s for a repeat, so a rebase
+  costs ~16 s whether or not the lane was warmed. No re-warm: the gate follows the rebase at once.
+- **Safety probes**: two `tsc -b` or two `eslint --cache` at once in one checkout both exit 0, and the next run still
+  catches a planted type error; a half-truncated buildinfo or eslint cache is rebuilt (exit 0), never trusted. The
+  real spawn (`execFileSync` of `setsid -f bash warm.sh`) returned in 5 ms; the warm took 36.3 s, 2139 MiB subtree
+  RSS, +111 container pids — `classes.warm` is 30 pids (the subtree's 25 threads; the pids delta carries neighbours)
+  / 2200 MiB / 120 s.
 
 ## Control tower
 

@@ -177,6 +177,13 @@ export function paceBlock(d: Deps): string | null {
   return r.length ? r.map((x) => x.text).join('; ') : null;
 }
 
+// The same rules minus the spacing, which the start judging it has just stamped: null when the box is calm. The cache
+// warm (warm.ts) runs only then.
+export function calmBlock(d: Deps): string | null {
+  const r = reasonsNow(d).filter((x) => x.key !== 'spacing');
+  return r.length ? r.map((x) => x.text).join('; ') : null;
+}
+
 // `--wait[=<min>]`: null when absent, whole minutes 1..WAIT_MAX_MIN, else 'bad' (a swallowed branch name too).
 export function parseWait(raw: string | null): number | null | 'bad' {
   if (raw === null) return null;

@@ -24,6 +24,7 @@
       "lint": 1.0,
       "test-file": 0.5,
       "build": 1.5,
+      "warm": 1.0,
       "other": 1.0
     },
     "phases": {
@@ -130,6 +131,12 @@
       "anonMiB": 1500,
       "p95Sec": 60,
       "source": "estimate — not in the matrix"
+    },
+    "warm": {
+      "pids": 30,
+      "anonMiB": 2200,
+      "p95Sec": 120,
+      "source": "2026-11-18 warm-caches A/B (SESSION-BOARD.md Results): tsc -b then eslint in sequence; anon from the real warm's 2139 MiB subtree RSS, pids its 25 threads; p95 covers moderate load (calm median 36 s, a cold tc+lint at moderate load 94 s); the warm runs only on a calm box"
     }
   }
 }

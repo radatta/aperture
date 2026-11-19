@@ -40,12 +40,15 @@ function script(w: World, over: [string, Answer][] = [], trees: string[] = []): 
         const wt = join(w.main, '.claude/worktrees', B);
         mkdirSync(wt, { recursive: true });
         writeFileSync(join(wt, '.git'), `gitdir: ../../../.git/worktrees/${B}\n`);
+        mkdirSync(join(wt, 'scripts/board'), { recursive: true });
+        writeFileSync(join(wt, 'scripts/board/warm.sh'), "# the checkout's copy\n");
         return '';
       },
     ],
     ['pnpm install', ''],
     ['tmux new-window', '@9\t%9'],
     ['tmux send-keys', ''],
+    ['setsid', ''],
     ['git worktree remove', ''],
     ['git branch -d', ''],
     ['tmux kill-window', ''],
@@ -316,7 +319,8 @@ describe('lane start: the nominal run', () => {
     const t = deps(w, script(w));
     expect(await start(t.d, args())).toBe(0);
     expect(t.sync.calls).toBe(1);
-    expect(t.sync.ran.at(-1)).toBe('tmux send-keys -t %9 Enter');
+    expect(t.sync.ran.at(-2)).toBe('tmux send-keys -t %9 Enter');
+    expect(t.sync.ran.at(-1)).toMatch(/^setsid -f bash .*\/warm.sh /); // the warm spawn
     expect(t.sync.logged.at(-1)).toMatch(new RegExp(`^lane ${B}: started in window @9`));
     expect(t.out().trimEnd().endsWith('tower: restart not needed (serving aaaaaaa)')).toBe(true);
   });
@@ -891,6 +895,118 @@ describe('lane start: the pace gate', () => {
     expect(await start(t.d, args())).toBe(1);
     expect(t.out()).toMatch(/rolled back: nothing left behind/);
     expect(JSON.parse(readFileSync(join(w.board, 'lane-last-start.json'), 'utf8')).branch).toBe(B);
+  });
+});
+
+describe('lane start: the cache warm', () => {
+  const T0 = Date.parse('2026-10-13T20:00:00Z'); // fakeClock's start
+  const wtOf = (w: World) => join(w.main, '.claude/worktrees', B);
+  const warmLog = (w: World) => join(wtOf(w), 'localNotes/warm.log');
+  const spawns = (calls: Call[]) => calls.filter((c) => c.line.startsWith('setsid'));
+
+  it("spawns the worktree's warm.sh detached once the session is live, before the lane file and sync-main", async () => {
+    const w = world();
+    claudeSession(w);
+    let laneAtSpawn: boolean | null = null;
+    const t = deps(
+      w,
+      script(w, [
+        [
+          'setsid',
+          () => {
+            laneAtSpawn = existsSync(join(w.board, 'lanes', `${B}.json`));
+            return '';
+          },
+        ],
+      ]),
+    );
+    expect(await start(t.d, args())).toBe(0);
+    expect(laneAtSpawn).toBe(false); // the lane file comes after the spawn
+    const wt = wtOf(w);
+    const s = spawns(t.calls);
+    expect(s.map((c) => c.args)).toEqual([
+      ['-f', 'bash', `${wt}/scripts/board/warm.sh`, `${wt}/localNotes/warm.log`],
+    ]);
+    expect(s[0]!.cwd).toBe(wt);
+    const lines = t.calls.map((c) => c.line);
+    expect(lines.indexOf(s[0]!.line)).toBe(lines.indexOf('tmux send-keys -t %9 Enter') + 1);
+    expect(t.sync.ran).toContain(s[0]!.line);
+    expect(t.out()).toMatch(
+      /warm: typecheck \+ lint spawned in the background \(localNotes\/warm.log\)/,
+    );
+    expect(t.logs.findIndex((l) => l.startsWith('warm:'))).toBeLessThan(
+      t.logs.findIndex((l) => /started in window/.test(l)),
+    );
+  });
+
+  it("this start's own spacing stamp, or another lane's, never skips it", async () => {
+    const w = world();
+    claudeSession(w);
+    writeFileSync(join(w.board, 'lane-last-start.json'), lastStartText('other-lane', T0 - 10_000));
+    const t = deps(w, script(w));
+    expect(await start(t.d, args({ overPace: 'spacing only' }))).toBe(0);
+    expect(spawns(t.calls)).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'a hot box',
+      (w: World) => writeFileSync(join(w.board, 'pace.json'), pace(T0, { state: 'hot' })),
+      /the container is hot/,
+    ],
+    ['no pace file', (w: World) => rmSync(join(w.board, 'pace.json')), /no pace.json in /],
+    [
+      'a hot mark from the hub',
+      (w: World) => writeFileSync(join(w.board, 'pace-control.json'), '{"state":"hot"}'),
+      /the hub marked the box hot/,
+    ],
+  ] as [string, (w: World) => void, RegExp][])(
+    'an --over-pace start on %s skips it, saying why in the start log and warm.log',
+    async (_, set, why) => {
+      const w = world();
+      claudeSession(w);
+      const t = deps(w, script(w));
+      set(w);
+      expect(await start(t.d, args({ overPace: 'the hub said go' }))).toBe(0);
+      expect(spawns(t.calls)).toEqual([]);
+      expect(t.out()).toMatch(/warm: skipped, the box isn't calm \(/);
+      expect(t.out()).toMatch(why);
+      expect(readFileSync(warmLog(w), 'utf8')).toMatch(why);
+    },
+  );
+
+  it('a failed spawn only warns: exit 0, nothing rolled back, the lane still written', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w, [['setsid', fail('setsid: not found')]]));
+    expect(await start(t.d, args())).toBe(0);
+    expect(t.out()).toMatch(/warning: the cache warm didn't start: .*setsid: not found/);
+    expect(t.calls.map((c) => c.line).some((l) => /kill-window|worktree remove/.test(l))).toBe(
+      false,
+    );
+    expect(existsSync(join(w.board, 'lanes', `${B}.json`))).toBe(true);
+    expect(t.sync.calls).toBe(1);
+  });
+
+  it('a checkout without warm.sh warns and spawns nothing: setsid -f would succeed and the error land nowhere', async () => {
+    const w = world();
+    claudeSession(w);
+    const t = deps(w, script(w));
+    const orig = t.d.fs.exists.bind(t.d.fs);
+    t.d.fs = { ...t.d.fs, exists: (p: string) => !p.endsWith('/scripts/board/warm.sh') && orig(p) };
+    expect(await start(t.d, args())).toBe(0);
+    expect(spawns(t.calls)).toEqual([]);
+    expect(t.out()).toMatch(/warning: the cache warm didn't start: no .*\/scripts\/board\/warm.sh/);
+  });
+
+  it.each([
+    ['a failed install', [['pnpm install', fail('ERR_PNPM')]]],
+    ['a failed send-keys', [['tmux send-keys', fail()]]],
+  ] as [string, [string, Answer][]][])('never spawns after %s', async (_, over) => {
+    const w = world();
+    const t = deps(w, script(w, over));
+    expect(await start(t.d, args())).toBe(1);
+    expect(spawns(t.calls)).toEqual([]);
   });
 });
 
