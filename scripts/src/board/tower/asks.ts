@@ -2,7 +2,7 @@
 // brief, and the writes `pnpm board asks add|answer|close` make. Writes take and return the raw queue object, so keys
 // this file doesn't know are kept; the CLI re-parses the result before it writes. Pure.
 import { clean, hhmm } from './fmt.ts';
-import { ASK_ID, letter, type Ask, type QueueData } from './queue.ts';
+import { ASK_ID, letter, parseQueue, type Ask, type QueueData } from './queue.ts';
 
 export const ASK_KEEP_MS = 24 * 3600e3; // answered and closed asks stay a day, for /back and `asks show`
 const LINE_MAX = 120;
@@ -90,6 +90,13 @@ export function askBriefLines(asks: Ask[], max = 5): string[] {
 
 const rawAsks = (raw: Raw): Raw[] => (Array.isArray(raw.asks) ? (raw.asks as Raw[]) : []);
 const iso = (t: number) => new Date(t).toISOString();
+// The raw entry the parser kept for `id`: the first with it that parses on its own (parseAsks drops a bad entry
+// without taking its id, and a later duplicate of a kept one), so a write never touches a dropped twin.
+const keptAt = (raw: Raw, id: string) =>
+  rawAsks(raw).findIndex(
+    (e) =>
+      e?.id === id && parseQueue(JSON.stringify({ ...raw, asks: [e] })).data?.asks?.length === 1,
+  );
 
 // Answered and closed asks older than a day go; open ones always stay. askSeq keeps the highest id ever used, so a
 // pruned id is never handed out again (a stale `d5 b` must never land on a new d5).
@@ -225,10 +232,9 @@ export function answerAsks(
   }
   if (!picked.size) return { raw, out, answered: 0 };
   const at = iso(now);
-  const next = rawAsks(raw).map((e) =>
-    typeof e?.id === 'string' && picked.has(e.id)
-      ? { ...e, status: 'answered', answer: picked.get(e.id), answeredAt: at }
-      : e,
+  const kept = new Map([...picked].map(([id, l]) => [keptAt(raw, id), l]));
+  const next = rawAsks(raw).map((e, i) =>
+    kept.has(i) ? { ...e, status: 'answered', answer: kept.get(i), answeredAt: at } : e,
   );
   return { raw: { ...raw, asks: next }, out, answered: picked.size };
 }
@@ -238,10 +244,11 @@ export function closeAsk(raw: Raw, asks: Ask[], id: string, now: number): Raw {
   const a = asks.find((x) => x.id === id.toLowerCase());
   if (!a) throw new Error(`asks close: no ask ${id}`);
   if (a.status !== 'open') throw new Error(`asks close: ${a.id} is ${a.status}, not open`);
+  const k = keptAt(raw, a.id);
   return {
     ...raw,
-    asks: rawAsks(raw).map((e) =>
-      e?.id === a.id ? { ...e, status: 'closed', answeredAt: iso(now) } : e,
+    asks: rawAsks(raw).map((e, i) =>
+      i === k ? { ...e, status: 'closed', answeredAt: iso(now) } : e,
     ),
   };
 }

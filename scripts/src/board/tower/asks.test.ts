@@ -290,6 +290,24 @@ describe('the writes', () => {
     );
     expect(parsed(added).asks!.at(-1)).toMatchObject({ explicit: true });
   });
+  it('answer and close edit only the entry the parser kept, never a dropped twin with its id', () => {
+    const raw = base();
+    raw.asks.unshift({ ...raw.asks[0]!, status: 'maybe' } as never); // a bad d3 the parser drops
+    const q = parseQueue(JSON.stringify(raw));
+    expect(q.problems).toEqual(['asks[0]: status "maybe"']);
+    for (const out of [
+      closeAsk(raw, q.data!.asks!, 'd3', NOW),
+      answerAsks(raw, q.data!.asks!, 'd3', 'a', NOW).raw,
+    ]) {
+      expect((out.asks as { status: string }[]).map((a) => a.status)).toEqual([
+        'maybe',
+        expect.stringMatching(/^(closed|answered)$/),
+        'open',
+        'open',
+      ]);
+      expect(parseQueue(JSON.stringify(out)).problems).toEqual(['asks[0]: status "maybe"']); // no new duplicate
+    }
+  });
   it('close: an open ask only, kept a day like an answered one', () => {
     const raw = base();
     const out = closeAsk(raw, parsed(raw).asks!, 'd1', NOW);
