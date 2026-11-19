@@ -46,7 +46,7 @@ _Not proven_ list. `--tier delta` defaults it to `--scenario` (smoke excluded). 
 not in the run is an error, like a bad `--scenario`.
 
 Exit 0 PASS, 1 FAIL, 2 CRASH. The load-time errors — a bad `--scenario`/`--feature`, and the codes `ENV_MISSING`,
-`PW_MISSING`, `MATRIX_GAP`, and `WRONG_USER` when the env file names someone else — stop the run before it starts:
+`PW_MISSING`, `MATRIX_GAP`, `LANES_REFUSED`, and `WRONG_USER` when the env file names someone else — stop the run before it starts:
 printed to stderr, exit 2, no `report.md`. Otherwise read `report.md` first — its first line is the status, and when the
 harness itself failed (the deploy wait, a sign-in, the build check, cleanup) the error's text follows it, with a
 `**Failed:** <code> — <message>` line per failure under _Leftovers_ (a step's error is in its _Steps_ row, so a
@@ -89,6 +89,47 @@ attempts refusal whenever the ledger has a Start today — that gate also counts
 the ledger never sees. Once the budget has run out in a run, a later Start refused because a sitting the cut-short
 scenario opened is still open (`Another sitting is still open`) reads needs-you too.
 
+## Two users
+
+On slot A a full run is two lanes (`lanes.ts`), one test user each: by default one after the other, the iPhone lane
+first (`serial`); `DEVCHECK_LANES=parallel` runs them at once, so the run takes about as long as its longer lane
+instead of both. Measured 2026-11-18 on one build: parallel 644–1029 s a full run (5 runs, 3 cold), serial 1449 s.
+Parallel isn't the default because it peaked the BFF at 18 concurrent, its whole reservation (0 throttles, CloudWatch
+over the 5 runs): the Simulator's cold Home beside the browser lane's is the known 429 shape below, and the bar for
+the default was a peak of at most 15. It returns as the default with a BFF reservation that holds two cold Homes at once (12 + 12 + the
+harness's ~2 each):
+
+| Lane    | Scenarios                                                               | Signs in as                                                                                                             | Its files                                                         |
+| ------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| iPhone  | `user: 'iphone'`: `ios-standalone`, `ios-probe`, `category-suggest-ios` | `identifiers.json` → `email.devTestUser`, the Simulator's own user (its email and Keychain item are pinned in `sim.sh`) | `devcheck.dev.env`, `devcheck.dev.state.json`, `ledger.dev.jsonl` |
+| browser | every other one                                                         | `email.devTestUserWeb`                                                                                                  | `devcheck.dev.web.env`, `…web.state.json`, `ledger.dev.web.jsonl` |
+
+**Why two users.** Separate partitions, so neither lane's tasks, plans or categories show in the other's lists and
+counts — `areas`' Home picker caps at 30 and the iPhone lane plans 16 tasks for today, to name one. What the two still
+share is the stage: the BFF's reserved concurrency (18) and MCP's (9), the DynamoDB ceiling, the LeetCode catalog
+(only `lc-catalog` reads it) and the build marker, which each lane checks itself. A 429 from the two users' load
+together reads like any other (_Throttles (429)_), and when the lanes ran side by side the report says so beside it.
+
+**How a lane runs.** Each lane is a whole pipeline run — its own deploy wait (shared: the iPhone lane sends no sim
+job before the build is confirmed), sign-in, sweep of its own ledger, settings baseline, in-page build check, steps,
+cleanup and leak check — so nothing about cleanup changes with two writers: each ledger has one. The iPhone lane's
+browser page parks on `/api/health` after its build check (an `/api/` path never boots the app from the service
+worker), so no second app polls dev while the Simulator works. The lanes merge into one report in scenario order:
+the header's `Lanes:` line gives each lane's time and the wall, the iPhone lane's harness lines start `iPhone user:`,
+its created records say `(iPhone user)`, and its screenshots sit in `shots/iphone/`. A lane that fails or crashes
+fails or crashes the run, by lane; the other still finishes and cleans up.
+
+**When it's one user.** devb (no Simulator), slot A before the browser user's env file exists (setup step 1b), or
+`DEVCHECK_LANES=one-user`: every scenario in one lane as `email.devTestUser`, as before lanes — so merging needed no
+setup first. Otherwise slot A runs both lanes, serial unless `DEVCHECK_LANES=parallel`. An explicit `serial` or `parallel` where the run can't have two users (devb, no env file)
+refuses (`LANES_REFUSED`) rather than quietly timing one. When no iPhone step will run (a branch touching no iOS path), its scenarios stay in the
+browser lane, every step deferred, and no second user signs in — unless the iPhone ledger holds an earlier run's
+leftovers, which that lane then sweeps.
+
+**Scenarios that name the user** read `ctx.testUser` (the lane's), never the constant: `identifier-cleanup` checks
+the session is that user. `category-suggest-ios` seeds its own Garden history in the iPhone user's partition — in a
+one-user run `category-suggest` seeded it already, and it skips its seed.
+
 ## One-time setup
 
 1. **Test user** (dev pool only — never prod). On the Mac, the plan's operator step creates it with
@@ -109,14 +150,49 @@ cloudformation describe-stacks --profile aperture-dev --region us-west-1 --stack
 && ! grep -q '^DEVCHECK_CLAUDE_CLIENT_ID=' .secrets/devcheck.dev.env && printf 'DEVCHECK_CLAUDE_CLIENT_ID=%s\n'
 "$id" >> .secrets/devcheck.dev.env && chmod 600 .secrets/devcheck.dev.env` (one line; a recreated dev stack
    means removing the old line and rerunning it).
+   1b. **The browser lane's user** (slot A only; _Two users_). The same kind of user, `identifiers.json` →
+   `email.devTestUserWeb`, made in dev's pool under the `aperture-dev` break-glass profile (the freeze denies
+   `AdminCreateUser` to every other principal, `cdk/src/lib/org-stack.ts`), writing
+   `.secrets/devcheck.dev.web.env` with all seven keys (the claude client's included: the append line above writes
+   only the original user's file). On the Mac, one line (`<email>` is `email.devTestUserWeb`): `cd <mac-repo> &&
+if [ -e .secrets/devcheck.dev.web.env ]; then echo 'already there, not overwritten'; else ( set -C && em=<email> &&
+acct=$(aws sts get-caller-identity --profile aperture-dev --region us-west-1 --query Account --output text) &&
+pool=$(aws cloudformation
+describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureData-dev --query
+"Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text) && client=$(aws cloudformation
+describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureApp-dev --query
+"Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text) && claude=$(aws cloudformation
+describe-stacks --profile aperture-dev --region us-west-1 --stack-name ApertureApp-dev --query
+"Stacks[0].Outputs[?OutputKey=='McpClientId'].OutputValue" --output text) && [ -n "$pool" ] && [ -n "$client" ] &&
+[ -n "$claude" ] && [ "$pool" != None ] && [ "$client" != None ] && [ "$claude" != None ] && { aws cognito-idp admin-get-user --profile aperture-dev --region us-west-1 --user-pool-id
+"$pool" --username "$em" >/dev/null 2>&1 || aws cognito-idp admin-create-user --profile aperture-dev --region
+us-west-1 --user-pool-id "$pool" --username "$em" --message-action SUPPRESS --user-attributes Name=email,Value="$em"
+Name=email_verified,Value=true >/dev/null; } && pw="$(openssl rand -base64 24)Aa1_" && t=$(mktemp) && printf
+'{"UserPoolId":"%s","Username":"%s","Password":"%s","Permanent":true}' "$pool" "$em" "$pw" >| "$t" && aws
+cognito-idp admin-set-user-password --profile aperture-dev --region us-west-1 --cli-input-json "file://$t"; r=$?;
+rm -f "$t"; [ "$r" = 0 ] && sub=$(aws
+cognito-idp admin-get-user --profile aperture-dev --region us-west-1 --user-pool-id "$pool" --username "$em" --query
+"UserAttributes[?Name=='sub'].Value" --output text) && umask 077 && printf
+'DEVCHECK_EMAIL=%s\nDEVCHECK_PASSWORD=%s\nDEVCHECK_SUB=%s\nDEVCHECK_COGNITO_HOST=%s\nDEVCHECK_CLIENT_ID=%s\nDEVCHECK_POOL_ID=%s\nDEVCHECK_CLAUDE_CLIENT_ID=%s\n'
+"$em" "$pw" "$sub" "aperture-dev-$acct.auth.us-west-1.amazoncognito.com" "$client" "$pool" "$claude" >
+.secrets/devcheck.dev.web.env && echo done ); fi`. It refuses an existing file (up front, and `set -C` at the
+   write), runs nothing if the `cd` fails, reuses a user a failed earlier try made, keeps the password off every argv (zsh's builtin `printf` into a mode-600 `mktemp` file, `>|` past
+   `set -C`, removed right after the call — `file:///dev/stdin` fails on macOS with "Invalid JSON received"; `_` is
+   the guaranteed symbol, `!` would trip zsh) and prints nothing secret; the subshell keeps `umask` and `pw` out of the operator's shell.
+   Until the file exists, slot A runs one user. One more user in the pool costs nothing: Cognito's free tier on the Lite and Essentials plans is
+   10,000 monthly active users with no end date ([pricing](https://aws.amazon.com/cognito/pricing/); the pool sets
+   no feature plan, so never Plus), the admin calls that create it carry no charge, and the claude client signs in
+   with a code and PKCE, not the paid machine-to-machine grant. It needs no Keychain item: the Simulator stays the
+   original user. Step 3's fixture bank is per user, so the browser user links its own.
 2. **Playwright, outside the repo** — it is no package's dependency (it would add a browser download to every
    CI install, and no test needs it). `~/pw` is a scratch directory outside the monorepo, so npm there doesn't
    break the pnpm-only rule: `mkdir -p ~/pw && cd ~/pw && npm init -y && npm install playwright && npx
 playwright install chromium`. The harness loads it from `~/pw` (`DEVCHECK_PW_ROOT` overrides;
    `DEVCHECK_CHROMIUM` points at a system Chromium). Check `npm view playwright version` before refreshing.
 
-3. **Fixture bank** (the `finance` scenario). Once, as the test user, from Safari on the Mac: read
-   `DEVCHECK_EMAIL` / `DEVCHECK_PASSWORD` from `.secrets/devcheck.dev.env`, sign in to dev in a private window,
+3. **Fixture bank** (the `finance` scenario). Once per user that runs it — on slot A the browser lane's
+   (`devcheck.dev.web.env`), on devb its one user — from Safari on the Mac: read
+   `DEVCHECK_EMAIL` / `DEVCHECK_PASSWORD` from that user's env file, sign in to dev in a private window,
    Finances → **Connect a bank** → _First Platypus Bank_ (non-OAuth; an OAuth institution may drop custom
    fields) → username `user_custom`, password = the JSON in `scripts/src/devcheck/fixtures/plaid-fixture.json`
    (a Plaid Sandbox `user_custom` config: a card and a checking account with fixed `DEVCHECK …` rows,
@@ -236,16 +312,23 @@ line is dropped. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
 own `/api` and `/mcp` clients back off a Lambda 429 and retry, so no console sees it and a call that succeeds may
 still have been throttled; `ctx.api.throttles()` and `ctx.mcp.throttles()` count those, for a step that must prove
-none happened (`dev-concurrency-caps`).
+none happened (`dev-concurrency-caps`). With two lanes side by side (`DEVCHECK_LANES=parallel`, _Two users_) the
+Simulator's cold Home loads land on the same reservation as the browser lane's steps; the report says so beside any
+429, and the default serial run is how to tell the two apart.
 
 The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
 
 ## Ledgers
 
-| File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                   |
-| ---------------------------------------------------- | --------------------------------- | -------------------------------------------------------- |
-| `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) |
-| `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`              |
+| File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                                                                 |
+| ---------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `ledger.dev.jsonl`                                   | the harness                       | the test user's partition (browser, API and MCP creates) — on slot A with two users, the iPhone lane's |
+| `ledger.dev.web.jsonl`                               | the harness                       | the browser lane's user's partition (_Two users_)                                                      |
+| `mcp-ledger.dev.jsonl`                               | `.claude/hooks/mcp-dev-ledger.sh` | the MCP agent's partition on `aperture-dev`                                                            |
+
+One ledger per user, never shared: cleanup reads a ledger's ids back with its user's token, so another user's id
+would read as gone. A one-user run on slot A leaves `ledger.dev.web.jsonl` alone and logs any ids pending in it; the
+next two-user run's browser lane sweeps them.
 
 Append-only JSONL, one line per event. The harness writes `{t, run, op, id?, via?, title?, status?, of?}`, `op`
 one of `run-start`, `intent` (an API create about to be sent — one with no `created` or `refused` after it is
@@ -270,26 +353,27 @@ yet pinned against a live call — a mismatch records nothing, so deletes deny.
 
 ## Reason codes
 
-| Code                       | Means                                                                                                                                                                                                                  | Do                                                                                                                                                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `ENV_MISSING`              | env file absent or a key missing                                                                                                                                                                                       | setup step 1                                                                                                                                                                                                                               |
-| `SLOT_UNKNOWN`             | the dev locks couldn't be read at start, so the run can't tell which slot its branch deployed to (_Dev slots_)                                                                                                         | rerun; `pnpm bot lock status` shows both locks                                                                                                                                                                                             |
-| `NO_LOCK`                  | the branch holds no dev lock and another branch holds `dev` live — the run would land in that branch's test (_Dev slots_)                                                                                              | `pnpm bot deploy-dev` takes a slot (or wait for `dev` to free)                                                                                                                                                                             |
-| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                                                                                                | setup step 2                                                                                                                                                                                                                               |
-| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                                                                                                   | did `pnpm bot deploy-dev` run for it?                                                                                                                                                                                                      |
-| `DEPLOY_FAILED`            | the run failed                                                                                                                                                                                                         | read the run; a failed `verify` job names why in its `::error::` line                                                                                                                                                                      |
-| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                                                                                                             | the message names what it serves                                                                                                                                                                                                           |
-| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                                                                                                 | check the env file's host                                                                                                                                                                                                                  |
-| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                                                                                               | screenshot in `shots/`; update `login.ts` deliberately                                                                                                                                                                                     |
-| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a refresh's `invalid_grant` means the cached session is dead: rerun — the launch renew discards a dead cache and signs in through the form                                                   |
-| `WRONG_USER`               | the session isn't the test user                                                                                                                                                                                        | rerun — at launch a wrong cached or renewed identity discards the cache itself; if it repeats, the env file `.secrets/devcheck.<slot>.env` doesn't name the pool's test user (its `DEVCHECK_SUB` or credentials) — operator                |
-| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                                                                                                             | rerun; persistent → service-worker bug                                                                                                                                                                                                     |
-| `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                                                                                               | the message names the scenario and row; fix the scenario, never the rule                                                                                                                                                                   |
-| `MCP_AUTH_FAILED`          | the claude-client sign-in or code swap failed, before any step: Cognito's error, a state mismatch, no callback (or two), a callback that wasn't blocked — a token expiring mid-run fails its step instead              | the message names Cognito's `error`: `invalid_client` means the client needs a secret now (fall back to a test-user agent token); `redirect_mismatch` means `CLAUDE_CALLBACK` drifted from `cdk/src/config/claudeConnector.ts`; else rerun |
-| `STEP_FAILED`              | a scenario step threw                                                                                                                                                                                                  | its row has the error and a screenshot                                                                                                                                                                                                     |
-| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                                                                                                        | a harness bug — never bypass                                                                                                                                                                                                               |
-| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, a delete was blocked by unrecorded parts, or a removal / read-back threw (the report's "Removal or read-back threw" line) | rerun (the sweep retries); else by hand                                                                                                                                                                                                    |
-| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                                                                                                          | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun                                                                                                                                                                               |
+| Code                       | Means                                                                                                                                                                                                                  | Do                                                                                                                                                                                                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ENV_MISSING`              | env file absent or a key missing — `devcheck.<slot>.env`, or on slot A the browser user's `devcheck.dev.web.env`                                                                                                       | setup step 1 (the browser user's: step 1b, or `DEVCHECK_LANES=one-user` meanwhile)                                                                                                                                                                                       |
+| `SLOT_UNKNOWN`             | the dev locks couldn't be read at start, so the run can't tell which slot its branch deployed to (_Dev slots_)                                                                                                         | rerun; `pnpm bot lock status` shows both locks                                                                                                                                                                                                                           |
+| `NO_LOCK`                  | the branch holds no dev lock and another branch holds `dev` live — the run would land in that branch's test (_Dev slots_)                                                                                              | `pnpm bot deploy-dev` takes a slot (or wait for `dev` to free)                                                                                                                                                                                                           |
+| `PW_MISSING`               | no Playwright in `~/pw`                                                                                                                                                                                                | setup step 2                                                                                                                                                                                                                                                             |
+| `DEPLOY_NOT_FOUND`         | no dispatched deploy run for the SHA                                                                                                                                                                                   | did `pnpm bot deploy-dev` run for it?                                                                                                                                                                                                                                    |
+| `DEPLOY_FAILED`            | the run failed                                                                                                                                                                                                         | read the run; a failed `verify` job names why in its `::error::` line                                                                                                                                                                                                    |
+| `DEPLOY_TIMEOUT`           | run never finished, or the edge kept serving another build                                                                                                                                                             | the message names what it serves                                                                                                                                                                                                                                         |
+| `AUTH_REDIRECT_UNEXPECTED` | Sign in didn't reach the dev Hosted UI                                                                                                                                                                                 | check the env file's host                                                                                                                                                                                                                                                |
+| `AUTH_PAGE_CHANGED`        | the Hosted UI form isn't the classic one                                                                                                                                                                               | screenshot in `shots/`; update `login.ts` deliberately                                                                                                                                                                                                                   |
+| `AUTH_REJECTED`            | Cognito refused the credentials, or the session refresh mid-run                                                                                                                                                        | password expired or user disabled — operator; a refresh's `invalid_grant` means the cached session is dead: rerun — the launch renew discards a dead cache and signs in through the form                                                                                 |
+| `WRONG_USER`               | the session isn't the test user                                                                                                                                                                                        | rerun — at launch a wrong cached or renewed identity discards the cache itself; if it repeats, the env file `.secrets/devcheck.<slot>.env` (the browser lane's: `devcheck.dev.web.env`) doesn't name the pool's test user (its `DEVCHECK_SUB` or credentials) — operator |
+| `LANES_REFUSED`            | `DEVCHECK_LANES` isn't `one-user`, `serial` or `parallel`, or asks for two users where the run can't have them (devb, or no `devcheck.dev.web.env`) — refused before the lock                                          | unset it, or set up the browser user (step 1b)                                                                                                                                                                                                                           |
+| `BUILD_MISMATCH_IN_PAGE`   | the page kept an old build after 3 reloads                                                                                                                                                                             | rerun; persistent → service-worker bug                                                                                                                                                                                                                                   |
+| `MATRIX_GAP`               | a row no step proves through its own entry, or an off-dev row's test file or title isn't there (at load)                                                                                                               | the message names the scenario and row; fix the scenario, never the rule                                                                                                                                                                                                 |
+| `MCP_AUTH_FAILED`          | the claude-client sign-in or code swap failed, before any step: Cognito's error, a state mismatch, no callback (or two), a callback that wasn't blocked — a token expiring mid-run fails its step instead              | the message names Cognito's `error`: `invalid_client` means the client needs a secret now (fall back to a test-user agent token); `redirect_mismatch` means `CLAUDE_CALLBACK` drifted from `cdk/src/config/claudeConnector.ts`; else rerun                               |
+| `STEP_FAILED`              | a scenario step threw                                                                                                                                                                                                  | its row has the error and a screenshot                                                                                                                                                                                                                                   |
+| `LEDGER_GUARD`             | a delete named an unrecorded id                                                                                                                                                                                        | a harness bug — never bypass                                                                                                                                                                                                                                             |
+| `LEFTOVERS`                | a ledger id survived cleanup, a create's id was never recorded, an unrecorded task appeared, a delete was blocked by unrecorded parts, or a removal / read-back threw (the report's "Removal or read-back threw" line) | rerun (the sweep retries); else by hand                                                                                                                                                                                                                                  |
+| `DEV_CHANGED_MID_RUN`      | dev's build changed during the run — main won                                                                                                                                                                          | read the merged PRs, rebase, gate, push, `deploy-dev`, rerun                                                                                                                                                                                                             |
 
 ## Writing a scenario
 
@@ -298,7 +382,8 @@ finds it on disk, and a file that exports no Scenario, two, or one whose `id` is
 It sets `order` to place itself in the run: the scenarios that predate discovery sit at 10, 20, … 440 in their old
 order (`LEGACY_ORDER`, whose comments say why each sits where it does), a tie breaks by `id`, and
 `pnpm --dir scripts exec tsx src/devcheck/list.ts` prints the result (`--json`: the fingerprint a refactor diffs
-before and after). Detail that's about this scenario alone — what it leaves behind, a kind it ledgers, why it
+before and after). A scenario that sends Simulator jobs sets `user: 'iphone'` and sends nothing else to the
+browser: on slot A it runs in the iPhone lane as the Simulator's user, with its own data (_Two users_). Detail that's about this scenario alone — what it leaves behind, a kind it ledgers, why it
 sits where it does — goes in its header comment, not here. A new API or MCP method goes in its area's file
 (`api/<area>.ts`, `mcp/<area>.ts`, next to the composers `api.ts` and `mcp.ts`), so lanes don't all edit one
 client. Its `rows` are the plan's dev-test matrix (_Rows_, below); a Chrome runbook maps onto its steps one for

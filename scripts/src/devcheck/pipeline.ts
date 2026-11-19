@@ -10,7 +10,7 @@ import {
   ledgerKind,
   type ApiClient,
 } from './api';
-import { targetOrigin } from './config';
+import { TEST_USER_EMAIL, targetOrigin } from './config';
 import type { DeployRun } from './deploy';
 import { parseMarker } from './deploy';
 import {
@@ -44,6 +44,7 @@ import {
   type InterceptOpts,
   type Interception,
   type Scenario,
+  type Step,
 } from './scenario';
 import { nearExpiry, type Session } from './token';
 
@@ -93,6 +94,11 @@ export interface PipelineDeps {
   skip?: (scenario: string, step: { id: string; entry: string }) => string | null;
   checkSessions?: boolean; // the local check: the end of the run asserts no timer was left running
   sleep?: (ms: number) => Promise<void>; // a cleanup retry's backoff (tests pass a no-op)
+  testUser?: string; // the email this run signs in as (ctx.testUser; default the original test user)
+  // A same-origin path the page parks on once the build check passed, so no app runs in it while the steps do: the
+  // iPhone lane's page (lanes.ts), whose steps are the Simulator's and the API's. `/api/` paths skip the service
+  // worker's app fallback, and the origin's storage — the session the token reads come from — stays readable.
+  park?: string;
 }
 
 // A dropped connection, not an answer: undici's `terminated` (the socket closed mid-response) or a socket-level
@@ -116,6 +122,17 @@ export function transient(err: unknown): boolean {
 const CLEAN_BACKOFF_MS = [500, 2000];
 
 export const DEFER_NOTE = 'slow tier: the branch touches none of its paths — run --tier all';
+// Why a step won't run this time — a skip's reason, or a slow step whose scenario the branch doesn't reach — else
+// null. One rule for the steps' loop and the lane split (lanes.ts planLanes), so a lane never starts for nothing.
+export function deferral(
+  d: Pick<PipelineDeps, 'skip' | 'slow'>,
+  scenario: string,
+  step: Pick<Step, 'id' | 'entry' | 'cost'>,
+): string | null {
+  const skipped = d.skip?.(scenario, step) ?? null;
+  if (skipped !== null) return skipped;
+  return step.cost === 'slow' && d.slow && !d.slow.includes(scenario) ? DEFER_NOTE : null;
+}
 const NO_IOS: IosClient = {
   run: () => needsYou(`${IOS_NOTE}: no mailroom in this run`),
 };
@@ -380,11 +397,13 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         'BUILD_MISMATCH_IN_PAGE',
         `page shows build ${inPage ?? 'none'} after ${IN_PAGE_RELOADS} reloads`,
       );
+    if (d.park) await page.goto(`${targetOrigin()}${d.park}`, { waitUntil: 'domcontentloaded' });
 
     const ctx: Ctx = {
       page,
       api,
       mcp,
+      testUser: d.testUser ?? TEST_USER_EMAIL,
       ui,
       nonce: d.runId.replace(/[^a-z0-9]/gi, '').slice(-10),
       dates: datesFor(new Date(d.now())),
@@ -417,15 +436,10 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           res.note = needs;
           continue;
         }
-        const skipped = d.skip?.(sc.id, step) ?? null;
-        if (skipped !== null) {
-          res.status = 'deferred';
-          res.note = skipped;
-          continue;
-        }
-        if (step.cost === 'slow' && d.slow && !d.slow.includes(sc.id)) {
+        const deferred = deferral(d, sc.id, step);
+        if (deferred !== null) {
           res.status = 'deferred'; // the scenario goes on: a slow step is never a cheap one's prerequisite
-          res.note = DEFER_NOTE;
+          res.note = deferred;
           continue;
         }
         const s0 = d.now();
@@ -470,8 +484,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           res.status = 'fail';
           res.error = budget && 'fail' in budget ? `${error} (${budget.fail})` : error;
           fail('STEP_FAILED');
-          // A secret may have been on screen (scenario.ts hidingSecret): the error text stands alone.
-          if (!shotWithheld(err))
+          // A secret may have been on screen (scenario.ts hidingSecret): the error text stands alone. A parked page
+          // (the iPhone lane's) shows only /api/health's JSON, no evidence: the step's own shots are (the sim job's).
+          if (!d.park && !shotWithheld(err))
             try {
               await shot('fail');
               res.shot = r.shots.at(-2); // the light one

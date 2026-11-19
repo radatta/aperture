@@ -12,6 +12,7 @@ export const REASON_CODES = [
   'AUTH_PAGE_CHANGED', // the Hosted UI form isn't the classic one the harness knows
   'AUTH_REJECTED', // Cognito refused the test user's credentials, or refused to renew the session mid-run
   'MCP_AUTH_FAILED', // the claude-client PKCE sign-in failed before any step: a Cognito error, state mismatch, the token endpoint refused, the callback never came, came twice or wasn't blocked (a token expiring mid-run fails its step instead)
+  'LANES_REFUSED', // DEVCHECK_LANES is no mode, or asks for two users where the run can't have them (devb, no browser-user env file)
   'WRONG_USER', // the signed-in identity isn't the test user — aborts before any write
   'BUILD_MISMATCH_IN_PAGE', // the page kept serving another build after reloads (PWA service worker)
   'MATRIX_GAP', // a coverage row no step proves through its own entry point, or an off-dev test that doesn't exist — found at load

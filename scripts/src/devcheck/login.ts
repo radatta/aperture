@@ -28,7 +28,7 @@ const FORM = {
 // The page's session, which must still be the test user's (WRONG_USER otherwise) — cleanup re-reads it.
 export async function readCheckedSession(page: PwPage, env: DevcheckEnv): Promise<Session | null> {
   const session = await readSession(page, env);
-  if (session) assertTestUser(session, env.DEVCHECK_SUB);
+  if (session) assertTestUser(session, env.DEVCHECK_SUB, env.DEVCHECK_EMAIL);
   return session;
 }
 
@@ -75,7 +75,7 @@ export async function refreshSession(
     (m) => new DevcheckError('AUTH_REJECTED', `session refresh: ${m}`),
   );
   const session = { accessToken, expiresAt, email, sub };
-  assertTestUser(session, env.DEVCHECK_SUB);
+  assertTestUser(session, env.DEVCHECK_SUB, env.DEVCHECK_EMAIL);
   return session;
 }
 
@@ -103,7 +103,7 @@ function readCheckedState(
     // and the app would load it.
     for (const key of Object.keys(storage).filter((k) => k.startsWith('oidc.user:'))) {
       const session = sessionFromStorage(storage, key);
-      if (session) assertTestUser(session, env.DEVCHECK_SUB);
+      if (session) assertTestUser(session, env.DEVCHECK_SUB, env.DEVCHECK_EMAIL);
     }
     return state;
   } catch (err) {
@@ -188,7 +188,7 @@ export async function cachedState(
     clearTimeout(timer);
   }
   try {
-    assertTestUser(granted.session, env.DEVCHECK_SUB);
+    assertTestUser(granted.session, env.DEVCHECK_SUB, env.DEVCHECK_EMAIL);
   } catch (err) {
     unlinkSync(path); // its refresh token signs in someone else: never renew from it again
     throw err;
@@ -306,7 +306,7 @@ export async function ensureSignedIn(
   const session = await readSession(page, env);
   if (!session)
     throw new DevcheckError('WRONG_USER', 'signed-in shell but no oidc session in localStorage');
-  assertTestUser(session, env.DEVCHECK_SUB);
+  assertTestUser(session, env.DEVCHECK_SUB, env.DEVCHECK_EMAIL);
   await saveState(context, opts.statePath);
   return session;
 }

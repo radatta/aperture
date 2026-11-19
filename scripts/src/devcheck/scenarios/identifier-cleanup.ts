@@ -3,7 +3,7 @@
 // app and through /mcp, and the about and privacy pages, now built from templates, come out filled. The rules
 // themselves — tracked files, commits, PR text — are tests: dev deploys the build, not the repo.
 import { IDS, findIdentifiers } from '../../identifiers.ts';
-import { TEST_USER_EMAIL, assertDevOrigin, targetOrigin } from '../config';
+import { TEST_USER_EMAIL, assertDevOrigin, isTestUserEmail, targetOrigin } from '../config';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const GUARD = 'scripts/src/tracked-identifiers.test.ts';
@@ -256,7 +256,13 @@ export const identifierCleanup: Scenario = {
       async run(ctx) {
         await ctx.ui.goto('/');
         const email = await sessionEmail(ctx.page);
-        if (email !== IDS.email.devTestUser || TEST_USER_EMAIL !== IDS.email.devTestUser)
+        // The lane's user (the browser lane signs in as its own on slot A: DEV-CHECK.md → Two users), and one of
+        // identifiers.json's test users.
+        if (
+          email !== ctx.testUser ||
+          !isTestUserEmail(email) ||
+          TEST_USER_EMAIL !== IDS.email.devTestUser
+        )
           throw new Error(`the session is ${email ?? '?'}, not identifiers.json's test user`);
         if (!email.endsWith(`@${IDS.domains.dev}`))
           throw new Error(`${email} is not on the dev subdomain`);

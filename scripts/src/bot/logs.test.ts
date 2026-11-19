@@ -133,7 +133,12 @@ describe('identifier guard (the dispatch inputs are public)', () => {
   const fake: Identifiers = {
     maintainer: { name: 'Alex Example', github: 'alex-example' },
     repo: 'example/aperture',
-    email: { contact: 'a@example.com', alerts: 'b@example.com', devTestUser: 'c@example.com' },
+    email: {
+      contact: 'a@example.com',
+      alerts: 'b@example.com',
+      devTestUser: 'c@example.com',
+      devTestUserWeb: 'd@example.com',
+    },
     domains: {
       apex: 'example.com',
       prod: 'a.example.com',

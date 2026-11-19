@@ -93,6 +93,11 @@ export function earlierOrphans(entries: LedgerEntry[], runId: string): LedgerEnt
   return out;
 }
 
+// What an earlier run of this ledger's user left for the next: ids still pending (the sweep's) and a killed run's
+// orphan intents (listed once). A lane with none needn't sign in just to sweep (devcheck/lanes.ts planLanes).
+export const leftovers = (entries: LedgerEntry[], runId: string): number =>
+  pendingIds(entries).length + earlierOrphans(entries, runId).length;
+
 export function openLedger(path: string, now: () => Date = () => new Date()): Ledger {
   mkdirSync(dirname(path), { recursive: true });
   const read = (): LedgerEntry[] => {

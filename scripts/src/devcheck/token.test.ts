@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { FetchLike } from './api';
-import { TEST_USER_EMAIL } from './config';
+import { TEST_USER_EMAIL, TEST_USERS } from './config';
 import {
   assertTestUser,
   cognitoAuthority,
@@ -57,6 +57,20 @@ describe('token', () => {
     expect(() =>
       assertTestUser(sessionFromStorage(stored('s1', TEST_USER_EMAIL, 'other'), KEY)!, 's1'),
     ).toThrow(/WRONG_USER/);
+  });
+
+  it('a lane’s user is the one it expects: the browser user passes as itself, never as the original', () => {
+    const web = sessionFromStorage(stored('s1', TEST_USERS.web), KEY)!;
+    expect(() => assertTestUser(web, 's1', TEST_USERS.web)).not.toThrow();
+    expect(() => assertTestUser(web, 's1')).toThrow(/WRONG_USER/);
+    expect(() =>
+      assertTestUser(sessionFromStorage(stored('s1', TEST_USER_EMAIL), KEY)!, 's1', TEST_USERS.web),
+    ).toThrow(/WRONG_USER/);
+  });
+
+  it('an expected email that is no test user is refused before the session is read', () => {
+    const me = sessionFromStorage(stored('s1', 'me@example.com'), KEY)!;
+    expect(() => assertTestUser(me, 's1', 'me@example.com')).toThrow(/WRONG_USER.*not a test user/);
   });
 });
 

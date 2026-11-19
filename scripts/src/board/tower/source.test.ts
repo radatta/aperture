@@ -31,6 +31,7 @@ function setup() {
       limits: join(dir, 'none.json'),
       ledger: join(dir, 'ledger.jsonl'),
       ledgerB: join(dir, 'ledger.devb.jsonl'),
+      ledgerWeb: join(dir, 'ledger.dev.web.jsonl'),
       bench: join(dir, 'bench'),
       cores: 9,
     },
@@ -171,6 +172,28 @@ describe('Source', () => {
     expect(s.runs.map((r) => [r.run, r.slot])).toEqual([
       ['2026-11-08T01-00-00-full', 'dev'],
       ['2026-11-08T02-00-00-full', 'devb'],
+    ]);
+  });
+
+  it("folds slot A's browser-user ledger into the same run: a browser-only run shows, a failed lane fails it", () => {
+    const { src } = setup();
+    const rec = (run: string, op: string, t: string, status?: string) =>
+      JSON.stringify({ t, run, op, status }) + '\n';
+    writeFileSync(
+      join(dir, 'ledger.jsonl'),
+      rec('2026-11-08T01-00-00-full', 'run-start', '2026-11-08T01:00:00Z') +
+        rec('2026-11-08T01-00-00-full', 'run-end', '2026-11-08T01:07:00Z', 'PASS'),
+    );
+    writeFileSync(
+      join(dir, 'ledger.dev.web.jsonl'),
+      rec('2026-11-08T01-00-00-full', 'run-start', '2026-11-08T01:00:00Z') +
+        rec('2026-11-08T01-00-00-full', 'run-end', '2026-11-08T01:09:00Z', 'FAIL') +
+        rec('2026-11-08T03-00-00-full', 'run-start', '2026-11-08T03:00:00Z'),
+    );
+    const s = src.refresh(Date.parse('2026-11-08T03:01:00Z'));
+    expect(s.runs.map((r) => [r.run, r.slot, r.status, r.end])).toEqual([
+      ['2026-11-08T01-00-00-full', 'dev', 'FAIL', Date.parse('2026-11-08T01:09:00Z')],
+      ['2026-11-08T03-00-00-full', 'dev', null, null],
     ]);
   });
 });

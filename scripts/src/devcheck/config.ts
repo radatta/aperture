@@ -41,6 +41,23 @@ export const slotOrigin = (): string => SLOT_TARGETS[slot].origin;
 
 // On the dev subdomain: no mailbox, and no one but the maintainer can receive a reset code for it.
 export const TEST_USER_EMAIL = IDS.email.devTestUser;
+// Who a lane signs in as (DEV-CHECK.md → Two users): `main` is the original test user — the Simulator's (its email and
+// Keychain item are pinned in sim.sh), devb's, and every scenario's in a one-user run; `web` is slot A's browser lane,
+// so the iPhone lane's tasks never show in the browser's lists and counts. Both constants: no file or flag names a user.
+export type TestUser = 'main' | 'web';
+export const TEST_USERS: Record<TestUser, string> = {
+  main: TEST_USER_EMAIL,
+  web: IDS.email.devTestUserWeb,
+};
+// A test user is one of the constants, and only on the dev subdomain: an identifiers.json missing a key or holding
+// another address can't widen the guard (token.ts assertTestUser).
+export const isTestUserEmail = (
+  email: string,
+  users: Record<string, string> = TEST_USERS,
+): boolean =>
+  typeof email === 'string' &&
+  email.endsWith(`@${IDS.domains.dev}`) &&
+  Object.values(users).includes(email);
 // packages/shared/src/rpc.ts AUTH_HEADER — the BFF reads the JWT here (CloudFront owns Authorization).
 export const AUTH_HEADER = 'x-aperture-authorization';
 // packages/shared/src/rpc.ts AGENT_TOKEN_HEADER — the MCP server's static agent token (a raw value, no Bearer).
@@ -134,8 +151,9 @@ export const ENV_KEYS = [
 ] as const;
 export type DevcheckEnv = Record<(typeof ENV_KEYS)[number], string>;
 
-// KEY=VALUE lines; blank lines and # comments skipped; the value is everything after the first '='.
-export function parseEnv(text: string): DevcheckEnv {
+// KEY=VALUE lines; blank lines and # comments skipped; the value is everything after the first '='. The file is one
+// user's (envPath), and must name that user.
+export function parseEnv(text: string, user: TestUser = 'main'): DevcheckEnv {
   const vars: Record<string, string> = {};
   for (const raw of text.split('\n')) {
     const line = raw.trim();
@@ -144,11 +162,15 @@ export function parseEnv(text: string): DevcheckEnv {
     if (eq > 0) vars[line.slice(0, eq)] = line.slice(eq + 1);
   }
   const missing = ENV_KEYS.filter((k) => !vars[k]);
-  if (missing.length) throw new DevcheckError('ENV_MISSING', `missing ${missing.join(', ')}`);
-  if (vars.DEVCHECK_EMAIL !== TEST_USER_EMAIL)
+  if (missing.length)
+    throw new DevcheckError(
+      'ENV_MISSING',
+      `missing ${missing.join(', ')}${user === 'web' ? ` in the browser user's devcheck.dev.web.env — DEV-CHECK.md → One-time setup, step 1b (meanwhile DEVCHECK_LANES=one-user)` : ''}`,
+    );
+  if (vars.DEVCHECK_EMAIL !== TEST_USERS[user])
     throw new DevcheckError(
       'WRONG_USER',
-      `env file names ${vars.DEVCHECK_EMAIL}, not the test user`,
+      `env file names ${vars.DEVCHECK_EMAIL}, not the ${user === 'web' ? 'browser lane’s ' : ''}test user`,
     );
   return Object.fromEntries(ENV_KEYS.map((k) => [k, vars[k]!])) as DevcheckEnv;
 }
@@ -170,28 +192,38 @@ export function worktreeRoot(cwd = process.cwd()): string {
 export const secretsDir = (main: string): string => join(main, '.secrets');
 // Per slot: the test user's env file (written by the user's one-time setup line), the signed-in browser state, the
 // cross-run ledger and the run lock — one run per slot, so two sessions' runs on dev and devb may overlap (each slot's
-// functions have their own reservations: CI-BOT.md → Compute). Slot A keeps the old shared name, `run.lock`.
-export const envPath = (main: string, s: Slot = slot): string =>
-  join(secretsDir(main), `devcheck.${s}.env`);
-export const statePath = (main: string, s: Slot = slot): string =>
-  join(secretsDir(main), `devcheck.${s}.state.json`);
-export const ledgerFile = (s: Slot = slot): string => `ledger.${s}.jsonl`;
+// functions have their own reservations: CI-BOT.md → Compute). Slot A keeps the old shared name, `run.lock`. The
+// browser lane's user (`web`) has its own env file, state and ledger beside them: a ledger is one user's, since
+// cleanup reads its ids back with that user's token.
+const userPart = (user: TestUser) => (user === 'web' ? '.web' : '');
+export const envPath = (main: string, s: Slot = slot, user: TestUser = 'main'): string =>
+  join(secretsDir(main), `devcheck.${s}${userPart(user)}.env`);
+export const statePath = (main: string, s: Slot = slot, user: TestUser = 'main'): string =>
+  join(secretsDir(main), `devcheck.${s}${userPart(user)}.state.json`);
+export const ledgerFile = (s: Slot = slot, user: TestUser = 'main'): string =>
+  `ledger.${s}${userPart(user)}.jsonl`;
 export const runLockFile = (s: Slot = slot): string => (s === 'dev' ? 'run.lock' : `run.${s}.lock`);
 // Shared across worktrees (the cross-run ledger lives here); per-run artifacts go to the worktree instead.
 export const devcheckHome = (main: string): string => join(main, 'localNotes', 'devcheck');
 export const runDir = (worktree: string, runId: string): string =>
   resolve(worktree, 'localNotes', 'devcheck', runId);
 
-export function loadEnv(path: string, warn: (msg: string) => void = console.warn): DevcheckEnv {
+export function loadEnv(
+  path: string,
+  warn: (msg: string) => void = console.warn,
+  user: TestUser = 'main',
+): DevcheckEnv {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
   } catch {
     throw new DevcheckError(
       'ENV_MISSING',
-      `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1`,
+      user === 'web'
+        ? `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1b (meanwhile DEVCHECK_LANES=one-user)`
+        : `${path} not found — docs/ops/DEV-CHECK.md → One-time setup, step 1`,
     );
   }
   if ((statSync(path).mode & 0o077) !== 0) warn(`${path} is readable by others — chmod 600 it`);
-  return parseEnv(text);
+  return parseEnv(text, user);
 }

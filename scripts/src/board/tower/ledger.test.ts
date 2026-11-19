@@ -35,6 +35,50 @@ describe('foldRuns', () => {
     ]);
   });
 
+  it("folds slot A's two lanes into one run: open while either is, the last end, the worst status", () => {
+    const m = new Map<string, Run>();
+    const one = () => [...m.values()][0]!;
+    // parallel: the iPhone lane (ledger.dev.jsonl) ends first and passes; the browser lane (ledger.dev.web) fails
+    foldRuns(m, [rec('run-start', 'p-full', '2026-11-08T05:00:00Z')], 'dev', 'main');
+    foldRuns(m, [rec('run-start', 'p-full', '2026-11-08T05:00:01Z')], 'dev', 'web');
+    foldRuns(m, [rec('run-end', 'p-full', '2026-11-08T05:07:00Z', 'PASS')], 'dev', 'main');
+    expect(one()).toMatchObject({ start: Date.parse('2026-11-08T05:00:00Z'), end: null });
+    foldRuns(m, [rec('run-end', 'p-full', '2026-11-08T05:09:00Z', 'FAIL')], 'dev', 'web');
+    expect(one()).toMatchObject({ end: Date.parse('2026-11-08T05:09:00Z'), status: 'FAIL' });
+    expect(m.size).toBe(1);
+    // serial: the iPhone lane ends, the browser lane starts — back in flight until it ends
+    const s = new Map<string, Run>();
+    foldRuns(
+      s,
+      [
+        rec('run-start', 's-full', '2026-11-08T06:00:00Z'),
+        rec('run-end', 's-full', '2026-11-08T06:04:00Z', 'FAIL'),
+      ],
+      'dev',
+      'main',
+    );
+    foldRuns(s, [rec('run-start', 's-full', '2026-11-08T06:04:01Z')], 'dev', 'web');
+    expect([...s.values()][0]).toMatchObject({ end: null, status: 'FAIL' });
+    foldRuns(s, [rec('run-end', 's-full', '2026-11-08T06:12:00Z', 'PASS')], 'dev', 'web');
+    expect([...s.values()][0]).toMatchObject({
+      start: Date.parse('2026-11-08T06:00:00Z'),
+      end: Date.parse('2026-11-08T06:12:00Z'),
+      status: 'FAIL', // a later PASS never hides a lane's failure
+    });
+  });
+
+  it('a ledger read again from the top never opens a live run twice', () => {
+    const m = new Map<string, Run>();
+    const start = rec('run-start', 'r-full', '2026-11-08T07:00:00Z');
+    foldRuns(m, [start], 'dev', 'web');
+    foldRuns(m, [start], 'dev', 'web'); // the file was replaced: readNew starts over
+    foldRuns(m, [rec('run-end', 'r-full', '2026-11-08T07:09:00Z', 'PASS')], 'dev', 'web');
+    expect([...m.values()][0]).toMatchObject({
+      end: Date.parse('2026-11-08T07:09:00Z'),
+      status: 'PASS',
+    });
+  });
+
   it("keeps each slot's runs apart, even under one id", () => {
     const m = new Map<string, Run>();
     foldRuns(m, [rec('run-end', 'x-full', '2026-11-08T05:10:00Z', 'PASS')]);

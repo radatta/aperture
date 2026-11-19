@@ -4,7 +4,7 @@
 // token alike. No signature check — the server verifies; this only stops a write going to the wrong partition.
 // A session near expiry is renewed at the dev pool's token endpoint (tokenGrant).
 import type { FetchLike } from './api';
-import { assertDevCognitoUrl, TEST_USER_EMAIL } from './config';
+import { assertDevCognitoUrl, isTestUserEmail, TEST_USER_EMAIL } from './config';
 import { DevcheckError } from './errors';
 
 export interface Session {
@@ -54,7 +54,15 @@ export function sessionFromStorage(storage: Record<string, string>, key: string)
   };
 }
 
-export function assertTestUser(session: Session, expectedSub: string): void {
+// `expectedEmail`: the lane's user (config.ts TEST_USERS), from its env file — which parseEnv already held to that user's
+// constant; checked against the constants again here, so no hand-built env can aim a write elsewhere.
+export function assertTestUser(
+  session: Session,
+  expectedSub: string,
+  expectedEmail: string = TEST_USER_EMAIL,
+): void {
+  if (!isTestUserEmail(expectedEmail))
+    throw new DevcheckError('WRONG_USER', `${expectedEmail} is not a test user — no writes made`);
   let accessSub: unknown;
   try {
     accessSub = decodeJwtPayload(session.accessToken).sub;
@@ -62,7 +70,7 @@ export function assertTestUser(session: Session, expectedSub: string): void {
     // never the parser's message: it quotes the decoded claims
     throw new DevcheckError('WRONG_USER', 'unreadable access token — no writes made');
   }
-  if (session.email !== TEST_USER_EMAIL || session.sub !== expectedSub || accessSub !== expectedSub)
+  if (session.email !== expectedEmail || session.sub !== expectedSub || accessSub !== expectedSub)
     throw new DevcheckError(
       'WRONG_USER',
       `signed in as ${session.email || '?'} (sub ${session.sub || '?'}), not the test user — no writes made`,

@@ -2,15 +2,18 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { IDS } from '../identifiers.ts';
 import {
   CLAUDE_CALLBACK,
   DEV_ORIGIN,
   TEST_USER_EMAIL,
+  TEST_USERS,
   ENV_KEYS,
   assertDevCognitoUrl,
   assertDevOrigin,
   assertPresignedDevUrl,
   isClaudeHost,
+  isTestUserEmail,
   loadEnv,
   parseEnv,
 } from './config';
@@ -77,11 +80,58 @@ describe('parseEnv', () => {
       /WRONG_USER/,
     );
   });
+  it('holds each user’s file to that user: neither test user’s file reads as the other’s', () => {
+    const web = GOOD.replace(TEST_USER_EMAIL, TEST_USERS.web);
+    expect(parseEnv(web, 'web').DEVCHECK_EMAIL).toBe(TEST_USERS.web);
+    expect(() => parseEnv(web)).toThrow(/WRONG_USER/);
+    expect(() => parseEnv(GOOD, 'web')).toThrow(/WRONG_USER.*browser lane/);
+    expect(TEST_USERS.web).not.toBe(TEST_USERS.main);
+  });
+});
+
+describe('the test users', () => {
+  it('two distinct, non-empty addresses, both on the dev subdomain', () => {
+    const all = Object.values(TEST_USERS);
+    expect(new Set(all).size).toBe(2);
+    for (const e of all)
+      expect(e).toMatch(new RegExp(`^[^@\\s]+@${IDS.domains.dev.replace(/\./g, '\\.')}$`));
+  });
+  it('the guard holds even if identifiers.json went wrong: an empty or off-domain entry admits nothing', () => {
+    expect(isTestUserEmail('', { main: TEST_USERS.main, web: '' })).toBe(false);
+    expect(isTestUserEmail('x@example.com', { main: TEST_USERS.main, web: 'x@example.com' })).toBe(
+      false,
+    );
+    expect(isTestUserEmail(TEST_USERS.main, { main: TEST_USERS.main, web: '' })).toBe(true);
+  });
+  it('isTestUserEmail admits only those two: no other address, no empty one', () => {
+    expect(isTestUserEmail(TEST_USERS.main)).toBe(true);
+    expect(isTestUserEmail(TEST_USERS.web)).toBe(true);
+    expect(isTestUserEmail('')).toBe(false);
+    expect(isTestUserEmail(`someone@${IDS.domains.dev}`)).toBe(false);
+    expect(isTestUserEmail(undefined as unknown as string)).toBe(false);
+  });
 });
 
 describe('loadEnv', () => {
   it('fails ENV_MISSING when the file is absent', () => {
     expect(() => loadEnv('/nonexistent/devcheck.dev.env')).toThrow(/ENV_MISSING/);
+  });
+  it('the browser user’s file missing a key names that file, its setup step and the one-user way round', () => {
+    const web = GOOD.replace(TEST_USER_EMAIL, TEST_USERS.web)
+      .split('\n')
+      .filter((l) => !l.startsWith('DEVCHECK_CLAUDE_CLIENT_ID='))
+      .join('\n');
+    expect(() => parseEnv(web, 'web')).toThrow(
+      /ENV_MISSING: missing DEVCHECK_CLAUDE_CLIENT_ID in the browser user's devcheck\.dev\.web\.env — .*step 1b/,
+    );
+    expect(() => parseEnv(GOOD.split('\n').slice(1).join('\n'))).toThrow(
+      /^ENV_MISSING: missing DEVCHECK_EMAIL$/,
+    );
+  });
+  it('the browser user’s missing file points at its own setup step and the one-user way round', () => {
+    expect(() => loadEnv('/nonexistent/devcheck.dev.web.env', vi.fn(), 'web')).toThrow(
+      /ENV_MISSING: .*step 1b \(meanwhile DEVCHECK_LANES=one-user\)/,
+    );
   });
   it('warns when the file is readable by others', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'devcheck-')), 'env');

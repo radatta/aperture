@@ -39,7 +39,7 @@ export type SkipReason = keyof typeof SKIP;
 // Ops that need data only dev has, by scenario and label. An entry that matches no op fails the run (a stale skip).
 export const DEV_DATA: { scenario: string; label: string; why: string }[] = [
   {
-    scenario: 'category-suggest',
+    scenario: 'category-suggest-ios',
     label: 'Use suggested category',
     why: 'the chip needs a Garden task history (the scenario seeds it on dev)',
   },
@@ -360,6 +360,11 @@ export async function checkJob(
             break;
           }
           const c = { x: Math.floor(f.x + f.w / 2), y: Math.floor(f.y + f.h / 2) };
+          // selects (sim_tap_selected): a toggle already on isn't tapped, since a tap could only turn it off.
+          if (op.selects && el.value === '1') {
+            add(i, op, warn ? 'warn' : 'pass', `already selected; not tapped · ${where}${warn}`);
+            break;
+          }
           if (f.w <= 0 || f.h <= 0 || c.x < 0 || c.x > SIM_W || c.y < 0 || c.y > SIM_H) {
             await fail(
               `OFF_SCREEN: target centre ${c.x},${c.y} is off the ${SIM_W}x${SIM_H} screen`,
@@ -378,6 +383,23 @@ export async function checkJob(
             const after = await page.read(c);
             if (matches(after, op.label, op.role)) {
               await fail(`STILL_THERE: ${seenAs(after)} at the tapped spot`);
+              break;
+            }
+          }
+          // selects: its centre must read the same toggle, on, after the tap — the runner's codes (sim_tap_selected):
+          // MISS when something else reads there, TAP_DROPPED when it stays off (a page can't drop a tap: NOT_SELECTED).
+          if (op.selects) {
+            const after = await page.read(c);
+            if (!matches(after, op.label, op.role)) {
+              await fail(
+                `MISS: "${op.label}" isn't at ${c.x},${c.y} after the tap (saw ${seenAs(after)})`,
+              );
+              break;
+            }
+            if (after?.value !== '1') {
+              await fail(
+                `NOT_SELECTED: ${seenAs(after)} "${after?.value ?? ''}" at the tapped spot`,
+              );
               break;
             }
           }

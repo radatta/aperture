@@ -22,7 +22,7 @@ describe('recordIosPlans', () => {
     for (const s of SCENARIOS)
       if ((await recordIosPlans(s, { nonce: 'plans' })).length) withJobs.push(s.id);
     expect(withJobs.sort()).toEqual(iosScenarioIds());
-    expect(withJobs).toEqual(expect.arrayContaining(['ios-standalone', 'category-suggest']));
+    expect(withJobs).toEqual(expect.arrayContaining(['ios-standalone', 'category-suggest-ios']));
   });
 
   it('records plans the runner would accept, named after their steps', async () => {
@@ -31,6 +31,20 @@ describe('recordIosPlans', () => {
         expect(s.steps.find((st) => st.id === j.step)?.entry, `${s.id}/${j.name}`).toBe('ios');
         const params = { sha: 'a'.repeat(40), timeoutSec: 300, shutdown: false, steps: j.steps };
         expect(validateSimParams(params), `${s.id}/${j.name}`).toBeNull();
+      }
+  });
+
+  it('every keys op names the field it types into, found earlier in its plan: the runner checks and retypes only then', async () => {
+    for (const s of SCENARIOS)
+      for (const j of await recordIosPlans(s, { nonce: 'plans' })) {
+        const found = new Set<string>();
+        for (const op of j.steps as { op: string; as?: string; in?: string }[]) {
+          if (op.op === 'keys')
+            expect(op.in && found.has(op.in), `${s.id}/${j.name}: keys without a found field`).toBe(
+              true,
+            );
+          if (op.as) found.add(op.as);
+        }
       }
   });
 

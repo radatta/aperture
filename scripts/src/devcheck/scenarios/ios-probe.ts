@@ -1,4 +1,4 @@
-// The probe job (docs/ops/IOS-CHECK.md → Probe job): every iOS plan ios-standalone and category-suggest send, cut
+// The probe job (docs/ops/IOS-CHECK.md → Probe job): every iOS plan ios-standalone and category-suggest-ios send, cut
 // to their probes (probe-only.ts) and sent to the Mac's Simulator as ordinary sim jobs — no drafts, kills, relaunch
 // or sign-in, ~4–5 min of Mac time against the full scenario's ~6+ (the one typed line is done-form's search filter). It
 // proves the plans' points still land on the deployed build; the full scenario stays the proof of what typing, kills
@@ -11,12 +11,12 @@ import { IOS_PROBE_PATHS } from './ios-paths';
 import { recordIosPlans } from '../ios-plans';
 import { probeJobs, type Plan } from '../probe-only';
 import { needsYou, type Ctx, type Scenario } from '../scenario';
-import { categorySuggest } from './category-suggest';
+import { categorySuggestIos } from './category-suggest-ios';
 import { iosStandalone } from './ios-standalone';
 
 // The scenarios whose plans are cut, in the order a full run sends them (index.test pins: every scenario that
 // sends a sim job).
-export const SOURCES = [iosStandalone, categorySuggest];
+export const SOURCES = [iosStandalone, categorySuggestIos];
 // A cut job is a few dozen point reads; the full jobs' 480 s is for typing and relaunches.
 const TIMEOUT_SEC = 240;
 
@@ -66,6 +66,7 @@ export const iosProbe: Scenario = {
   id: 'ios-probe',
   title: 'iOS probe job: every sim plan’s probe points, on the Simulator, without drafts',
   tiers: ['full'],
+  user: 'iphone',
   slowPaths: IOS_PROBE_PATHS,
   rows: [
     {
@@ -78,7 +79,7 @@ export const iosProbe: Scenario = {
       id: 'probe-points',
       entry: 'ios',
       kind: 'nominal',
-      what: 'Every find, tap and absent of ios-standalone’s and category-suggest’s plans lands on the deployed build (the reads outside drafts)',
+      what: 'Every find, tap and absent of ios-standalone’s and category-suggest-ios’s plans lands on the deployed build (the reads outside drafts)',
     },
     {
       id: 'probe-closes',

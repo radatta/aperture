@@ -8,7 +8,8 @@
   "email": {
     "contact": "rahul3datta@gmail.com",
     "alerts": "rahul3datta@gmail.com",
-    "devTestUser": "devcheck@dev.aperture.rahuldatta.dev"
+    "devTestUser": "devcheck@dev.aperture.rahuldatta.dev",
+    "devTestUserWeb": "devcheck-web@dev.aperture.rahuldatta.dev"
   },
   "domains": {
     "apex": "rahuldatta.dev",

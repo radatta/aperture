@@ -1,6 +1,8 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
 //   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full|all [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
+//   DEVCHECK_LANES=one-user|serial|parallel — slot A's two users (DEV-CHECK.md → Two users); unset: serial when the
+//   browser user's env file exists, else one-user
 // Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per slot: the
 // sweep of earlier runs' leftovers would otherwise race a live run on the same slot. Each slot sweeps its own ledger
 // and table, so another session's run on the other slot may overlap.
@@ -22,6 +24,7 @@ import { hostjobsDir, nodeFs, repoRunnerVersion } from '../mailroom/submit.ts';
 import { createApiClient } from './api';
 import { loadPlaywright } from './browser';
 import {
+  TEST_USERS,
   currentSlot,
   devcheckHome,
   envPath,
@@ -34,20 +37,24 @@ import {
   statePath,
   useSlot,
   worktreeRoot,
+  type DevcheckEnv,
+  type TestUser,
 } from './config';
 import { RUN_FIELDS, waitForDeploy, type DeployRun } from './deploy';
 import { DevcheckError } from './errors';
-import { openLedger } from './ledger';
+import { leftovers, openLedger } from './ledger';
+import { IPHONE_SHOTS, LANES_ENV, laneMode, planLanes, runLanes } from './lanes';
 import { matrixProblems } from './matrix';
 import { createMcpClient } from './mcp';
 import { ensureMcpSignedIn } from './mcp-login';
 import { ensureSignedIn, launchCached, readCheckedSession, refreshSession } from './login';
 import { globMatch } from './glob';
-import { createIos, iosSlotNote } from './ios';
+import { createIos, iosSlotNote, type Ios } from './ios';
 import { IOS_SLOW_PATHS } from './scenarios/ios-paths';
 import { exitCode, runPipeline } from './pipeline';
 import { writeHeavyDetail } from './heavy-detail';
-import { renderReport, statusLine } from './report';
+import { lanesLine, renderReport, statusLine, type RunResult } from './report';
+import type { Scenario } from './scenario';
 import { pickSlot } from './slot';
 import {
   SCENARIOS,
@@ -154,6 +161,10 @@ async function listRuns(): Promise<DeployRun[]> {
   }
 }
 
+// Where the iPhone lane's browser page waits while the Simulator works (pipeline.ts park): the health route is one
+// cheap call, and an /api/ path never boots the app from the service worker, so no second app polls dev meanwhile.
+export const PARK_PATH = '/api/health';
+
 const fetchShell = async (): Promise<string> =>
   (
     await fetch(`${slotOrigin()}/`, {
@@ -215,7 +226,15 @@ async function main(): Promise<number> {
     );
   });
   useSlot(pick.slot);
-  const env = loadEnv(envPath(main));
+  const slot = currentSlot();
+  const lanes = laneMode({
+    slot,
+    webEnv: existsSync(envPath(main, slot, 'web')),
+    env: process.env[LANES_ENV],
+  });
+  const envs: Partial<Record<TestUser, DevcheckEnv>> = { main: loadEnv(envPath(main)) };
+  if (lanes.mode !== 'one-user')
+    envs.web = loadEnv(envPath(main, slot, 'web'), console.warn, 'web');
   const pw = loadPlaywright();
 
   const home = devcheckHome(main);
@@ -231,18 +250,22 @@ async function main(): Promise<number> {
       release();
       process.exit(code);
     });
-  const ledger = openLedger(join(home, ledgerFile()));
+  // One ledger per user (config.ts ledgerFile): cleanup reads its ids back with that user's token.
+  const ledgers = {
+    main: openLedger(join(home, ledgerFile())),
+    web: openLedger(join(home, ledgerFile(slot, 'web'))),
+  };
   const runId = `${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}-${args.tier}`;
   const out = runDir(worktree, runId);
   const shotsDir = join(out, 'shots');
   mkdirSync(shotsDir, { recursive: true });
   const log = (msg: string) => console.log(`[devcheck] ${msg}`);
   const slotNote = iosSlotNote(
-    currentSlot(),
+    slot,
     (changed ?? []).filter((f) => IOS_SLOW_PATHS.some((g) => globMatch(g, f))),
   );
-  if (slotNote) log(`on ${currentSlot()}, the iPhone rows read needs-you — ${slotNote}`);
-  log(`target: ${currentSlot()} → ${slotOrigin()} (${pick.why})`);
+  if (slotNote) log(`on ${slot}, the iPhone rows read needs-you — ${slotNote}`);
+  log(`target: ${slot} → ${slotOrigin()} (${pick.why})`);
   log(
     `run ${runId}: ${scenarios.map((s) => s.id).join(', ')}${feature.length ? ` (feature: ${feature.join(', ')})` : ''} against ${sha.slice(0, 7)} → ${out}`,
   );
@@ -253,62 +276,81 @@ async function main(): Promise<number> {
     now: Date.now,
     sleep: (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
   };
+  const skip = probeSkip(slow);
+  // One deploy wait, shared by the lanes — whichever asks first waits (in serial, the iPhone lane), and neither sends a
+  // step before it confirmed the build.
+  let deployed: Promise<DeployRun> | undefined;
+  const waitOnce = args.deployWait
+    ? () =>
+        (deployed ??= waitForDeploy(sha, {
+          listRuns,
+          fetchShell,
+          sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+          now: Date.now,
+          log,
+        }))
+    : undefined;
+  const iosFor = (dir: string, laneLog: (msg: string) => void) =>
+    createIos({
+      fs: nodeFs,
+      clock,
+      dir: hostjobsDir(sh),
+      expectedSha: sha,
+      outDir: dir,
+      copy: copyFileSync,
+      log: laneLog,
+      repoVersion: () => repoRunnerVersion(sh('git', ['rev-parse', '--show-toplevel'])),
+      slot,
+      slotNote,
+    });
 
-  try {
-    const result = await runPipeline({
+  // One lane's pipeline: its user's env, browser state and ledger; everything else the run's.
+  const lane = (o: {
+    user: TestUser;
+    scenarios: Scenario[];
+    dir: string;
+    ios?: Ios;
+    park?: string;
+    log: (msg: string) => void;
+  }) => {
+    const env = envs[o.user]!;
+    const ledger = ledgers[o.user];
+    const state = statePath(main, slot, o.user);
+    return runPipeline({
       runId,
       tier: args.tier,
       feature,
       expectedSha: sha,
       scenarioSha,
-      target: `${currentSlot()} (${slotOrigin()})`,
-      scenarios,
+      target: `${slot} (${slotOrigin()})`,
+      scenarios: o.scenarios,
       ledger,
-      shotsDir,
+      shotsDir: o.dir,
       slow,
-      skip: probeSkip(slow),
-      ios: createIos({
-        fs: nodeFs,
-        clock,
-        dir: hostjobsDir(sh),
-        expectedSha: sha,
-        outDir: shotsDir,
-        copy: copyFileSync,
-        log,
-        repoVersion: () => repoRunnerVersion(sh('git', ['rev-parse', '--show-toplevel'])),
-        slot: currentSlot(),
-        slotNote,
-      }),
-      waitForDeploy: args.deployWait
-        ? () =>
-            waitForDeploy(sha, {
-              listRuns,
-              fetchShell,
-              sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-              now: Date.now,
-              log,
-            })
-        : undefined,
+      skip,
+      ios: o.ios,
+      park: o.park,
+      testUser: TEST_USERS[o.user],
+      waitForDeploy: waitOnce,
       fetchShell,
       async openBrowser() {
-        const { browser, context } = await launchCached(pw, statePath(main), env, {
+        const { browser, context } = await launchCached(pw, state, env, {
           fetch,
           now: Date.now,
-          log,
+          log: o.log,
         });
         const page = await context.newPage();
         return {
           page,
-          signIn: (shot) =>
-            ensureSignedIn(page, context, env, { statePath: statePath(main), shot }),
+          signIn: (shot) => ensureSignedIn(page, context, env, { statePath: state, shot }),
           readSession: () => readCheckedSession(page, env),
           refreshSession: () => refreshSession(page, env, fetch, Date.now),
           signInMcp: (shotOf) =>
             ensureMcpSignedIn(context, env, {
               fetch,
               shotOf,
-              statePath: statePath(main),
-              log,
+              statePath: state,
+              log: o.log,
               now: Date.now,
             }),
           close: () => browser.close(),
@@ -318,8 +360,77 @@ async function main(): Promise<number> {
         createApiClient({ fetch, token, fresh, ledger, run: runId, onAnswer }),
       makeMcp: (token) => createMcpClient({ fetch, token, ledger, run: runId }),
       now: Date.now,
-      log,
+      log: o.log,
     });
+  };
+
+  try {
+    let result: RunResult;
+    if (lanes.mode === 'one-user') {
+      log(`one test user (${lanes.why})`);
+      const waiting = leftovers(ledgers.web.read(), runId);
+      if (waiting)
+        log(
+          `the browser user's ledger has ${waiting} leftover(s) (pending ids, orphan intents): the next two-user run sweeps or lists them`,
+        );
+      result = await lane({
+        user: 'main',
+        scenarios,
+        dir: shotsDir,
+        ios: iosFor(shotsDir, log),
+        log,
+      });
+      result.lanes = { mode: 'one-user' };
+    } else {
+      const split = planLanes({
+        scenarios,
+        defer: { skip, slow },
+        mainLeftovers: leftovers(ledgers.main.read(), runId) > 0,
+      });
+      const iphoneRuns = split.iphoneRuns;
+      const ilog = (msg: string) => log(`iPhone · ${msg}`);
+      const iDir = join(shotsDir, IPHONE_SHOTS);
+      log(
+        iphoneRuns
+          ? `lanes ${lanes.mode}: browser user ${scenarios.length - split.iphone.length} scenario(s), iPhone user ${split.iphone.map((s) => s.id).join(', ') || 'none (sweeping its ledger)'}`
+          : 'lanes: browser user only — no iPhone step runs this time',
+      );
+      if (iphoneRuns) mkdirSync(iDir, { recursive: true });
+      const browserLane = () =>
+        lane({
+          user: 'web',
+          scenarios: split.browser,
+          dir: shotsDir,
+          // An idle iPhone lane's scenarios ride here, every step deferred: their client sends nothing.
+          ...(split.browserGetsIos ? { ios: iosFor(shotsDir, log) } : {}),
+          log,
+        });
+      const iphoneLane = () =>
+        lane({
+          user: 'main',
+          scenarios: split.iphone,
+          dir: iDir,
+          ios: iosFor(iDir, ilog),
+          park: PARK_PATH,
+          log: ilog,
+        });
+      result = await runLanes({
+        mode: lanes.mode,
+        browser: { scenarios: split.browser, run: browserLane },
+        ...(iphoneRuns ? { iphone: { scenarios: split.iphone, run: iphoneLane } } : {}),
+        base: {
+          runId,
+          tier: args.tier,
+          feature,
+          expectedSha: sha,
+          scenarioSha,
+          target: `${slot} (${slotOrigin()})`,
+        },
+        order: scenarios.map((s) => s.id),
+        now: Date.now,
+      });
+      log(lanesLine(result.lanes!, result.durationMs));
+    }
     writeFileSync(join(out, 'report.md'), renderReport(result));
     writeFileSync(join(out, 'report.json'), JSON.stringify(result, null, 2) + '\n');
     writeHeavyDetail(result, join(out, 'report.json'));

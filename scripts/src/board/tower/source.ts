@@ -26,6 +26,7 @@ export type Paths = {
   limits: string; // scripts/board/limits.json
   ledger: string; // localNotes/devcheck/ledger.dev.jsonl
   ledgerB?: string; // slot B's, ledger.devb.jsonl (absent: slot A's runs only)
+  ledgerWeb?: string; // slot A's browser user's, ledger.dev.web.jsonl: the same runs' other lane (devcheck/lanes.ts)
   bench: string; // localNotes/bench-vitest/
   cores?: number; // the CPU-guard's core count; default the host's (fixtures pin theirs)
 };
@@ -174,6 +175,7 @@ export class Source {
     // The ledger is mostly created/deleted rows (~2 MB): read it once, then only what's appended.
     this.ledgerTails = [['dev', tail(paths.ledger)]];
     if (paths.ledgerB) this.ledgerTails.push(['devb', tail(paths.ledgerB)]);
+    if (paths.ledgerWeb) this.ledgerTails.push(['dev', tail(paths.ledgerWeb)]);
     const lockFile = (name: string) =>
       new Watched<LockFile | null>(join(paths.boardDir, name), null, (t) => {
         try {
@@ -223,7 +225,8 @@ export class Source {
     this.leaseFeed = this.leaseFeed.filter((f) => f.t >= now - DAY);
     this.lockFeed = this.lockFeed.filter((f) => f.t >= now - DAY);
 
-    for (const [slot, t] of this.ledgerTails) foldRuns(this.runs, parseLines(readNew(t)), slot);
+    for (const [slot, t] of this.ledgerTails)
+      foldRuns(this.runs, parseLines(readNew(t)), slot, t.path);
     // full runs stay: the TTL proof counts them from queue.json's `since`, however old (a handful a day)
     for (const [id, r] of this.runs)
       if (!r.full && (r.end ?? r.start ?? now) < now - JOB_DAYS * DAY) this.runs.delete(id);
@@ -372,6 +375,7 @@ export function defaultPaths(repo: string): Paths {
     limits: join(repo, 'scripts/board/limits.json'),
     ledger: join(notes, 'devcheck/ledger.dev.jsonl'),
     ledgerB: join(notes, 'devcheck/ledger.devb.jsonl'),
+    ledgerWeb: join(notes, 'devcheck/ledger.dev.web.jsonl'),
     bench: join(notes, 'bench-vitest'),
   };
 }

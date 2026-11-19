@@ -2,7 +2,7 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { DEV_ORIGIN, TEST_USER_EMAIL, type DevcheckEnv } from './config';
+import { DEV_ORIGIN, TEST_USER_EMAIL, TEST_USERS, type DevcheckEnv } from './config';
 import type { FetchLike } from './api';
 import {
   cachedState,
@@ -95,6 +95,81 @@ describe('readCheckedSession', () => {
   });
   it('throws WRONG_USER for anyone else', async () => {
     await expect(readCheckedSession(page('s9', 'x@example.com'), env)).rejects.toThrow(
+      /WRONG_USER/,
+    );
+  });
+});
+
+describe('the browser lane’s user: every caller checks against its env’s user, not the Simulator’s', () => {
+  const wenv = { ...env, DEVCHECK_EMAIL: TEST_USERS.web, DEVCHECK_SUB: 'sw' } as DevcheckEnv;
+  const file = (text: string) => {
+    const path = join(mkdtempSync(join(tmpdir(), 'state-')), 'state.json');
+    writeFileSync(path, text);
+    return path;
+  };
+  const page = (sub: string, email: string) =>
+    ({
+      evaluate: async () =>
+        Object.fromEntries(
+          JSON.parse(state(sub, email)).origins[0].localStorage.map(
+            (x: { name: string; value: string }) => [x.name, x.value],
+          ),
+        ),
+    }) as unknown as PwPage;
+  const check = (path: string, log = vi.fn()) =>
+    cachedState(path, wenv, { fetch: vi.fn<FetchLike>(), now: () => 0, log });
+
+  it('cachedState keeps the browser user’s cache and discards the Simulator user’s, before any page loads', async () => {
+    const mine = file(state('sw', TEST_USERS.web));
+    expect(await check(mine)).toEqual(JSON.parse(state('sw', TEST_USERS.web)));
+    const theirs = file(state('s1', TEST_USER_EMAIL)); // a main-user state file in the web user's slot
+    const log = vi.fn();
+    expect(await check(theirs, log)).toBeUndefined();
+    expect(existsSync(theirs)).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringMatching(/WRONG_USER/));
+  });
+
+  it('readCheckedSession: the browser user’s session reads; the Simulator user’s is WRONG_USER', async () => {
+    expect((await readCheckedSession(page('sw', TEST_USERS.web), wenv))?.email).toBe(
+      TEST_USERS.web,
+    );
+    await expect(readCheckedSession(page('s1', TEST_USER_EMAIL), wenv)).rejects.toThrow(
+      /WRONG_USER/,
+    );
+    await expect(readCheckedSession(page('sw', TEST_USER_EMAIL), wenv)).rejects.toThrow(
+      /WRONG_USER/,
+    );
+  });
+
+  it('refreshSession: a renewal that comes back as the Simulator’s user is WRONG_USER', async () => {
+    const HOST = 'aperture-dev-123456789012.auth.us-west-1.amazoncognito.com';
+    const renv = { ...wenv, DEVCHECK_COGNITO_HOST: HOST } as DevcheckEnv;
+    const key = userStoreKey(cognitoAuthority(renv.DEVCHECK_POOL_ID), renv.DEVCHECK_CLIENT_ID);
+    const claims = (p: Record<string, unknown>) =>
+      `h.${Buffer.from(JSON.stringify(p)).toString('base64url')}.sig`;
+    const pg = {
+      evaluate: async () => ({
+        [key]: JSON.stringify({
+          access_token: jwt('sw'),
+          refresh_token: 'RT-W',
+          profile: { sub: 'sw' },
+        }),
+      }),
+    } as unknown as PwPage;
+    const as = (email: string) =>
+      vi.fn<FetchLike>(async () => ({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            access_token: claims({ sub: 'sw', exp: 5000 }),
+            id_token: claims({ sub: 'sw', email }),
+            expires_in: 3600,
+          }),
+      }));
+    expect(await refreshSession(pg, renv, as(TEST_USERS.web), () => 0)).toMatchObject({
+      email: TEST_USERS.web,
+    });
+    await expect(refreshSession(pg, renv, as(TEST_USER_EMAIL), () => 0)).rejects.toThrow(
       /WRONG_USER/,
     );
   });
@@ -431,7 +506,11 @@ describe('cachedState', () => {
 describe('the callers open their browser through launchCached', () => {
   // Both entry points must renew before launch; a bare launch(pw, statePath) would load the cache unrenewed.
   it.each([
-    ['devcheck/run.ts', /launchCached\(\s*pw,\s*statePath\(main\)/],
+    // each lane's own user's state (lanes.ts): `state` is statePath(main, slot, o.user)
+    [
+      'devcheck/run.ts',
+      /const state = statePath\(main, slot, o\.user\);[^]*launchCached\(\s*pw,\s*state,/,
+    ],
     [
       'mailroom/sim-bench-seed.ts',
       /launchCached\(\s*loadPlaywright\(\),\s*statePath\(main, 'dev'\)/,

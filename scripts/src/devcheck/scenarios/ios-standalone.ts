@@ -298,6 +298,7 @@ export const iosStandalone: Scenario = {
   id: 'ios-standalone',
   title: 'iOS: the Home Screen app on the Mac’s Simulator',
   tiers: ['full'],
+  user: 'iphone',
   slowPaths: IOS_STANDALONE_PATHS,
   rows: [
     {
