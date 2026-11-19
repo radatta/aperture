@@ -311,6 +311,16 @@ describe('checkJob mirrors sim.sh', () => {
     };
     expect((await checkJob(on, job([tap]))).ops[1]).toMatchObject({ status: 'pass' });
 
+    const gone = fakePage([toggle('0')]);
+    const click2 = gone.click;
+    gone.click = async (p) => {
+      await click2(p);
+      gone.drop('Task');
+    };
+    expect((await checkJob(gone, job([tap]))).ops[1]!.note).toMatch(
+      /^MISS: "Task" isn't at 110,870 after the tap \(saw nothing\)/,
+    );
+
     const already = fakePage([toggle('1')]);
     let clicks = 0;
     already.click = async () => void clicks++;

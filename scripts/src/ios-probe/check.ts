@@ -386,12 +386,19 @@ export async function checkJob(
               break;
             }
           }
-          // selects: its centre must read the same toggle, on, after the tap (the runner taps once more first).
+          // selects: its centre must read the same toggle, on, after the tap — the runner's codes (sim_tap_selected):
+          // MISS when something else reads there, TAP_DROPPED when it stays off (a page can't drop a tap: NOT_SELECTED).
           if (op.selects) {
             const after = await page.read(c);
-            if (!matches(after, op.label, op.role) || after?.value !== '1') {
+            if (!matches(after, op.label, op.role)) {
               await fail(
-                `NOT_SELECTED: ${seenAs(after)}${after ? ` "${after.value}"` : ''} at the tapped spot`,
+                `MISS: "${op.label}" isn't at ${c.x},${c.y} after the tap (saw ${seenAs(after)})`,
+              );
+              break;
+            }
+            if (after?.value !== '1') {
+              await fail(
+                `NOT_SELECTED: ${seenAs(after)} "${after?.value ?? ''}" at the tapped spot`,
               );
               break;
             }
