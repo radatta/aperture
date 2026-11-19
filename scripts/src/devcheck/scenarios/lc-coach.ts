@@ -890,7 +890,7 @@ export const lcCoach: Scenario = {
       id: 'mock-ui-cancel-5xx',
       entry: 'ui',
       kind: 'edge',
-      what: 'A Cancel that lands but answers 500 reads as cancelled: the row goes, no error, focus on Log a mock',
+      what: 'A Cancel that lands but answers 500 reads as cancelled: the row goes, no error, focus on Log a mock, “Mock cancelled.” said',
     },
     {
       id: 'mock-ui-cancel-save-race',
@@ -1539,7 +1539,7 @@ export const lcCoach: Scenario = {
             (s) => s.slug === slot.slug && s.status === 'open',
           ),
         );
-        await focusOn(ctx, `— ${slot.title}`, 'after Restore');
+        await focusOn(ctx, openButton(slot.title), 'after Restore');
         if (canSwap) {
           await c.getByRole('button', { name: `Another problem — ${slot.title}` }).click();
           let swapped: DevCoachSlot | undefined;
@@ -1563,7 +1563,7 @@ export const lcCoach: Scenario = {
         await until('the original back', async () =>
           same(slugs(await ctx.api.reads.getCoachToday()), slugs(t0)),
         );
-        await focusOn(ctx, `— ${slot.title}`, 'after the last Restore');
+        await focusOn(ctx, openButton(slot.title), 'after the last Restore');
         // Resolves the ledger entry (a restore with nothing to undo changes nothing).
         await ctx.mcp.writes.swapSlot(t0.day, slot.slug, { slug: slot.slug, action: 'restore' });
       },
@@ -2632,6 +2632,8 @@ export const lcCoach: Scenario = {
         await focusOn(ctx, 'Log a mock', 'after a Cancel answered 500');
         if (await block.getByRole('alert').count())
           fail(`a landed cancel shows “${await block.getByRole('alert').textContent()}”`);
+        const said = (await block.getByRole('status').textContent())?.trim();
+        if (said !== 'Mock cancelled.') fail(`the section’s status line reads “${said}”`);
         await ctx.shot('lc-coach-mock-cancel-500');
 
         // One planned for yesterday (over MCP: the form can't plan a past day) waits under the line; Cancel there.
@@ -2744,19 +2746,26 @@ export async function morning(ctx: Ctx) {
   await ctx.page.getByRole('button', { name: 'Morning', exact: true }).click();
   await ctx.page.getByText('Plan today', { exact: true }).waitFor({ timeout: 15_000 });
 }
-// Keyboard focus on a control whose accessible name ends with `name` (a slot's buttons end "— <title>"), never
-// <body>: the card's focus-return (CONVENTIONS → focus-return).
-async function focusOn(ctx: Ctx, name: string, when: string) {
+// Keyboard focus on a control whose accessible name ends with `name`, or matches it (a slot's buttons end
+// "— <title>"), never <body>: the card's focus-return (CONVENTIONS → focus-return).
+async function focusOn(ctx: Ctx, name: string | RegExp, when: string) {
   const at = () =>
     ctx.page.evaluate<string | null>(
       '(() => { const a = document.activeElement; return !a || a === document.body ? null : (a.getAttribute("aria-label") ?? a.textContent ?? "").trim(); })()',
     );
-  await until(
-    `focus on “${name}” ${when}`,
-    async () => !!(await at())?.endsWith(name),
-    5_000,
-  ).catch(async (e: Error) => fail(`${e.message} — it is on ${JSON.stringify(await at())}`));
+  const on = async () => {
+    const got = await at();
+    return !!got && (typeof name === 'string' ? got.endsWith(name) : name.test(got));
+  };
+  await until(`focus on “${name}” ${when}`, on, 5_000).catch(async (e: Error) =>
+    fail(`${e.message} — it is on ${JSON.stringify(await at())}`),
+  );
 }
+// An open slot's first button: never the pressed Restore, whose label ends in the same title.
+const openButton = (title: string) => {
+  const literal = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(Another problem|Skip today) — ${literal}$`);
+};
 export async function until(what: string, ok: () => Promise<boolean>, ms = 15_000) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 500)))
     if (await ok()) return;

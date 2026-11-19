@@ -14,6 +14,7 @@ import { LoadError } from '../../components/LoadError';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import {
+  slotKey,
   useCoachSlotCached,
   useCoachToday,
   mockListed,
@@ -115,8 +116,17 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
       inFlight.current = false;
     }
   }
-  const change = (s: CoachSlot, action: 'swap' | 'skip' | 'restore') =>
-    run(() => slot.mutateAsync({ slug: s.slug, action }));
+  const cached = useCoachSlotCached();
+  // A swap changes the row's problem while focus stays on its button, whose new name isn't re-read: said here.
+  // Skip and Restore move focus to a button that names the change.
+  const [said, setSaid] = useState<string | null>(null);
+  const change = async (s: CoachSlot, action: 'swap' | 'skip' | 'restore') => {
+    setSaid(null);
+    const ok = await run(() => slot.mutateAsync({ slug: s.slug, action }));
+    const now = ok && action === 'swap' ? cached(slotKey(s)) : undefined;
+    if (now) setSaid(`Swapped in ${now.title}.`);
+    return ok;
+  };
   // While Opus picks, the rule slots aren't shown — nor what's due beyond them: the plan never shifts under a glance.
   const ai = today.ai;
   const { picking } = aiStatus(today, startFailed);
@@ -151,7 +161,7 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
             <SlotRow
               // The engine's pick: steady across a swap (which can change the kind) and a restore, so the row
               // keeps its DOM, and focus, through either. Slots never share one (applySlotChange).
-              key={s.swappedFrom ?? s.slug}
+              key={slotKey(s)}
               slot={s}
               busy={busy}
               canStart={() => !inFlight.current}
@@ -201,6 +211,9 @@ function TodayBody({ today, startFailed }: { today: CoachToday; startFailed: boo
           {error}
         </p>
       )}
+      <p role="status" className="sr-only">
+        {said}
+      </p>
 
       {today.offPlan.length > 0 && (
         <Text size="sm" tone="muted">
@@ -538,7 +551,7 @@ function SlotRow({
   const state = slotState(s);
   const row = useRef<HTMLLIElement>(null);
   const cached = useCoachSlotCached();
-  const key = s.swappedFrom ?? s.slug;
+  const key = slotKey(s);
   // The pressed button usually goes with the change (Skip → Restore). So once the write lands, the row re-homes
   // focus on the render that shows the write's plan: on its first button, else its title — never left on <body>
   // (CONVENTIONS → focus-return). Nothing waits while the write runs, so a read that changes the row meanwhile

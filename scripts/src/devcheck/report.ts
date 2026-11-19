@@ -79,7 +79,7 @@ export interface RunResult {
   consoleErrors: string[];
   failedLoads: string[]; // every failed load the page saw, in order: `<status|net error> <METHOD> <host/path>` (no query)
   throttled: string[]; // every HTTP 429 the page got, in order: `/api/<method>`, else the path — names what never ran
-  injected: string[]; // responses the harness itself served (ctx.intercept): `/api/<method> → <status>|dropped`
+  injected: string[]; // responses the harness itself served (ctx.intercept): `/api/<method> → <status>|dropped`, `(after the real call)` when forwarded
   shots: string[];
   durationMs: number;
   crash?: string;

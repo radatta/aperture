@@ -9,7 +9,10 @@ import { addDays, AI_PICK_NOTICE } from '@aperture/shared';
 import type { CoachAiView, CoachToday } from '@aperture/shared';
 
 beforeEach(() => globalThis.localStorage?.clear());
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  focusManager.setFocused(undefined); // a test that stopped midway leaves no forced focus behind
+});
 
 const stub = (seed: boolean) => createStubClient({ seed, storageKey: `today-${Math.random()}` });
 const card = async () => screen.findByRole('region', { name: 'Today’s practice' });
@@ -116,6 +119,20 @@ describe('the Today card', () => {
     await waitFor(async () => expect(await titles()).not.toContain('Two Sum'));
     const row = document.activeElement?.closest('li');
     expect(row && within(row).queryByText(/^Swapped in for Two Sum/)).toBeTruthy();
+  });
+
+  it('Another says the swapped-in problem in the card’s status line, as focus stays on its button', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    renderApp({ api, path: '/recruiting' });
+    await slots();
+    await user.click(screen.getByRole('button', { name: 'Another problem — Two Sum' }));
+    await waitFor(async () => expect(await titles()).not.toContain('Two Sum'));
+    const swapped = (await api.getCoachToday()).slots.find((s) => s.swappedFrom === 'two-sum')!;
+    const said = within(await card())
+      .getAllByRole('status')
+      .map((x) => x.textContent);
+    expect(said).toContain(`Swapped in ${swapped.title}.`);
   });
 
   it('a refused change says why, inline', async () => {
@@ -249,11 +266,14 @@ describe('the Today card', () => {
       await real(input);
       return shown;
     });
-    await user.click(screen.getByRole('button', { name: 'Skip today — Permutation in String' }));
+    const skip = screen.getByRole('button', { name: 'Skip today — Permutation in String' });
+    await user.click(skip);
     await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 50));
+    await write.mock.results[0]!.value;
+    await waitFor(() => expect(skip.getAttribute('aria-disabled')).toBeNull()); // the write settled
     const elsewhere = within(await card()).getByRole('button', { name: 'Log a mock' });
     act(() => elsewhere.focus());
+    // Window focus stands in for any later read (prod reads on a write's invalidation, not on focus).
     act(() => {
       focusManager.setFocused(false);
       focusManager.setFocused(true); // a later read shows the skip
@@ -263,32 +283,62 @@ describe('the Today card', () => {
     expect(document.activeElement).toBe(elsewhere);
   });
 
+  // A plan read that begins (window focus stands in for any read) and waits, answering `old` once released; the
+  // query layer cancels it when a write restarts the read (D2: a cancelled read's waiters get the new one).
+  const staleRead = async (api: ReturnType<typeof stub>, old: CoachToday) => {
+    let release!: () => void;
+    let returned!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const answered = new Promise<void>((r) => (returned = r));
+    const read = vi.spyOn(api, 'getCoachToday').mockImplementationOnce(async () => {
+      await gate;
+      returned();
+      return old;
+    });
+    act(() => {
+      focusManager.setFocused(false);
+      focusManager.setFocused(true);
+    });
+    focusManager.setFocused(undefined);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    return { release, answered };
+  };
+  // Past the query layer's notify (a macrotask) and React's commit, a few times over.
+  const settle = async () => {
+    for (let i = 0; i < 3; i++) await act(() => new Promise<void>((r) => setTimeout(r, 0)));
+  };
+
   it('a read that began before a slot change can’t put the old plan back', async () => {
     const user = userEvent.setup();
     const api = stub(true);
     renderApp({ api, path: '/recruiting' });
     await slots();
     const before = await api.getCoachToday();
-    let release!: () => void;
-    const gate = new Promise<void>((r) => (release = r));
-    const read = vi.spyOn(api, 'getCoachToday').mockImplementationOnce(async () => {
-      await gate;
-      return before;
-    });
-    act(() => {
-      focusManager.setFocused(false);
-      focusManager.setFocused(true); // the read starts, and waits
-    });
-    focusManager.setFocused(undefined);
-    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    const { release, answered } = await staleRead(api, before);
     await user.click(screen.getByRole('button', { name: 'Skip today — Permutation in String' }));
     expect(await within(await slots()).findByText('skipped today')).toBeTruthy();
     release();
-    await new Promise((r) => setTimeout(r, 100));
+    await answered;
+    await settle();
     expect(within(await slots()).getByText('skipped today')).toBeTruthy();
     expect(document.activeElement).toBe(
       screen.getByRole('button', { name: 'Restore — Permutation in String' }),
     );
+  });
+
+  it('a read that began before Floor day can’t put the full day back', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    renderApp({ api, path: '/recruiting' });
+    await slots();
+    const before = await api.getCoachToday();
+    const { release, answered } = await staleRead(api, before);
+    await user.click(screen.getByRole('button', { name: 'Floor day' }));
+    expect(await within(await card()).findByText(/Floor day: just/)).toBeTruthy();
+    release();
+    await answered;
+    await settle();
+    expect(within(await card()).getByText(/Floor day: just/)).toBeTruthy();
   });
 });
 
@@ -870,6 +920,47 @@ describe('the Today card’s mocks', () => {
     expect(within(m).queryByRole('alert')).toBeNull();
   });
 
+  it('a refused Cancel whose row went anyway (gone elsewhere) reads as cancelled', async () => {
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    await api.upsertMock({ status: 'planned', day: addDays(today, 1) });
+    const real = api.deleteMock.bind(api);
+    vi.spyOn(api, 'deleteMock').mockImplementationOnce(async (id) => {
+      await real(id);
+      throw new ApiError(`Not found: ${id}`, 400);
+    });
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    const cancel = await within(queue).findByRole('button', {
+      name: 'Cancel — mock tomorrow, with a person',
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+    fireEvent.click(cancel);
+    await waitFor(() => expect(within(m).getByRole('status').textContent).toBe('Mock cancelled.'));
+    expect(within(m).queryByRole('alert')).toBeNull();
+    expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' }));
+  });
+
+  it('a 5xx Cancel that didn’t land says it couldn’t confirm, and keeps the row', async () => {
+    const user = userEvent.setup();
+    const api = stub(true);
+    const today = (await api.getCoachToday()).day;
+    await api.upsertMock({ status: 'planned', day: addDays(today, 1) });
+    vi.spyOn(api, 'deleteMock').mockRejectedValueOnce(new ApiError('Bad gateway', 502));
+    renderApp({ api, path: '/recruiting' });
+    const m = await mockSection();
+    const queue = await within(await card()).findByRole('region', { name: 'Next 48 hours' });
+    await user.click(
+      await within(queue).findByRole('button', { name: 'Cancel — mock tomorrow, with a person' }),
+    );
+    expect((await within(m).findByRole('alert')).textContent).toBe(
+      'Couldn’t confirm the mock was cancelled — the card shows what stands.',
+    );
+    expect(within(queue).getByText('Mock interview')).toBeTruthy();
+    expect(within(m).getByRole('status').textContent).toBe('');
+  });
+
   it('a landed Cancel says “Mock cancelled.” in the mock section’s status line', async () => {
     const user = userEvent.setup();
     const api = stub(true);
@@ -942,7 +1033,8 @@ describe('the Today card’s mocks', () => {
     );
   });
 
-  it('a second coach write racing the post-cancel read still lands focus on Log a mock', async () => {
+  // A pin, not a fix: the cancel's read is cancelled by the save's and its waiters get the save's read (D2).
+  it('a save racing the post-cancel read: “Mock cancelled.” and focus on Log a mock', async () => {
     const { m, queue } = await saveAndCancelOnOneRead('lands');
     await waitFor(() => expect(within(queue).queryByText('Mock interview')).toBeNull());
     expect(document.activeElement).toBe(within(m).getByRole('button', { name: 'Log a mock' }));

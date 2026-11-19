@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useMutation, useMutationState, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import type { CoachSlotInput, CoachToday, MockInput, PatternId } from '@aperture/shared';
+import type { CoachSlot, CoachSlotInput, CoachToday, MockInput, PatternId } from '@aperture/shared';
 import { useApi } from '../api-context';
 import { qk } from '../queryKeys';
 
@@ -64,14 +64,14 @@ function usePlanWrite<T>(fn: (input: T) => Promise<CoachToday>) {
     },
   });
 }
-// The cached plan's slot for a row, by its key (the engine's pick): an unchanged slot keeps its object through a
-// write's answer (structural sharing), so a row can tell whether the cache holds more than it has rendered.
+// A slot's steady key: the engine's pick, kept across a swap and a restore (slots never share one).
+export const slotKey = (s: Pick<CoachSlot, 'slug' | 'swappedFrom'>) => s.swappedFrom ?? s.slug;
+// The cached plan's slot for a row, by its key: an unchanged slot keeps its object through a write's answer
+// (structural sharing), so a row can tell whether the cache holds more than it has rendered.
 export function useCoachSlotCached() {
   const qc = useQueryClient();
   return (key: string) =>
-    qc
-      .getQueryData<CoachToday>(qk.coachToday())
-      ?.slots.find((x) => (x.swappedFrom ?? x.slug) === key);
+    qc.getQueryData<CoachToday>(qk.coachToday())?.slots.find((x) => slotKey(x) === key);
 }
 export function useSetCoachSlot() {
   const api = useApi();

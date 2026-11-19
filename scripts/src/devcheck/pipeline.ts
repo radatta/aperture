@@ -540,7 +540,11 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       );
       if (opts.abort) return route.abort('failed');
       // The real call runs (a write lands) and its answer is dropped: a fetch that fails still gets the status.
-      if (opts.forward) await route.fetch().catch(() => undefined);
+      if (opts.forward)
+        await route.fetch().then(
+          (res) => res.dispose(),
+          () => undefined,
+        );
       return route.fulfill({
         status,
         body: JSON.stringify(opts.body ?? {}),
