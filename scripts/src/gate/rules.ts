@@ -314,6 +314,7 @@ export const INPUT_RULES: InputRule[] = [
       'scripts/src/board/tower/queue.test.ts',
       'scripts/src/board/tower/queued.test.ts',
       'scripts/src/board/watchers.test.ts',
+      'scripts/src/lane/', // the lane CLI reads limits.json (lanes, pace, budget): every lane test, new ones too
       'scripts/src/lane/pace.test.ts',
       'scripts/src/lane/start.test.ts',
       'scripts/src/lane/state.test.ts',
@@ -394,7 +395,8 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/devcheck/mcp-login.test.ts': 'temp dir',
   'scripts/src/identifiers-scan.test.ts': 'temp repos',
   'scripts/src/lane/archive.test.ts': 'temp dir',
-  'scripts/src/lane/cli.test.ts': 'reads lane/*.ts (same area)',
+  'scripts/src/lane/cli.test.ts':
+    'reads lane/*.ts (same area) and limits.json (the scripts/board/ rule runs it)',
   'scripts/src/lane/end.test.ts': 'temp dir',
   'scripts/src/mailroom/clip.test.ts': 'temp dir',
   'scripts/src/vapid-keys.test.ts': 'spawns its sibling vapid-keys.ts',

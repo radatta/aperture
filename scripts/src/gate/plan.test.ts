@@ -193,6 +193,9 @@ describe('plan', () => {
         'scripts/src/gate/cli.test.ts',
       ]),
     );
+    // every lane test, so one that reads limits.json can't slip by (lane/cli.test.ts pins the budget, PR 235)
+    const lane = plan(ch('scripts/board/limits.json'), [...TESTS, 'scripts/src/lane/cli.test.ts']);
+    expect(pkg(lane, 'scripts').tests).toContain('scripts/src/lane/cli.test.ts');
   });
 
   it.each([['scripts/board/heavy.sh'], ['scripts/board/lib.sh']])(

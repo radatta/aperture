@@ -104,8 +104,9 @@ same-area rule runs every gate test on any change to it.
 - **A graph-blind input** (`INPUT_RULES`) runs the tests that read it from disk, raw-import it, or spawn it.
   - Same-area rules: a change under `scripts/src/<area>/` (board, bot, devcheck, gate, lane, mailroom, ios-probe,
     lc-e2e) runs every test in that area, which covers the CLIs those tests spawn.
-  - The board shell (`scripts/board/`: `heavy.sh`, `lib.sh`, `limits.json`, the watchers) runs the board and lane
-    tests, which spawn it and read it; `limits.json` also runs `gate/cli.test.ts`, which pins `NARROW_WORKERS` to it.
+  - The board shell (`scripts/board/`: `heavy.sh`, `lib.sh`, `limits.json`, the watchers) runs every test under
+    `scripts/src/board/` and `scripts/src/lane/`, which spawn it and read it; `limits.json` also runs
+    `gate/cli.test.ts`, which pins `NARROW_WORKERS` to it.
     Every vitest reader is in scripts, and CI never runs `heavy.sh`. A broken `heavy.sh` can't pass the gate: the
     inner pass and every step report their own exit codes past it, through a file named in their env (`GATE_RESULT`;
     `GATE_STEP_RESULT`, written by `step.sh`), and a `heavy.sh` 0 with no report is exit 2. The hook fixtures read `limits.json` too, outside vitest: after a change to it, run them by hand
