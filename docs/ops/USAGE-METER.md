@@ -15,13 +15,14 @@ status line ─► statusline-log.sh ─► meter-<day>.jsonl ──┐
 
 ## Commands
 
-| Command                                              | Does                                                                                                                                                 |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm usage report [--since YYYY-MM-DD] [--refresh]` | Scans, then prints the full model and writes `localNotes/usage/report-<day>.md`. `--since` defaults to 2026-11-04; `--refresh` refetches merged PRs. |
-| `pnpm usage fit`                                     | Only k, its interval, the holdout and the burn rate.                                                                                                 |
-| `pnpm usage line`                                    | One line: `usage <n>% · <r>%/h · ~<h> h to 100%`. Not wired into the status line or tower yet (a follow-up).                                         |
-| `pnpm usage scan [--rate <MB/s>]`                    | Only the transcript scan (default 40, at most 60).                                                                                                   |
-| `pnpm usage doctor`                                  | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                  |
+| Command                                              | Does                                                                                                                                                                                                                          |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm usage report [--since YYYY-MM-DD] [--refresh]` | Scans, then prints the full model and writes `localNotes/usage/report-<day>.md`. `--since` defaults to 2026-11-04; `--refresh` refetches merged PRs.                                                                          |
+| `pnpm usage fit`                                     | Only k, its interval, the holdout and the burn rate.                                                                                                                                                                          |
+| `pnpm usage line`                                    | One line: `usage <n>% · <r>%/h · ~<h> h to 100%`. Not wired into the status line or tower yet (a follow-up).                                                                                                                  |
+| `pnpm usage burn [--at <HH:MM>]`                     | The hub's `/burn`: usage now, and where it lands at the weekly reset and at HH:MM, low–high: k's 80% interval × the last hour's QU (+ λ), widened to hold the meter's tick rate (`burn.ts`). Scans first, unless `--no-scan`. |
+| `pnpm usage scan [--rate <MB/s>]`                    | Only the transcript scan (default 40, at most 60).                                                                                                                                                                            |
+| `pnpm usage doctor`                                  | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                                                                                           |
 
 `--no-scan` on report, fit and line skips the scan. `-h` on any command prints its usage and runs nothing. `--since`
 is midnight Pacific on that day, in its own offset.

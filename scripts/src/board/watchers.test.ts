@@ -513,6 +513,39 @@ describe('pace-watch.sh', () => {
   });
 });
 
+describe('pace-watch.sh: the hard stop (exit 12)', () => {
+  const ctl = (stopAt: unknown) => ({ state: 'calm', since: 0, held: [], triggers: [], stopAt });
+  const st = T10 + 15 * 60; // 10:15: exit 12 ten minutes ahead, at the 10:05 tick
+
+  it('exits 12 STOP_LEAD ahead of stopAt, before the sample floor and on a bad reading', () => {
+    const r = pace(T10, 8, (i) => ({
+      ctl: ctl(st),
+      ...(i === 5 ? { files: { 'cg/memory.stat': 'garbled' } } : {}),
+    }));
+    expect([r.status, r.tick]).toEqual([12, 5]);
+    expect(r.stdout).toBe('10:05 STOP at 10:15: hard stop, lanes stop clean by then\n');
+    expect(read(r, 'board/stop-fired').trim()).toBe(String(st));
+    expect(pace(T10, 4, all({ ctl: ctl(st) })).quiet).toBe(true);
+  });
+  it('fires once per stopAt: a restarted watcher stays quiet, a new time fires again', () => {
+    const fired = { files: { 'board/stop-fired': `${st}\n` } };
+    expect(pace(T10, 8, all({ ctl: ctl(st), ...fired })).quiet).toBe(true);
+    expect(pace(T10, 8, all({ ctl: ctl(st + 60), ...fired }))).toMatchObject({
+      status: 12,
+      tick: 6,
+    });
+  });
+  it('a stop over an hour past, a garbled stopAt or none never fires', () => {
+    expect(pace(T10, 4, all({ ctl: ctl(T10 - 3600) })).quiet).toBe(true);
+    expect(pace(T10, 4, all({ ctl: ctl(T10 - 3500) }))).toMatchObject({ status: 12, tick: 1 }); // late, still within the hour
+    for (const bad of ['10:15', null, -5, { at: st }])
+      expect(pace(T10, 8, all({ ctl: ctl(bad) })).quiet).toBe(true);
+    expect(
+      pace(T10, 8, all({ ctl: { state: 'calm', since: 0, held: [], triggers: [] } })).quiet,
+    ).toBe(true);
+  });
+});
+
 // ---- usage ----
 const ts = (epoch: number) =>
   new Date((epoch - 8 * 3600) * 1000).toISOString().slice(0, 19) + '-08:00'; // local -08:00, as the logger writes

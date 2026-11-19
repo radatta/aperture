@@ -114,6 +114,8 @@ export interface FitModel {
     hoursTo100: number | null;
     since: number | null; // the rate's ticks start here
     resetAt: number | null; // the window's resets_at has passed with no fresh reading since: the numbers are stale
+    at: number | null; // the latest reading's time
+    nextReset: number | null; // the latest resets_at, when it is still ahead (`pnpm usage burn`)
   };
   coverage: { from: number | null; to: number | null }; // the calls table's span; intervals outside it are dropped
 }
@@ -184,6 +186,8 @@ export function fitModel(o: {
       hoursTo100: b && pctPerHour ? hoursTo100(b.pct, b.at, pctPerHour, o.now) : null,
       since: b?.perHour != null ? b.since : null,
       resetAt,
+      at: b?.at ?? null,
+      nextReset: Number.isFinite(latestReset) && latestReset > o.now ? latestReset : null,
     },
     coverage: { from: q.first, to: q.last },
   };

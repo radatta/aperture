@@ -735,9 +735,34 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
   ],
   "planAt": "<ISO, when the hub last rewrote the plan>",
   "planNotes": ["<what slips, what moved and why, what can wait>"],
-  "mergeOrder": [{ "branch": "", "pr": 41, "note": "<optional>" }]
+  "mergeOrder": [{ "branch": "", "pr": 41, "note": "<optional>" }],
+  "askSeq": 12,
+  "asks": [
+    {
+      "id": "d12",
+      "asked": "<ISO>",
+      "text": "",
+      "options": ["<a>", "<b>"],
+      "pick": "<a letter, optional>",
+      "lane": "<optional: the branch it is for>",
+      "needsPane": "<optional: true for a go only a pane can give>",
+      "pane": "<with needsPane: the window>",
+      "go": "<with needsPane: the exact words>",
+      "status": "open | answered | closed",
+      "answer": "<a letter, once answered>",
+      "answeredAt": "<ISO, once answered or closed>"
+    }
+  ]
 }
 ```
+
+`asks[]` is the hub's asks of the maintainer (HUB.md → _Asks_), written by `pnpm board asks add|answer|close`, never
+by hand. Options are lettered `a`… in file order; a pane ask may have none, any other wants 2 to 6. An entry with no
+`id` or `text`, an `id` not `d<n>`, a repeated `id` (the later one), an unknown `status` or bad `options` is named and
+dropped; a bad `asked`, `pick`, `lane` or `answer` is named and read as absent; a `needsPane` that isn't `true` or
+`false` is named and read as `true` (fails closed: `ok` never answers it), and one with no `pane` falls back to its
+`lane`. `askSeq` is the last id handed out, so a pruned id never comes back; answered and closed asks are pruned a
+day after `answeredAt`.
 
 `mergeOrder` is the hub's landing order for the lanes in flight, first to land first (an entry may be a bare branch name); the web tower's NEXT shows
 it (TOWER.md → _Panels_). Entries with no `branch`, a duplicate branch, or a field that isn't an array are named as
@@ -805,12 +830,12 @@ the board's history, untracked); `sim`, whether a Simulator device is booted (`l
 _Lanes_), plus the inbox's waiting entries. Tests: `scripts/src/board/watchers.test.ts`
 (PATH shims for `sleep` and `date` drive a file clock over a fake cgroup, loadavg and meter dir).
 
-| Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                     | Exits                                                              |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `pace-watch.sh`                | cgroup `cpu.stat`, `memory.stat`, `{cpu,memory}.pressure`, `/proc/loadavg`; `pace-control.json`, `queue.json`, `mac-stats.json` (read-only) | `pace.json` each minute, `idle-fired`, `history/vm-pace-<day>.jsonl`, `history/mac-load-<day>.jsonl`, `pace-watch.log` | 3 trip, 0 recovered, 5 trigger, 4 hot an hour, 6 idle + ready lane |
-| `usage-watch.sh [--hard-only]` | `localNotes/usage/meter-*.jsonl` (the two newest)                                                                                           | `usage-now.json`, `usage-watch.log`                                                                                    | 7 soft stop, 8 hard stop                                           |
-| `context-watch.sh`             | the same meter files                                                                                                                        | `ctx.json`, `ctx-alerted.json`, `history/ctx-<day>.jsonl`, `context-watch.log`                                         | 9 urgent                                                           |
-| `merge-watch.sh`               | `history/events-*.jsonl` (the two newest; `merged` rows), `ran/<id>`                                                                        | `merge-announced`, `ran-announced`, `merge-watch.log`                                                                  | 10 merged, 11 a Mac line ran                                       |
+| Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                                   | Exits                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| `pace-watch.sh`                | cgroup `cpu.stat`, `memory.stat`, `{cpu,memory}.pressure`, `/proc/loadavg`; `pace-control.json`, `queue.json`, `mac-stats.json` (read-only) | `pace.json` each minute, `idle-fired`, `stop-fired`, `history/vm-pace-<day>.jsonl`, `history/mac-load-<day>.jsonl`, `pace-watch.log` | 3 trip, 0 recovered, 5 trigger, 4 hot an hour, 6 idle + ready lane, 12 hard stop |
+| `usage-watch.sh [--hard-only]` | `localNotes/usage/meter-*.jsonl` (the two newest)                                                                                           | `usage-now.json`, `usage-watch.log`                                                                                                  | 7 soft stop, 8 hard stop                                                         |
+| `context-watch.sh`             | the same meter files                                                                                                                        | `ctx.json`, `ctx-alerted.json`, `history/ctx-<day>.jsonl`, `context-watch.log`                                                       | 9 urgent                                                                         |
+| `merge-watch.sh`               | `history/events-*.jsonl` (the two newest; `merged` rows), `ran/<id>`                                                                        | `merge-announced`, `ran-announced`, `merge-watch.log`                                                                                | 10 merged, 11 a Mac line ran                                                     |
 
 **pace** samples every `intervalSec` (60) and averages the last `windowSamples` (5); nothing trips below the gate's
 `pace.minSamples` (3). Calm → **trip (3)** on anon avg ≥ `tripAnonMiB` (10800) or memory PSI full > `pace.psiMemFullMax`
@@ -829,6 +854,10 @@ once a tick: missing is calm; empty or unparseable (a write caught mid-way) keep
 isn't a whole epoch at or before now (a fraction floors; milliseconds, a string) counts as 0 — hot since 1970, so the
 first judged tick exits 5 if a trigger matches, else 0 (readings under the recovery lines) or 4. A file without a string
 `state` counts as unreadable (the start gate refuses it too), and a trigger without a numeric `load5Below` never matches.
+**Hard stop (12)**, checked first each tick, before any reading: `pace-control.json` `stopAt` (whole epoch seconds,
+written by `pnpm board stop HH:MM`) is ten minutes away (`STOP_LEAD`, 600 s, in the script beside `away.ts`'s
+`STOP_LEAD_SEC`), or up to an hour past (a watcher down at the time still wakes the hub), once per `stopAt`
+(`stop-fired` holds the last one fired). A `stopAt` that isn't a positive number never fires.
 
 **usage**: the account % is the max weekly `used_percentage` among meter rows from the last `freshSec` (600): a stale
 session reports an old value, a fresh row the live one. ≥ `hardPct` (60) → 8, else ≥ `softPct` (58) → 7, checked every

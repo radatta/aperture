@@ -7,6 +7,8 @@
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { BRIEF_FILE, briefText, type BriefView } from '../brief.ts';
 import { budgetNow } from '../../budget-read.ts';
+import { MERGE_LINE_FILE, mergeLine, mergeLineText, type MergeLine } from '../../mergeline.ts';
+import { PRS_FILE, prsFile } from '../../lookup.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -32,7 +34,7 @@ import { readCosts, readMacStats, type MacRead } from '../health.ts';
 import { readLanes } from '../lanes.ts';
 import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
-import { PrCache, ghFetch, type Fetch } from '../prs.ts';
+import { PrCache, ghFetch, type Fetch, type Pr } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
 import {
   boardLine,
@@ -298,6 +300,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     sparks: Record<string, (number | null)[]>;
     startedAt: number;
     usage: UsageLine | null;
+    mergeLine: MergeLine;
   } {
     const now = clock();
     const tower = source.refresh(now);
@@ -325,7 +328,18 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       mainSync: readMainSync(paths.boardDir),
       ctx: readCtx(paths.boardDir, fx ? now : null),
     };
-    const v = derive(inputs);
+    const d = derive(inputs);
+    // the merge line (mergeline.ts): MERGE ME in landing order, each pinned to the head sha the PR list has
+    const v = {
+      ...d,
+      mergeLine: mergeLine(
+        d.next.merge,
+        d.next.order.map((o) => o.branch),
+        prs?.list ?? [],
+        MAC,
+        d.sources.find((x) => x.name === 'gh PRs'),
+      ),
+    };
     const sparks = {
       anon: sparkBuckets(
         tower.points.map((p) => [p.t, p.anon]),
@@ -348,7 +362,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       },
     };
   }
-  return { poll, view, sample, clock, paths, version };
+  return { poll, view, sample, clock, paths, version, prs: () => prs?.list ?? [] };
 }
 
 // dispatch's ctx.json; its mtime is its time (a fixture's is the fixed clock's)
@@ -404,11 +418,17 @@ export function briefBudget(
   }
 }
 
-// brief.txt (brief.ts): `pnpm board brief` prints it. Its own writer, beside writeDerived's two files.
-export function writeBrief(dir: string, v: BriefView) {
-  const tmp = join(dir, `.${BRIEF_FILE}.tmp.${process.pid}`);
-  writeFileSync(tmp, briefText(v));
-  renameSync(tmp, join(dir, BRIEF_FILE));
+// brief.txt (brief.ts): `pnpm board brief` prints it; merge-line.txt (`board merge-line`) and pr-index.json (`board wi`)
+// beside it. Their own writer, beside writeDerived's two files; each file tmp + rename.
+export function writeBrief(dir: string, v: BriefView & { mergeLine?: MergeLine }, prs: Pr[] = []) {
+  const put = (name: string, text: string) => {
+    const tmp = join(dir, `.${name}.tmp.${process.pid}`);
+    writeFileSync(tmp, text);
+    renameSync(tmp, join(dir, name));
+  };
+  put(BRIEF_FILE, briefText(v));
+  if (v.mergeLine) put(MERGE_LINE_FILE, mergeLineText(v.mergeLine));
+  put(PRS_FILE, prsFile(prs, v.now));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -461,7 +481,7 @@ async function run(a: Args) {
         const v = t.view(false);
         try {
           // its own try: a failed board.line must not age the brief into TOWER DOWN
-          writeBrief(t.paths.boardDir, { ...v, budget: briefBudget(t.paths.boardDir) });
+          writeBrief(t.paths.boardDir, { ...v, budget: briefBudget(t.paths.boardDir) }, t.prs());
         } catch (e) {
           process.stderr.write(`tower-web: brief.txt: ${(e as Error).message}\n`);
         }

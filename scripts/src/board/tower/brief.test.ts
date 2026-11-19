@@ -6,6 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BRIEF_FILE, BRIEF_STALE_MS, briefOut, briefText, type BriefView } from './brief.ts';
 import { budgetLine, parseBudget } from '../budget.ts';
 import { briefBudget, build, parseArgs, writeBrief } from './web/main.ts';
+import { MERGE_LINE_FILE } from '../mergeline.ts';
+import { PRS_FILE } from '../lookup.ts';
 const ctl = (s: string) => [...s].some((c) => c.charCodeAt(0) < 32 && c !== '\n'); // a control byte other than newline
 
 const FIXTURES = join(import.meta.dirname, 'fixtures');
@@ -234,11 +236,31 @@ describe('briefText on an empty board', () => {
 });
 
 describe('the brief file and pnpm board brief', () => {
-  it('writeBrief writes by rename and leaves no tmp file', () => {
+  it('writeBrief writes the brief, the merge line and the PR index by rename, and leaves no tmp file', () => {
     const dir = tmp();
-    writeBrief(dir, fx);
-    expect(readdirSync(dir)).toEqual([BRIEF_FILE]);
+    writeBrief(dir, fx, [
+      {
+        number: 41,
+        title: 't',
+        branch: 'charlie-branch',
+        state: 'OPEN',
+        mergedAt: null,
+        createdAt: null,
+        sha: null,
+        mergeSha: null,
+        url: null,
+        draft: false,
+      },
+    ]);
+    expect(readdirSync(dir).sort()).toEqual([BRIEF_FILE, MERGE_LINE_FILE, PRS_FILE].sort());
     expect(readFileSync(join(dir, BRIEF_FILE), 'utf8')).toMatch(/^BRIEF /);
+    // the fixture board: nothing to merge, charlie-branch on hold
+    expect(readFileSync(join(dir, MERGE_LINE_FILE), 'utf8')).toMatch(
+      /^MERGE none\nleft out, on hold: PR 41 charlie-branch \(dev: bravo-branch is testing/,
+    );
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).prs).toEqual([
+      { number: 41, title: 't', branch: 'charlie-branch', state: 'OPEN', url: null },
+    ]);
   });
   it('briefOut prints the file; past 180 s it says TOWER DOWN first', () => {
     expect(briefOut('BRIEF x\n', 1000, 1000 + BRIEF_STALE_MS, utc)).toBe('BRIEF x');

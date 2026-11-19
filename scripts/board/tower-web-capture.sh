@@ -52,6 +52,12 @@ function stress(v) {
     { kind: 'todo', what: LONG('todo'), link: null, cmd: null, unblocks: null, since: now - 1, sinceDay: '11-07', branch: null },
     ...v.needs,
   ];
+  // dispatch's asks (asks.ts): a long one with six long options, and a pane ask on a long pane name
+  v.asks = [
+    { id: 'd123456', asked: now - 900000, text: LONG('ask'), options: [1, 2, 3, 4, 5, 6].map((k) => LONG(`option ${k}`)), pick: 'f', lane: 'a-fifty-character-branch-name-for-the-dev-slot-card', needsPane: false, pane: null, go: null, status: 'open', answer: null, answeredAt: null },
+    { id: 'd7', asked: now - 60000, text: LONG('pane ask'), options: [], pick: null, lane: null, needsPane: true, pane: 'a-fifty-character-branch-name-for-the-dev-slot-card', go: 'go 1a2b3c4d', status: 'open', answer: null, answeredAt: null },
+    ...(v.asks ?? []),
+  ];
   for (const r of v.active.slice(0, 2)) r.detail = LONG('detail');
   if (v.active[2]) {
     v.active[2].hold = LONG('hold');
@@ -89,6 +95,7 @@ function empty(v) {
   delete v.health.power;
   delete v.health.slowdown;
   v.needs = [];
+  delete v.asks; // a server older than the page: no asks
   v.active = [];
   v.next = { order: [], queue: [], merge: [], maintainer: null, more: 0, parked: [], table: [], nowIndex: 0, soon: [], notes: [], planAt: null, ask: null };
   v.done = [];
@@ -161,15 +168,22 @@ async function boardChecks(page, tag, variant, phone) {
     const cfSlot = [...document.querySelectorAll('#now .slot .meta.cf')].some((e) => e.offsetParent !== null); // the dev holder's
     // every chip, rows' and slot cards', shows whole: never past its box, never in a box that clips (an ellipsis)
     const cfCut = [...document.querySelectorAll('#now .meta.cf, #next .meta.cf')].filter((e) => e.offsetParent !== null && (e.getBoundingClientRect().right > (e.closest('.row, .slot') ?? e.parentElement).getBoundingClientRect().right + 1 || (getComputedStyle(e.parentElement).overflow === 'hidden' && e.parentElement.scrollWidth > e.parentElement.clientWidth + 1))).map((e) => e.textContent);
+    // dispatch's asks (asks.ts): rows badged D<n> in NEEDS YOU; expanded, under their own heading
+    const askRows = [...document.querySelectorAll('#needs .badge')].filter((e) => /^D\d+$/.test(e.textContent) && shown(e)).length;
+    const askHead = [...document.querySelectorAll('#needs h3')].some((e) => /^Asks/.test(e.textContent) && shown(e));
     // innerText: what shows, not a hidden span
-    return { board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow, cfRow, cfToned, cfDim, cfSlot, cfCut };
+    return { askRows, askHead, board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow, cfRow, cfToned, cfDim, cfSlot, cfCut };
   });
   const loud = /t-(warn|bad)/;
   if (variant === 'empty') {
+    if (r.askRows) fails.push(`${tag}: an ask row with no asks in the view`);
     if (r.board || /stale/.test(r.sText)) fails.push(`${tag}: a board count with no board in the view`);
     if (r.ctx || /ctx/.test(r.sText)) fails.push(`${tag}: a context count with no ctx in the view`);
     return;
   }
+  // the fixtures' queue.json has two open asks (one a pane ask), stress two more; NEXT expanded hides NEEDS YOU
+  if (variant !== 'xnext' && variant !== 'xstress' && r.askRows < (variant === 'stress' ? 4 : 2)) fails.push(`${tag}: ${r.askRows} ask rows in NEEDS YOU`);
+  if (variant === 'xneeds' && !r.askHead) fails.push(`${tag}: no Asks heading in NEEDS YOU expanded`);
   // context (F240): the fixtures have a session over 50 %, so it leads the phone chip and shows on the desktop
   if (phone ? !/^\d+ ctx≥50/.test(r.sText) : !r.ctx || !/t-bad/.test(r.cCls)) fails.push(`${tag}: no context count (${phone ? r.sText : r.cCls})`);
   if (!variant.startsWith('x') && !r.ctxRow) fails.push(`${tag}: no row shows its session's ctx %`);

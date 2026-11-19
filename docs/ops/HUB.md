@@ -152,7 +152,8 @@ no script writes it: the Mac never runs anything from the shared folder.
   is read: `pnpm board budget-report /workspace/localNotes/board/history 1`. It measures the box only. More light
   lanes means more tokens an hour, and the usage lines govern that (_Watchers_ → `usage-watch.sh`), never the budget.
 - **Asks.** Relay each `[ask-maintainer]` to the user with the hub's own recommendation, and the answer back as a
-  `[relay]`, verbatim, plus what it means for the lane.
+  `[relay]`, verbatim, plus what it means for the lane. Every ask put to the user — a lane's or the hub's own — goes
+  into `queue.json` `asks[]` first (_Asks_ below), so the user answers by id and letter.
 - **Lens gaps.** The hub alone writes `/workspace/localNotes/review-gaps.md` from the `lens-gap:` lines lanes send
   in `[pr-open]`; a second gap of the same lens and kind becomes a `followups[]` entry to widen that lens — an
   `.claude/agents/` edit, so the lane that takes it needs the user's go in its pane (`docs/ops/REVIEW.md` → _Lens
@@ -221,13 +222,15 @@ is follow-up F274). What each exit asks:
 | 9     | context | a session at the urgent line: tell the user at once                                                                                                   |
 | 10    | merge   | PRs merged on main (a `MERGED` line each): the after-merge duties for each, unprompted (_The hub's duties_)                                           |
 | 11    | merge   | a Mac line finished (`RAN <id> exit <n>`): carry on with what waited on it; not 0, or unreadable: look into it                                        |
+| 12    | pace    | the hard stop (`/hs`, `stopAt`) is ten minutes away: send each lane `[hold]` to stop clean by then, then a hard stop (below); fires once per time     |
 | 124   | any     | an hour with nothing to report: restart with the same arguments                                                                                       |
 | 78    | any     | a `limits.json` key is missing or bad, or (merge) jq is missing: stderr and `<board>/<watcher>.log` name it; fix it, then restart                     |
 | other | any     | 2 (a bad argument or override), 74 (merge: a state file unwritable, after its lines), 1, 126 …: read stderr and the log, fix it — never restart blind |
 
 **Soft and hard stop** (the user's rule, 2026-11-17). Soft: no new lane starts, and running lanes park at a clean
 checkpoint (committed, status file written), never mid-step. Hard: every lane stops after its current command and
-releases any dev lock.
+releases any dev lock. A stop at a time (`/hs <HH:MM>`, `pnpm board stop`) means work until a minute before it,
+then stop clean — never "stop now".
 
 `autoStart` entries in `queue.json` (`SESSION-BOARD.md` → _Control tower_ → `queue.json`) are lanes the user has
 already approved to start; exit 6 only finds capacity for one, it never adds approval.
@@ -256,6 +259,43 @@ cd <mac-repo> && <cmd> && <cmd>; (r=$?; set -C; echo $r > <mac-repo>/localNotes/
   to a reader on the Mac, or, with no reader, hold the finished line open until Ctrl-C.
 - `merge-watch.sh` exits 11 with the code. No marker means not run, or interrupted (Ctrl-C drops the rest of the
   line), or a step with no line (a web page): past the step's expected time, the hub asks.
+
+### Asks
+
+Every ask the hub puts to the user — its own, or a lane's `[ask-maintainer]` relayed — is written to `queue.json`
+`asks[]` before the message goes out, with `pnpm board asks add` (stdin JSON: `{text, options, pick, lane?, pane?,
+go?}`; schema: `SESSION-BOARD.md` → _Control tower_), and the message leads with the id it prints: `d3 · Cache key?
+a) per branch b) per lockfile · pick b`. The user answers `d3 b`, `d3 ok` (the pick) or `d3 ?` (explain), typed
+bare or as `/nm` — both mean the same. `pnpm board asks answer d3 b` marks it and prints the `[relay]` line to send,
+as printed; an answer in words is acted on, then `asks close d3`.
+
+- **A go only the pane can give** (_Approval_) is a pane ask: `pane` names the window, `go` the exact words. No
+  reply to the hub answers it, `ok` included: `asks answer` prints `GO NEEDED` and writes nothing, and the ask
+  closes (`asks close`) once the lane's `[info] … in my pane` arrives.
+- The writers (`add`, `answer`, `close`) run from `/workspace` only, re-parse the whole file before writing and keep
+  every key they don't know; answered and closed asks stay a day, ids never repeat (`askSeq`).
+
+### Shortcuts
+
+Skills the user types in the hub's pane (`.claude/skills/<name>/`, user-invoked only). Each runs one command and
+pastes its output verbatim; the script composes, the hub doesn't.
+
+| Skill             | Runs                                         | For                                                       |
+| ----------------- | -------------------------------------------- | --------------------------------------------------------- |
+| `/nm [d3 b…\|ok]` | `pnpm board asks list` / `asks answer …`     | what needs the user; answer asks (`/nm ok`: every pick)   |
+| `/sr`             | `pnpm board brief`                           | status                                                    |
+| `/q <lane>…`      | `autoStart[]` entries, or `pnpm lanes start` | queue or start the lanes named (the approval for those)   |
+| `/ml`             | `pnpm board merge-line`                      | the merge line, printed only                              |
+| `/away [ping]`    | `pnpm board away`                            | terse replies until `/back`; pings only on asks if `ping` |
+| `/back`           | `pnpm board back`, then `pnpm board brief`   | what moved while the user was away                        |
+| `/hs <HH:MM>`     | `pnpm board stop <HH:MM>\|off`               | a hard stop at a time (pace-watch exit 12)                |
+| `/burn [HH:MM]`   | `pnpm usage burn [--at HH:MM]`               | usage now, at the reset and at a time, low–high           |
+| `/wi <id>`        | `pnpm board wi <id>`                         | what F209, PR 206, d3 or a lane is                        |
+| `/eta`            | `pnpm board eta`                             | lane and plan ETAs (the board-eta lane's verb)            |
+
+**What stays human:** `/ml` only prints — the user runs the line, and `merge-watch.sh` sees it land. No shortcut sets
+an effort above `high`, writes Aperture data (an MCP write stays one at a time, shown first, on the user's explicit ask), or
+merges. `/nm ok` never answers a pane ask: it lists each as `GO NEEDED` with the pane and the words.
 
 ## Lock etiquette
 
