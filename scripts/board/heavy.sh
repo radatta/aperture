@@ -316,7 +316,8 @@ fi
 [ -n "$stop" ] && [ "$stop" != duration ] && verdict=guard-stop
 
 # The perf fields' JSON (SESSION-BOARD.md → Perf fields), merged into the event; {} under HEAVY_DETAIL=0.
-jn() { [[ "$1" =~ ^[0-9]+(\.[0-9]+)?$ ]] && printf '%s' "$1" || printf null; }
+# jv VAR VALUE: VAR = VALUE as a JSON number, else null — a builtin, so the run's end forks nothing for it
+jv() { if [[ "$2" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then printf -v "$1" '%s' "$2"; else printf -v "$1" null; fi; }
 perf='{}'
 if [ "$detail" = 1 ]; then
   wait_sec=null
@@ -343,10 +344,12 @@ if [ "$detail" = 1 ]; then
       read -r last age n src cfg <<<"${cline[$k]:-- - - - -}"
       [[ "$last" =~ ^[0-9a-f]{40}$ ]] && lj="\"$last\"" fk=false || lj=null fk=true
       [ "${cline[$k]+x}" ] || fk=null  # the background job never reported: unknown
-      cache+=",\"$k\":{\"lastSha\":$lj,\"lastAgeSec\":$(jn "$age"),\"first\":$fk,\"changed\":$(jn "$n"),"
-      cache+="\"changedSrc\":$(jn "$src"),\"changedCfg\":$(jn "$cfg"),"
+      jv age "$age"; jv n "$n"; jv src "$src"; jv cfg "$cfg"
+      cache+=",\"$k\":{\"lastSha\":$lj,\"lastAgeSec\":$age,\"first\":$fk,\"changed\":$n,"
+      cache+="\"changedSrc\":$src,\"changedCfg\":$cfg,"
       if [ "$k" = tsc ]; then
-        cache+="\"of\":${#SB_TSBUILDINFO[@]},\"existed\":$(jn "$tsc_ex"),\"rewritten\":$(jn "$rew")}"
+        jv te "$tsc_ex"; jv rw "$rew"
+        cache+="\"of\":${#SB_TSBUILDINFO[@]},\"existed\":$te,\"rewritten\":$rw}"
         if ! [[ "$tsc_ex" =~ ^[0-9]+$ ]]; then cold=null
         elif [ "$cold" = false ] && [ "$tsc_ex" -lt "${#SB_TSBUILDINFO[@]}" ]; then cold=true; fi
       else
@@ -367,7 +370,8 @@ if [ "$detail" = 1 ]; then
     fi
   fi
   sj=null; [ -n "$slot" ] && sj="\"$slot_class\""
-  perf="{\"waitSec\":$wait_sec,\"slot\":$sj,\"boot\":{\"upSec\":$(jn "$up"),\"first\":$first},\"cache\":$cache,"
+  jv up "$up"
+  perf="{\"waitSec\":$wait_sec,\"slot\":$sj,\"boot\":{\"upSec\":$up,\"first\":$first},\"cache\":$cache,"
   perf+="\"vitest\":$vitest,\"devcheck\":$devcheck}"  # a part that isn't JSON shows as perfInvalid, never silence
 fi
 
