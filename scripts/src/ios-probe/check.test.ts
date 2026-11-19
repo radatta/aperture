@@ -285,6 +285,40 @@ describe('checkJob mirrors sim.sh', () => {
     expect(r.ops[1]!.note).toMatch(/^STILL_THERE: /);
   });
 
+  it('a selects tap must leave its toggle on; one already on is not tapped (sim_tap_selected)', async () => {
+    const toggle = (value: string) => ({
+      role: 'AXCheckBox',
+      label: 'Task',
+      value,
+      frame: { x: 80, y: 850, w: 60, h: 40 },
+    });
+    const tap: IosOp = {
+      op: 'tap',
+      label: 'Task',
+      scan: { x: 110, from: 780, to: 940 },
+      role: 'AXCheckBox',
+      selects: true,
+    };
+    const dropped = await checkJob(fakePage([toggle('0')]), job([tap]));
+    expect(dropped.ops[1]!.note).toMatch(/^NOT_SELECTED: Task \(AXCheckBox\) "0"/);
+
+    const on = fakePage([toggle('0')]);
+    const click = on.click;
+    on.click = async (p) => {
+      await click(p);
+      on.drop('Task');
+      on.add(toggle('1'));
+    };
+    expect((await checkJob(on, job([tap]))).ops[1]).toMatchObject({ status: 'pass' });
+
+    const already = fakePage([toggle('1')]);
+    let clicks = 0;
+    already.click = async () => void clicks++;
+    const r = await checkJob(already, job([tap]));
+    expect(r.ops[1]!.note).toMatch(/^already selected; not tapped/);
+    expect(clicks).toBe(0);
+  });
+
   it('reads an empty spot as enabled with no label, and compares labelIs exactly (sim_op_expect)', async () => {
     const page = DOCK();
     const send: IosOp = {

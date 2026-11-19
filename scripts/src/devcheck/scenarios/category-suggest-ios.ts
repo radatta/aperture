@@ -32,7 +32,13 @@ const REVIEW_KEYBOARD: IosOp[] = [
   // changeMode), and the bar sits still at the bottom. Tapped on the lifted dock instead, the toggle could be read
   // mid-settle and the tap missed and blurred the field (jobs …011648Z…-8c62, …010744Z…-6102, and run
   // 2026-11-19T02-21-16-full even after a 4 s wait). `selects`: a dropped tap is tapped again.
-  { op: 'tap', label: 'Task', scan: { x: 110, from: 780, to: 940 }, role: 'AXCheckBox', selects: true },
+  {
+    op: 'tap',
+    label: 'Task',
+    scan: { x: 110, from: 780, to: 940 },
+    role: 'AXCheckBox',
+    selects: true,
+  },
   // A text area's tap must bring the keyboard up, else the runner taps it once more.
   { op: 'tap', label: 'Capture task', near: { x: 220, y: 895 }, radius: 10, role: 'AXTextArea' },
   // The dock lifts over the keyboard: let it settle before reading the field there (ios-standalone waits 4 too).
@@ -78,7 +84,8 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'absent', label: 'Use suggested category', scan: { x: 195, from: 300, to: 600 } },
   { op: 'shot', name: 'review-chip-taken' },
   { op: 'erase', n: R_SIM_CHIP.length },
-  { op: 'tap', label: 'Log', scan: DOCK(49, MODE_ROW), role: 'AXCheckBox' },
+  // `selects`: a dropped tap is tapped again; a miss would leave the bar in Task mode for whatever runs next.
+  { op: 'tap', label: 'Log', scan: DOCK(49, MODE_ROW), role: 'AXCheckBox', selects: true },
   { op: 'blur' },
 ];
 

@@ -1407,6 +1407,9 @@ export const lcCoach: Scenario = {
         try {
           await ctx.ui.goto('/recruiting/patterns');
           await list.waitFor();
+          // The focus loads on its own query: until it does every row has a button, then the focus row's turns
+          // into "Focus" text — a button looped over meanwhile detaches (run 2026-11-19T03-45-42-full).
+          await list.locator('li[aria-current="true"]').waitFor();
           for (const theme of ['light', 'dark'] as const) {
             await ctx.ui.setTheme(theme);
             const wide = await ctx.page.evaluate<boolean>(
