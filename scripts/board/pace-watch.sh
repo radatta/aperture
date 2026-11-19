@@ -7,9 +7,9 @@
 #   12 = the hub's hard stop is STOP_LEAD away (stop.json stopAt, set only by `pnpm board stop HH:MM|off`)
 #   74 = stop-fired unwritable (fixing the board dir comes first)   2 = an argument (it takes none)
 # The hub owns pace-control.json ({state: calm|hot, since: <epoch>, held, triggers: [{lane, load5Below}]}), stop.json
-# ({stopAt: <epoch>|null}) and queue.json; all are read-only here. Thresholds: limits.json → watchers.pace, plus four of the gate's `pace` keys
-# (psiMemFullMax, psiCpuBelow, anonMiBBelow, minSamples) so the trip and the gate share them. What each means:
-# docs/ops/SESSION-BOARD.md → Watchers.
+# ({stopAt: <epoch>|null}) and queue.json; all are read-only here. Thresholds: limits.json → watchers.pace, plus four
+# of the gate's `pace` keys (psiMemFullMax, psiCpuBelow, anonMiBBelow, minSamples) so the trip and the gate share them.
+# What each means: docs/ops/SESSION-BOARD.md → Watchers.
 # Run: timeout 65m scripts/board/pace-watch.sh   (124 = an hour, nothing happened: restart it)
 set -u
 [ $# -eq 0 ] || { echo "usage: pace-watch.sh (no arguments; docs/ops/HUB.md → Watchers)" >&2; exit 2; }
