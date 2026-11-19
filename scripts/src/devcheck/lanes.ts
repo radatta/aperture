@@ -155,6 +155,9 @@ export function mergeRuns(
     endSha: base.endSha ?? iphone?.endSha,
     deployUrl: base.deployUrl ?? iphone?.deployUrl,
     ios: iphone?.ios ?? base.ios,
+    // the browser lane's (base's) pipeline phases: one lane's split, under the wall it never exceeds; the iPhone
+    // lane's own time is lanes.iphoneMs, and its steps are in steps (heavy-detail.ts reads both)
+    ...(base.phases ? { phases: base.phases } : {}),
     lanes: {
       mode: o.mode,
       ...(parts.some((p) => p.lane === 'browser') ? { browserMs: base.durationMs } : {}),

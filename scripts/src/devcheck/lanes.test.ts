@@ -243,6 +243,18 @@ describe('mergeRuns', () => {
     expect(m.steps.find((s) => s.scenario === 'areas')?.shot).toBe('areas-s-fail-light.png');
   });
 
+  it('the pipeline phases are the browser lane’s, never the sum of both lanes', () => {
+    const phases = { deployWaitMs: 1, openMs: 2, setupMs: 3, stepsMs: 4, cleanupMs: 5 };
+    const both = mergeRuns(
+      [
+        { lane: 'browser', r: { ...browser, phases } },
+        { lane: 'iphone', r: { ...iphone, phases: { ...phases, stepsMs: 900 } } },
+      ],
+      { order, mode: 'parallel', wallMs: 540_000 },
+    );
+    expect(both.phases).toEqual(phases);
+  });
+
   it('the build, budget and deploy are the browser lane’s; the Simulator section the iPhone lane’s', () => {
     expect(m.startSha).toBe('b'.repeat(40));
     expect(m.sittingStarts).toBe(4);
