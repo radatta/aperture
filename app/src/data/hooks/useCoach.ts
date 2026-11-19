@@ -51,13 +51,27 @@ export function useCoachToday(opts: { enabled?: boolean } = {}) {
   };
 }
 
-// Slot and floor writes hand back the day's plan after them: it lands in the cache as is.
+// Slot and floor writes hand back the day's plan after them: it lands in the cache as is. A read that began before
+// the write would land after it and put the old plan back, so one in flight starts again.
 function usePlanWrite<T>(fn: (input: T) => Promise<CoachToday>) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: fn,
-    onSuccess: (today) => qc.setQueryData(qk.coachToday(), today),
+    onSuccess: (today) => {
+      const stale = qc.isFetching({ queryKey: qk.coachToday() }) > 0;
+      qc.setQueryData(qk.coachToday(), today);
+      if (stale) void qc.invalidateQueries({ queryKey: qk.coachToday() });
+    },
   });
+}
+// The cached plan's slot for a row, by its key (the engine's pick): an unchanged slot keeps its object through a
+// write's answer (structural sharing), so a row can tell whether the cache holds more than it has rendered.
+export function useCoachSlotCached() {
+  const qc = useQueryClient();
+  return (key: string) =>
+    qc
+      .getQueryData<CoachToday>(qk.coachToday())
+      ?.slots.find((x) => (x.swappedFrom ?? x.slug) === key);
 }
 export function useSetCoachSlot() {
   const api = useApi();

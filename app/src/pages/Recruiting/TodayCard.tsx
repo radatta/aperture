@@ -14,6 +14,7 @@ import { LoadError } from '../../components/LoadError';
 import { Select } from '../../components/Select';
 import { Text } from '../../components/Text';
 import {
+  useCoachSlotCached,
   useCoachToday,
   mockListed,
   useDeleteMock,
@@ -287,6 +288,7 @@ function useMockState() {
   const listed = useMockListed();
   const [form, setForm] = useState<{ mock: MockBrief | null } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [said, setSaid] = useState<string | null>(null); // the section's status line, for a screen reader
   const trigger = useRef<HTMLButtonElement>(null);
   // Log a mock is back once the form closes: focus moves to it after that render (MockBlock's effect). A cancel
   // names its mock, so the effect waits for the render where that row has gone — when the read after the delete
@@ -296,34 +298,48 @@ function useMockState() {
     refocus.current = {};
     setForm(null);
   };
+  const reset = () => {
+    setError(null);
+    setSaid(null);
+  };
   return {
     form,
     error,
+    said,
     trigger,
     refocus,
     close,
     openNew: () => {
-      setError(null);
+      reset();
       setForm({ mock: null });
     },
     openLog: (m: MockBrief) => {
-      setError(null);
+      reset();
       setForm({ mock: m });
     },
     cancel: async (m: MockBrief) => {
       if (del.isPending) return;
-      setError(null);
+      reset();
+      let failed: unknown = null;
       try {
         await del.mutateAsync(m.id);
-        refocus.current = listed(m.id) ? null : { id: m.id }; // the row and its buttons go
-        setForm((f) => (f?.mock?.id === m.id ? null : f)); // a Log it opened on it meanwhile closes too
       } catch (e) {
-        setError(
-          isTransientRead(e)
-            ? 'Couldn’t confirm the mock was cancelled — the card shows what stands.'
-            : `${(e as Error).message || 'Couldn’t cancel the mock'}. Nothing changed.`,
-        );
+        failed = e ?? new Error();
       }
+      // The read after the delete has settled either way (useDeleteMock): the cache says whether it landed, a 5xx
+      // answer or not. Gone: the row and its buttons go.
+      if (!listed(m.id)) {
+        refocus.current ??= { id: m.id }; // never over a form close's pending move
+        setForm((f) => (f?.mock?.id === m.id ? null : f)); // a Log it opened on it meanwhile closes too
+        setSaid('Mock cancelled.');
+        return;
+      }
+      if (failed)
+        setError(
+          isTransientRead(failed)
+            ? 'Couldn’t confirm the mock was cancelled — the card shows what stands.'
+            : `${(failed as Error).message || 'Couldn’t cancel the mock'}. Nothing changed.`,
+        );
     },
   };
 }
@@ -428,6 +444,10 @@ function MockBlock({ today, state }: { today: CoachToday; state: MockState }) {
           {state.error}
         </p>
       )}
+      {/* Mounted always, so a cancel is spoken: the row going is visible, focus moving names only its target. */}
+      <p role="status" className="sr-only">
+        {state.said}
+      </p>
       {state.form && (
         <MockForm
           key={state.form.mock?.id ?? 'new'}
@@ -517,22 +537,34 @@ function SlotRow({
 }) {
   const state = slotState(s);
   const row = useRef<HTMLLIElement>(null);
-  // The pressed button usually goes with the change (Skip → Restore), and the new plan commits after the write
-  // resolves. So the row re-homes focus as that commit lands: on its first button, else its title — never left on
-  // <body> (CONVENTIONS → focus-return). A refused change keeps its button, and focus with it.
-  const refocus = useRef(false);
-  useLayoutEffect(() => {
-    if (!refocus.current) return;
-    refocus.current = false;
+  const cached = useCoachSlotCached();
+  const key = s.swappedFrom ?? s.slug;
+  // The pressed button usually goes with the change (Skip → Restore). So once the write lands, the row re-homes
+  // focus on the render that shows the write's plan: on its first button, else its title — never left on <body>
+  // (CONVENTIONS → focus-return). Nothing waits while the write runs, so a read that changes the row meanwhile
+  // can't spend the move early, and a change the row already shows leaves nothing waiting. Only lost focus moves:
+  // never pulled out of another row or field. A refused change keeps its button, and focus with it.
+  const shown = useRef(s);
+  const landing = useRef(false);
+  const rehome = () => {
     const li = row.current;
-    if (!li || li.contains(document.activeElement)) return;
+    const at = document.activeElement;
+    if (!li || (at && at !== document.body && at.isConnected)) return;
     const next = li.querySelector<HTMLElement>('button') ?? li.querySelector<HTMLElement>('a');
     if (next) returnFocus(next);
-  }, [s.status, s.slug, s.swappedFrom]);
+  };
+  useLayoutEffect(() => {
+    shown.current = s;
+    if (!landing.current || cached(key) !== s) return; // not the write's plan yet: wait for that render
+    landing.current = false;
+    rehome();
+  });
   const act = (action: 'swap' | 'skip' | 'restore') => async () => {
-    if (!canStart()) return; // a second tap mid-write: the first tap's own arm stands
-    refocus.current = true;
-    if (!(await onChange(s, action))) refocus.current = false;
+    if (!canStart()) return; // a second tap mid-write: the first tap's change stands
+    if (!(await onChange(s, action))) return;
+    if (cached(key) === shown.current)
+      rehome(); // the row already shows the write's plan: nothing left to commit
+    else landing.current = true;
   };
   const quiet = (label: string, action: 'swap' | 'skip' | 'restore', name: string) => (
     <Button

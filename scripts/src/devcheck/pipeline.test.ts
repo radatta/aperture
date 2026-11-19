@@ -249,6 +249,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   // The app calling /api/<method>: the first matching route decides; a fulfilled 429 also reaches the
   // response listeners, as a real one would.
   const injectedBodies: (string | undefined)[] = [];
+  const forwarded: string[] = []; // the calls a forwarding intercept sent on before answering
   const call = async (method: string): Promise<number | 'real' | 'dropped'> => {
     const url = `https://dev.aperture.rahuldatta.dev/api/${method}`;
     const hit = [...routes].reverse().find((x) => x.match(new URL(url))); // Playwright: last registered wins
@@ -264,6 +265,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       request: () => request,
       continue: async () => void (out = 'real'),
       fallback: async () => void (out = 'real'),
+      fetch: async () => void forwarded.push(method),
       abort: async () => {
         out = 'dropped';
         // Playwright fails the route's own request object: the one the harness marked as injected.
@@ -717,6 +719,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     consoleError,
     call,
     injectedBodies,
+    forwarded,
     routes,
     gotos,
     api,
@@ -2030,6 +2033,21 @@ describe('runPipeline', () => {
       '/api/parseTask → 200',
       '/api/parseTask → 429',
     ]);
+  });
+
+  it('a forwarding intercept sends the real call on, then answers with its status', async () => {
+    const w = world();
+    const sc = scenario(async (x, ctx) => {
+      const i = await ctx.intercept('deleteMock', { status: 500, times: 1, forward: true });
+      expect(await x.call('deleteMock')).toBe(500);
+      expect(await x.call('deleteMock')).toBe('real'); // `times` ran out: passed through
+      expect([i.hits(), i.passed()]).toEqual([1, 1]);
+      await i.release();
+      expect(x.forwarded).toEqual(['deleteMock']);
+    })(w);
+    const r = await runPipeline(deps(w, [sc]));
+    expect(r.injected).toEqual(['/api/deleteMock → 500 (after the real call)']);
+    expect(r.status).toBe('PASS');
   });
 
   it('an intercept fails `times` calls, then passes through, and counts both', async () => {

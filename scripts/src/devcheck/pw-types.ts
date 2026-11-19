@@ -116,6 +116,7 @@ export interface PwRoute {
   abort(errorCode?: string): Promise<void>;
   continue(): Promise<void>;
   fallback(): Promise<void>; // on to the next matching route (or the network) — what a pass-through should use
+  fetch(): Promise<unknown>; // sends the request itself and hands back its response, the route still unanswered
   fulfill(opts: { status: number; body?: string; headers?: Record<string, string> }): Promise<void>;
 }
 
