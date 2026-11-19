@@ -11,6 +11,8 @@ import { mergedPRs } from './gh.ts';
 import { fitModel, reportModel } from './model.ts';
 import type { JobEvent } from './questions.ts';
 import { boardLine, fitLines, reportLines } from './report.ts';
+import { burnLines } from './burn.ts';
+import { stopAt } from '../board/away.ts';
 import { anonBytes, scan } from './scan.ts';
 import { loadCache, writeAtomic } from './store.ts';
 
@@ -21,6 +23,8 @@ export const USAGE = `pnpm usage <command>   (-h / --help on any command: its us
                                 measure-first questions; also writes <usage dir>/report-<day>.md
   fit [--no-scan]               k (meter % per QU) with its interval, the holdout, burn now
   line [--no-scan]              one line: usage % · %/h · hours to 100
+  burn [--at <HH:MM>] [--no-scan]
+                                usage now and where it lands at the reset (and at HH:MM), low–high (the hub's /burn)
   doctor                        is the meter logger installed and writing?`;
 
 export const FLAGS: Record<string, Spec> = {
@@ -28,6 +32,7 @@ export const FLAGS: Record<string, Spec> = {
   report: { flags: ['since'], bare: ['refresh', 'no-scan'] },
   fit: { bare: ['no-scan'] },
   line: { bare: ['no-scan'] },
+  burn: { flags: ['at'], bare: ['no-scan'] },
   doctor: {},
 };
 
@@ -256,6 +261,27 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
         now: Date.now(),
       });
       out(positional[0] === 'line' ? boardLine(m) : fitLines(m).join('\n'));
+      return 0;
+    }
+    case 'burn': {
+      let at: number | null = null;
+      if (flags.at !== undefined) {
+        try {
+          at = stopAt(flags.at, Date.now()) * 1000; // the next such local time
+        } catch {
+          out(`--at takes HH:MM (24 h), got ${JSON.stringify(flags.at)}`);
+          return 2;
+        }
+      }
+      if (!flags['no-scan']) await scanQuiet(e, () => {});
+      const now = Date.now();
+      const m = fitModel({
+        rows: readMeter(e.usageDir).rows,
+        manual: readManual(e.usageDir),
+        calls: loadCache(e.cache).calls,
+        now,
+      });
+      out(burnLines(m, at, now).join('\n'));
       return 0;
     }
     case 'doctor': {

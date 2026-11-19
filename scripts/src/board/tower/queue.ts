@@ -112,6 +112,8 @@ const QUEUE_KEYS = [
   'mergeOrder',
   'planNotes',
   'planAt',
+  'asks',
+  'askSeq',
 ];
 
 // An open follow-up whose `after` has happened: a merged branch or PR (`<branch>`, `<branch> merge(s)`, `PR <n>`,
@@ -180,6 +182,31 @@ export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
     return at !== null && at <= now ? [{ ...f, firedAt: at }] : [];
   });
 
+// dispatch's own asks of the maintainer (docs/ops/HUB.md → Asks): answered by letter (`d3 b`) through `pnpm board
+// asks`. Options are lettered a, b, c… in file order. A pane ask (`needsPane`) is a go only the maintainer's typing in
+// `pane` can give: never answered here, only closed once the go arrives. An `explicit` ask (an effort above `high`, or
+// anything else whose approval must name it) takes its own reply: `all ok` passes over it.
+export const ASK_STATUS = ['open', 'answered', 'closed'] as const;
+export type AskStatus = (typeof ASK_STATUS)[number];
+export const ASK_ID = /^d([1-9]\d{0,5})$/;
+export const ASK_OPTIONS = { min: 2, max: 6 } as const;
+export const letter = (i: number) => String.fromCharCode(97 + i);
+export type Ask = {
+  id: string;
+  asked: number | null;
+  text: string;
+  options: string[];
+  pick: string | null; // a letter, one of its options
+  lane: string | null;
+  needsPane: boolean;
+  explicit: boolean; // its own reply only: `all ok` never answers it
+  pane: string | null; // the window the go is typed in: `pane`, else `lane`
+  go: string | null; // the exact words to type there
+  status: AskStatus;
+  answer: string | null; // a letter
+  answeredAt: number | null;
+};
+
 // dispatch's landing order for the lanes in flight (NEXT): file order is the order.
 export type MergeOrderItem = { branch: string; pr: number | null; note: string | null };
 
@@ -196,6 +223,8 @@ export type QueueData = {
   mergeOrder: MergeOrderItem[];
   autoStart?: string[]; // dispatch's auto-start queue, branches only (its shape is pq-check's); read leniently
   autoQueue?: AutoStartItem[]; // the same entries in full, for QUEUED (queued.ts); a bad field reads as null
+  asks?: Ask[]; // file order; every status (asks.ts picks the open ones); optional like autoStart
+  askSeq?: number | null; // the last id handed out: ids never repeat after a prune
 };
 export type AutoStartItem = {
   branch: string;
@@ -444,6 +473,8 @@ function parse(text: string | null, prev: QueueData | null): Queue {
   });
   const autoStart = autoQueue.map((a) => a.branch);
 
+  const { asks, askSeq } = parseAsks(raw, problems);
+
   return {
     status: problems.length ? 'bad' : 'ok',
     data: {
@@ -459,10 +490,106 @@ function parse(text: string | null, prev: QueueData | null): Queue {
       mergeOrder,
       autoStart,
       autoQueue,
+      asks,
+      askSeq,
     },
     problems,
     ...(unread.length ? { unread } : {}),
   };
+}
+
+// asks[]: an entry missing what it must have is dropped; a bad optional field is named and read the safe way (a
+// garbled `needsPane` or `explicit` as true, so `ok` can never answer it).
+function parseAsks(raw: Record<string, unknown>, problems: string[]) {
+  let askSeq: number | null = null;
+  if (raw.askSeq != null) {
+    if (Number.isInteger(raw.askSeq) && (raw.askSeq as number) >= 0) askSeq = raw.askSeq as number;
+    else problems.push('askSeq is not a whole number');
+  }
+  const asks: Ask[] = [];
+  if (raw.asks !== undefined && !Array.isArray(raw.asks)) {
+    problems.push('asks is not an array');
+    return { asks, askSeq };
+  }
+  const ids = new Set<string>();
+  arr(raw.asks).forEach((x, i) => {
+    const a = (x ?? {}) as Record<string, unknown>;
+    const at = `asks[${i}]`;
+    const id = typeof a.id === 'string' ? a.id : null;
+    const text = str(a.text);
+    if (!id || !text) return void problems.push(`${at}: no id or text`);
+    if (!ASK_ID.test(id))
+      return void problems.push(`${at}: id ${JSON.stringify(clean(id))} is not d<n>`);
+    if (ids.has(id)) return void problems.push(`${at}: duplicate id ${id}`);
+    const status = a.status as AskStatus;
+    if (!ASK_STATUS.includes(status))
+      return void problems.push(`${at}: status ${JSON.stringify(a.status)}`);
+    const opts = a.options === undefined ? [] : a.options;
+    if (!Array.isArray(opts) || opts.some((o) => !str(o)))
+      return void problems.push(`${at}: options is not a list of text`);
+    let needsPane = false;
+    if (a.needsPane === true) needsPane = true;
+    else if (a.needsPane != null && a.needsPane !== false) {
+      problems.push(`${at}: needsPane is not true or false`);
+      needsPane = true; // fails closed
+    }
+    let explicit = false;
+    if (a.explicit === true) explicit = true;
+    else if (a.explicit != null && a.explicit !== false) {
+      problems.push(`${at}: explicit is not true or false`);
+      explicit = true; // fails closed
+    }
+    const options = opts.map((o) => str(o)!);
+    if (!needsPane && (options.length < ASK_OPTIONS.min || options.length > ASK_OPTIONS.max))
+      return void problems.push(
+        `${at}: wants ${ASK_OPTIONS.min} to ${ASK_OPTIONS.max} options (has ${options.length})`,
+      );
+    if (options.length > ASK_OPTIONS.max)
+      return void problems.push(
+        `${at}: wants at most ${ASK_OPTIONS.max} options (has ${options.length})`,
+      );
+    ids.add(id);
+    const isLetter = (v: unknown) =>
+      typeof v === 'string' && v.length === 1 && v >= 'a' && v < letter(options.length);
+    const asked = parseTime(a.asked);
+    if (asked === null) problems.push(`${at}: asked is not an ISO time`);
+    let pick: string | null = null;
+    if (a.pick != null) {
+      if (isLetter(a.pick)) pick = a.pick as string;
+      else problems.push(`${at}: pick ${JSON.stringify(a.pick)} is not one of its options`);
+    }
+    let lane: string | null = null;
+    if (a.lane != null) {
+      if (typeof a.lane === 'string' && LANE_RE.test(a.lane)) lane = a.lane;
+      else problems.push(`${at}: lane is not a branch name`);
+    }
+    let pane = str(a.pane);
+    if (needsPane && !pane) {
+      problems.push(`${at}: needsPane with no pane`);
+      pane = lane;
+    }
+    let answer: string | null = null;
+    if (a.answer != null) {
+      if (isLetter(a.answer)) answer = a.answer as string;
+      else problems.push(`${at}: answer ${JSON.stringify(a.answer)} is not one of its options`);
+    }
+    asks.push({
+      id,
+      asked,
+      text,
+      options,
+      pick,
+      lane,
+      needsPane,
+      explicit,
+      pane,
+      go: str(a.go),
+      status,
+      answer,
+      answeredAt: parseTime(a.answeredAt),
+    });
+  });
+  return { asks, askSeq };
 }
 
 // amber past 30 min, red past 2 h

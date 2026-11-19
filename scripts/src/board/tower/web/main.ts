@@ -7,6 +7,7 @@
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { BRIEF_FILE, briefText, type BriefView } from '../brief.ts';
 import { budgetNow } from '../../budget-read.ts';
+import { PRS_FILE, prsFile } from '../../lookup.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -32,7 +33,7 @@ import { readCosts, readMacStats, type MacRead } from '../health.ts';
 import { readLanes } from '../lanes.ts';
 import { MAINLOG_ARGS, parseMainLog, type MainMerge } from '../mergelog.ts';
 import { fixturePaths } from '../main.ts';
-import { PrCache, ghFetch, type Fetch } from '../prs.ts';
+import { PrCache, ghFetch, type Fetch, type Pr } from '../prs.ts';
 import { Source, defaultPaths, type Paths } from '../source.ts';
 import {
   boardLine,
@@ -348,7 +349,16 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       },
     };
   }
-  return { poll, view, sample, clock, paths, version };
+  return {
+    poll,
+    view,
+    sample,
+    clock,
+    paths,
+    version,
+    prs: () => prs?.list ?? [],
+    prsAt: () => prs?.at ?? null,
+  };
 }
 
 // dispatch's ctx.json; its mtime is its time (a fixture's is the fixed clock's)
@@ -404,11 +414,17 @@ export function briefBudget(
   }
 }
 
-// brief.txt (brief.ts): `pnpm board brief` prints it. Its own writer, beside writeDerived's two files.
-export function writeBrief(dir: string, v: BriefView) {
-  const tmp = join(dir, `.${BRIEF_FILE}.tmp.${process.pid}`);
-  writeFileSync(tmp, briefText(v));
-  renameSync(tmp, join(dir, BRIEF_FILE));
+// brief.txt (brief.ts): `pnpm board brief` prints it; pr-index.json (`board wi`) beside it. Their own writer, beside writeDerived's two files; each file tmp + rename. pr-index.json carries when the
+// PR list was fetched (`prsAt`, the cache's last success; null before the first), not when it was written, so `wi`
+// can say how old it is.
+export function writeBrief(dir: string, v: BriefView, prs: Pr[] = [], prsAt: number | null = null) {
+  const put = (name: string, text: string) => {
+    const tmp = join(dir, `.${name}.tmp.${process.pid}`);
+    writeFileSync(tmp, text);
+    renameSync(tmp, join(dir, name));
+  };
+  put(BRIEF_FILE, briefText(v));
+  put(PRS_FILE, prsFile(prs, prsAt));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -461,7 +477,12 @@ async function run(a: Args) {
         const v = t.view(false);
         try {
           // its own try: a failed board.line must not age the brief into TOWER DOWN
-          writeBrief(t.paths.boardDir, { ...v, budget: briefBudget(t.paths.boardDir) });
+          writeBrief(
+            t.paths.boardDir,
+            { ...v, budget: briefBudget(t.paths.boardDir) },
+            t.prs(),
+            t.prsAt(),
+          );
         } catch (e) {
           process.stderr.write(`tower-web: brief.txt: ${(e as Error).message}\n`);
         }

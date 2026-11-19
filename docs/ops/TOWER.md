@@ -30,6 +30,7 @@ board.sh tower start → tower-web.sh → node tower/web/main.ts   ◀── GET
 | `board.sh sync start\|restart\|stop\|status\|once\|ensure` | The main sync loop (_Board freshness_ → _Main sync_). `ensure` starts it only for the real board, which `tower start` and the tower's minute tick do.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `pnpm board stale [--json]`                                | The tower's last `stale.json`: queue.json's age and each fact it contradicts, with the fix (_Board freshness_).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `pnpm board brief`                                         | The tower's last `brief.txt`, verbatim: the status block the hub pastes when the maintainer asks for status (_Board freshness_ → _Derived files_). Past 180 s old it opens `TOWER DOWN: this brief is from HH:MM`; with no file yet it refuses (exit 2).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `pnpm board asks …`, `pnpm board wi <id>`                  | dispatch's asks and the id lookup, from the tower's derived files and `queue.json` (HUB.md → _Asks_, _Shortcuts_). The writers run from `/workspace` only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `scripts/board/tower-web.sh --once`                        | One View as JSON, no socket (`--fixtures <dir> --now <iso>` for the recorded board; `--no-gh`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 
 The SessionStart hook (`board-session.sh`) starts it when none is running, always from `/workspace`'s main checkout
@@ -84,6 +85,10 @@ From the top:
      agent older than the power fields shows no line, never red, and NEEDS YOU carries its reinstall.
    - **AWS**: month to date.
 2. **NEEDS YOU (n)**, in order:
+   - **asks**: dispatch's open `queue.json` `asks[]` (`asks.ts`; HUB.md → _Asks_), oldest id first, badged `D3`, with
+     its pick or `go in <pane>`; a tap shows each lettered option and how to reply (`d3 b` · `d3 ok` · `d3 ?`, or the
+     pane and the words for a pane ask). No copy button: the reply is two words. Expanded, they sit under their own
+     _Asks_ heading; at a glance they lead the one 6-row cap;
    - lane `needs` items, with the link or a copy button for the one-line Mac command (the phone says "on the Mac"
      instead; the command is in the details). An ask written before its lane's PR merged is dropped with the lane;
      one written after the merge shows;
@@ -101,7 +106,7 @@ From the top:
      read HH:MM", with why (the refresh's own error, `failedWhy`) in its details.
    - A building lane whose lane file hasn't moved in 2 h (`STALE.lane`) carries an amber "quiet" age.
 4. **NEXT**:
-   - your next step (the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item not
+   - your next step (the first open ask, else the first NEEDS YOU item, with how many more; else the first `plan[]` `maintainer` item not
      `done` that is undated, or timed within 2 h of now either way);
    - **NEXT ASK**: when the maintainer is next asked for something, `~HH:MM–HH:MM` — the earliest of a NOW lane's
      PR window (its lane file's `eta.pr`, while it has no open PR; `late` once that window has passed) and the next
@@ -327,6 +332,9 @@ beside `queue.json` every 30 s, tmp + rename:
 - `brief.txt`, which `pnpm board brief` prints (`brief.ts`): one fixed block, every heading always there in this
   order, with `none` or `unknown` written out (gh unreachable reads `MERGE unknown (gh PRs …)`, never `none`).
   Board text is one line, control bytes out, capped. A new line is one more entry in `SECTIONS`.
+  Beside it, by the same writer: `pr-index.json` (`lookup.ts`: number, title, branch, state, url of the PR list,
+  stamped with the list's fetch time, `null` before gh first answers), which `pnpm board wi` reads, saying when the
+  list is over 10 min old.
 
   ```
   BRIEF 13:42 · board 4m · 2 stale · tower c5797521
@@ -335,6 +343,7 @@ beside `queue.json` every 30 s, tmp + rename:
   MERGE 1 · PR 231 <lane> "<title>"                         MERGE ME, then HOLD with its reason
   QUEUED 12 · 3 ready · 5 held                              then the first 5 (QUEUED above), +n more
   ASK ~14:10–14:30 <what>                                   NEXT ASK
+  ASKS 2 · 1 needs your go in a pane                        then the first 5 open asks: id, text, options, pick
   NEEDS 3 · <first item> (+2)
   USAGE 53% · 9.6%/h · ~4.8 h to 100% (13:40)               pnpm usage line, with when it was read
   MAC AC 79% charging … · load 8.2 11.0 12.1 /12            the Mac line (Low Power and battery as RED:) and load

@@ -44,6 +44,34 @@ import { machine } from './machine.ts';
 import { ranId, ranOut } from './ran.ts';
 import { BRIEF_FILE, briefOut } from './tower/brief.ts';
 import { macRoot } from '../mac-root.ts';
+import { parseQueue } from './tower/queue.ts';
+import {
+  addAsk,
+  answerAsks,
+  askLines,
+  askShow,
+  closeAsk,
+  openAsks,
+  pruneAsks,
+} from './tower/asks.ts';
+import { readLanes } from './tower/lanes.ts';
+import { PRS_FILE, readPrIndex, whatIs } from './lookup.ts';
+import {
+  AWAY_FILE,
+  AWAY_LAST,
+  awayStamp,
+  backDigest,
+  readStamp,
+  stopAt,
+  stopLine,
+  usageRow,
+  STOP_FILE,
+  stopFile,
+  AWAY_STALE_MS,
+  type Merged,
+  type Started,
+} from './away.ts';
+import { hhmm } from './tower/fmt.ts';
 
 export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on any command: its usage; nothing runs)
   decide-heavy                          stdin {limits, liveLimits, live, slots, req} → HeavyDecision
@@ -58,7 +86,18 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   sync-main                             the main checkout to origin/main; restarts the web tower if its code changed
   stale [--json]                        where queue.json contradicts the derived board (the web tower's stale.json)
   brief                                 the status block the hub pastes verbatim (the web tower's brief.txt)
-  ran <slug>                            the suffix that records a Mac line's exit code for merge-watch.sh`;
+  ran <slug>                            the suffix that records a Mac line's exit code for merge-watch.sh
+  asks list|add|show|answer|close …     dispatch's asks of the maintainer, in queue.json asks[] (docs/ops/HUB.md → Asks):
+      list [--json]                     the open ones, numbered, with how to reply
+      add                               stdin {text, options, pick?, lane?, pane?, go?, explicit?} → the new id (d<n>)
+      show <id>                         one ask in full, any status
+      answer <id> <letter|ok>           mark it answered; prints the meaning and the [relay] line (never a pane ask's go)
+      answer all ok <newest>            each pick, for the asks up to <newest> (the last id the user was shown), bar explicit ones
+      close <id>                        withdrawn, answered in words, or a pane go that arrived
+  wi <id>                               what an F-number, PR n, d<n> or lane name is
+  away [ping]                           stamp the maintainer away (the hub's /away)
+  back                                  what moved since /away, then clear the stamp
+  stop <HH:MM>|off                      the hub's hard stop: stop.json stopAt (pace-watch.sh exit 12)`;
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
 export const FLAGS: Record<string, Spec> = {
@@ -75,6 +114,15 @@ export const FLAGS: Record<string, Spec> = {
   stale: { bare: ['json'] },
   brief: {},
   ran: { args: 1 },
+  'asks list': { bare: ['json'] },
+  'asks add': {},
+  'asks show': { args: 1 },
+  'asks answer': { args: 3 },
+  'asks close': { args: 1 },
+  wi: { args: 1 },
+  away: { args: 1 },
+  back: {},
+  stop: { args: 1 },
 };
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.
@@ -238,6 +286,130 @@ const readOr = (p: string) => {
     return null;
   }
 };
+
+const board = () => {
+  const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
+  if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+  return dir;
+};
+// tmp + rename, so a reader never sees half a file
+const put = (f: string, text: string) => {
+  writeFileSync(`${f}.tmp.${process.pid}`, text);
+  renameSync(`${f}.tmp.${process.pid}`, f);
+};
+const readQueue = (dir: string) => parseQueue(readOr(join(dir, 'queue.json')));
+// why a read found no queue (missing, or a file that doesn't parse), so a reader says "unknown", never "none"
+const queueWhy = (q: ReturnType<typeof readQueue>) =>
+  q.data ? null : `queue.json ${q.status}${q.problems.length ? `: ${q.problems[0]}` : ''}`;
+const queueAsks = (q: ReturnType<typeof readQueue>) => queueWhy(q) ?? openAsks(q.data);
+
+// The hub's files are written from the main checkout only (/workspace, where the hub runs): a lane's run of a writer
+// would act for the hub. The main checkout is the one whose git dir is the common dir.
+function hubBoard(verb: string): string {
+  const here = process.env.INIT_CWD ?? process.cwd(); // pnpm runs scripts from the root; INIT_CWD is where it was typed
+  const g = gitOr(here, 'rev-parse', '--path-format=absolute', '--git-dir', '--git-common-dir');
+  const [gd, common] = (g ?? '').trim().split('\n');
+  if (!gd || gd !== common)
+    throw new Error(
+      `${verb} writes the hub's files: run it from the main checkout (/workspace), not a worktree`,
+    );
+  return board();
+}
+
+// lane starts: lifecycle/<branch>.json `startedAt`
+function lifecycle(dir: string): Started[] {
+  let files: string[];
+  try {
+    files = readdirSync(join(dir, 'lifecycle')).filter((f) => f.endsWith('.json'));
+  } catch {
+    return [];
+  }
+  return files.flatMap((f) => {
+    try {
+      const l = JSON.parse(readFileSync(join(dir, 'lifecycle', f), 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      return typeof l.branch === 'string' &&
+        typeof l.startedAt === 'string' &&
+        Date.parse(l.startedAt) > 0
+        ? [{ branch: l.branch, startedAt: l.startedAt }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+// `asks <sub>`: reads go anywhere; writes (add, answer, close) are the hub's, from the main checkout, and land only
+// when the whole file still parses with no asks problem.
+function asks(args: string[], rest: string[], stdin: () => string, now: number): string {
+  const [sub, a1, a2, a3] = args;
+  if (sub === 'list' || sub === 'show') {
+    const q = readQueue(board());
+    if (!q.data)
+      throw new Error(
+        `queue.json: ${q.status}${q.problems.length ? ` (${q.problems.join('; ')})` : ''}`,
+      );
+    if (sub === 'show') {
+      const a = (q.data.asks ?? []).find((x) => x.id === (a1 ?? '').toLowerCase());
+      if (!a) throw new Error(`asks show: no ask ${a1 ?? '(none given)'}`);
+      return askShow(a);
+    }
+    const open = openAsks(q.data);
+    return rest.includes('--json') ? JSON.stringify(open) : askLines(open);
+  }
+  const dir = hubBoard(`asks ${sub}`);
+  const f = join(dir, 'queue.json');
+  const text = readOr(f);
+  if (text === null) throw new Error(`no ${f}`);
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    throw new Error(`queue.json is not JSON (${(e as Error).message}): fix it first`, { cause: e });
+  }
+  // prune first and judge the write against the pruned file: the op then only appends (add) or edits in place
+  // (answer, close), so a problem's index never moves and a pruned entry never hides a new problem
+  raw = pruneAsks(raw, now);
+  const before = parseQueue(JSON.stringify(raw));
+  if (!before.data) throw new Error(`queue.json: ${before.problems.join('; ')}`);
+  const list = before.data.asks ?? [];
+  let next: Record<string, unknown>;
+  let out: string;
+  if (sub === 'add') {
+    let input: unknown;
+    try {
+      input = JSON.parse(stdin());
+    } catch (e) {
+      throw new Error(`asks add: stdin is not JSON (${(e as Error).message})`, { cause: e });
+    }
+    const r = addAsk(raw, input, now);
+    next = r.raw;
+    out = r.id;
+  } else if (sub === 'answer') {
+    if (!a1 || !a2) throw new Error('usage: asks answer <id> <letter|ok> | all ok <newest shown>');
+    if (a3 !== undefined && a1 !== 'all')
+      throw new Error(`asks answer: a newest id (${a3}) goes only with \`all ok\``);
+    const r = answerAsks(raw, list, a1, a2, now, a3 ?? null);
+    if (!r.answered) return r.out.join('\n'); // nothing to write
+    next = r.raw;
+    out = r.out.join('\n');
+  } else if (sub === 'close') {
+    if (!a1) throw new Error('usage: asks close <id>');
+    next = closeAsk(raw, list, a1, now);
+    out = `CLOSED ${a1.toLowerCase()}`;
+  } else throw new Error(`unknown asks subcommand "${sub ?? ''}"`);
+  // updatedAt stays: it is the hub's last look at the whole queue (the tower's queue age), which an ask write isn't
+  const body = JSON.stringify(next, null, 2) + '\n';
+  // only a problem this write made refuses it: one already on file (a hand edit) never locks the hub out of closing it
+  const had = new Set(before.problems);
+  const bad = parseQueue(body).problems.filter((p) => /^asks|^askSeq/.test(p) && !had.has(p));
+  if (bad.length)
+    throw new Error(`asks ${sub}: refused, the result would not parse: ${bad.join('; ')}`);
+  put(f, body);
+  return out;
+}
 
 export function main(argv: string[], stdin: () => string): string {
   const [cmd, ...rest] = argv;
@@ -431,9 +603,78 @@ export function main(argv: string[], stdin: () => string): string {
         `ran: every ${slug} id for the next minute is already on disk: try again later`,
       );
     }
+    case 'asks':
+      return asks(args, rest, stdin, now.getTime());
+    case 'wi': {
+      const [id] = args;
+      if (!id) throw new Error('usage: wi <F-number | PR n | d<n> | lane>');
+      const dir = board();
+      const q = readQueue(dir);
+      return whatIs(id, {
+        queue: q.data,
+        queueWhy: queueWhy(q),
+        lanes: readLanes(dir).lanes,
+        prs: readPrIndex(readOr(join(dir, PRS_FILE))),
+        roadmap: readOr(join(dir, '..', 'roadmap.md')),
+        kickoff: (b) => readOr(join(dir, '..', 'kickoffs', `${b}.md`)),
+        now: now.getTime(),
+      });
+    }
+    case 'away': {
+      const [ping] = args;
+      if (ping !== undefined && ping !== 'ping') throw new Error('usage: away [ping]');
+      const dir = hubBoard('away');
+      const usage = usageRow(readOr(join(dir, 'board.line')));
+      // already away (no /back since): the first stamp stands, so /back still covers the whole time; only ping changes
+      const was = readStamp(readOr(join(dir, AWAY_FILE)));
+      // a stamp past AWAY_STALE_MS had no /back: a new away starts fresh, and says the old one went
+      const prev = was && now.getTime() - Date.parse(was.at) <= AWAY_STALE_MS ? was : null;
+      const stamp = prev ? { ...prev, ping: !!ping } : awayStamp(now.getTime(), !!ping, usage);
+      put(join(dir, AWAY_FILE), JSON.stringify(stamp) + '\n');
+      return prev
+        ? `AWAY still, since ${hhmm(Date.parse(prev.at))}${ping ? ' · ping on asks' : ''} · usage then ${prev.usage ?? 'unknown'}`
+        : `AWAY since ${hhmm(now.getTime())}${ping ? ' · ping on asks' : ''} · usage ${usage ?? 'unknown'}${was ? ` (a stamp from ${was.at.slice(0, 16).replace('T', ' ')} UTC with no /back replaced)` : ''}`;
+    }
+    case 'back': {
+      const dir = hubBoard('back');
+      const stamp = readStamp(readOr(join(dir, AWAY_FILE)));
+      if (!stamp) throw new Error(`back: no ${AWAY_FILE} (no /away stamp to digest from)`);
+      const day = stamp.at.slice(0, 10); // events files are named by UTC day
+      const merged = readJsonl(join(dir, 'history'), 'events-')
+        .filter((e): e is Merged & { kind: string } => {
+          const x = e as Record<string, unknown>;
+          return (
+            x?.kind === 'merged' &&
+            Number.isInteger(x.pr) &&
+            typeof x.sha === 'string' &&
+            typeof x.mergedAt === 'string' &&
+            typeof x.title === 'string'
+          );
+        })
+        .filter((e) => e.mergedAt.slice(0, 10) >= day);
+      const out = backDigest({
+        stamp,
+        now: now.getTime(),
+        merged,
+        started: lifecycle(dir),
+        lanes: readLanes(dir).lanes,
+        asks: queueAsks(readQueue(dir)),
+        usageNow: usageRow(readOr(join(dir, 'board.line'))),
+      });
+      renameSync(join(dir, AWAY_FILE), join(dir, AWAY_LAST));
+      return out;
+    }
+    case 'stop': {
+      const [t] = args;
+      if (!t) throw new Error('usage: stop <HH:MM>|off');
+      const dir = hubBoard('stop');
+      const at = t === 'off' ? null : stopAt(t, now.getTime());
+      put(join(dir, STOP_FILE), stopFile(at, now.getTime()));
+      return at === null ? 'STOP off' : stopLine(at, now.getTime());
+    }
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | budget | budget-report | lane | sync-main | stale | brief | ran (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | budget | budget-report | lane | sync-main | stale | brief | ran | asks | wi | away | back | stop (got ${cmd ?? 'nothing'})`,
       );
   }
 }

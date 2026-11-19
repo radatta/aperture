@@ -112,6 +112,7 @@ function inputs(
     maintainer?: { text: string; since: string | null }[];
     mergeOrder?: NonNullable<TowerState['queue']['data']>['mergeOrder'];
     autoQueue?: NonNullable<TowerState['queue']['data']>['autoQueue'];
+    asks?: NonNullable<TowerState['queue']['data']>['asks'];
     plan?: (Pick<PlanItem, 'at' | 'what' | 'kind' | 'who'> & Partial<PlanItem>)[];
     planNotes?: string[];
     mainLog?: Inputs['mainLog'];
@@ -153,6 +154,8 @@ function inputs(
         mergeOrder: over.mergeOrder ?? [],
         autoStart: (over.autoQueue ?? []).map((a) => a.branch),
         autoQueue: over.autoQueue ?? [],
+        asks: over.asks ?? [],
+        askSeq: null,
       },
     },
     prs: { list: over.prs ?? [], at: NOW - MIN, error: null },
@@ -444,6 +447,36 @@ describe('the accuracy audit (2026-11-14)', () => {
     const y = derive(inputs({ plan: [{ ...timed[0]!, done: true }, ...plan] })).next;
     expect(y.maintainer).toBe('Rotate the test key');
     expect(soon(y)).not.toContain('In an hour');
+  });
+
+  it('open asks lead YOU NEXT and count in NEEDS YOU; answered ones never show', () => {
+    const ask = (id: string, status: 'open' | 'answered' | 'closed') => ({
+      id,
+      asked: NOW - MIN,
+      text: `ask ${id}`,
+      options: ['x', 'y'],
+      pick: 'a',
+      lane: null,
+      needsPane: false,
+      explicit: false,
+      pane: null,
+      go: null,
+      status,
+      answer: status === 'answered' ? 'a' : null,
+      answeredAt: status === 'open' ? null : NOW,
+    });
+    const v = derive(
+      inputs({
+        maintainer: [{ text: 'a todo', since: null }],
+        asks: [ask('d9', 'open'), ask('d2', 'open'), ask('d1', 'answered'), ask('d3', 'closed')],
+      }),
+    );
+    expect(v.asks!.map((a) => a.id)).toEqual(['d2', 'd9']);
+    expect(v.next).toMatchObject({ maintainer: 'd2 ask d2', more: 2 });
+    expect(v.heads.needs).toBe('3');
+    const none = derive(inputs({ maintainer: [{ text: 'a todo', since: null }] }));
+    expect(none.asks).toEqual([]);
+    expect(none.next).toMatchObject({ maintainer: 'a todo', more: 0 });
   });
 
   it('a bare-date since is the end of that local day, shown as the day', () => {

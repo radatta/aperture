@@ -23,6 +23,8 @@ import { nextAsk, planSoon, planTable, type Ask, type PlanRow } from './plan.ts'
 import type { Pr } from './prs.ts';
 import { firedFollowups, sinceTime, staleFollowups, type Lane } from './queue.ts';
 import { queuedView, type QueuedItem } from './queued.ts';
+import { openAsks } from './asks.ts';
+import type { Ask as QueueAsk } from './queue.ts';
 
 export type Slot = 'dev' | 'devb';
 export type State =
@@ -173,6 +175,7 @@ export type View = {
   board: Board; // queue.json's age and where it contradicts the derived facts (stale.ts)
   ctx: CtxView | null; // sessions over 40 % and 50 % context (ctx.ts); null with no ctx.json
   queued: QueuedItem[]; // QUEUED: autoStart lanes not started yet, in start order (queued.ts)
+  asks: QueueAsk[] | null; // null: no queue.json to read; dispatch's open asks of the maintainer, oldest first (asks.ts): NEEDS YOU's first group
 };
 
 export type Inputs = {
@@ -873,13 +876,15 @@ export function derive(i: Inputs): View {
     i.now,
     (n) => mergedPrs.get(n) ?? null,
   );
-  // the maintainer's next step: the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
+  // the maintainer's next step: the first open ask (asks[]), else the first NEEDS YOU item, else the next plan[] step of theirs (undated, or timed
   // within 2 h of now either way: tomorrow evening's step never jumps the undated ones); the rest follow it
   const mine = (q?.plan ?? []).filter(
     (p) =>
       p.kind === 'maintainer' && !p.done && (p.at === null || Math.abs(p.at - i.now) <= 2 * 3600e3),
   );
-  const first = needs[0]?.what ?? mine[0]?.what ?? null;
+  const asks = q ? openAsks(q) : null;
+  const askWhat = asks?.[0] ? `${asks[0].id} ${asks[0].text}` : null;
+  const first = askWhat ?? needs[0]?.what ?? mine[0]?.what ?? null;
   const ask = nextAsk(
     table.rows,
     rows
@@ -908,7 +913,7 @@ export function derive(i: Inputs): View {
     parked: rows.filter((r) => r.state === 'PARKED').map((r) => r.branch),
     merge: rows.filter((r) => r.state === 'MERGE ME' || r.state === 'HOLD'),
     maintainer: first,
-    more: Math.max(0, needs.length - 1),
+    more: Math.max(0, (asks?.length ?? 0) + needs.length - 1),
     nowIndex: table.nowIndex,
     soon: planSoon(
       // the rows YOU NEXT and NEXT ASK already show aren't repeated
@@ -1037,7 +1042,7 @@ export function derive(i: Inputs): View {
   const srcs = sources(i);
   const off = srcs.filter((s) => s.state !== 'ok').length;
   const heads: View['heads'] = {
-    needs: String(needs.length),
+    needs: String((asks?.length ?? 0) + needs.length),
     now: `${active.length} lane${active.length === 1 ? '' : 's'}`,
     next: next.ask
       ? `ask ${next.ask.late ? 'late' : next.ask.lo <= i.now ? 'now' : `~${hhmm(next.ask.lo)}`}`
@@ -1063,6 +1068,7 @@ export function derive(i: Inputs): View {
       q,
       new Set([...files.keys(), ...prs.filter((p) => p.state === 'OPEN').map((p) => p.branch)]),
     ),
+    asks,
     heads,
     done,
     health: {

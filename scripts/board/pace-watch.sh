@@ -4,11 +4,12 @@
 # docs/ops/LANES.md → The pace gate) and EXITS ONLY ON A TRANSITION, so the hub wakes just then:
 #   3 = trip (calm → hot)   0 = recovered (hot → calm)   5 = a held lane's resume trigger met   4 = hot for hotExitSec
 #   6 = idle capacity and a ready autoStart lane (start it, or say why not)   78 = a limits.json key is missing or bad
-#   2 = an argument (it takes none)
-# The hub owns pace-control.json ({state: calm|hot, since: <epoch>, held, triggers: [{lane, load5Below}]}) and
-# queue.json; both are read-only here. Thresholds: limits.json → watchers.pace, plus four of the gate's `pace` keys
-# (psiMemFullMax, psiCpuBelow, anonMiBBelow, minSamples) so the trip and the gate share them. What each means:
-# docs/ops/SESSION-BOARD.md → Watchers.
+#   12 = the hub's hard stop is STOP_LEAD away (stop.json stopAt, set only by `pnpm board stop HH:MM|off`)
+#   74 = stop-fired unwritable (fixing the board dir comes first)   2 = an argument (it takes none)
+# The hub owns pace-control.json ({state: calm|hot, since: <epoch>, held, triggers: [{lane, load5Below}]}), stop.json
+# ({stopAt: <epoch>|null}) and queue.json; all are read-only here. Thresholds: limits.json → watchers.pace, plus four
+# of the gate's `pace` keys (psiMemFullMax, psiCpuBelow, anonMiBBelow, minSamples) so the trip and the gate share them.
+# What each means: docs/ops/SESSION-BOARD.md → Watchers.
 # Run: timeout 65m scripts/board/pace-watch.sh   (124 = an hour, nothing happened: restart it)
 set -u
 [ $# -eq 0 ] || { echo "usage: pace-watch.sh (no arguments; docs/ops/HUB.md → Watchers)" >&2; exit 2; }
@@ -37,7 +38,7 @@ FLOOR=$(wl_int $W .pace.minSamples) || exit 78
 # a floor above the window is never reached: no trip, recovery or idle ever, and the gate stays warming
 [ "$FLOOR" -le "$WINDOW" ] || { echo "$W: limits.json .pace.minSamples $FLOOR is above .watchers.pace.windowSamples $WINDOW" | tee -a "$BOARD_DIR/$W.log" >&2; exit 78; }
 sb_init_dirs
-OUT=$BOARD_DIR/pace.json CTL=$BOARD_DIR/pace-control.json
+OUT=$BOARD_DIR/pace.json CTL=$BOARD_DIR/pace-control.json STOPF=$BOARD_DIR/stop.json
 # The mailroom's shared folder (docs/ops/MAILROOM.md): beside the real board's checkout, else only when named.
 HOSTJOBS=${APERTURE_HOSTJOBS:-}
 [ -n "$HOSTJOBS" ] || [ "$BOARD_DIR" != "$SB_HOME_BOARD" ] || HOSTJOBS=${BOARD_DIR%/localNotes/board}/.hostjobs
@@ -65,6 +66,8 @@ hostjobs() {
   printf '{"ios":%d,"fx":%d,"other":%d,"queued":%d}\n' "$ios" "$fx" "$other" "$q"
 }
 
+STOP_LEAD=600 # away.ts STOP_LEAD_SEC: ten minutes for the hub to tell each lane, and the lanes to stop clean by stopAt
+
 anon=() cores=() pcpu=() cpuhot_at=0 idle_at=0 state=calm since=0
 avg() { printf '%s\n' "$@" | awk '{s+=$1} END{if(NR) printf "%.2f", s/NR; else print 0}'; }
 push() { local -n a=$1; a+=("$2"); [ "${#a[@]}" -gt "$WINDOW" ] && a=("${a[@]:1}"); }
@@ -75,6 +78,17 @@ u_prev=$(cg_usage_usec 2>/dev/null) t_prev=$(date +%s)
 while :; do
   sleep "$EVERY"
   now=$(date +%s) u=$(cg_usage_usec 2>/dev/null) an=$(cg_anon 2>/dev/null) pc=$(wl_psi cpu some) pmem=$(wl_psi memory full) l5=
+  # 12 = the hub's hard stop, before any reading (a stop never waits on a good sample): STOP_LEAD ahead of stopAt, and
+  # until an hour past it (a watcher down at the time still wakes the hub), once per stopAt (stop-fired holds the last).
+  st=$(jq -r 'select(type == "object") | .stopAt | select(type == "number" and . > 0) | floor' "$STOPF" 2>/dev/null)
+  if [[ "$st" =~ ^[0-9]{1,12}$ ]] && [ "$now" -ge $((st - STOP_LEAD)) ] && [ "$now" -lt $((st + 3600)) ] &&
+    [ "$(cat "$BOARD_DIR/stop-fired" 2>/dev/null)" != "$st" ]; then
+    # an unwritable stop-fired would fire 12 on every restart for the hour: fail loud instead (74, as merge-watch does)
+    echo "$st" | sb_write "$BOARD_DIR/stop-fired" ||
+      { wl_say $W "$(wl_at +%H:%M) STOP at $(date -d "@$st" +%H:%M) is due, but stop-fired is unwritable"; exit 74; }
+    wl_say $W "$(wl_at +%H:%M) STOP at $(date -d "@$st" +%H:%M): hard stop, lanes stop clean by then"
+    exit 12
+  fi
   read -r _ l5 _ 2>/dev/null <"$LOADAVG"
   # Any unreadable reading skips the tick, judging nothing: pace.json goes stale and the start gate fails closed,
   # where a stand-in 0 would read as an idle box. The next good tick's CPU rate spans the gap (t_prev stays).

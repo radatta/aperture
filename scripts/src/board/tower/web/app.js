@@ -303,12 +303,57 @@ function needItem(n) {
   });
 }
 
+// dispatch's open asks (asks.ts): answered by typing `d3 b` (or `d3 ok`, the pick) to dispatch. A pane ask is a go
+// typed in that pane, never a reply. No copy button: the reply is two words, and phones have none.
+const optLetter = (i) => String.fromCharCode(97 + i);
+function dAskItem(a) {
+  return item(`ask:${a.id}`, {
+    c: 'c-hold',
+    badge: a.id.toUpperCase(),
+    sig: `${a.text}|${a.pick ?? ''}`,
+    text: [short(a.text)],
+    meta: [
+      // a meta chip never wraps: the pane is capped here, named in full in the details
+      a.needsPane
+        ? `go in ${short(a.pane ?? a.lane ?? '?', 20)}`
+        : a.pick
+          ? `pick ${a.pick}`
+          : 'no pick',
+      a.asked ? timer(a.asked) : null,
+    ],
+    more: [
+      short(a.text) !== a.text ? a.text : null,
+      ...a.options.map(
+        (o, i) => `${optLetter(i)}) ${o}${a.pick === optLetter(i) ? '  ← pick' : ''}`,
+      ),
+      a.needsPane
+        ? `type in the ${a.pane ?? a.lane ?? '?'} pane: ${a.go ?? 'go'}`
+        : `reply ${a.id} <letter>${a.pick ? ` · ${a.id} ok` : ''} · ${a.id} ?`,
+      a.lane ? `for ${a.lane}` : null,
+    ],
+  });
+}
+
 function needs(v) {
   const b = body('needs');
-  $('#needs .count').textContent = v.needs.length ? `(${v.needs.length})` : '';
-  $('#needs').classList.toggle('has', v.needs.length > 0);
-  if (!v.needs.length) return emptyOr(v, b, 'needs', 'nothing needs you ✓');
-  list(b, 'needs', v.needs.map(needItem), 6);
+  const asks = v.asks ?? []; // a page newer than its server: no asks yet
+  const n = asks.length + v.needs.length;
+  $('#needs .count').textContent = n ? `(${n})` : '';
+  $('#needs').classList.toggle('has', n > 0);
+  if (!n) return emptyOr(v, b, 'needs', 'nothing needs you ✓');
+  // the glance: asks first inside the one cap; expanded, a heading over each group
+  const both = asks.length && v.needs.length && inFull;
+  list(
+    b,
+    'needs',
+    [
+      ...(both ? [el('h3', null, 'Asks (reply to dispatch)')] : []),
+      ...asks.map(dAskItem),
+      ...(both ? [el('h3', null, 'Your items')] : []),
+      ...v.needs.map(needItem),
+    ],
+    6,
+  );
 }
 
 // `o`: a landing-order row (NEXT): its own key, its place, dispatch's note

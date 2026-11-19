@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BRIEF_FILE, BRIEF_STALE_MS, briefOut, briefText, type BriefView } from './brief.ts';
 import { budgetLine, parseBudget } from '../budget.ts';
 import { briefBudget, build, parseArgs, writeBrief } from './web/main.ts';
+import { PRS_FILE } from '../lookup.ts';
 const ctl = (s: string) => [...s].some((c) => c.charCodeAt(0) < 32 && c !== '\n'); // a control byte other than newline
 
 const FIXTURES = join(import.meta.dirname, 'fixtures');
@@ -18,6 +19,7 @@ const HEADS = [
   'MERGE',
   'QUEUED',
   'ASK',
+  'ASKS',
   'NEEDS',
   'USAGE',
   'MAC',
@@ -70,6 +72,12 @@ describe('briefText on the fixture board', () => {
     expect(b).toMatch(/^CTX ≥50 /m);
     expect(b).toMatch(/^ASK ~\d\d:\d\d–\d\d:\d\d echo-branch PR$/m);
     expect(b).toMatch(/^NEEDS 3 · india-branch: admit the branch to dev \(\+2\)$/m);
+    expect(b).toMatch(/^ASKS 2 · 1 needs your go in a pane$/m);
+    expect(b).toMatch(
+      /^ {2}d3 Cache key for the warm cache: .* · a\) per branch b\) per lockfile c\) both · pick b$/m,
+    );
+    expect(b).toMatch(/^ {2}d4 Apply the skills patch to echo-branch · go typed in dispatch$/m);
+    expect(b).not.toMatch(/d2 Start golf/); // answered: not open
     expect(b).toMatch(/^MERGE 0 · 1 on hold$/m);
     expect(b).toMatch(/^ {2}HOLD PR 41 charlie-branch ".*": dev: bravo-branch is testing/m);
   });
@@ -117,6 +125,7 @@ describe('briefText on an empty board', () => {
     })),
     next: { ...fx.next, merge: [], ask: null },
     queued: [],
+    asks: [],
     needs: [],
     usage: null,
     ctx: null,
@@ -134,6 +143,7 @@ describe('briefText on an empty board', () => {
       'SLOTS dev free · devb free',
       'QUEUED none',
       'ASK none',
+      'ASKS none',
       'NEEDS none',
       'USAGE unknown',
       'CTX unknown (no ctx.json)',
@@ -225,11 +235,44 @@ describe('briefText on an empty board', () => {
 });
 
 describe('the brief file and pnpm board brief', () => {
-  it('writeBrief writes by rename and leaves no tmp file', () => {
+  it('an unreadable queue.json is ASKS unknown, never none', () => {
+    expect(briefText({ ...fx, asks: null }, utc)).toMatch(
+      /^ASKS unknown \(queue.json unreadable\)$/m,
+    );
+    const missing = fx.sources.map((x) =>
+      x.name === 'queue.json' ? { ...x, state: 'missing' as const } : x,
+    );
+    expect(briefText({ ...fx, asks: null, sources: missing }, utc)).toMatch(
+      /^ASKS unknown \(queue.json missing\)$/m,
+    );
+  });
+  it('writeBrief writes the brief and the PR index by rename, and leaves no tmp file', () => {
     const dir = tmp();
-    writeBrief(dir, fx);
-    expect(readdirSync(dir)).toEqual([BRIEF_FILE]);
+    writeBrief(dir, fx, [
+      {
+        number: 41,
+        title: 't',
+        branch: 'charlie-branch',
+        state: 'OPEN',
+        mergedAt: null,
+        createdAt: null,
+        sha: null,
+        mergeSha: null,
+        url: null,
+        draft: false,
+      },
+    ]);
+    expect(readdirSync(dir).sort()).toEqual([BRIEF_FILE, PRS_FILE].sort());
     expect(readFileSync(join(dir, BRIEF_FILE), 'utf8')).toMatch(/^BRIEF /);
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).prs).toEqual([
+      { number: 41, title: 't', branch: 'charlie-branch', state: 'OPEN', url: null },
+    ]);
+    // pr-index.json is stamped with the list's fetch time; null before gh first answers (wi says so)
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBeNull();
+    writeBrief(dir, fx, [], Date.parse('2026-11-08T05:00:00Z'));
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBe(
+      '2026-11-08T05:00:00.000Z',
+    );
   });
   it('briefOut prints the file; past 180 s it says TOWER DOWN first', () => {
     expect(briefOut('BRIEF x\n', 1000, 1000 + BRIEF_STALE_MS, utc)).toBe('BRIEF x');
