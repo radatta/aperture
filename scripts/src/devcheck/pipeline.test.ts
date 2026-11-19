@@ -823,6 +823,22 @@ describe('runPipeline', () => {
     expect(r.durationMs - sum).toBeLessThanOrEqual(10); // the one tick of the fake clock after the last phase
   });
 
+  it('a crash before the steps still splits its time: the steps phase stays 0, cleanup still counts', async () => {
+    const w = world();
+    const r = await runPipeline(
+      deps(w, [scenario(async (x) => void x.uiCreate('a'))(w)], memLedger(), {
+        openBrowser: async () => Promise.reject(new Error('chromium died')),
+      }),
+    );
+    expect(r.status).toBe('CRASH');
+    const p = r.phases!;
+    expect(p.stepsMs).toBe(0);
+    expect(p.setupMs).toBe(0);
+    expect(p.openMs).toBeGreaterThan(0);
+    expect(p.cleanupMs).toBeGreaterThan(0);
+    expect(Object.values(p).reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(r.durationMs);
+  });
+
   it('a leftover short work block from a killed run is put back before any step', async () => {
     const w = world();
     await w.api.writes.updateSettings({ pomodoroWorkMin: 1 });

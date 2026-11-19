@@ -41,20 +41,24 @@ OUT=$BOARD_DIR/pace.json CTL=$BOARD_DIR/pace-control.json
 # The mailroom's shared folder (docs/ops/MAILROOM.md): beside the real board's checkout, else only when named.
 HOSTJOBS=${APERTURE_HOSTJOBS:-}
 [ -n "$HOSTJOBS" ] || [ "$BOARD_DIR" != "$SB_HOME_BOARD" ] || HOSTJOBS=${BOARD_DIR%/localNotes/board}/.hostjobs
+HJ_REF="${TMPDIR:-/tmp}/aperture-pace-watch.$$.cut" # a stamp 15 min back: what a running job's dir is newer than
+trap 'rm -f "$HJ_REF"' EXIT
 
 # Mailroom jobs the Mac is running now, as JSON {ios, fx, other, queued}: a result dir the Mac made (its pickup) with
-# no result.json yet and an id stamped in the last 15 min (a sim's deadline), by lane name (…Z-ios-…, …Z-fx-…), plus
-# the inbox's waiting entries. null without the folder.
+# no result.json yet, touched in the last 15 min (the pickup, or a heartbeat's rename inside it), by lane name
+# (…Z-ios-…, …Z-fx-…), plus the inbox's waiting entries. Only ids stamped on today's UTC day, or on an hour ago's,
+# are looked at (a fixtures job waits up to 15 min for its pickup, then runs). null without the folder.
 hostjobs() {
-  local cut day today d n dirs ios=0 fx=0 other=0 q=0
+  local ref day today d n dirs ios=0 fx=0 other=0 q=0
   [ -n "$HOSTJOBS" ] && [ -d "$HOSTJOBS/results" ] || { echo null; return; }
-  cut=$(date -d "@$((now - 900))" -u +%Y%m%dT%H%M%SZ) day=${cut:0:8}
-  today=$(date -d "@$now" -u +%Y%m%d)
-  dirs=("$HOSTJOBS"/results/"$day"T*) # the cut's UTC day, and today's when the window spans midnight
+  ref=$HJ_REF
+  touch -d "@$((now - 900))" "$ref" 2>/dev/null || { echo null; return; }
+  day=$(date -d "@$((now - 3600))" -u +%Y%m%d) today=$(date -d "@$now" -u +%Y%m%d)
+  dirs=("$HOSTJOBS"/results/"$day"T*)
   [ "$today" = "$day" ] || dirs+=("$HOSTJOBS"/results/"$today"T*)
   for d in "${dirs[@]}"; do
     n=${d##*/}
-    [ -d "$d" ] && [ ! -e "$d/result.json" ] && [[ "${n:0:16}" > "$cut" || "${n:0:16}" = "$cut" ]] || continue
+    [ -d "$d" ] && [ ! -e "$d/result.json" ] && ! [ "$ref" -nt "$d" ] || continue
     case "$n" in *Z-ios-*) ios=$((ios + 1)) ;; *Z-fx-*) fx=$((fx + 1)) ;; *) other=$((other + 1)) ;; esac
   done
   for d in "$HOSTJOBS"/inbox/*.json; do [ -e "$d" ] && q=$((q + 1)); done

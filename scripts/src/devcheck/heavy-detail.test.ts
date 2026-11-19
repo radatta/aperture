@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -66,8 +66,22 @@ describe('devcheckDetail', () => {
     writeHeavyDetail(run([]), 'x', dir);
     expect(JSON.parse(readFileSync(join(dir, 'devcheck.json'), 'utf8')).ms.total).toBe(90_000);
     expect(() => writeHeavyDetail(run([]), 'x', join(dir, 'gone', 'x'))).not.toThrow();
-    const none = mkdtempSync(join(tmpdir(), 'dcd-'));
-    writeHeavyDetail(run([]), 'x', undefined);
-    expect(readdirSync(none)).toEqual([]);
+  });
+
+  it('defaults to HEAVY_DETAIL_DIR, and writes nothing without it', () => {
+    const saved = process.env.HEAVY_DETAIL_DIR; // set when this suite itself runs under heavy.sh
+    const dir = mkdtempSync(join(tmpdir(), 'dcd-'));
+    try {
+      process.env.HEAVY_DETAIL_DIR = dir;
+      writeHeavyDetail(run([]), 'x');
+      expect(readdirSync(dir)).toEqual(['devcheck.json']);
+      rmSync(join(dir, 'devcheck.json'));
+      delete process.env.HEAVY_DETAIL_DIR;
+      writeHeavyDetail(run([]), 'x');
+      expect(readdirSync(dir)).toEqual([]);
+    } finally {
+      if (saved === undefined) delete process.env.HEAVY_DETAIL_DIR;
+      else process.env.HEAVY_DETAIL_DIR = saved;
+    }
   });
 });

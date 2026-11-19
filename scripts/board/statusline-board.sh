@@ -7,7 +7,7 @@
 # Dim when the board is fresh, amber with stale items, red past the tower's threshold; red "tower down" once the tower
 # hasn't written for 3 min (its facts are then old). Replaces localNotes/board/next-merge.sh, whose merge row it reads
 # after the tower's own derivation (a merged PR's row is gone). First, `· mac 6 8 12/12 · vm 2 5 9/9 · slow 30m tc×1.2
-# lint– gl×1.0 gn– gw×1.1` (F293): the Mac's load, the container's live /proc/loadavg over its cores (shown whatever
+# lint– gl×1.0 gn– gw×1.1` (F293): the Mac's load, the VM's live /proc/loadavg over the container's cores (shown whatever
 # the tower's state; the core count from the file), and the slowdown's cut in its tone. Replaces
 # localNotes/board/slowdown-line.sh: while that file is still there, it prints these three itself, so this leaves them
 # out. vm rounds half to even (printf), mac half up (the tower), as that file did.

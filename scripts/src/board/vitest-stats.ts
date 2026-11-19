@@ -90,8 +90,9 @@ interface ProjectLike {
   vitest?: { state?: { getFiles?: () => FileLike[]; transformTime?: unknown } };
 }
 
+// wallMs is the vitest process's age at teardown (performance.now() counts from process start): its config load,
+// startup and run, the same whichever project's setup ran first.
 export default function setup(project: ProjectLike) {
-  const t0 = performance.now();
   return () => {
     const dir = process.env.HEAVY_DETAIL_DIR;
     if (!dir) return;
@@ -101,7 +102,7 @@ export default function setup(project: ProjectLike) {
         pkgOf(project.config?.root ?? process.cwd()),
         state?.getFiles?.() ?? [],
         state?.transformTime,
-        performance.now() - t0,
+        performance.now(),
       );
       writeFileSync(join(dir, `vitest-${process.pid}.json`), `${JSON.stringify(s)}\n`);
     } catch {

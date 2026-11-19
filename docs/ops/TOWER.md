@@ -318,7 +318,7 @@ beside `queue.json` every 30 s, tmp + rename:
   ctx <n≥40> <n≥50> <names≥50|->    sessions over the context lines (_Context per session_)
   slow <ok|warn|bad> <text>         the slowdown's status line cut, in the CONTAINER tile's tone
   mac <l1> <l5> <l15> <cpus>        the Mac's load averages, whole numbers; only from a fresh mac-stats.json
-  vm <cores>                        the container's cores, for the live /proc/loadavg the status line reads
+  vm <cores>                        the container's cores, for the VM's live /proc/loadavg the status line reads
   ```
 
   Text fields are one line with no control bytes (every session's terminal prints them); a ctx name's spaces and
@@ -346,7 +346,7 @@ beside `queue.json` every 30 s, tmp + rename:
 **Status line.** `scripts/board/statusline-board.sh` (builtins only, sourced by `statusline-snippet.sh`) prints
 `· mac 6 8 12/12 · vm 2 5 9/9 · slow 30m tc×1.2 gl×1.0 gn– gw×1.1 · lint no data since 16:58 · usage … · board 12m ·
 3 stale · next ~19:40 <what>`, the next merge last with `?` once its time has passed, the usage part only while under 15 min old. `vm` is
-the container's live `/proc/loadavg` (1, 5, 15 min) over its cores; `slow` is the slowdown's cut (SESSION-BOARD.md →
+the VM's live `/proc/loadavg` (1, 5, 15 min; lxcfs passes it through) over the container's cores; `slow` is the slowdown's cut (SESSION-BOARD.md →
 _History_ → _Slowdown_), dim, amber or red. A `board.line` over 3 min old prints `vm` and red `tower down`, nothing
 else; a missing or garbled one, `vm` alone (with its core count only if the `vm` row survived). It replaces dispatch's `localNotes/board/next-merge.sh`, which read `plan[]` raw, and
 `localNotes/board/slowdown-line.sh`, which spawned node from the status line (F293): while that file is still in the

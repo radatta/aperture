@@ -12,6 +12,7 @@ import {
   readdirSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -435,17 +436,21 @@ describe('pace-watch.sh', () => {
     });
     const dir = paceFake(T10, 1, all({ files: { 'board/mac-stats.json': mac } }));
     const hj = join(dir, 'hostjobs');
-    // the first row is 10:01 PST = 18:01Z: a running job is one stamped since 17:46Z with no result.json
-    const job = (id: string, done = false) => {
-      mkdirSync(join(hj, 'results', id), { recursive: true });
-      if (done) writeFileSync(join(hj, 'results', id, 'result.json'), '{}');
+    // the first row is 10:01 PST = 18:01Z. A running job: a result dir with no result.json, touched (picked up, or a
+    // heartbeat renamed inside it) in the last 15 min — whenever its id was stamped
+    const now = T10 + 60;
+    const job = (id: string, ageSec: number, done = false) => {
+      const d = join(hj, 'results', id);
+      mkdirSync(d, { recursive: true });
+      if (done) writeFileSync(join(d, 'result.json'), '{}');
+      utimesSync(d, now - ageSec, now - ageSec);
     };
-    job('20261117T175500Z-ios-lane-ab12');
-    job('20261117T174600Z-fx-lane-cd34'); // at the cut: still counts
-    job('20261117T180000Z-edit-lane-ef56');
-    job('20261117T175000Z-lane-done-0001', true);
-    job('20261117T170000Z-ios-stale-0002'); // older than a sim's deadline: abandoned, not running
-    job('20261116T235900Z-ios-yesterday-0003');
+    job('20261117T175500Z-ios-lane-ab12', 300);
+    job('20261117T173000Z-fx-lane-cd34', 840); // stamped 31 min ago, picked up 14 min ago: running
+    job('20261117T180000Z-edit-lane-ef56', 60);
+    job('20261117T175000Z-lane-done-0001', 60, true);
+    job('20261117T170000Z-ios-stale-0002', 960); // untouched for 16 min: abandoned, not running
+    job('20261116T235900Z-ios-yesterday-0003', 60); // stamped on a day outside the window
     mkdirSync(join(hj, 'inbox'));
     writeFileSync(join(hj, 'inbox', 'q.json'), '{}');
     const r = run(dir, 'pace-watch.sh', [], { APERTURE_HOSTJOBS: hj });
@@ -463,6 +468,22 @@ describe('pace-watch.sh', () => {
         jobs: { ios: 1, fx: 1, other: 1, queued: 1 },
       },
     ]);
+  });
+
+  it('mailroom jobs across UTC midnight: an id stamped on the day before still counts', () => {
+    const t0 = at('2026-11-17T16:05:00-08:00'); // the row is 00:06Z on 11-18
+    const dir = paceFake(t0, 1, all({ files: { 'board/mac-stats.json': '{"t":"x"}' } }));
+    const hj = join(dir, 'hostjobs');
+    const job = (id: string) => {
+      const d = join(hj, 'results', id);
+      mkdirSync(d, { recursive: true });
+      utimesSync(d, t0, t0);
+    };
+    job('20261117T235800Z-ios-lane-ab12');
+    job('20261118T000100Z-fx-lane-cd34');
+    const r = run(dir, 'pace-watch.sh', [], { APERTURE_HOSTJOBS: hj });
+    const [row] = lines(r, 'board/history/mac-load-2026-11-17.jsonl').map((l) => JSON.parse(l));
+    expect(row.jobs).toEqual({ ios: 1, fx: 1, other: 0, queued: 0 });
   });
 
   it('a history day follows local time, not UTC', () => {

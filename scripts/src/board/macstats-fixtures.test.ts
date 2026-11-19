@@ -104,7 +104,7 @@ describe('macstats.sh --render', () => {
 
   it('no hypervisor process is vm: null; pressure 4 is critical; 4 KiB pages', () => {
     const d = variant((f) => {
-      f['ps.txt'] = '    1  12000 /sbin/launchd\n';
+      f['ps.txt'] = '    1  12000   0.0 /sbin/launchd\n';
       f['sysctl.txt'] = f['sysctl.txt']!.replace(/\n2\n$/, '\n4\n');
       f['vm_stat.txt'] = f['vm_stat.txt']!.replace('16384', '4096');
     });

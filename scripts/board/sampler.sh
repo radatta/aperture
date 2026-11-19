@@ -2,7 +2,8 @@
 # Background usage sampler: one tick every SAMPLER_INTERVAL s (30) → board/history/samples-<date>.jsonl,
 # plus board/status.line. One per container (flock, waited for up to 5 s: status/json probes hold it for
 # microseconds); started by `board.sh sampler start`, dies with the container. Bash, one awk and a few jq per tick
-# (sessions, slots, lane phases); reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).
+# (sessions, slots, lane phases), plus the RTT probe's curl after it in the background; reads /proc/<pid>/{stat,cmdline}
+# only (shape rules: lib.sh).
 #   sampler.sh          run forever
 #   sampler.sh --once   one tick, no lock (tests, probe)
 #   sampler.sh --print  compute a tick to stdout; writes nothing (board.sh status/json)
@@ -21,22 +22,30 @@ prev="${APERTURE_SAMPLER_PREV:-${APERTURE_CGROUP_DIR:+$APERTURE_CGROUP_DIR/sampl
 prev="${prev:-/tmp/aperture-sampler.prev}"
 # The RTT probe's host (SESSION-BOARD.md → Perf fields → net): the dev origin, from the tracked identifiers, only on the
 # real board in a coi container — never a test's fake board. APERTURE_PROBE_HOST stands in (tests).
-probe_host="${APERTURE_PROBE_HOST:-}"
-if [ -z "$probe_host" ] && [ "$BOARD_DIR" = "$SB_HOME_BOARD" ] && sb_in_container; then
-  probe_host=$(jq -r '.domains.dev // empty' "$SB_REPO/identifiers.json" 2>/dev/null)
+probe_host="${APERTURE_PROBE_HOST:-}" prod_host=
+if [ "${1:-}" = --probe ] || [ $# -eq 0 ]; then  # the run-forever loop and --probe only: a tick never reads this
+  { read -r d; read -r prod_host; } < <(jq -r '.domains.dev // "", .domains.prod // ""' "$SB_REPO/identifiers.json" 2>/dev/null)
+  [ -z "$probe_host" ] && [ "$BOARD_DIR" = "$SB_HOME_BOARD" ] && sb_in_container && probe_host=$d
 fi
-[[ "$probe_host" =~ ^[a-z0-9.-]+$ ]] || probe_host=
+[[ "$probe_host" =~ ^[a-z0-9.-]+$ ]] && [ "$probe_host" != "$prod_host" ] || probe_host=
 
 # One HEAD over plain http: CloudFront answers it with its own redirect at the edge, so no origin, S3 or Lambda request
-# is made (a CloudFront request, inside its always-free tier). Writes "epoch dnsMs connMs ttfbMs code" (code 0 = no
-# answer: times "-"). Any other answer than the edge redirect turns the probe off (<prev>.net.off, one log line)
-# rather than risk an origin request; a sampler restart tries again.
+# is made (a CloudFront request, inside its always-free tier). -q: no ~/.curlrc (a `location` there would follow the
+# redirect to the origin); no redirects; http only. Writes "epoch dnsSec connSec ttfbSec code" (code 0 = no answer:
+# times "-"; sample.awk turns them into ms). At most one probe per 25 s whatever the tick, and after no answer (a night
+# allowlist profile drops it) one per 5 min. Any other answer than the edge redirect turns the probe off
+# (<prev>.net.off, one log line) rather than risk an origin request; a sampler restart tries again.
 probe() {
-  local out code dns conn ttfb xc now
+  local out code dns conn ttfb xc now was= wc=
   [ -n "$probe_host" ] && [ ! -e "$prev.net.off" ] || return 0
-  now=$(sb_epoch)
-  out=$(curl -s -I -m 5 -o /dev/null -w '%{http_code} %{time_namelookup} %{time_connect} %{time_starttransfer} %header{x-cache}' \
-    "http://$probe_host/" 2>/dev/null)
+  printf -v now '%(%s)T' -1
+  read -r was _ _ _ wc 2>/dev/null <"$prev.net"
+  if [[ "$was" =~ ^[0-9]+$ ]]; then
+    [ $((now - was)) -ge 25 ] || return 0
+    [ "$wc" != 0 ] || [ $((now - was)) -ge 300 ] || return 0
+  fi
+  out=$(curl -q -s -I -m 5 --max-redirs 0 --proto =http -o /dev/null \
+    -w '%{http_code} %{time_namelookup} %{time_connect} %{time_starttransfer} %header{x-cache}' "http://$probe_host/" 2>/dev/null)
   read -r code dns conn ttfb xc <<<"$out"
   if [[ "$code" =~ ^[1-9][0-9][0-9]$ ]] && [ "$xc" != "Redirect from cloudfront" ]; then
     echo "sampler: probe off — http://$probe_host/ answered $code, x-cache '${xc}', not CloudFront's edge redirect" >&2
@@ -44,7 +53,6 @@ probe() {
     return 0
   fi
   [[ "$code" =~ ^[1-9][0-9][0-9]$ ]] || { code=0 dns=- conn=- ttfb=-; }
-  [ "$code" = 0 ] || read -r dns conn ttfb < <(awk -v a="$dns" -v b="$conn" -v c="$ttfb" 'BEGIN { printf "%d %d %d\n", a * 1000, b * 1000, c * 1000 }')
   printf '%s %s %s %s %s\n' "$now" "$dns" "$conn" "$ttfb" "$code" >"$prev.net.tmp" && mv -f "$prev.net.tmp" "$prev.net"
 }
 
@@ -97,6 +105,7 @@ if [ "${1:-}" = --prev-path ]; then printf '%s\n' "$prev"; exit 0; fi
 if [ "${1:-}" = --once ]; then tick; exit 0; fi
 if [ "${1:-}" = --print ]; then tick print; exit 0; fi
 if [ "${1:-}" = --probe ]; then probe; exit 0; fi
+[ $# -eq 0 ] || { echo "usage: sampler.sh [--once | --print | --prev-path | --probe]" >&2; exit 2; }
 
 exec 8>>"$SAMPLER_LOCK"
 flock -w 5 8 || exit 0  # another sampler holds it; a probe's hold is over in microseconds
@@ -120,7 +129,7 @@ while :; do
     APERTURE_DEVLOCK_CALLER=sampler bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 240 >/dev/null 2>&1 8>&- &
     dl=$!
   fi
-  # The RTT probe, once a tick after it, in the background (≤ 5 s); same fd 8 rule.
+  # The RTT probe after the tick, in the background (≤ 5 s; its own floor, above); same fd 8 rule.
   if [ -n "$probe_host" ] && ! { [ -n "${np:-}" ] && kill -0 "$np" 2>/dev/null; }; then
     probe 8>&- 2>>"$BOARD_DIR/sampler.log" &
     np=$!

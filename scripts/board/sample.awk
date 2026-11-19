@@ -55,6 +55,7 @@ function root(p,   q, n) {
 function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
 function num(x) { return x == "" ? 0 : x }
 function isnum(x) { return x ~ /^[0-9]+(\.[0-9]+)?$/ }
+function msOf(x) { return isnum(x) ? sprintf("%d", x * 1000 + 0.5) : "null" }
 
 END {
   for (p in cat) {
@@ -116,11 +117,12 @@ END {
   stealOut = (steal != "" && prevSteal != "" && dt > 0 && hz > 0 && steal >= prevSteal) ? sprintf("%.2f", (steal - prevSteal) / hz / dt) : "null"
   sys = sprintf("{\"steal\":%s,\"load1\":%s,\"run\":%s,\"upSec\":%s}", stealOut, isnum(load1) ? load1 : "null", \
     isnum(runq) ? runq : "null", isnum(upSec) ? upSec : "null")
-  # The probe's last reading (sampler.sh: "epoch dnsMs connMs ttfbMs code"); null once over 90 s old.
+  # The probe's last reading (sampler.sh: "epoch dnsSec connSec ttfbSec code"), in ms; null once over 90 s old, which a
+  # probe backing off after no answer (5 min) also reads as.
   netOut = "null"
   if (split(net, nv, " ") == 5 && isnum(nv[1]) && ep - nv[1] <= 90 && ep >= nv[1])
     netOut = sprintf("{\"ageSec\":%d,\"dnsMs\":%s,\"connMs\":%s,\"ttfbMs\":%s,\"code\":%s}", ep - nv[1], \
-      isnum(nv[2]) ? nv[2] : "null", isnum(nv[3]) ? nv[3] : "null", isnum(nv[4]) ? nv[4] : "null", isnum(nv[5]) ? nv[5] : "null")
+      msOf(nv[2]), msOf(nv[3]), msOf(nv[4]), isnum(nv[5]) ? nv[5] : "null")
 
   printf "{\"t\":\"%s\",\"v\":1,\"cg\":{\"anonMiB\":%d,\"fileMiB\":%d,\"currentMiB\":%d,\"highMiB\":%s,\"pids\":%d,\"pidsMax\":%s,\"cpuCores\":%s,\"psiMemSome10\":%s,\"psiMemFull10\":%s,\"psiCpuSome10\":%s,\"oomKill\":%d,\"highEvents\":%d},\"cats\":{%s},\"sessions\":[%s],\"mix\":{\"working\":%d,\"idle\":%d,\"heavy\":%d},\"gapSec\":%s,\"sys\":%s,\"net\":%s}\n", \
     t, anon / MiB, file / MiB, current / MiB, high == "" ? "null" : int(high / MiB), pids, pidsMax == "" ? "null" : pidsMax, \
