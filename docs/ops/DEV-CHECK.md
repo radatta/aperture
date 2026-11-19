@@ -91,9 +91,13 @@ scenario opened is still open (`Another sitting is still open`) reads needs-you 
 
 ## Two users
 
-On slot A a full run is two lanes at once (`lanes.ts`), one test user each, so it takes about as long as its longer lane
-instead of both — the Simulator's ~7 min used to run after the browser's ~9 (`localNotes`' sim profile, 2026-11-08;
-board history, 2026-11-17):
+On slot A a full run is two lanes (`lanes.ts`), one test user each: by default one after the other, the iPhone lane
+first (`serial`); `DEVCHECK_LANES=parallel` runs them at once, so the run takes about as long as its longer lane
+instead of both. Measured 2026-11-18 on one build: parallel 644–1029 s a full run (5 runs, 3 cold), serial 1449 s.
+Parallel isn't the default because it peaked the BFF at 18 concurrent, its whole reservation (0 throttles, CloudWatch
+over the 5 runs): the Simulator's cold Home beside the browser lane's is the known 429 shape below, and the bar for
+the default was a peak of at most 15. It returns as the default with a BFF reservation that holds two cold Homes at once (12 + 12 + the
+harness's ~2 each):
 
 | Lane    | Scenarios                                                               | Signs in as                                                                                                             | Its files                                                         |
 | ------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -104,7 +108,7 @@ board history, 2026-11-17):
 counts — `areas`' Home picker caps at 30 and the iPhone lane plans 16 tasks for today, to name one. What the two still
 share is the stage: the BFF's reserved concurrency (18) and MCP's (9), the DynamoDB ceiling, the LeetCode catalog
 (only `lc-catalog` reads it) and the build marker, which each lane checks itself. A 429 from the two users' load
-together reads like any other (_Throttles (429)_), and the report says the lanes ran side by side beside it.
+together reads like any other (_Throttles (429)_), and when the lanes ran side by side the report says so beside it.
 
 **How a lane runs.** Each lane is a whole pipeline run — its own deploy wait (shared: the iPhone lane sends no sim
 job before the build is confirmed), sign-in, sweep of its own ledger, settings baseline, in-page build check, steps,
@@ -117,8 +121,7 @@ fails or crashes the run, by lane; the other still finishes and cleans up.
 
 **When it's one user.** devb (no Simulator), slot A before the browser user's env file exists (setup step 1b), or
 `DEVCHECK_LANES=one-user`: every scenario in one lane as `email.devTestUser`, as before lanes — so merging needed no
-setup first. `DEVCHECK_LANES=serial` runs both lanes, the iPhone lane first: the timing baseline, and the fallback
-if side by side misbehaves. An explicit `serial` or `parallel` where the run can't have two users (devb, no env file)
+setup first. Otherwise slot A runs both lanes, serial unless `DEVCHECK_LANES=parallel`. An explicit `serial` or `parallel` where the run can't have two users (devb, no env file)
 refuses (`LANES_REFUSED`) rather than quietly timing one. When no iPhone step will run (a branch touching no iOS path), its scenarios stay in the
 browser lane, every step deferred, and no second user signs in — unless the iPhone ledger holds an earlier run's
 leftovers, which that lane then sweeps.
@@ -309,9 +312,9 @@ line is dropped. Failures a scenario injects on
 purpose (_Injected failures_) are listed apart, under _Injected by the harness_, and never count here. The harness's
 own `/api` and `/mcp` clients back off a Lambda 429 and retry, so no console sees it and a call that succeeds may
 still have been throttled; `ctx.api.throttles()` and `ctx.mcp.throttles()` count those, for a step that must prove
-none happened (`dev-concurrency-caps`). With two lanes side by side (_Two users_) the Simulator's cold Home loads
-land on the same reservation as the browser lane's steps; the report says so beside any 429, and
-`DEVCHECK_LANES=serial` is how to tell the two apart.
+none happened (`dev-concurrency-caps`). With two lanes side by side (`DEVCHECK_LANES=parallel`, _Two users_) the
+Simulator's cold Home loads land on the same reservation as the browser lane's steps; the report says so beside any
+429, and the default serial run is how to tell the two apart.
 
 The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
 

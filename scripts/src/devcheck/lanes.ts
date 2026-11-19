@@ -1,7 +1,7 @@
 // The dev check's two lanes (DEV-CHECK.md → Two users). On slot A the Simulator's scenarios (`user: 'iphone'`) run in
-// the iPhone lane, signed in as the Simulator's own test user, side by side with every other scenario in the browser
-// lane, signed in as the browser's: two users, so neither lane's tasks show in the other's lists and counts, and a
-// full run takes about as long as its longer lane instead of both. Each lane is a whole pipeline run (pipeline.ts) —
+// the iPhone lane, signed in as the Simulator's own test user, and every other scenario in the browser lane, signed in
+// as the browser's: two users, so neither lane's tasks show in the other's lists and counts. One after the other by
+// default; side by side on request, when a full run takes about as long as its longer lane instead of both. Each lane is a whole pipeline run (pipeline.ts) —
 // its own sign-in, sweep, ledger, cleanup and leak check, all per user — and the two results merge into one report.
 // Pure: run.ts does the wiring.
 import type { Slot } from './config';
@@ -12,8 +12,8 @@ import type { CreatedRecord, RunResult, StepResult } from './report';
 import type { Scenario, Step } from './scenario';
 
 // one-user: everything in one lane as the original test user — devb (no Simulator), no browser-user env file yet, or
-// DEVCHECK_LANES=one-user. serial: both lanes, the iPhone lane first — the timing baseline, and the fallback when the
-// two side by side misbehave. parallel: both at once (the default with two users).
+// DEVCHECK_LANES=one-user. serial: both lanes, the iPhone lane first (the default with two users). parallel: both at
+// once, on DEVCHECK_LANES=parallel only — it peaked the BFF at its whole reservation (DEV-CHECK.md → Two users).
 export type LaneMode = 'one-user' | 'serial' | 'parallel';
 export const LANES_ENV = 'DEVCHECK_LANES';
 const MODES: readonly string[] = ['one-user', 'serial', 'parallel'];
@@ -39,8 +39,10 @@ export function laneMode(o: { slot: Slot; webEnv: boolean; env?: string }): {
         : null;
   if (no && v) throw new DevcheckError('LANES_REFUSED', `${LANES_ENV}=${v}, but ${no}`);
   if (no) return { mode: 'one-user', why: no };
-  if (v === 'serial') return { mode: 'serial', why: `${LANES_ENV}=serial` };
-  return { mode: 'parallel', why: 'two users, side by side' };
+  if (v === 'parallel') return { mode: 'parallel', why: `${LANES_ENV}=parallel` };
+  // Serial by default: side by side peaked the BFF at its whole reservation of 18 (0 throttles; DEV-CHECK.md → Two
+  // users), so parallel waits for a reservation with room for two cold Homes.
+  return { mode: 'serial', why: v ? `${LANES_ENV}=serial` : 'two users, one after the other' };
 }
 
 // Which scenarios go where. The iPhone lane takes the `user: 'iphone'` scenarios only when one of their steps will

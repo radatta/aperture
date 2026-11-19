@@ -64,14 +64,22 @@ const stepResult = (scenario: string, shot?: string) => ({
 const BASE = { runId: 'r1', tier: 'full', feature: [], expectedSha: 'a'.repeat(40) };
 
 describe('laneMode', () => {
-  it('two users side by side on dev once the browser user is set up', () => {
-    expect(laneMode({ slot: 'dev', webEnv: true }).mode).toBe('parallel');
-    expect(laneMode({ slot: 'dev', webEnv: true, env: '' }).mode).toBe('parallel');
-    expect(laneMode({ slot: 'dev', webEnv: true, env: 'parallel' }).mode).toBe('parallel');
+  it('two users side by side on request, once the browser user is set up', () => {
+    expect(laneMode({ slot: 'dev', webEnv: true, env: 'parallel' })).toEqual({
+      mode: 'parallel',
+      why: 'DEVCHECK_LANES=parallel',
+    });
   });
 
-  it('serial on request, the iPhone lane first', () => {
-    expect(laneMode({ slot: 'dev', webEnv: true, env: 'serial' }).mode).toBe('serial');
+  it('serial by default (unset or empty), and on request: the iPhone lane first', () => {
+    expect(laneMode({ slot: 'dev', webEnv: true })).toEqual({
+      mode: 'serial',
+      why: 'two users, one after the other',
+    });
+    expect(laneMode({ slot: 'dev', webEnv: true, env: '' }).mode).toBe('serial');
+    expect(laneMode({ slot: 'dev', webEnv: true, env: 'serial' }).why).toBe(
+      'DEVCHECK_LANES=serial',
+    );
   });
 
   it('one user on devb, before the browser user exists, or on request — today’s path', () => {

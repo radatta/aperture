@@ -384,7 +384,7 @@ export function renderReport(r: RunResult): string {
     // Both users' load lands on one stage's reserved concurrency (DEV-CHECK.md → Two users): say so beside a 429.
     ...(r.throttled.length && r.lanes?.mode === 'parallel' && r.lanes.iphoneMs !== undefined
       ? [
-          '_The lanes ran side by side: a 429 here may be the two users’ load together — rerun with DEVCHECK_LANES=serial to tell._',
+          '_The lanes ran side by side: a 429 here may be the two users’ load together — rerun without DEVCHECK_LANES (serial) to tell._',
           '',
         ]
       : []),

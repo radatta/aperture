@@ -1,7 +1,7 @@
 // The dev check CLI — docs/ops/DEV-CHECK.md. From a worktree whose branch is (being) deployed to dev:
 //   pnpm --filter @aperture/scripts devcheck --tier smoke|delta|full|all [--scenario a,b] [--feature a,b] [--sha <40-hex>]
 //     [--no-deploy-wait]
-//   DEVCHECK_LANES=one-user|serial|parallel — slot A's two users (DEV-CHECK.md → Two users); unset: parallel when the
+//   DEVCHECK_LANES=one-user|serial|parallel — slot A's two users (DEV-CHECK.md → Two users); unset: serial when the
 //   browser user's env file exists, else one-user
 // Never alongside tests or a dev server (CLAUDE.md → COI ceilings). One run at a time per slot: the
 // sweep of earlier runs' leftovers would otherwise race a live run on the same slot. Each slot sweeps its own ledger
