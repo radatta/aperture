@@ -135,30 +135,36 @@ describe('gate rules', () => {
       expect(JSON.parse(read(`${p.dir}/package.json`)).name, p.dir).toBe(p.name);
   });
 
-  it("each package's `reaches` covers every other package its code imports", () => {
-    const byName = new Map(PACKAGES.map((p) => [p.name, p.dir]));
-    for (const p of PACKAGES) {
-      const found = new Set<string>();
-      for (const f of tracked.filter(
-        (t) => t.startsWith(`${p.dir}/`) && /\.(?:ts|tsx|mts|js|mjs)$/.test(t),
-      )) {
-        for (const [, spec] of read(f).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
-          const scoped = /^(@aperture\/[^/]+)/.exec(spec!)?.[1];
-          if (scoped && byName.has(scoped)) found.add(byName.get(scoped)!);
-          if (spec!.startsWith('.')) {
-            const abs = join(f, '..', spec!);
-            const other = PACKAGES.find((q) => abs.startsWith(`${q.dir}/`));
-            if (other) found.add(other.dir);
+  // Reads every package's source over the container's host mount (virtiofs): ~2.6 s alone, past vitest's 5 s default
+  // under load (a gate on 11-18), like tracked-identifiers' scan (F292).
+  it(
+    "each package's `reaches` covers every other package its code imports",
+    { timeout: 30_000 },
+    () => {
+      const byName = new Map(PACKAGES.map((p) => [p.name, p.dir]));
+      for (const p of PACKAGES) {
+        const found = new Set<string>();
+        for (const f of tracked.filter(
+          (t) => t.startsWith(`${p.dir}/`) && /\.(?:ts|tsx|mts|js|mjs)$/.test(t),
+        )) {
+          for (const [, spec] of read(f).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
+            const scoped = /^(@aperture\/[^/]+)/.exec(spec!)?.[1];
+            if (scoped && byName.has(scoped)) found.add(byName.get(scoped)!);
+            if (spec!.startsWith('.')) {
+              const abs = join(f, '..', spec!);
+              const other = PACKAGES.find((q) => abs.startsWith(`${q.dir}/`));
+              if (other) found.add(other.dir);
+            }
           }
         }
+        found.delete(p.dir);
+        expect(
+          [...found].filter((d) => !p.reaches.includes(d)),
+          p.dir,
+        ).toEqual([]);
       }
-      found.delete(p.dir);
-      expect(
-        [...found].filter((d) => !p.reaches.includes(d)),
-        p.dir,
-      ).toEqual([]);
-    }
-  });
+    },
+  );
 
   it('every graph-blind test file and module is registered', () => {
     expect(only('blind')).toBe('');
