@@ -78,7 +78,8 @@ beforeEach(() => {
 // One tick of sample.awk over canned inputs; procs are "pid ppid comm thr rssPages cpuTicks args own start".
 function awkTick(prev: string, procs: string[], v: Record<string, string | number> = {}) {
   const f = (n: string, t: string) => (writeFileSync(join(tmp, n), t), join(tmp, n));
-  const files = [f('panes', ''), f('sess', ''), f('slots', ''), f('prevIn', prev)];
+  // sampler.sh's order: panes, sessions, slots, the prev tick, lane phases, then the procs on stdin
+  const files = [f('panes', ''), f('sess', ''), f('slots', ''), f('prevIn', prev), f('lanes', '')];
   const vars = {
     t: 'T',
     ep: 1030,
@@ -100,6 +101,7 @@ function awkTick(prev: string, procs: string[], v: Record<string, string | numbe
     F2: files[1]!,
     F3: files[2]!,
     F4: files[3]!,
+    F5: files[4]!,
     ...v,
   };
   const r = spawnSync(
@@ -408,6 +410,21 @@ describe('heavy.sh perf fields', () => {
     expect(four.cache.tsc).toMatchObject({ changed: 3, changedSrc: 3 }); // a.ts, r.ts, c.ts
     // four runs, and only the stamp tsc.last names plus the one before it (each run sweeps the dead and unnamed)
     expect(cacheDir(dir)).toEqual({ last: { tsc: expect.any(String) }, stamps: 2, other: [] });
+  });
+
+  it('warm rolls both baselines on a clean finish, neither after its duration stop', () => {
+    const { dir } = gitRepo();
+    const d = join(dir, 'node_modules/.cache/aperture-heavy');
+    heavy('sleep 5', { HEAVY_CLASS: 'warm', HEAVY_DURATION: '1' }, dir); // warm.sh's 300 s cap, shortened
+    expect(cacheDir(dir).last).toEqual({});
+    const r = heavy('true', { HEAVY_CLASS: 'warm' }, dir);
+    expect(r.ev.cache).toMatchObject({ tsc: { first: true }, eslint: { first: true } });
+    const { last } = cacheDir(dir);
+    expect(Object.keys(last).sort()).toEqual(['eslint', 'tsc']);
+    expect(last.tsc).toBe(last.eslint); // one run, one stamp
+    expect(readFileSync(join(d, 'tsc.last'), 'utf8')).toBe(
+      readFileSync(join(d, 'eslint.last'), 'utf8'),
+    );
   });
 
   it('a gate’s outer run reports both caches’ state and moves neither baseline', () => {

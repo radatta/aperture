@@ -82,10 +82,10 @@ after it in the background (_Perf fields_) — and appends one line to
  "cats":{"claude":{"n":7,"thr":110,"rssMiB":2675,"cpu":0.24},"vitest":{…},"vite":{…},"chromium":{…},"tsc":{…},
          "eslint":{…},"pnpm":{…},"system":{…},"other":{…},"unattributed":{"thr":0},"unseen":{"cpu":0.21}},
  "sessions":[{"pid":2180,"name":"dev-e2e","sid":"…","branch":"dev-e2e","state":"working","stateSrc":"hook",
-"thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test","phase":"gate"}],
-"mix":{"working":2,"idle":5,"heavy":1},"gapSec":null,
-"sys":{"steal":0.00,"load1":3.25,"run":1,"upSec":901247},
-"net":{"ageSec":12,"dnsMs":43,"connMs":60,"ttfbMs":158,"code":301}}
+              "thr":15,"rssMiB":502,"cpuSec":1.2,"heavy":"test","phase":"gate"}],
+ "mix":{"working":2,"idle":5,"heavy":1},"gapSec":null,
+ "sys":{"steal":0.00,"load1":3.25,"run":1,"upSec":901247},
+ "net":{"ageSec":12,"dnsMs":43,"connMs":60,"ttfbMs":158,"code":301}}
 ```
 
 - A **session** is a `claude` process; every other process is attributed to the nearest `claude` ancestor
