@@ -360,9 +360,10 @@ response ≥ 400 and every request that got none or whose body failed (not a `ne
 
 A failure dev won't produce on demand (a read that 429s, a dropped connection, a stop that doesn't land) is
 injected **by the harness**, never by a switch in shipped code: `ctx.intercept(method, { status?, times?,
-abort?, body? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
+abort?, forward?, body? })` puts a Playwright route on the page for dev's `/api/<method>`. The next `times` calls (default:
 every call) get `status` (default 429) with `body` as JSON (default `{}`), or a dropped connection, and the rest
-pass through. A row needing an exact model reply can get a canned one this way (status 200): `category-suggest`
+pass through. `forward` sends the real call first (`route.fetch()`) and drops its answer: a write that lands but
+reads as failed, as `mock-ui-cancel-5xx` needs. A row needing an exact model reply can get a canned one this way (status 200): `category-suggest`
 does, beside three rows that go through the real parse and assert only what holds whatever the model says. The returned handle
 counts `hits()` and `passed()`; `release()` unroutes it, because a live page route turns off the page's HTTP
 cache. The pipeline releases any a step left live when its scenario ends, so a step that threw mid-intercept

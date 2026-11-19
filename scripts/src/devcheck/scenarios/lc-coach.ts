@@ -320,6 +320,45 @@ export const lcCoach: Scenario = {
       what: 'Another swaps a slot to an easier problem (Skip when nothing easier is left); Restore brings the original back',
     },
     {
+      id: 'ui-slot-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Restore, then Another or Skip, keep keyboard focus in the slot’s row as its buttons change',
+    },
+    {
+      id: 'ui-slot-focus-midwrite',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A slot whose row a read changes while its write runs still gets its focus move when the write lands',
+      offDev: {
+        file: 'app/src/pages/Recruiting/TodayCard.test.tsx',
+        test: 'a Skip whose row a read changed mid-write still lands focus on Restore',
+        why: 'dev can’t hold a slot write open while another write’s read lands on the same row',
+      },
+    },
+    {
+      id: 'ui-slot-no-late-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A slot change that left its row as it was never moves focus later, when a read changes the row',
+      offDev: {
+        file: 'app/src/pages/Recruiting/TodayCard.test.tsx',
+        test: 'a slot change that lands without changing its row arms nothing: a later read doesn’t pull focus into the row',
+        why: 'its answer must equal the plan on screen, which only a read that raced the write leaves; dev can’t order the two',
+      },
+    },
+    {
+      id: 'ui-slot-stale-read',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A read that began before a slot change can’t put the old plan back on the card',
+      offDev: {
+        file: 'app/src/pages/Recruiting/TodayCard.test.tsx',
+        test: 'a read that began before a slot change can’t put the old plan back',
+        why: 'an intercept fulfils or forwards at once; dev can’t hold a read open across a write',
+      },
+    },
+    {
       id: 'ui-cause',
       entry: 'ui',
       kind: 'nominal',
@@ -840,6 +879,29 @@ export const lcCoach: Scenario = {
       entry: 'ui',
       kind: 'edge',
       what: 'A planned mock whose day passed waits under the card’s line with Log it and Cancel; Cancel removes it',
+    },
+    {
+      id: 'mock-ui-cancel-focus',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'Cancel on a planned mock’s row hands keyboard focus to Log a mock, never <body>',
+    },
+    {
+      id: 'mock-ui-cancel-5xx',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A Cancel that lands but answers 500 reads as cancelled: the row goes, no error, focus on Log a mock, “Mock cancelled.” said',
+    },
+    {
+      id: 'mock-ui-cancel-save-race',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A save and a cancel settling on one failed read still hand focus to Log a mock',
+      offDev: {
+        file: 'app/src/pages/Recruiting/TodayCard.test.tsx',
+        test: 'a save and a cancel settling on one failed read: the form’s close still lands focus on Log a mock',
+        why: 'dev can’t make the two writes’ reads collapse into one and fail it',
+      },
     },
     {
       id: 'mock-delete-idempotent',
@@ -1455,7 +1517,7 @@ export const lcCoach: Scenario = {
       id: 'ui-swap',
       title: 'Another (or Skip) on a slot, then Restore — through the card',
       entry: 'ui',
-      proves: ['ui-swap'],
+      proves: ['ui-swap', 'ui-slot-focus'],
       async run(ctx) {
         const t0 = await ctx.api.reads.getCoachToday();
         const open = t0.slots.filter((s) => s.status === 'open' && !s.swappedFrom);
@@ -1477,6 +1539,7 @@ export const lcCoach: Scenario = {
             (s) => s.slug === slot.slug && s.status === 'open',
           ),
         );
+        await focusOn(ctx, openButton(slot.title), 'after Restore');
         if (canSwap) {
           await c.getByRole('button', { name: `Another problem — ${slot.title}` }).click();
           let swapped: DevCoachSlot | undefined;
@@ -1488,16 +1551,19 @@ export const lcCoach: Scenario = {
           });
           await c.getByRole('link', { name: swapped!.title, exact: true }).first().waitFor();
           await ctx.shot('lc-coach-swapped');
+          await focusOn(ctx, `— ${swapped!.title}`, 'after Another');
           await c.getByRole('button', { name: `Restore — ${swapped!.title}` }).click();
         } else {
           ctx.log(`no easier problem left for ${slot.slug}: Skip instead of Another`);
           await c.getByRole('button', { name: `Skip today — ${slot.title}` }).click();
           await c.getByText('skipped today').first().waitFor({ timeout: 10_000 });
+          await focusOn(ctx, `Restore — ${slot.title}`, 'after Skip');
           await c.getByRole('button', { name: `Restore — ${slot.title}` }).click();
         }
         await until('the original back', async () =>
           same(slugs(await ctx.api.reads.getCoachToday()), slugs(t0)),
         );
+        await focusOn(ctx, openButton(slot.title), 'after the last Restore');
         // Resolves the ledger entry (a restore with nothing to undo changes nothing).
         await ctx.mcp.writes.swapSlot(t0.day, slot.slug, { slug: slot.slug, action: 'restore' });
       },
@@ -2391,6 +2457,8 @@ export const lcCoach: Scenario = {
         'mock-patterns-delete',
         'mock-ui-unlogged',
         'mock-390',
+        'mock-ui-cancel-focus',
+        'mock-ui-cancel-5xx',
       ],
       async run(ctx) {
         const label = `dc ${tag(ctx)}`.slice(0, 40);
@@ -2532,6 +2600,41 @@ export const lcCoach: Scenario = {
           .getByRole('button', { name: /^Cancel — mock tomorrow/ })
           .click();
         await until('the planned mock gone', async () => !(await mine('planned')).length);
+        await focusOn(ctx, 'Log a mock', 'after Cancel');
+
+        // A Cancel that lands but answers 500: the cache, not the answer, says it went.
+        const late = `${label} 5`.slice(0, 40);
+        await ctx.mcp.writes.logMock({
+          status: 'planned',
+          day: addDays(before.day, 1),
+          partner: late,
+        });
+        c = await todayCard(ctx);
+        const lateRow = c
+          .getByRole('region', { name: 'Next 48 hours' })
+          .getByRole('listitem')
+          .filter({ hasText: `with ${late}` });
+        await lateRow.waitFor({ timeout: 15_000 });
+        const answer500 = await ctx.intercept('deleteMock', {
+          status: 500,
+          times: 1,
+          forward: true,
+        });
+        try {
+          await lateRow.getByRole('button', { name: /^Cancel — mock tomorrow/ }).click();
+          await lateRow.waitFor({ state: 'hidden', timeout: 15_000 });
+          if (answer500.hits() !== 1) fail(`the 500 answered ${answer500.hits()} cancels`);
+        } finally {
+          await answer500.release();
+        }
+        if ((await ctx.api.reads.listMocks()).some((m) => m.partner === late))
+          fail('the forwarded cancel didn’t land');
+        await focusOn(ctx, 'Log a mock', 'after a Cancel answered 500');
+        if (await block.getByRole('alert').count())
+          fail(`a landed cancel shows “${await block.getByRole('alert').textContent()}”`);
+        const said = (await block.getByRole('status').textContent())?.trim();
+        if (said !== 'Mock cancelled.') fail(`the section’s status line reads “${said}”`);
+        await ctx.shot('lc-coach-mock-cancel-500');
 
         // One planned for yesterday (over MCP: the form can't plan a past day) waits under the line; Cancel there.
         const past = `${label} p`.slice(0, 40);
@@ -2643,6 +2746,26 @@ export async function morning(ctx: Ctx) {
   await ctx.page.getByRole('button', { name: 'Morning', exact: true }).click();
   await ctx.page.getByText('Plan today', { exact: true }).waitFor({ timeout: 15_000 });
 }
+// Keyboard focus on a control whose accessible name ends with `name`, or matches it (a slot's buttons end
+// "— <title>"), never <body>: the card's focus-return (CONVENTIONS → focus-return).
+async function focusOn(ctx: Ctx, name: string | RegExp, when: string) {
+  const at = () =>
+    ctx.page.evaluate<string | null>(
+      '(() => { const a = document.activeElement; return !a || a === document.body ? null : (a.getAttribute("aria-label") ?? a.textContent ?? "").trim(); })()',
+    );
+  const on = async () => {
+    const got = await at();
+    return !!got && (typeof name === 'string' ? got.endsWith(name) : name.test(got));
+  };
+  await until(`focus on “${name}” ${when}`, on, 5_000).catch(async (e: Error) =>
+    fail(`${e.message} — it is on ${JSON.stringify(await at())}`),
+  );
+}
+// An open slot's first button: never the pressed Restore, whose label ends in the same title.
+const openButton = (title: string) => {
+  const literal = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^(Another problem|Skip today) — ${literal}$`);
+};
 export async function until(what: string, ok: () => Promise<boolean>, ms = 15_000) {
   for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 500)))
     if (await ok()) return;

@@ -390,7 +390,11 @@ The thread in claude.ai drives the coaching; the app is the glance and the recor
   a new tab. An in-progress slot links to its sitting, and a done one to its review. **Another** (only while
   `alternatives` has an easier unseen problem), **Skip today** and **Restore** are `setCoachSlot`; **Floor day**
   and **Full day** are `setCoachFloor`. One write at a time, so a double tap is one call; focus stays in the slot's row as its buttons change
-  (CONVENTIONS → focus-return). A refused change says why
+  (CONVENTIONS → focus-return): once the write lands, on the render that shows its plan, and only focus that was
+  lost (a field or another row's button the user moved to keeps it; on Safari a tapped button never holds focus, so
+  there the move always happens). A swap says "Swapped in <title>." in the card's status line, since focus stays on
+  its button. A read that began before a slot or floor write starts again when the write lands, so its older answer
+  can't put the old plan back (the restarted read is an eventually consistent display read, like any other). A refused change says why
   inline, and a failed read is a `LoadError` with Retry. Tones are teal for done-clean and gold or muted
   otherwise, never red.
 - **The review form** adds five cause chips (one choice; a second tap clears it) and labels help's `solution` as
@@ -539,7 +543,9 @@ scores}`. A done mock is dated today or earlier (≤ 365 days back), a planned o
   5xx "may have saved". The card's 48-hour list (**Next 48 hours**, re-solves and planned mocks) gives a planned
   mock **Log it** on its day and **Cancel**; `unlogged` ones wait under the line with the same two. Log it saves onto
   that row, its notes carried over. Closing the form hands focus back to Log a mock; a row cancelled while a form stays open hands it to the mock
-  section, unless focus already moved on.
+  section, unless focus already moved on. Whether a Cancel landed is the read after it, not its answer: the row gone
+  is cancelled even behind a 5xx (no error; a Log it form on it closes), and a screen reader hears "Mock cancelled."
+  from the section's status line.
 - **The Patterns tab** (`PatternsMocks.tsx`, after the ranking): Code and Solve over time (two lines, from two done
   mocks), each done mock with its scores beside its ISO week's first-try rate (`mockRows`; a week of re-solves only
   has none), newest first, ≤ 12, and **Delete** with an inline Yes / No (No returns focus to Delete, Yes to the
