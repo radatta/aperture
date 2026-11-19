@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { PACE_DEFAULTS, paceReasons } from '../lane/pace.ts';
+import { STOP_LEAD_SEC } from './away.ts';
 
 // Every case is a few dozen bash/jq forks per tick: well under a second idle, slower beside a full gate.
 // A test runs several watchers back to back; one run is capped at 25 s below.
@@ -514,35 +515,51 @@ describe('pace-watch.sh', () => {
 });
 
 describe('pace-watch.sh: the hard stop (exit 12)', () => {
-  const ctl = (stopAt: unknown) => ({ state: 'calm', since: 0, held: [], triggers: [], stopAt });
+  // stop.json, the stop's own file (board stop writes it): pace-control.json's hand rewrites never touch it
+  const stop = (stopAt: unknown, more: Record<string, string> = {}) => ({
+    files: { 'board/stop.json': JSON.stringify({ v: 1, stopAt }), ...more },
+  });
   const st = T10 + 15 * 60; // 10:15: exit 12 ten minutes ahead, at the 10:05 tick
 
+  it("STOP_LEAD is away.ts's STOP_LEAD_SEC (the CLI's line names the time pace-watch fires)", () => {
+    expect(readFileSync(join(BOARD, 'pace-watch.sh'), 'utf8')).toContain(
+      `STOP_LEAD=${STOP_LEAD_SEC} `,
+    );
+  });
+  it('a stopAt in pace-control.json is not the stop: only stop.json fires', () => {
+    expect(
+      pace(T10, 8, all({ ctl: { state: 'calm', since: 0, held: [], triggers: [], stopAt: st } }))
+        .quiet,
+    ).toBe(true);
+    // a calm/hot rewrite of pace-control.json beside a set stop still fires it
+    expect(pace(T10, 8, (i) => ({ ...stop(st), ctl: hot(T10 + i) }))).toMatchObject({
+      status: 12,
+      tick: 5,
+    });
+  });
+
   it('exits 12 STOP_LEAD ahead of stopAt, before the sample floor and on a bad reading', () => {
-    const r = pace(T10, 8, (i) => ({
-      ctl: ctl(st),
-      ...(i === 5 ? { files: { 'cg/memory.stat': 'garbled' } } : {}),
-    }));
+    const r = pace(T10, 8, (i) => stop(st, i === 5 ? { 'cg/memory.stat': 'garbled' } : {}));
     expect([r.status, r.tick]).toEqual([12, 5]);
     expect(r.stdout).toBe('10:05 STOP at 10:15: hard stop, lanes stop clean by then\n');
     expect(read(r, 'board/stop-fired').trim()).toBe(String(st));
-    expect(pace(T10, 4, all({ ctl: ctl(st) })).quiet).toBe(true);
+    expect(pace(T10, 4, all(stop(st))).quiet).toBe(true);
   });
   it('fires once per stopAt: a restarted watcher stays quiet, a new time fires again', () => {
-    const fired = { files: { 'board/stop-fired': `${st}\n` } };
-    expect(pace(T10, 8, all({ ctl: ctl(st), ...fired })).quiet).toBe(true);
-    expect(pace(T10, 8, all({ ctl: ctl(st + 60), ...fired }))).toMatchObject({
+    const fired = { 'board/stop-fired': `${st}\n` };
+    expect(pace(T10, 8, all(stop(st, fired))).quiet).toBe(true);
+    expect(pace(T10, 8, all(stop(st + 60, fired)))).toMatchObject({
       status: 12,
       tick: 6,
     });
   });
   it('a stop over an hour past, a garbled stopAt or none never fires', () => {
-    expect(pace(T10, 4, all({ ctl: ctl(T10 - 3600) })).quiet).toBe(true);
-    expect(pace(T10, 4, all({ ctl: ctl(T10 - 3500) }))).toMatchObject({ status: 12, tick: 1 }); // late, still within the hour
+    expect(pace(T10, 4, all(stop(T10 - 3600))).quiet).toBe(true);
+    expect(pace(T10, 4, all(stop(T10 - 3500)))).toMatchObject({ status: 12, tick: 1 }); // late, still within the hour
     for (const bad of ['10:15', null, -5, { at: st }])
-      expect(pace(T10, 8, all({ ctl: ctl(bad) })).quiet).toBe(true);
-    expect(
-      pace(T10, 8, all({ ctl: { state: 'calm', since: 0, held: [], triggers: [] } })).quiet,
-    ).toBe(true);
+      expect(pace(T10, 8, all(stop(bad))).quiet).toBe(true);
+    expect(pace(T10, 8, all({ files: { 'board/stop.json': '{' } })).quiet).toBe(true);
+    expect(pace(T10, 8, all({})).quiet).toBe(true);
   });
 });
 

@@ -55,7 +55,7 @@ import {
   pruneAsks,
 } from './tower/asks.ts';
 import { readLanes } from './tower/lanes.ts';
-import { MERGE_LINE_FILE, withSuffix } from './mergeline.ts';
+import { MERGE_LINE_FILE, lineShapeOk, withSuffix } from './mergeline.ts';
 import { PRS_FILE, readPrIndex, whatIs } from './lookup.ts';
 import {
   AWAY_FILE,
@@ -66,7 +66,7 @@ import {
   stopAt,
   stopLine,
   usageRow,
-  withStop,
+  STOP_FILE, stopFile,
   type Merged,
   type Started,
 } from './away.ts';
@@ -88,9 +88,10 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   ran <slug>                            the suffix that records a Mac line's exit code for merge-watch.sh
   asks list|add|show|answer|close …     dispatch's asks of the maintainer, in queue.json asks[] (docs/ops/HUB.md → Asks):
       list [--json]                     the open ones, numbered, with how to reply
-      add                               stdin {text, options, pick?, lane?, pane?, go?} → the new id (d<n>)
+      add                               stdin {text, options, pick?, lane?, pane?, go?, explicit?} → the new id (d<n>)
       show <id>                         one ask in full, any status
-      answer <id|all> <letter|ok>       mark it answered; prints the meaning and the [relay] line (never a pane ask's go)
+      answer <id> <letter|ok>           mark it answered; prints the meaning and the [relay] line (never a pane ask's go)
+      answer all ok <newest>            each pick, for the asks up to <newest> (the last id the user was shown), bar explicit ones
       close <id>                        withdrawn, answered in words, or a pane go that arrived
   merge-line                            the one Mac line that merges every MERGE ME PR in landing order (prints only)
   wi <id>                               what an F-number, PR n, d<n> or lane name is
@@ -116,7 +117,7 @@ export const FLAGS: Record<string, Spec> = {
   'asks list': { bare: ['json'] },
   'asks add': {},
   'asks show': { args: 1 },
-  'asks answer': { args: 2 },
+  'asks answer': { args: 3 },
   'asks close': { args: 1 },
   'merge-line': {},
   wi: { args: 1 },
@@ -124,6 +125,10 @@ export const FLAGS: Record<string, Spec> = {
   back: {},
   stop: { args: 1 },
 };
+
+// a control byte but the newline: what merge-line prints from a shared file never moves a cursor
+// eslint-disable-next-line no-control-regex
+const CTRL_NL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.
 const bareFlags = (argv: string[]) => ({
@@ -298,6 +303,10 @@ const put = (f: string, text: string) => {
   renameSync(`${f}.tmp.${process.pid}`, f);
 };
 const readQueue = (dir: string) => parseQueue(readOr(join(dir, 'queue.json')));
+// why a read found no queue (missing, or a file that doesn't parse), so a reader says "unknown", never "none"
+const queueWhy = (q: ReturnType<typeof readQueue>) =>
+  q.data ? null : `queue.json ${q.status}${q.problems.length ? `: ${q.problems[0]}` : ''}`;
+const queueAsks = (q: ReturnType<typeof readQueue>) => queueWhy(q) ?? openAsks(q.data);
 
 // The hub's files are written from the main checkout only (/workspace, where the hub runs): a lane's run of a writer
 // would act for the hub. The main checkout is the one whose git dir is the common dir.
@@ -364,7 +373,7 @@ function lifecycle(dir: string): Started[] {
 // `asks <sub>`: reads go anywhere; writes (add, answer, close) are the hub's, from the main checkout, and land only
 // when the whole file still parses with no asks problem.
 function asks(args: string[], rest: string[], stdin: () => string, now: number): string {
-  const [sub, a1, a2] = args;
+  const [sub, a1, a2, a3] = args;
   if (sub === 'list' || sub === 'show') {
     const q = readQueue(board());
     if (!q.data)
@@ -405,8 +414,10 @@ function asks(args: string[], rest: string[], stdin: () => string, now: number):
     next = r.raw;
     out = r.id;
   } else if (sub === 'answer') {
-    if (!a1 || !a2) throw new Error('usage: asks answer <id|all> <letter|ok>');
-    const r = answerAsks(raw, list, a1, a2, now);
+    if (!a1 || !a2) throw new Error('usage: asks answer <id> <letter|ok> | all ok <newest shown>');
+    if (a3 !== undefined && a1 !== 'all')
+      throw new Error(`asks answer: a newest id (${a3}) goes only with \`all ok\``);
+    const r = answerAsks(raw, list, a1, a2, now, a3 ?? null);
     if (!r.answered) return r.out.join('\n'); // nothing to write
     next = r.raw;
     out = r.out.join('\n');
@@ -415,9 +426,12 @@ function asks(args: string[], rest: string[], stdin: () => string, now: number):
     next = closeAsk(raw, list, a1, now);
     out = `CLOSED ${a1.toLowerCase()}`;
   } else throw new Error(`unknown asks subcommand "${sub ?? ''}"`);
-  next = { ...pruneAsks(next, now), updatedAt: new Date(now).toISOString() };
+  // updatedAt stays: it is the hub's last look at the whole queue (the tower's queue age), which an ask write isn't
+  next = pruneAsks(next, now);
   const body = JSON.stringify(next, null, 2) + '\n';
-  const bad = parseQueue(body).problems.filter((p) => /^asks|^askSeq/.test(p));
+  // only a problem this write made refuses it: one already on file (a hand edit) never locks the hub out of closing it
+  const had = new Set(before.problems);
+  const bad = parseQueue(body).problems.filter((p) => /^asks|^askSeq/.test(p) && !had.has(p));
   if (bad.length)
     throw new Error(`asks ${sub}: refused, the result would not parse: ${bad.join('; ')}`);
   put(f, body);
@@ -610,8 +624,15 @@ export function main(argv: string[], stdin: () => string): string {
           .split('\n')
           .filter((l) => !l.startsWith('cd '))
           .join('\n')}`;
-      if (!text.split('\n').some((l) => l.startsWith('cd '))) return text.replace(/\n$/, '');
+      text = text.replace(CTRL_NL, ' '); // the file is shared: none of its bytes moves a cursor here
+      const cds = text.split('\n').filter((l) => l.startsWith('cd '));
+      if (!cds.length) return text.replace(/\n$/, '');
       const root = macRoot();
+      // what the user pastes into zsh is re-checked here, never trusted from the file (mergeline.ts lineShapeOk)
+      if (cds.length > 1 || !lineShapeOk(cds[0]!, root))
+        throw new Error(
+          `merge-line.txt's line is not the shape the tower writes for cd ${root}, so no line printed: a tower started before .local/mac-root reads <mac-repo> (board.sh tower restart), else the file was edited`,
+        );
       const out = withSuffix(text, ranSuffix(root, mintRan(dir, 'merge', now)));
       return root === MAC_PLACEHOLDER ? `${out}\n${MAC_ROOT_NOTE}` : out;
     }
@@ -619,8 +640,10 @@ export function main(argv: string[], stdin: () => string): string {
       const [id] = args;
       if (!id) throw new Error('usage: wi <F-number | PR n | d<n> | lane>');
       const dir = board();
+      const q = readQueue(dir);
       return whatIs(id, {
-        queue: readQueue(dir).data,
+        queue: q.data,
+        queueWhy: queueWhy(q),
         lanes: readLanes(dir).lanes,
         prs: readPrIndex(readOr(join(dir, PRS_FILE))),
         roadmap: readOr(join(dir, '..', 'roadmap.md')),
@@ -633,9 +656,15 @@ export function main(argv: string[], stdin: () => string): string {
       if (ping !== undefined && ping !== 'ping') throw new Error('usage: away [ping]');
       const dir = hubBoard('away');
       const usage = usageRow(readOr(join(dir, 'board.line')));
+      // already away (no /back since): the first stamp stands, so /back still covers the whole time; only ping changes
       const prev = readStamp(readOr(join(dir, AWAY_FILE)));
-      put(join(dir, AWAY_FILE), JSON.stringify(awayStamp(now.getTime(), !!ping, usage)) + '\n');
-      return `AWAY since ${hhmm(now.getTime())}${ping ? ' · ping on asks' : ''} · usage ${usage ?? 'unknown'}${prev ? ` (replaces the stamp from ${hhmm(Date.parse(prev.at))})` : ''}`;
+      const stamp = prev
+        ? { ...prev, ping: !!ping }
+        : awayStamp(now.getTime(), !!ping, usage);
+      put(join(dir, AWAY_FILE), JSON.stringify(stamp) + '\n');
+      return prev
+        ? `AWAY still, since ${hhmm(Date.parse(prev.at))}${ping ? ' · ping on asks' : ''} · usage then ${prev.usage ?? 'unknown'}`
+        : `AWAY since ${hhmm(now.getTime())}${ping ? ' · ping on asks' : ''} · usage ${usage ?? 'unknown'}`;
     }
     case 'back': {
       const dir = hubBoard('back');
@@ -660,7 +689,7 @@ export function main(argv: string[], stdin: () => string): string {
         merged,
         started: lifecycle(dir),
         lanes: readLanes(dir).lanes,
-        asks: openAsks(readQueue(dir).data),
+        asks: queueAsks(readQueue(dir)),
         usageNow: usageRow(readOr(join(dir, 'board.line'))),
       });
       renameSync(join(dir, AWAY_FILE), join(dir, AWAY_LAST));
@@ -670,9 +699,8 @@ export function main(argv: string[], stdin: () => string): string {
       const [t] = args;
       if (!t) throw new Error('usage: stop <HH:MM>|off');
       const dir = hubBoard('stop');
-      const f = join(dir, 'pace-control.json');
       const at = t === 'off' ? null : stopAt(t, now.getTime());
-      put(f, JSON.stringify(withStop(readOr(f), at, now.getTime()), null, 2) + '\n');
+      put(join(dir, STOP_FILE), stopFile(at, now.getTime()));
       return at === null ? 'STOP off' : stopLine(at, now.getTime());
     }
     default:

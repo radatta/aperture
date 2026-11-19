@@ -184,7 +184,8 @@ export const firedFollowups = (fu: Followup[], merged: Merged[], now: number) =>
 
 // dispatch's own asks of the maintainer (docs/ops/HUB.md → Asks): answered by letter (`d3 b`) through `pnpm board
 // asks`. Options are lettered a, b, c… in file order. A pane ask (`needsPane`) is a go only the maintainer's typing in
-// `pane` can give: never answered here, only closed once the go arrives.
+// `pane` can give: never answered here, only closed once the go arrives. An `explicit` ask (an effort above `high`, or
+// anything else whose approval must name it) takes its own reply: `all ok` passes over it.
 export const ASK_STATUS = ['open', 'answered', 'closed'] as const;
 export type AskStatus = (typeof ASK_STATUS)[number];
 export const ASK_ID = /^d([1-9]\d{0,5})$/;
@@ -198,6 +199,7 @@ export type Ask = {
   pick: string | null; // a letter, one of its options
   lane: string | null;
   needsPane: boolean;
+  explicit: boolean; // its own reply only: `all ok` never answers it
   pane: string | null; // the window the go is typed in: `pane`, else `lane`
   go: string | null; // the exact words to type there
   status: AskStatus;
@@ -497,7 +499,7 @@ function parse(text: string | null, prev: QueueData | null): Queue {
 }
 
 // asks[]: an entry missing what it must have is dropped; a bad optional field is named and read the safe way (a
-// garbled `needsPane` as true, so `ok` can never answer it).
+// garbled `needsPane` or `explicit` as true, so `ok` can never answer it).
 function parseAsks(raw: Record<string, unknown>, problems: string[]) {
   let askSeq: number | null = null;
   if (raw.askSeq != null) {
@@ -530,6 +532,12 @@ function parseAsks(raw: Record<string, unknown>, problems: string[]) {
     else if (a.needsPane != null && a.needsPane !== false) {
       problems.push(`${at}: needsPane is not true or false`);
       needsPane = true; // fails closed
+    }
+    let explicit = false;
+    if (a.explicit === true) explicit = true;
+    else if (a.explicit != null && a.explicit !== false) {
+      problems.push(`${at}: explicit is not true or false`);
+      explicit = true; // fails closed
     }
     const options = opts.map((o) => str(o)!);
     if (!needsPane && (options.length < ASK_OPTIONS.min || options.length > ASK_OPTIONS.max))
@@ -573,6 +581,7 @@ function parseAsks(raw: Record<string, unknown>, problems: string[]) {
       pick,
       lane,
       needsPane,
+      explicit,
       pane,
       go: str(a.go),
       status,

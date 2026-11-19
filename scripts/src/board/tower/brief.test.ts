@@ -5,8 +5,9 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { BRIEF_FILE, BRIEF_STALE_MS, briefOut, briefText, type BriefView } from './brief.ts';
 import { budgetLine, parseBudget } from '../budget.ts';
-import { briefBudget, build, parseArgs, writeBrief } from './web/main.ts';
-import { MERGE_LINE_FILE } from '../mergeline.ts';
+import { briefBudget, build, parseArgs, viewMergeLine, writeBrief } from './web/main.ts';
+import { lineShapeOk, MERGE_LINE_FILE } from '../mergeline.ts';
+import type { Pr } from './prs.ts';
 import { PRS_FILE } from '../lookup.ts';
 const ctl = (s: string) => [...s].some((c) => c.charCodeAt(0) < 32 && c !== '\n'); // a control byte other than newline
 
@@ -261,6 +262,39 @@ describe('the brief file and pnpm board brief', () => {
     expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).prs).toEqual([
       { number: 41, title: 't', branch: 'charlie-branch', state: 'OPEN', url: null },
     ]);
+    // pr-index.json is stamped with the list's fetch time when the tower has one, else the view's
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBe(
+      new Date(fx.now).toISOString(),
+    );
+    writeBrief(dir, fx, [], Date.parse('2026-11-08T05:00:00Z'));
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBe(
+      '2026-11-08T05:00:00.000Z',
+    );
+  });
+  it("the tower's merge line: the fixture's held PR turned MERGE ME lands pinned to the list's head, in mergeOrder", () => {
+    const sha = 'f'.repeat(40);
+    const held = fx.next.merge.find((r) => r.state === 'HOLD')!;
+    const d = {
+      ...fx,
+      next: { ...fx.next, merge: [{ ...held, state: 'MERGE ME' as const, hold: null }] },
+    };
+    const pr = { number: held.pr!.number, sha } as unknown as Pr;
+    const m = viewMergeLine(d, [pr], '/repo/x');
+    expect(m.line).toBe(
+      `cd /repo/x && GH_PAGER=cat gh pr merge ${held.pr!.number} --squash --admin --body "" --match-head-commit ${sha}`,
+    );
+    expect(lineShapeOk(m.line!, '/repo/x')).toBe(true);
+    // the list without that PR: left out, never unpinned; gh down: unknown
+    expect(viewMergeLine(d, [], '/repo/x')).toMatchObject({ head: 'MERGE none', line: null });
+    const down = {
+      ...d,
+      sources: d.sources.map((s) =>
+        s.name === 'gh PRs' ? { ...s, state: 'failed' as const, detail: 'HTTP 502' } : s,
+      ),
+    };
+    expect(viewMergeLine(down, [pr], '/repo/x').head).toBe(
+      'MERGE unknown (gh PRs failed: HTTP 502)',
+    );
   });
   it('briefOut prints the file; past 180 s it says TOWER DOWN first', () => {
     expect(briefOut('BRIEF x\n', 1000, 1000 + BRIEF_STALE_MS, utc)).toBe('BRIEF x');

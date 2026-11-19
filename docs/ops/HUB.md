@@ -222,9 +222,10 @@ is follow-up F274). What each exit asks:
 | 9     | context | a session at the urgent line: tell the user at once                                                                                                   |
 | 10    | merge   | PRs merged on main (a `MERGED` line each): the after-merge duties for each, unprompted (_The hub's duties_)                                           |
 | 11    | merge   | a Mac line finished (`RAN <id> exit <n>`): carry on with what waited on it; not 0, or unreadable: look into it                                        |
-| 12    | pace    | the hard stop (`/hs`, `stopAt`) is ten minutes away: send each lane `[hold]` to stop clean by then, then a hard stop (below); fires once per time     |
+| 12    | pace    | the hard stop (`/hs`, `stop.json`) is ten minutes away: send each lane `[hold]` to stop clean by then, then a hard stop (below); fires once per time  |
 | 124   | any     | an hour with nothing to report: restart with the same arguments                                                                                       |
 | 78    | any     | a `limits.json` key is missing or bad, or (merge) jq is missing: stderr and `<board>/<watcher>.log` name it; fix it, then restart                     |
+| 74    | pace    | `stop-fired` unwritable (so 12 would fire on every restart): fix the board dir, then restart                                                          |
 | other | any     | 2 (a bad argument or override), 74 (merge: a state file unwritable, after its lines), 1, 126 …: read stderr and the log, fix it — never restart blind |
 
 **Soft and hard stop** (the user's rule, 2026-11-17). Soft: no new lane starts, and running lanes park at a clean
@@ -263,39 +264,53 @@ cd <mac-repo> && <cmd> && <cmd>; (r=$?; set -C; echo $r > <mac-repo>/localNotes/
 ### Asks
 
 Every ask the hub puts to the user — its own, or a lane's `[ask-maintainer]` relayed — is written to `queue.json`
-`asks[]` before the message goes out, with `pnpm board asks add` (stdin JSON: `{text, options, pick, lane?, pane?,
-go?}`; schema: `SESSION-BOARD.md` → _Control tower_), and the message leads with the id it prints: `d3 · Cache key?
-a) per branch b) per lockfile · pick b`. The user answers `d3 b`, `d3 ok` (the pick) or `d3 ?` (explain), typed
-bare or as `/nm` — both mean the same. `pnpm board asks answer d3 b` marks it and prints the `[relay]` line to send,
-as printed; an answer in words is acted on, then `asks close d3`.
+`asks[]` before the message goes out, with `pnpm board asks add < <file>` (JSON: `{text, options, pick, lane?, pane?,
+go?, explicit?}`; schema: `SESSION-BOARD.md` → _Control tower_), and the message leads with the id it prints: `d3 ·
+Cache key? a) per branch b) per lockfile · pick b`. The JSON goes in a file written with the Write tool, never a
+heredoc on the Bash line: an ask's text is often a lane's words, and COI reads every command line (CLAUDE.md →
+_Commands_). The user answers `d3 b`, `d3 ok` (the pick) or `d3 ?` (explain), typed bare or as `/nm` — both mean
+the same. `pnpm board asks answer d3 b` marks it and prints the `[relay]` line to send, as printed; an answer in
+words is acted on, then `asks close d3`.
 
+- **`ok` alone covers what the user saw.** `asks answer all ok <newest>` takes each pick up to `<newest>`, the
+  highest id the hub last put in front of the user (its reply, the list or brief it pasted; `asks list` prints
+  `newest d<n>`); a newer ask is left open as `NOT SHOWN`, to be shown and answered on its own.
+- **An explicit ask** (`explicit: true`) takes its own reply, `d3 ok` or `d3 b`: `all ok` passes over it
+  (`OWN REPLY`). Every ask for an effort above `high` is one (CLAUDE.md → _Claude behavior_: the user's explicit yes),
+  and so is any other whose approval must name it.
 - **A go only the pane can give** (_Approval_) is a pane ask: `pane` names the window, `go` the exact words. No
-  reply to the hub answers it, `ok` included: `asks answer` prints `GO NEEDED` and writes nothing, and the ask
-  closes (`asks close`) once the lane's `[info] … in my pane` arrives.
+  reply to the hub answers it, `ok` included: `asks answer` prints `GO NEEDED` and writes nothing, and words don't
+  close it either. A lane's pane ask closes (`asks close`) once the lane's `[info] … in my pane` arrives; one whose
+  pane is `dispatch` (a `.claude/` patch's go) closes when the hub acts on the go typed in its own pane.
 - The writers (`add`, `answer`, `close`) run from `/workspace` only, re-parse the whole file before writing and keep
-  every key they don't know; answered and closed asks stay a day, ids never repeat (`askSeq`).
+  every key they don't know; a write that would add an asks problem is refused, one already on file never blocks
+  one. They leave `updatedAt` alone (the hub's look at the whole queue). Answered and closed asks stay a day; ids
+  never repeat (`askSeq`). The `/workspace` check is the run's directory, not who runs it: a lane in its own worktree
+  is refused, one that `cd`s to `/workspace` isn't (the skills say hub only).
 
 ### Shortcuts
 
-Skills the user types in the hub's pane (`.claude/skills/<name>/`, user-invoked only). Each runs one command and
-pastes its output verbatim; the script composes, the hub doesn't.
+Skills the user types in the hub's pane (`.claude/skills/<name>/`, user-invoked only). Most run one command and paste
+its output verbatim — the script composes, the hub doesn't; `/nm` also acts on an answer in words or explains a `?`,
+`/q` edits `autoStart[]` or starts lanes, and `/hs` sends each lane `[hold]` when pace-watch exits 12.
 
-| Skill             | Runs                                         | For                                                       |
-| ----------------- | -------------------------------------------- | --------------------------------------------------------- |
-| `/nm [d3 b…\|ok]` | `pnpm board asks list` / `asks answer …`     | what needs the user; answer asks (`/nm ok`: every pick)   |
-| `/sr`             | `pnpm board brief`                           | status                                                    |
-| `/q <lane>…`      | `autoStart[]` entries, or `pnpm lanes start` | queue or start the lanes named (the approval for those)   |
-| `/ml`             | `pnpm board merge-line`                      | the merge line, printed only                              |
-| `/away [ping]`    | `pnpm board away`                            | terse replies until `/back`; pings only on asks if `ping` |
-| `/back`           | `pnpm board back`, then `pnpm board brief`   | what moved while the user was away                        |
-| `/hs <HH:MM>`     | `pnpm board stop <HH:MM>\|off`               | a hard stop at a time (pace-watch exit 12)                |
-| `/burn [HH:MM]`   | `pnpm usage burn [--at HH:MM]`               | usage now, at the reset and at a time, low–high           |
-| `/wi <id>`        | `pnpm board wi <id>`                         | what F209, PR 206, d3 or a lane is                        |
-| `/eta`            | `pnpm board eta`                             | lane and plan ETAs (the board-eta lane's verb)            |
+| Skill             | Runs                                         | For                                                                                 |
+| ----------------- | -------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `/nm [d3 b…\|ok]` | `pnpm board asks list` / `asks answer …`     | what needs the user; answer asks (`/nm ok`: each pick shown)                        |
+| `/sr`             | `pnpm board brief`                           | status                                                                              |
+| `/q <lane>…`      | `autoStart[]` entries, or `pnpm lanes start` | queue or start the lanes named (the approval for those; autonomous unless `collab`) |
+| `/ml`             | `pnpm board merge-line`                      | the merge line, printed only                                                        |
+| `/away [ping]`    | `pnpm board away`                            | terse replies until `/back`; pings only on asks if `ping`                           |
+| `/back`           | `pnpm board back`, then `pnpm board brief`   | what moved while the user was away                                                  |
+| `/hs <HH:MM>`     | `pnpm board stop <HH:MM>\|off`               | a hard stop at a time (pace-watch exit 12)                                          |
+| `/burn [HH:MM]`   | `pnpm usage burn [--at HH:MM]`               | usage now, at the reset and at a time, low–high                                     |
+| `/wi <id>`        | `pnpm board wi <id>`                         | what F209, PR 206, d3 or a lane is                                                  |
+| `/eta`            | `pnpm board eta` (once board-eta lands)      | lane and plan ETAs; until then the brief's LANES block                              |
 
 **What stays human:** `/ml` only prints — the user runs the line, and `merge-watch.sh` sees it land. No shortcut sets
 an effort above `high`, writes Aperture data (an MCP write stays one at a time, shown first, on the user's explicit ask), or
-merges. `/nm ok` never answers a pane ask: it lists each as `GO NEEDED` with the pane and the words.
+merges. `/nm ok` never answers a pane ask (it lists each as `GO NEEDED` with the pane and the words), an explicit ask
+or one the user wasn't shown.
 
 ## Lock etiquette
 

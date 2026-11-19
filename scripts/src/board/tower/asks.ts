@@ -28,7 +28,8 @@ const optionText = (a: Ask, l: string) => a.options[l.charCodeAt(0) - 97] ?? '?'
 // `pnpm board asks list`: every open ask, its options lettered, and how to reply.
 export function askLines(asks: Ask[], f: Fmt = hhmm): string {
   if (!asks.length) return 'ASKS none open';
-  const out = [`ASKS ${asks.length} open`];
+  const newest = asks.reduce((m, a) => (num(a.id) > num(m) ? a.id : m), asks[0]!.id);
+  const out = [`ASKS ${asks.length} open · newest ${newest}`];
   for (const a of asks) {
     out.push(
       `${a.id} · ${a.asked === null ? '--:--' : f(a.asked)}${a.lane ? ` · ${a.lane}` : ''} · ${one(a.text)}`,
@@ -39,7 +40,7 @@ export function askLines(asks: Ask[], f: Fmt = hhmm): string {
     else
       out.push(
         a.pick
-          ? `   pick ${a.pick} · reply ${a.id} ${a.pick} | ${a.id} ok | ${a.id} ?`
+          ? `   pick ${a.pick} · reply ${a.id} ${a.pick} | ${a.id} ok | ${a.id} ?${a.explicit ? ' · its own reply, not all ok' : ''}`
           : `   no pick · reply ${a.id} <letter> | ${a.id} ?`,
       );
   }
@@ -90,15 +91,23 @@ export function askBriefLines(asks: Ask[], max = 5): string[] {
 const rawAsks = (raw: Raw): Raw[] => (Array.isArray(raw.asks) ? (raw.asks as Raw[]) : []);
 const iso = (t: number) => new Date(t).toISOString();
 
-// Answered and closed asks older than a day go; open ones always stay.
+// Answered and closed asks older than a day go; open ones always stay. askSeq keeps the highest id ever used, so a
+// pruned id is never handed out again (a stale `d5 b` must never land on a new d5).
 export function pruneAsks(raw: Raw, now: number): Raw {
+  if (!Array.isArray(raw.asks)) return raw;
   const keep = rawAsks(raw).filter((a) => {
     if (a?.status === 'open') return true;
     const t = Date.parse(String(a?.answeredAt ?? ''));
     return !(t > 0) || now - t <= ASK_KEEP_MS; // no time: kept, so a hand-written entry never vanishes unseen
   });
-  return { ...raw, asks: keep };
+  if (keep.length === rawAsks(raw).length) return raw;
+  return { ...raw, askSeq: maxSeq(raw), asks: keep };
 }
+const maxSeq = (raw: Raw) =>
+  Math.max(
+    Number.isInteger(raw.askSeq) ? (raw.askSeq as number) : 0,
+    ...rawAsks(raw).map((a) => num(String(a?.id ?? ''))),
+  );
 
 export type AskInput = {
   text: string;
@@ -107,20 +116,20 @@ export type AskInput = {
   lane?: string;
   pane?: string;
   go?: string;
+  explicit?: boolean;
 };
 
 // `asks add` (stdin JSON): the next id after askSeq and every id in the file, so a pruned id never returns.
 export function addAsk(raw: Raw, input: unknown, now: number): { raw: Raw; id: string } {
   if (!input || typeof input !== 'object' || Array.isArray(input))
-    throw new Error('asks add: stdin wants a JSON object {text, options, pick, lane?, pane?, go?}');
+    throw new Error(
+      'asks add: stdin wants a JSON object {text, options, pick, lane?, pane?, go?, explicit?}',
+    );
   const i = input as Record<string, unknown>;
-  const known = ['text', 'options', 'pick', 'lane', 'pane', 'go'];
+  const known = ['text', 'options', 'pick', 'lane', 'pane', 'go', 'explicit'];
   const extra = Object.keys(i).filter((k) => !known.includes(k));
   if (extra.length) throw new Error(`asks add: unknown field ${extra.join(', ')}`);
-  const seq = Math.max(
-    Number.isInteger(raw.askSeq) ? (raw.askSeq as number) : 0,
-    ...rawAsks(raw).map((a) => num(String(a?.id ?? ''))),
-  );
+  const seq = maxSeq(raw);
   const id = `d${seq + 1}`;
   const entry: Raw = {
     id,
@@ -131,20 +140,23 @@ export function addAsk(raw: Raw, input: unknown, now: number): { raw: Raw; id: s
     ...(i.lane !== undefined ? { lane: i.lane } : {}),
     ...(i.pane !== undefined ? { needsPane: true, pane: i.pane } : {}),
     ...(i.go !== undefined ? { go: i.go } : {}),
+    ...(i.explicit !== undefined ? { explicit: i.explicit } : {}),
     status: 'open',
   };
   return { raw: { ...raw, askSeq: seq + 1, asks: [...rawAsks(raw), entry] }, id };
 }
 
-// `asks answer <id|all> <letter|ok>`: what it printed and the new raw (unchanged when nothing was answered). A pane
-// ask is never answered here, by a letter or by `ok`: its go is typed in the pane (GO NEEDED). `ok` takes the pick;
-// an ask with no pick needs a letter (NO PICK).
+// `asks answer <id|all> <letter|ok> [--upto d<n>]`: what it printed and the new raw (unchanged when nothing was
+// answered). A pane ask is never answered here, by a letter or by `ok`: its go is typed in the pane (GO NEEDED). `ok`
+// takes the pick; an ask with no pick needs a letter (NO PICK). `all ok` covers only what the user was shown — the
+// asks up to `upto`, the newest id dispatch last put in front of them — and never an explicit ask (OWN REPLY).
 export function answerAsks(
   raw: Raw,
   asks: Ask[],
   target: string,
   reply: string,
   now: number,
+  upto: string | null = null,
 ): { raw: Raw; out: string[]; answered: number } {
   const r = reply.toLowerCase();
   if (r !== 'ok' && !/^[a-z]$/.test(r))
@@ -155,6 +167,10 @@ export function answerAsks(
   if (target === 'all') {
     if (r !== 'ok')
       throw new Error('asks answer all: only `all ok` (each pick), never one letter for every ask');
+    if (!upto || !ASK_ID.test(upto.toLowerCase()))
+      throw new Error(
+        'asks answer all ok: wants --upto d<n>, the newest ask the user was shown (`asks list` prints it)',
+      );
     todo = asks.filter((a) => a.status === 'open').sort((x, y) => num(x.id) - num(y.id));
     if (!todo.length) return { raw, out: ['ASKS none open'], answered: 0 };
   } else {
@@ -168,9 +184,18 @@ export function answerAsks(
   }
   const out: string[] = [];
   const picked = new Map<string, string>();
+  const cap = upto ? num(upto.toLowerCase()) : Infinity;
   for (const a of todo) {
+    if (num(a.id) > cap) {
+      out.push(`NOT SHOWN ${a.id}: newer than ${upto}, so not covered by all ok · show it: asks show ${a.id}`);
+      continue;
+    }
     if (a.needsPane) {
       out.push(`GO NEEDED ${a.id}: ${goLine(a)} (a reply here is not the go)`);
+      continue;
+    }
+    if (target === 'all' && a.explicit) {
+      out.push(`OWN REPLY ${a.id}: its own reply only (${a.id} ok or ${a.id} <letter>), never all ok`);
       continue;
     }
     const l = r === 'ok' ? a.pick : r;

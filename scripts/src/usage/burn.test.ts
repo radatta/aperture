@@ -53,6 +53,16 @@ describe('burnLines', () => {
       "  range: k's 80% interval × the last hour's QU (+ λ), widened to hold the tick rate; assumes the last hour's pace holds",
     ]);
   });
+  it('a named time past the reset projects nothing through it', () => {
+    const out = burnLines(model({}), NOW + 6 * H, NOW, f, fd);
+    expect(out[2]).toBe('  at 02:00   after the reset (d 01:00): the meter starts again near 0');
+  });
+  it("100% comes from the status line's clock (hoursTo100): a reading an hour old has moved on by a point", () => {
+    // 90% read at 19:00 at 4 %/h: 2.5 h of points from now, less the one point (15 min) it has moved since → 22:15,
+    // what `usage line` says too; the plain reading-plus-2.5 h would have said 21:30
+    const old = burnLines(model({ pct: 90, pctPerHour: 4, at: NOW - H }), null, NOW, f, fd);
+    expect(old[1]).toMatch(/^ {2}at reset {3}100% from ~22:15 /);
+  });
   it('reaching 100%: when, fastest to slowest; the fast end alone says possible', () => {
     const fast = burnLines(model({ pct: 90, pctPerHour: 4 }), null, NOW, f, fd);
     // 10 points at 4–5 %/h: 22:00 at 5, 22:30 at 4

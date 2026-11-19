@@ -251,8 +251,36 @@ describe('stale meter after a reset', () => {
       calls: [],
       now: Date.parse('2026-01-05T13:00:00Z'),
     });
-    expect(f.burn).toMatchObject({ resetAt: resetsAt * 1000, pct: null });
+    expect(f.burn).toMatchObject({ resetAt: resetsAt * 1000, pct: null, nextReset: null, at: null });
     expect(boardLine(f)).toMatch(/^usage reset .* no reading since$/);
+  });
+
+  it('a reset still ahead is burn.nextReset, and burn.at is the newest reading (usage burn reads both)', () => {
+    const resetsAt = Date.parse('2026-01-05T12:00:00Z') / 1000;
+    const meter = [0, 1, 2]
+      .map((i) => meterRow({ ts: `2026-01-05T10:0${i}:00Z`, pct: 90 + i, cost: i, resetsAt }))
+      .join('\n');
+    const f = fitModel({
+      rows: parseMeter(meter).rows,
+      manual: null,
+      calls: [],
+      now: Date.parse('2026-01-05T11:00:00Z'),
+    });
+    expect(f.burn).toMatchObject({
+      resetAt: null,
+      pct: 92,
+      nextReset: resetsAt * 1000,
+      at: Date.parse('2026-01-05T10:02:00Z'),
+    });
+  });
+
+  it('burn --at refuses a time that is not HH:MM before reading anything', async () => {
+    for (const bad of ['25:99', 'soon', '7pm']) {
+      lines.length = 0;
+      expect(await main(['burn', '--at', bad, '--no-scan'], out)).toBe(2);
+      expect(lines.join('\n')).toMatch(/--at takes HH:MM \(24 h\)/);
+    }
+    expect(existsSync(join(usage, 'cache'))).toBe(false);
   });
 
   it('labels a rate from k × QU/h as such, not as ticks', () => {

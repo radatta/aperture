@@ -329,17 +329,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       ctx: readCtx(paths.boardDir, fx ? now : null),
     };
     const d = derive(inputs);
-    // the merge line (mergeline.ts): MERGE ME in landing order, each pinned to the head sha the PR list has
-    const v = {
-      ...d,
-      mergeLine: mergeLine(
-        d.next.merge,
-        d.next.order.map((o) => o.branch),
-        prs?.list ?? [],
-        MAC,
-        d.sources.find((x) => x.name === 'gh PRs'),
-      ),
-    };
+    const v = { ...d, mergeLine: viewMergeLine(d, prs?.list ?? [], MAC) };
     const sparks = {
       anon: sparkBuckets(
         tower.points.map((p) => [p.t, p.anon]),
@@ -362,7 +352,16 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       },
     };
   }
-  return { poll, view, sample, clock, paths, version, prs: () => prs?.list ?? [] };
+  return {
+    poll,
+    view,
+    sample,
+    clock,
+    paths,
+    version,
+    prs: () => prs?.list ?? [],
+    prsAt: () => prs?.at ?? null,
+  };
 }
 
 // dispatch's ctx.json; its mtime is its time (a fixture's is the fixed clock's)
@@ -418,9 +417,26 @@ export function briefBudget(
   }
 }
 
+// the merge line (mergeline.ts) for a derived board: MERGE ME in landing order, each pinned to the head sha the PR list
+// has, and unknown while the gh PRs source isn't ok
+export const viewMergeLine = (d: ReturnType<typeof derive>, prs: Pr[], root: string) =>
+  mergeLine(
+    d.next.merge,
+    d.next.order.map((o) => o.branch),
+    prs,
+    root,
+    d.sources.find((x) => x.name === 'gh PRs'),
+  );
+
 // brief.txt (brief.ts): `pnpm board brief` prints it; merge-line.txt (`board merge-line`) and pr-index.json (`board wi`)
-// beside it. Their own writer, beside writeDerived's two files; each file tmp + rename.
-export function writeBrief(dir: string, v: BriefView & { mergeLine?: MergeLine }, prs: Pr[] = []) {
+// beside it. Their own writer, beside writeDerived's two files; each file tmp + rename. pr-index.json carries when the
+// PR list was fetched (`prsAt`, the cache's last success), not when it was written, so `wi` can say how old it is.
+export function writeBrief(
+  dir: string,
+  v: BriefView & { mergeLine?: MergeLine },
+  prs: Pr[] = [],
+  prsAt: number | null = null,
+) {
   const put = (name: string, text: string) => {
     const tmp = join(dir, `.${name}.tmp.${process.pid}`);
     writeFileSync(tmp, text);
@@ -428,7 +444,7 @@ export function writeBrief(dir: string, v: BriefView & { mergeLine?: MergeLine }
   };
   put(BRIEF_FILE, briefText(v));
   if (v.mergeLine) put(MERGE_LINE_FILE, mergeLineText(v.mergeLine));
-  put(PRS_FILE, prsFile(prs, v.now));
+  put(PRS_FILE, prsFile(prs, prsAt ?? v.now));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).
@@ -481,7 +497,12 @@ async function run(a: Args) {
         const v = t.view(false);
         try {
           // its own try: a failed board.line must not age the brief into TOWER DOWN
-          writeBrief(t.paths.boardDir, { ...v, budget: briefBudget(t.paths.boardDir) }, t.prs());
+          writeBrief(
+            t.paths.boardDir,
+            { ...v, budget: briefBudget(t.paths.boardDir) },
+            t.prs(),
+            t.prsAt(),
+          );
         } catch (e) {
           process.stderr.write(`tower-web: brief.txt: ${(e as Error).message}\n`);
         }

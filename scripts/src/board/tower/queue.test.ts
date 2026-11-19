@@ -653,15 +653,18 @@ describe('asks[] (dispatch asks the maintainer, answered by letter)', () => {
       { ...ok, id: 'd4', needsPane: 'yes', pane: 'dispatch' },
       { ...ok, id: 'd5', needsPane: true, lane: 'warm-caches' },
       { ...ok, id: 'd6', answer: 'z' },
+      { ...ok, id: 'd7', explicit: 'yes' },
     ]);
     const a = q.data!.asks!;
-    expect(a.map((x) => x.id)).toEqual(['d1', 'd2', 'd3', 'd4', 'd5', 'd6']);
+    expect(a.map((x) => x.id)).toEqual(['d1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7']);
     expect(a[0]!.asked).toBeNull();
     expect(a[1]!.pick).toBeNull(); // so `ok` skips it
     expect(a[2]!.lane).toBeNull();
     expect(a[3]!.needsPane).toBe(true); // a garbled needsPane fails closed
     expect(a[4]!.pane).toBe('warm-caches'); // falls back to the lane
     expect(a[5]!.answer).toBeNull();
+    expect(a[6]!.explicit).toBe(true); // a garbled explicit fails closed: all ok passes over it
+    expect(a[0]!.explicit).toBe(false);
     expect(q.problems).toEqual([
       'asks[0]: asked is not an ISO time',
       'asks[1]: pick "c" is not one of its options',
@@ -669,6 +672,7 @@ describe('asks[] (dispatch asks the maintainer, answered by letter)', () => {
       'asks[3]: needsPane is not true or false',
       'asks[4]: needsPane with no pane',
       'asks[5]: answer "z" is not one of its options',
+      'asks[6]: explicit is not true or false',
     ]);
   });
   it('a pane ask may have no options', () => {
@@ -690,6 +694,19 @@ describe('asks[] (dispatch asks the maintainer, answered by letter)', () => {
       go: 'go 1a2b3c4d',
       options: [],
     });
+    // no minimum, but still the maximum
+    const seven = doc([
+      {
+        id: 'd9',
+        asked: ok.asked,
+        text: 't',
+        needsPane: true,
+        pane: 'dispatch',
+        options: ['1', '2', '3', '4', '5', '6', '7'],
+        status: 'open',
+      },
+    ]);
+    expect(seven.problems).toEqual(['asks[0]: wants at most 6 options (has 7)']);
   });
   it('a non-array asks and a bad askSeq are problems; no asks key reads as none', () => {
     expect(doc({}).problems).toEqual(['asks is not an array']);

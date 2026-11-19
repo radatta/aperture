@@ -69,6 +69,14 @@ export function mergeLine(
 export const mergeLineText = (m: MergeLine) =>
   [m.head, ...(m.line ? [m.line] : []), ...m.notes].join('\n') + '\n';
 
+// The one shape a merge line may have, checked again where it is printed: merge-line.txt sits in the shared board dir,
+// so the CLI never trusts what it reads there — `cd <root>`, then only pinned squash merges of PR numbers.
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const MERGE_CMD =
+  'GH_PAGER=cat gh pr merge [1-9]\\d{0,6} --squash --admin --body "" --match-head-commit [0-9a-f]{40}';
+export const lineShapeOk = (line: string, root: string) =>
+  new RegExp(`^cd ${esc(root)} && ${MERGE_CMD}( && ${MERGE_CMD})*$`).test(line);
+
 // What the CLI prints: the file with the marker suffix on its command line (the one starting `cd `).
 export const withSuffix = (text: string, suffix: string) =>
   text

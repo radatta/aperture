@@ -58,7 +58,7 @@ describe('openAsks and the printed lines', () => {
     expect(asks.map((a) => a.id)).toEqual(['d1', 'd2', 'd3']);
     expect(askLines(asks, f)).toBe(
       [
-        'ASKS 3 open',
+        'ASKS 3 open · newest d3',
         'd1 · 19:00 · Apply the skills patch',
         '   GO NEEDED: type in the dispatch pane: go 1a2b3c4d',
         'd2 · 19:05 · Start golf tonight?',
@@ -113,10 +113,39 @@ describe('openAsks and the printed lines', () => {
       '  +1 more',
     ]);
     expect(askBriefLines([])).toEqual(['ASKS none']);
+    const long = base();
+    long.asks[0]!.text = 'q'.repeat(300);
+    long.asks[0]!.options = ['o'.repeat(80), 'p'.repeat(80)];
+    for (const l of askBriefLines(openAsks(parsed(long))))
+      expect(l.length).toBeLessThanOrEqual(120);
+    for (const l of askLines(openAsks(parsed(long)), f).split('\n'))
+      expect(l.length).toBeLessThanOrEqual(150); // text 120, options 60 each with their letters
   });
 });
 
 describe('the writes', () => {
+  it('prune keeps askSeq at the highest id it drops, so a hand-kept file never reuses one', () => {
+    const raw = {
+      v: 1,
+      updatedAt: '2026-11-18T19:00:00Z',
+      asks: [
+        {
+          id: 'd5',
+          asked: '2026-11-17T10:00:00Z',
+          text: 'old',
+          options: ['x', 'y'],
+          status: 'answered',
+          answer: 'a',
+          answeredAt: '2026-11-17T10:05:00Z',
+        },
+      ],
+    };
+    const pruned = pruneAsks(raw, NOW);
+    expect(pruned).toMatchObject({ askSeq: 5, asks: [] });
+    expect(addAsk(pruned, { text: 't', options: ['x', 'y'] }, NOW).id).toBe('d6');
+    const fresh = base();
+    expect(pruneAsks(fresh, NOW)).toBe(fresh); // nothing to drop: untouched
+  });
   it('add hands out the next id past askSeq and every id on file, and the result parses', () => {
     const raw = base();
     raw.askSeq = 1; // behind the file: d3 is on file, so the next is d4
@@ -207,9 +236,9 @@ describe('the writes', () => {
       'GO NEEDED d3: type in the warm-caches pane: go (a reply here is not the go)',
     );
   });
-  it('all ok answers every pick and lists the rest', () => {
+  it('all ok answers every pick up to the newest shown and lists the rest', () => {
     const raw = base();
-    const r = answerAsks(raw, parsed(raw).asks!, 'all', 'ok', NOW);
+    const r = answerAsks(raw, parsed(raw).asks!, 'all', 'ok', NOW, 'd3');
     expect(r.answered).toBe(1);
     expect(r.out).toEqual([
       'GO NEEDED d1: type in the dispatch pane: go 1a2b3c4d (a reply here is not the go)',
@@ -219,7 +248,45 @@ describe('the writes', () => {
     ]);
     expect(openAsks(parsed(r.raw)).map((a) => a.id)).toEqual(['d1', 'd2']);
     const none = { ...base(), asks: [] };
-    expect(answerAsks(none, [], 'all', 'ok', NOW).out).toEqual(['ASKS none open']);
+    expect(answerAsks(none, [], 'all', 'ok', NOW, 'd1').out).toEqual(['ASKS none open']);
+  });
+  it('all ok covers only what the user was shown: no newest refuses, a newer ask is left open', () => {
+    const raw = base();
+    const asks = parsed(raw).asks!;
+    for (const upto of [null, '', 'seven', 'd0'])
+      expect(() => answerAsks(raw, asks, 'all', 'ok', NOW, upto)).toThrow(/wants --upto d<n>/);
+    raw.asks[1]!.pick = 'a';
+    const r = answerAsks(raw, parsed(raw).asks!, 'all', 'ok', NOW, 'D2');
+    expect(r.answered).toBe(1);
+    expect(r.out).toContain(
+      'NOT SHOWN d3: newer than D2, so not covered by all ok · show it: asks show d3',
+    );
+    expect(openAsks(parsed(r.raw)).map((a) => a.id)).toEqual(['d1', 'd3']);
+  });
+  it('an explicit ask takes its own reply: all ok passes over it, d<n> ok answers it; garbled reads as explicit', () => {
+    const raw = base();
+    raw.asks[0] = { ...raw.asks[0]!, explicit: true } as never;
+    const all = answerAsks(raw, parsed(raw).asks!, 'all', 'ok', NOW, 'd3');
+    expect(all.answered).toBe(0);
+    expect(all.out).toContain(
+      'OWN REPLY d3: its own reply only (d3 ok or d3 <letter>), never all ok',
+    );
+    expect(askLines(openAsks(parsed(raw)), f)).toContain(
+      '   pick b · reply d3 b | d3 ok | d3 ? · its own reply, not all ok',
+    );
+    const own = answerAsks(raw, parsed(raw).asks!, 'd3', 'ok', NOW);
+    expect(own.answered).toBe(1);
+    const garbled = base();
+    garbled.asks[0] = { ...garbled.asks[0]!, explicit: 'maybe' } as never;
+    const q = parseQueue(JSON.stringify(garbled));
+    expect(q.problems).toEqual(['asks[0]: explicit is not true or false']);
+    expect(answerAsks(garbled, q.data!.asks!, 'all', 'ok', NOW, 'd3').answered).toBe(0);
+    const { raw: added } = addAsk(
+      base(),
+      { text: 'xhigh for gate-trims?', options: ['yes', 'no'], explicit: true },
+      NOW,
+    );
+    expect(parsed(added).asks!.at(-1)).toMatchObject({ explicit: true });
   });
   it('close: an open ask only, kept a day like an answered one', () => {
     const raw = base();

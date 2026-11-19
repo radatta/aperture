@@ -9,13 +9,14 @@ import type { Pr } from './tower/prs.ts';
 import type { QueueData } from './tower/queue.ts';
 
 export const PRS_FILE = 'pr-index.json'; // the tower writes it beside brief.txt
+const PRS_OLD_MS = 10 * 60e3; // the tower refetches every minute or so: a list past this is a failing fetch
 
 export type PrIndexRow = Pick<Pr, 'number' | 'title' | 'branch' | 'state' | 'url'>;
 export type PrIndex = { at: number; prs: PrIndexRow[] };
 
-export const prsFile = (prs: Pr[], now: number) =>
+export const prsFile = (prs: Pr[], at: number) =>
   JSON.stringify({
-    at: new Date(now).toISOString(),
+    at: new Date(at).toISOString(),
     prs: prs.map(({ number, title, branch, state, url }) => ({
       number,
       title,
@@ -53,6 +54,7 @@ export function readPrIndex(text: string | null): PrIndex | null {
 
 export type WiSources = {
   queue: QueueData | null;
+  queueWhy?: string | null; // why there is no queue (missing, unreadable)
   lanes: LaneFile[];
   prs: PrIndex | null;
   roadmap: string | null; // /workspace/localNotes/roadmap.md
@@ -74,6 +76,7 @@ export function whatIs(idIn: string, s: WiSources, f: Fmt = hhmm): string {
   if (pr) return prInfo(+pr[1]!, s, f);
   if (/^f\d{1,5}$/i.test(id)) return followup(id.toUpperCase(), s);
   if (/^d\d{1,6}$/i.test(id)) {
+    if (!s.queue) return `unknown: ${id} (${s.queueWhy ?? 'no queue.json'})`;
     const a = s.queue?.asks?.find((x) => x.id === id.toLowerCase());
     return a ? askShow(a, f) : `not found: ${id} (no such ask in queue.json)`;
   }
@@ -99,9 +102,10 @@ function prInfo(n: number, s: WiSources, f: Fmt): string {
   if (!s.prs)
     return `PR ${n}: no pr-index.json yet (the web tower writes it every 30 s: board.sh tower start)`;
   const p = s.prs.prs.find((x) => x.number === n);
-  if (!p) return `PR ${n}: not in the tower's newest PRs (as of ${f(s.prs.at)})`;
+  const age = s.now - s.prs.at > PRS_OLD_MS ? ` (the list is from ${f(s.prs.at)}: gh PRs failing?)` : '';
+  if (!p) return `PR ${n}: not in the tower's newest PRs (as of ${f(s.prs.at)})${age}`;
   const out = [
-    `PR ${n} · ${p.state} · ${p.branch} · "${one(p.title, 120)}"${p.url ? ` · ${p.url}` : ''}`,
+    `PR ${n} · ${p.state} · ${p.branch} · "${one(p.title, 120)}"${p.url ? ` · ${p.url}` : ''}${age}`,
   ];
   const l = s.lanes.find((x) => x.branch === p.branch);
   if (l) out.push(laneLine(l, f));

@@ -81,13 +81,15 @@ describe('asks', () => {
       'd2',
     );
     expect(cli(['asks', 'list']).out).toMatch(
-      /^ASKS 2 open\nd1 · \d\d:\d\d · warm-caches · Cache key\?\n/,
+      /^ASKS 2 open · newest d2\nd1 · \d\d:\d\d · warm-caches · Cache key\?\n/,
     );
     expect(
       JSON.parse(cli(['asks', 'list', '--json']).out).map((a: { id: string }) => a.id),
     ).toEqual(['d1', 'd2']);
 
-    const ok = cli(['asks', 'answer', 'all', 'ok']);
+    expect(cli(['asks', 'answer', 'all', 'ok']).err).toMatch(/wants --upto d<n>/); // what the user saw
+    expect(cli(['asks', 'answer', 'd1', 'ok', 'd2']).err).toMatch(/goes only with `all ok`/);
+    const ok = cli(['asks', 'answer', 'all', 'ok', 'd2']);
     expect(ok.status).toBe(0);
     expect(ok.out.split('\n')).toEqual([
       'ANSWERED d1: b) per lockfile (the pick)',
@@ -166,7 +168,50 @@ describe('asks', () => {
     }
     expect(readFileSync(queueFile(), 'utf8')).toBe(before);
     expect(existsSync(join(board, 'away.json'))).toBe(false);
-    expect(existsSync(join(board, 'pace-control.json'))).toBe(false);
+    expect(existsSync(join(board, 'stop.json'))).toBe(false);
+  });
+
+  it('a problem already on file never blocks the writes, and asks writes leave updatedAt alone', () => {
+    seed({
+      askSeq: 1,
+      asks: [
+        { id: 'd1', asked: 'soon', text: 'hand-written', options: ['a', 'b'], status: 'open' },
+      ],
+    });
+    expect(parseQueue(readFileSync(queueFile(), 'utf8')).problems).toEqual([
+      'asks[0]: asked is not an ISO time',
+    ]);
+    expect(
+      cli(['asks', 'add'], { input: JSON.stringify({ text: 't', options: ['x', 'y'] }) }).out,
+    ).toBe('d2');
+    expect(cli(['asks', 'close', 'd1']).out).toBe('CLOSED d1');
+    expect(queue().updatedAt).toBe('2026-11-18T19:00:00Z'); // the hub's last look at the whole queue
+    // a new problem still refuses
+    expect(
+      cli(['asks', 'add'], { input: JSON.stringify({ text: 't', options: ['x'] }) }).err,
+    ).toMatch(/would not parse: asks\[2\]: wants 2 to 6 options/);
+  });
+
+  it('prunes answered asks past a day on the next write, keeping askSeq', () => {
+    seed({
+      askSeq: 4,
+      asks: [
+        {
+          id: 'd4',
+          asked: '2026-11-10T10:00:00Z',
+          text: 'old',
+          options: ['a', 'b'],
+          status: 'answered',
+          answer: 'a',
+          answeredAt: '2026-11-10T10:05:00Z',
+        },
+      ],
+    });
+    expect(
+      cli(['asks', 'add'], { input: JSON.stringify({ text: 't', options: ['x', 'y'] }) }).out,
+    ).toBe('d5');
+    expect(queue().asks.map((a: { id: string }) => a.id)).toEqual(['d5']);
+    expect(queue().askSeq).toBe(5);
   });
 });
 
@@ -176,23 +221,46 @@ describe('merge-line', () => {
     rmSync(file(), { force: true });
     expect(cli(['merge-line']).err).toMatch(/no .*merge-line.txt yet: the web tower writes it/);
   });
+  const SHA = 'a'.repeat(40);
+  const cmd = (n: number) =>
+    `GH_PAGER=cat gh pr merge ${n} --squash --admin --body "" --match-head-commit ${SHA}`;
   it('a fresh file: the line gets a fresh ran marker (and the root note here, with no mac-root)', () => {
     writeFileSync(
       file(),
-      'MERGE 1 · landing order: PR 7 a\ncd <mac-repo> && GH_PAGER=cat gh pr merge 7 --squash\nleft out, on hold: PR 5 b\n',
+      `MERGE 1 · landing order: PR 7 a\ncd <mac-repo> && ${cmd(7)}\nleft out, on hold: PR 5 b\u001b[2J\n`,
     );
     const r = cli(['merge-line']);
     expect(r.status).toBe(0);
     const [head, line, note, rootNote] = r.out.split('\n');
     expect(head).toBe('MERGE 1 · landing order: PR 7 a');
     expect(line).toMatch(
-      /^cd <mac-repo> && .* --squash; \(r=\$\?; set -C; echo \$r > <mac-repo>\/localNotes\/board\/ran\/merge-[0-9a-z]{4}\)$/,
+      /^cd <mac-repo> && .* --match-head-commit a{40}; \(r=\$\?; set -C; echo \$r > <mac-repo>\/localNotes\/board\/ran\/merge-[0-9a-z]{4}\)$/,
     );
-    expect(note).toBe('left out, on hold: PR 5 b');
+    expect(note).toBe('left out, on hold: PR 5 b [2J'); // a shared file's control bytes never reach the terminal
     expect(rootNote).toMatch(/^\(<mac-repo> is the Mac repo path/);
     const id = /ran\/(merge-[0-9a-z]{4})\)$/.exec(line!)![1]!;
     expect(existsSync(join(board, 'ran', `.${id}`))).toBe(true); // reserved, create-only
     expect(cli(['merge-line']).out).not.toContain(`ran/${id})`); // the next print gets its own id
+  });
+  it('the file is shared, so its line is re-checked: anything but the pinned shape for this root prints no line', () => {
+    for (const bad of [
+      'cd <mac-repo> && GH_PAGER=cat gh pr merge 7 --squash', // unpinned
+      `cd <mac-repo> && ${cmd(7)} && touch x`,
+      `cd <mac-repo> && ${cmd(7)}; rm x`,
+      `cd /elsewhere && ${cmd(7)}`, // a root the CLI doesn't have (a tower started before mac-root)
+      `cd <mac-repo> && ${cmd(7)}\ncd <mac-repo> && ${cmd(8)}`, // two lines
+      `cd <mac-repo> && ${cmd(7).replace(SHA, 'b'.repeat(39))}`,
+    ]) {
+      writeFileSync(file(), `MERGE 1 · landing order: PR 7 a\n${bad}\n`);
+      const r = cli(['merge-line']);
+      expect([r.status, r.out]).toEqual([2, '']);
+      expect(r.err).toMatch(/not the shape the tower writes for cd <mac-repo>, so no line printed/);
+    }
+    writeFileSync(
+      file(),
+      `MERGE 2 · landing order: PR 7 a, PR 8 b\ncd <mac-repo> && ${cmd(7)} && ${cmd(8)}\n`,
+    );
+    expect(cli(['merge-line']).status).toBe(0);
   });
   it('nothing to merge: the file as is, no marker minted', () => {
     writeFileSync(file(), 'MERGE none\n');
@@ -228,6 +296,8 @@ describe('wi, away, back, stop', () => {
     expect(cli(['wi', 'F9']).out).toBe('F9 · open · lane · after now · since 11-14 · w (s)');
     expect(cli(['wi', 'PR', '7']).status).toBe(2); // one argument: `wi 7` or `wi "PR 7"`
     expect(cli(['wi', 'PR 7']).out).toMatch(/^PR 7: no pr-index.json yet/);
+    writeFileSync(queueFile(), '{');
+    expect(cli(['wi', 'd3']).out).toMatch(/^unknown: d3 \(queue.json bad/); // never "not found"
   });
   it('away stamps, back digests and clears the stamp, a second back refuses', () => {
     seed();
@@ -239,29 +309,81 @@ describe('wi, away, back, stop', () => {
       /^AWAY since \d\d:\d\d · ping on asks · usage 41% · 2%\/h \(\d\d:\d\d\)$/,
     );
     expect(cli(['away', 'later']).err).toMatch(/usage: away \[ping\]/);
+    const first = JSON.parse(readFileSync(join(board, 'away.json'), 'utf8')).at;
+    expect(cli(['away']).out).toMatch(/^AWAY still, since \d\d:\d\d · usage then 41%/); // the first stamp stands
+    expect(JSON.parse(readFileSync(join(board, 'away.json'), 'utf8'))).toMatchObject({
+      at: first,
+      ping: false,
+    });
     const b = cli(['back']);
     expect(b.out).toMatch(
-      /^BACK \d\d:\d\d · away since \d\d:\d\d \(0m\)\nMERGED none\nSTARTED none\nMOVED none\nASKS none open\nUSAGE then 41%/,
+      /^BACK \d\d:\d\d · away since \d\d:\d\d \(\d+m\)\nMERGED none\nSTARTED none\nMOVED none\nASKS none open\nUSAGE then 41%/,
     );
     expect(existsSync(join(board, 'away.json'))).toBe(false);
     expect(existsSync(join(board, 'away-last.json'))).toBe(true);
     expect(cli(['back']).err).toMatch(/no away.json/);
   });
-  it('stop writes stopAt into pace-control.json keeping the rest; off removes it; a bad time refuses', () => {
+  it('back reads what moved while away: merges, starts and lane phases; a bad queue is unknown asks', () => {
+    writeFileSync(queueFile(), '{');
+    expect(cli(['away']).status).toBe(0);
+    const later = new Date(Date.now() + 60e3).toISOString();
+    const day = later.slice(0, 10);
+    for (const d of ['history', 'lifecycle', 'lanes'])
+      mkdirSync(join(board, d), { recursive: true });
+    const merged = {
+      kind: 'merged',
+      pr: 240,
+      sha: 'c'.repeat(40),
+      mergedAt: later,
+      title: 'Board: asks',
+    };
+    const old = {
+      kind: 'merged',
+      pr: 1,
+      sha: 'd'.repeat(40),
+      mergedAt: '2026-01-01T00:00:00Z',
+      title: 'old',
+    };
     writeFileSync(
-      join(board, 'pace-control.json'),
-      JSON.stringify({ state: 'calm', since: 1, held: ['x'], triggers: [] }),
+      join(board, 'history', `events-${day}.jsonl`),
+      [merged, merged, old].map((e) => JSON.stringify(e)).join('\n') + '\n',
     );
-    expect(cli(['stop', '22:30']).out).toMatch(
-      /^STOP 22:30 hard · in \S+ · pace-watch exits 12 at 22:20: lanes work until 22:29, then stop clean$/,
+    writeFileSync(
+      join(board, 'lifecycle', 'gate-trims.json'),
+      JSON.stringify({ branch: 'gate-trims', startedAt: later }),
     );
-    const c = JSON.parse(readFileSync(join(board, 'pace-control.json'), 'utf8'));
-    expect(c).toMatchObject({ state: 'calm', since: 1, held: ['x'] });
-    expect(new Date(c.stopAt * 1000).toISOString().slice(11, 16)).toBe('22:30');
+    writeFileSync(
+      join(board, 'lanes', 'warm-caches.json'),
+      JSON.stringify({
+        v: 1,
+        branch: 'warm-caches',
+        phase: 'review',
+        phaseSince: later,
+        updatedAt: later,
+      }),
+    );
+    const out = cli(['back']).out.split('\n');
+    expect(out[1]).toMatch(/^MERGED 1 · PR 240 "Board: asks" \d\d:\d\d$/); // deduped, the old one not since
+    expect(out[2]).toMatch(/^STARTED 1 · gate-trims \d\d:\d\d$/);
+    expect(out[3]).toMatch(/^MOVED 1 · warm-caches → review \d\d:\d\d$/);
+    expect(out[4]).toMatch(/^ASKS unknown \(queue.json bad/);
+    for (const d of ['history', 'lifecycle', 'lanes']) rmSync(join(board, d), { recursive: true });
+  });
+  it('stop writes stop.json, its own file, never pace-control.json; off nulls it; a bad time refuses', () => {
+    const ctl = JSON.stringify({ state: 'calm', since: 1, held: ['x'], triggers: [] });
+    writeFileSync(join(board, 'pace-control.json'), ctl);
+    const at = new Date(Date.now() + 3 * 3600e3).toISOString().slice(11, 16); // TZ=UTC: 3 h ahead
+    const lead = new Date(Date.now() + 3 * 3600e3 - 600e3).toISOString().slice(11, 16);
+    expect(cli(['stop', at]).out).toMatch(
+      new RegExp(
+        `^STOP ${at} hard · in \\S+ · pace-watch exits 12 at ${lead}: lanes work until \\d\\d:\\d\\d, then stop clean$`,
+      ),
+    );
+    const c = JSON.parse(readFileSync(join(board, 'stop.json'), 'utf8'));
+    expect(new Date(c.stopAt * 1000).toISOString().slice(11, 16)).toBe(at);
+    expect(readFileSync(join(board, 'pace-control.json'), 'utf8')).toBe(ctl);
     expect(cli(['stop', 'off']).out).toBe('STOP off');
-    expect(
-      JSON.parse(readFileSync(join(board, 'pace-control.json'), 'utf8')).stopAt,
-    ).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(board, 'stop.json'), 'utf8')).stopAt).toBeNull();
     expect(cli(['stop', '25:00']).err).toMatch(/want HH:MM/);
     noTmp();
   });

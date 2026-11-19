@@ -91,12 +91,22 @@ describe('whatIs', () => {
     for (const id of ['206', 'PR 206', 'pr206', '#206']) expect(whatIs(id, src(), f)).toBe(want);
     expect(whatIs('999', src(), f)).toBe("PR 999: not in the tower's newest PRs (as of 20:00)");
     expect(whatIs('206', src({ prs: null }), f)).toMatch(/^PR 206: no pr-index.json yet/);
+    // the list's own fetch time: past 10 min old, wi says so (a failing gh keeps serving the last list)
+    expect(whatIs('206', src({ now: NOW + 11 * 60e3 }), f).split('\n')[0]).toMatch(
+      /· https:\/\/github.com\/o\/r\/pull\/206 \(the list is from 20:00: gh PRs failing\?\)$/,
+    );
+    expect(whatIs('999', src({ now: NOW + 11 * 60e3 }), f)).toMatch(
+      /\(as of 20:00\) \(the list is from 20:00/,
+    );
   });
   it('an ask: shown in full', () => {
     expect(whatIs('D3', src(), f)).toMatch(
       /^d3 · open · asked 19:10\nCache key\?\n {2}a\) branch\n {2}b\) lockfile {2}← pick$/,
     );
     expect(whatIs('d9', src(), f)).toBe('not found: d9 (no such ask in queue.json)');
+    expect(whatIs('d3', src({ queue: null, queueWhy: 'queue.json bad: not JSON' }), f)).toBe(
+      'unknown: d3 (queue.json bad: not JSON)',
+    );
   });
   it('a lane: its file, queue entries, newest PR and kickoff line', () => {
     expect(whatIs('warm-caches', src(), f)).toBe(

@@ -6,8 +6,8 @@ import {
   STOP_LEAD_SEC,
   stopAt,
   stopLine,
+  stopFile,
   usageRow,
-  withStop,
 } from './away.ts';
 import type { LaneFile } from './tower/lanes.ts';
 import type { Ask } from './tower/queue.ts';
@@ -125,38 +125,17 @@ describe('the hard stop', () => {
       `STOP 21:05 hard · in 3h00m · pace-watch exits 12 at ${f((at - STOP_LEAD_SEC) * 1000)}: lanes work until 21:04, then stop clean`,
     );
   });
-  it('withStop sets or removes stopAt and keeps every other key; a bad file refuses, a missing one starts calm', () => {
-    const ctl = JSON.stringify({
-      state: 'hot',
-      since: 5,
-      held: ['x'],
-      triggers: [],
-      note: 'n',
-      stopAt: 1,
-    });
-    expect(withStop(ctl, 99, T)).toEqual({
-      state: 'hot',
-      since: 5,
-      held: ['x'],
-      triggers: [],
-      note: 'n',
+  it('under STOP_LEAD away, the line says exit 12 comes on the next tick, not at a time already past', () => {
+    expect(stopLine(T / 1000 + 300, T, f)).toBe(
+      'STOP 18:10 hard · in 5m · pace-watch exits 12 on its next tick (under 10 min away): lanes work until 18:09, then stop clean',
+    );
+  });
+  it("stop.json, the stop's own file: the time or null for off, and when it was set", () => {
+    expect(JSON.parse(stopFile(99, T))).toEqual({
+      v: 1,
       stopAt: 99,
+      setAt: new Date(T).toISOString(),
     });
-    expect(withStop(ctl, null, T)).toEqual({
-      state: 'hot',
-      since: 5,
-      held: ['x'],
-      triggers: [],
-      note: 'n',
-    });
-    expect(withStop(null, 99, T)).toEqual({
-      state: 'calm',
-      since: T / 1000,
-      held: [],
-      triggers: [],
-      stopAt: 99,
-    });
-    expect(() => withStop('{', 99, T)).toThrow(/pace-control.json is unreadable/);
-    expect(() => withStop('[]', 99, T)).toThrow(/not an object/);
+    expect(JSON.parse(stopFile(null, T)).stopAt).toBeNull();
   });
 });

@@ -335,8 +335,10 @@ beside `queue.json` every 30 s, tmp + rename:
   Beside it, by the same writer: `merge-line.txt` (`mergeline.ts`: the head, the one Mac line merging every MERGE ME
   PR in `mergeOrder` then PR order, each `--match-head-commit` its head sha — only numbers and shas, never a branch
   or title — and what was left out: HOLD, or no head sha; `MERGE unknown (gh PRs …)` and no line when gh isn't ok),
-  which `pnpm board merge-line` prints with a fresh ran marker (no line at all past 180 s old); and `pr-index.json`
-  (`lookup.ts`: number, title, branch, state, url of the PR list), which `pnpm board wi` reads. The merge group's
+  which `pnpm board merge-line` prints with a fresh ran marker — no line at all past 180 s old, and none unless the
+  line is exactly that pinned shape for this checkout's Mac path (`lineShapeOk`: the board dir is shared, so the
+  printer never trusts the file); and `pr-index.json` (`lookup.ts`: number, title, branch, state, url of the PR
+  list, stamped with the list's fetch time), which `pnpm board wi` reads, saying when the list is over 10 min old. The merge group's
   "copy merge line" button copies the same line, without the marker.
 
   ```

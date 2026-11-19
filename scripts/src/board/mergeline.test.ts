@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { mergeLine, mergeLineText, withSuffix } from './mergeline.ts';
+import { lineShapeOk, mergeLine, mergeLineText, withSuffix } from './mergeline.ts';
 import type { LaneRow, SourceRow } from './tower/derive.ts';
 import type { Pr } from './tower/prs.ts';
 
@@ -35,6 +35,26 @@ describe('mergeLine', () => {
         `GH_PAGER=cat gh pr merge 7 ${flags} --match-head-commit ${sha('c')}`,
     );
     expect(m.notes).toEqual(['left out, on hold: PR 5 hold-me (dev: x is testing)']);
+    // what the tower writes is the one shape the CLI prints (cli.ts re-checks the shared file)
+    expect(lineShapeOk(m.line!, ROOT)).toBe(true);
+    expect(lineShapeOk(m.line!, '/repo/other')).toBe(false);
+    expect(lineShapeOk(m.line!.replace(' && GH_PAGER', '; GH_PAGER'), ROOT)).toBe(false);
+    expect(
+      lineShapeOk(
+        mergeLine([row('a', 1)], [], [pr(1, sha('e'))], '<mac-repo>', ok).line!,
+        '<mac-repo>',
+      ),
+    ).toBe(true);
+  });
+  it('rows outside mergeOrder land after it, by PR number', () => {
+    const m = mergeLine(
+      [row('c', 30), row('b', 20), row('a', 10)],
+      ['b'],
+      [pr(30, sha('a')), pr(20, sha('b')), pr(10, sha('c'))],
+      ROOT,
+      ok,
+    );
+    expect(m.head).toBe('MERGE 3 · landing order: PR 20 b, PR 10 a, PR 30 c');
   });
   it('a PR whose head the list lacks (or a bad sha) is left out, never merged unpinned', () => {
     const m = mergeLine(

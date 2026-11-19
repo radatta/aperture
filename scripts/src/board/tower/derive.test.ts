@@ -458,6 +458,7 @@ describe('the accuracy audit (2026-11-14)', () => {
       pick: 'a',
       lane: null,
       needsPane: false,
+      explicit: false,
       pane: null,
       go: null,
       status,

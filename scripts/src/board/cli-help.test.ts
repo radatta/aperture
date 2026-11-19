@@ -46,6 +46,17 @@ describe('board cli … refuses what it does not know', () => {
     [['report', '/x', '--json=1']],
     [['budget', '/x', '--jsn']],
     [['budget-report', '/x', '1', 'extra']],
+    // the shortcut verbs: the guard refuses before hubBoard, a read or a write
+    [['asks']],
+    [['asks', 'list', '--bogus']],
+    [['asks', 'add', 'extra']],
+    [['asks', 'answer', 'all', 'ok', 'd3', 'more']],
+    [['asks', 'nope']],
+    [['away', 'x', 'y']],
+    [['back', 'x']],
+    [['stop', '22:30', 'extra']],
+    [['wi', 'a', 'b']],
+    [['merge-line', '--json']],
   ])('%j → throws (exit 2), nothing read', (argv) => {
     expect(() => main(argv, noStdin)).toThrow(/unknown|unexpected|takes no value|needs a value/);
     expect(noStdin).not.toHaveBeenCalled();

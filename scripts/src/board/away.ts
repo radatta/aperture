@@ -52,7 +52,7 @@ export type BackInputs = {
   merged: Merged[]; // history/events-*.jsonl `merged` rows, any order, may repeat
   started: Started[]; // lifecycle/<branch>.json
   lanes: LaneFile[];
-  asks: Ask[]; // open
+  asks: Ask[] | string; // open; or why queue.json couldn't be read
   usageNow: string | null;
 };
 
@@ -84,13 +84,18 @@ export function backDigest(b: BackInputs, f: Fmt = hhmm): string {
     .filter((l) => l.phaseSince !== null && l.phaseSince >= since)
     .sort((x, y) => x.phaseSince! - y.phaseSince!)
     .map((l) => `${l.branch} → ${l.phase} ${f(l.phaseSince!)}`);
-  const fresh = b.asks.filter((a) => a.asked !== null && a.asked >= since).length;
+  const asks =
+    typeof b.asks === 'string'
+      ? `ASKS unknown (${b.asks})`
+      : b.asks.length
+        ? `ASKS ${b.asks.length} open (${b.asks.filter((a) => a.asked !== null && a.asked >= since).length} new)`
+        : 'ASKS none open';
   return [
     `BACK ${f(b.now)} · away since ${f(since)} (${dur(b.now - since)})`,
     section('MERGED', merged),
     section('STARTED', started),
     section('MOVED', moved),
-    b.asks.length ? `ASKS ${b.asks.length} open (${fresh} new)` : 'ASKS none open',
+    asks,
     `USAGE then ${b.stamp.usage ?? 'unknown'} · now ${b.usageNow ?? 'unknown'}`,
     "deploys: not recorded on the board (the brief's LANES, the tower's DONE TODAY)",
   ].join('\n');
@@ -106,29 +111,16 @@ export function stopAt(hm: string, now: number): number {
   return Math.floor(d.getTime() / 1000);
 }
 
+// A stop under STOP_LEAD away fires on pace-watch's next tick, so it says so rather than name a time already past.
 export const stopLine = (at: number, now: number, f: Fmt = hhmm) =>
-  `STOP ${f(at * 1000)} hard · in ${countdown(at * 1000, now)} · pace-watch exits 12 at ${f((at - STOP_LEAD_SEC) * 1000)}: lanes work until ${f((at - 60) * 1000)}, then stop clean`;
+  `STOP ${f(at * 1000)} hard · in ${countdown(at * 1000, now)} · ${
+    at * 1000 - now <= STOP_LEAD_SEC * 1000
+      ? 'pace-watch exits 12 on its next tick (under 10 min away)'
+      : `pace-watch exits 12 at ${f((at - STOP_LEAD_SEC) * 1000)}`
+  }: lanes work until ${f((at - 60) * 1000)}, then stop clean`;
 
-// pace-control.json with stopAt set (or removed), every other key kept. A missing or unreadable file starts calm.
-export function withStop(
-  text: string | null,
-  at: number | null,
-  now: number,
-): Record<string, unknown> {
-  let c: Record<string, unknown>;
-  if (text !== null) {
-    try {
-      const raw = JSON.parse(text) as unknown;
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) c = raw as Record<string, unknown>;
-      else throw new Error('not an object');
-    } catch (e) {
-      throw new Error(
-        `stop: pace-control.json is unreadable (${(e as Error).message}): fix it first`,
-        { cause: e },
-      );
-    }
-  } else c = { state: 'calm', since: Math.floor(now / 1000), held: [], triggers: [] };
-  const out = { ...c };
-  delete out.stopAt;
-  return at === null ? out : { ...out, stopAt: at };
-}
+// stop.json, the hard stop's own file: only `board stop` writes it and pace-watch reads it, so a hand rewrite of
+// pace-control.json (the hub's calm/hot state) can never drop a stop. `off` writes a null stopAt.
+export const STOP_FILE = 'stop.json';
+export const stopFile = (at: number | null, now: number) =>
+  JSON.stringify({ v: 1, stopAt: at, setAt: new Date(now).toISOString() }) + '\n';
