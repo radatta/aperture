@@ -84,7 +84,7 @@ describe('vitest-stats', () => {
       tests: 1,
       ms: { transform: 7 },
     });
-    expect(JSON.parse(lines[0]!).wallMs).toBeGreaterThanOrEqual(age);
+    expect(JSON.parse(lines[0]!).wallMs).toBeGreaterThanOrEqual(Math.floor(age)); // wallMs is rounded
     // a broken state or an unwritable dir: nothing thrown, the run's exit code stays vitest's
     const broken = {
       vitest: {
