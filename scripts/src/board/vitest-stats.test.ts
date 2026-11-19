@@ -70,6 +70,7 @@ describe('vitest-stats', () => {
       vitest: { state: { getFiles: () => [file([test('pass')])], transformTime: 7 } },
     };
     const teardown = setup(project);
+    const age = performance.now(); // the process's age: wallMs counts from its start, not from setup()
     teardown();
     teardown(); // app's two projects each run it
     expect(readdirSync(dir)).toEqual([`vitest-${process.pid}.json`]);
@@ -83,6 +84,7 @@ describe('vitest-stats', () => {
       tests: 1,
       ms: { transform: 7 },
     });
+    expect(JSON.parse(lines[0]!).wallMs).toBeGreaterThanOrEqual(age);
     // a broken state or an unwritable dir: nothing thrown, the run's exit code stays vitest's
     const broken = {
       vitest: {

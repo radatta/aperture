@@ -311,11 +311,11 @@ function cacheDir(dir: string) {
     expect(names).toContain(ref);
     last[n.replace('.last', '')] = ref;
   }
-  const stamps = names.filter((n) => /^start\.\d+$/.test(n)).length;
+  const stamps = names.filter((n) => /^start\.\d+\.\d+$/.test(n)).length;
   return {
     last,
     stamps,
-    other: names.filter((n) => !n.endsWith('.last') && !/^start\.\d+$/.test(n)),
+    other: names.filter((n) => !n.endsWith('.last') && !/^start\.\d+\.\d+$/.test(n)),
   };
 }
 
@@ -388,7 +388,7 @@ describe('heavy.sh perf fields', () => {
       rewritten: 0,
     });
     expect(two.cache.cold).toBe(true); // 1 of the buildinfo files: still a cold cache
-    expect(two.cache.tsc.lastAgeSec).toBeGreaterThanOrEqual(0);
+    expect(two.cache.tsc.lastAgeSec).toBeGreaterThanOrEqual(1); // run one's stamp to run two's, a settle apart
     await settle();
     // since run two: an untracked file and a committed tsconfig. a.ts, still dirty but untouched, isn't counted again;
     // c.ts, still gone, is (the known over-count: SESSION-BOARD.md → Perf fields)
@@ -450,13 +450,30 @@ describe('heavy.sh perf fields', () => {
       encoding: 'utf8',
     }).stdout.trim();
     const l0 = readFileSync(last, 'utf8');
-    expect(l0).toMatch(new RegExp(`^${head} start\\.\\d+\n$`));
+    expect(l0).toMatch(new RegExp(`^${head} start\\.\\d+\\.\\d+\n$`));
     heavy('kill -TERM $$', tc, dir); // the command dies of a signal
     expect(readFileSync(last, 'utf8')).toBe(l0);
     heavy('sleep 5', { ...tc, HEAVY_DURATION: '1' }, dir); // heavy.sh's own duration stop
     expect(readFileSync(last, 'utf8')).toBe(l0);
     // the signalled run's stamp is swept by the next; the named one and the last run's own stay
     expect(cacheDir(dir)).toEqual({ last: { tsc: l0.trim().split(' ')[1] }, stamps: 2, other: [] });
+  });
+
+  it('heavy.sh itself signalled doesn’t move the baseline, even when its command exits 0', () => {
+    const { dir } = gitRepo();
+    const tc = { HEAVY_CLASS: 'typecheck' };
+    heavy('true', tc, dir);
+    const last = join(dir, 'node_modules/.cache/aperture-heavy/tsc.last');
+    const l0 = readFileSync(last, 'utf8');
+    // the command turns TERM into exit 0; heavy.sh gets the TERM (spawnSync's timeout). Its interrupted wait makes it a
+    // 143 either way: the `$sig` guard is for a signal outside that wait (before the fork, during the fold), untimeable
+    const r = spawnSync(
+      'bash',
+      [join(BOARD, 'heavy.sh'), '--', 'bash', '-c', "trap 'exit 0' TERM; sleep 10 & wait"],
+      { env: { ...env, ...tc }, cwd: dir, encoding: 'utf8', timeout: 2500, killSignal: 'SIGTERM' },
+    );
+    expect(r.signal ?? r.status).not.toBeNull();
+    expect(readFileSync(last, 'utf8')).toBe(l0);
   });
 
   it('no cache field outside tsc and eslint classes, outside a git checkout, or without node_modules', () => {

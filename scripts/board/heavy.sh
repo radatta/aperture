@@ -161,15 +161,17 @@ child=$!
 # write their caches at the end), the sha and, per cache, the paths changed since this worktree's last run of that
 # kind (changed since its tracked state, or untracked, and missing or newer than the last run's start). Lines:
 # "E tscExisted eslintExisted", "S sha", "K kind lastSha lastAgeSec changed changedSrc changedCfg" ("-" unknown).
-# start.<pid> is this run's start as an mtime on the caches' own mount (a /tmp stamp would compare across two clocks),
-# made here in its first milliseconds: what a rewritten buildinfo, or the next run's changed file, is newer than.
-# <kind>.last is "sha start.<pid>" of the last run of that kind that ended well — one builtin write at the end, so the
-# run's own path has no fork; a stamp no .last names and no live run owns is swept here, off that path.
+# start.<pid>.<start tick> (a reused pid gets its own) is this run's start as an mtime on the caches' own mount (a /tmp
+# stamp would compare across two clocks), made here in its first milliseconds: what a rewritten buildinfo, or the next
+# run's changed file, is newer than. <kind>.last is "sha <stamp>" of the last run of that kind that ended well — one
+# builtin write at the end, so the run's own path has no fork; a stamp no .last names and no live run owns is swept
+# here, off that path.
+stamp="start.$me.${me_start:-0}"
 cj=
 if [ -n "$top" ]; then
   (
     cd "$top" || exit 0
-    : >"$cdir/start.$me"
+    : >"$cdir/$stamp"
     te=0 ee=false
     for f in "${SB_TSBUILDINFO[@]}"; do [ -e "$f" ] && te=$((te + 1)); done
     [ -e node_modules/.cache/eslint/.eslintcache ] && ee=true
@@ -179,13 +181,14 @@ if [ -n "$top" ]; then
     [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || sha=-
     echo "S $sha"
     untracked=$(timeout 5 git ls-files -o --exclude-standard 2>/dev/null)
-    printf -v now '%(%s)T' -1
     for k in $kinds; do
       last= lref= age=- n=- src=- cfg=-
       read -r last lref 2>/dev/null <"$cdir/$k.last"
       ref="$cdir/$lref"
-      if [[ "$last" =~ ^[0-9a-f]{40}$ && "$lref" =~ ^start\.[0-9]+$ ]] && [ -f "$ref" ]; then
-        m=$(stat -c %Y "$ref" 2>/dev/null) && age=$((now - m)) && [ "$age" -ge 0 ] || age=-
+      if [[ "$last" =~ ^[0-9a-f]{40}$ && "$lref" =~ ^start\.[0-9]+\.[0-9]+$ ]] && [ -f "$ref" ]; then
+        # the age between two stamps on one mount, so one clock: this run's start and that run's
+        a= b=; { read -r a; read -r b; } < <(stat -c %Y "$cdir/$stamp" "$ref" 2>/dev/null)
+        [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ ]] && [ "$a" -ge "$b" ] && age=$((a - b))
         # --no-renames: a `git mv` lists its old path too (missing, so counted); its new one keeps the old mtime
         if timeout 5 git cat-file -e "$last^{commit}" 2>/dev/null &&
           list=$(timeout 5 git diff --no-renames --name-only "$last" -- 2>/dev/null); then
@@ -201,15 +204,19 @@ if [ -n "$top" ]; then
       else last=-; fi
       echo "K $k $last $age $n $src $cfg"
     done
-    # The sweep: stamps a stopped, failed-to-start or superseded run left.
-    keep=" start.$me "
-    for k in tsc eslint; do lref=; read -r _ lref 2>/dev/null <"$cdir/$k.last" && keep+="$lref "; done
-    gone=()
+    # The sweep: stamps a stopped, failed-to-start or superseded run left — dead and unnamed, the names read again
+    # just before the delete (a run that wrote its .last and exited meanwhile keeps its stamp).
+    named() { local k r; for k in tsc eslint; do r=; read -r _ r 2>/dev/null <"$cdir/$k.last" && printf ' %s' "$r"; done; echo ' '; }
+    keep=" $stamp$(named)" gone=()
     for p in "$cdir"/start.*; do
-      n=${p##*/}
-      [[ "$keep" == *" $n "* ]] || kill -0 "${n#start.}" 2>/dev/null || gone+=("$p")
+      n=${p##*/} q=${p##*/start.}
+      [[ "$keep" == *" $n "* ]] || kill -0 "${q%%.*}" 2>/dev/null || gone+=("$p")
     done
-    [ "${#gone[@]}" -eq 0 ] || rm -f "${gone[@]}"
+    if [ "${#gone[@]}" -gt 0 ]; then
+      keep=$(named) g=()
+      for p in "${gone[@]}"; do [[ "$keep" == *" ${p##*/} "* ]] || g+=("$p"); done
+      [ "${#g[@]}" -eq 0 ] || rm -f "${g[@]}"
+    fi
   ) >"$work.cache" 2>/dev/null </dev/null &
   cj=$!
 fi
@@ -291,8 +298,8 @@ if [ -n "$top" ]; then
   [ -f "$work.cache" ] && while read -r a b c; do
     case "$a" in E) tsc_ex=$b eslint_ex=$c ;; S) csha=$b ;; K) cline[$b]=$c ;; esac
   done <"$work.cache"
-  if [ -f "$cdir/start.$me" ]; then
-    for f in "${SB_TSBUILDINFO[@]}"; do [ "$top/$f" -nt "$cdir/start.$me" ] && rew=$((rew + 1)); done
+  if [ -f "$cdir/$stamp" ]; then
+    for f in "${SB_TSBUILDINFO[@]}"; do [ "$top/$f" -nt "$cdir/$stamp" ] && rew=$((rew + 1)); done
   else rew=-; fi
 fi
 rm -f "${work:?}".* 2>/dev/null
@@ -355,8 +362,8 @@ if [ "$detail" = 1 ]; then
     # to heavy.sh (a cache may be half-written), nor from a gate's outer run, nor without a sha or a stamp. A builtin
     # write: a torn read is a reader's "no last run".
     if [ "$roll" = 1 ] && [ -z "$stop" ] && [ "$signal" = null ] && [ -z "$sig" ] && [ -n "$csha" ] &&
-      [ -f "$cdir/start.$me" ]; then
-      for k in $kinds; do printf '%s start.%s\n' "$csha" "$me" >"$cdir/$k.last"; done
+      [ -f "$cdir/$stamp" ]; then
+      for k in $kinds; do printf '%s %s\n' "$csha" "$stamp" >"$cdir/$k.last"; done
     fi
   fi
   sj=null; [ -n "$slot" ] && sj="\"$slot_class\""

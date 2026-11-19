@@ -40,7 +40,7 @@ probe() {
   [ -n "$probe_host" ] && [ ! -e "$prev.net.off" ] || return 0
   printf -v now '%(%s)T' -1
   read -r was _ _ _ wc 2>/dev/null <"$prev.net"
-  if [[ "$was" =~ ^[0-9]+$ ]]; then
+  if [[ "$was" =~ ^[0-9]+$ ]] && [ "$now" -ge "$was" ]; then  # a stamp from the future (a clock step back) is stale
     [ $((now - was)) -ge 25 ] || return 0
     [ "$wc" != 0 ] || [ $((now - was)) -ge 300 ] || return 0
   fi
