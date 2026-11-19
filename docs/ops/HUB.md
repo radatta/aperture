@@ -167,7 +167,8 @@ what it refuses and why lives in `scripts/src/claude-edit/` and its tests.
    file's Mac path. Every hub call is `pnpm -C /workspace`, so none depends on the directory the session is in. The hub pastes the header whole as the last thing in one message
    for that patch alone, and says its flags line in words; the user reads the diff in the file. The lane's summary
    never stands in for it, and the hub never edits a patch: a change the user asks for goes back to the lane as n+1.
-   After a compaction the hub runs `check` and shows again before taking a go.
+   After a compaction the hub runs `check` and shows again before taking a go. The ask goes into `asks[]` after
+   `check` as a pane ask (`pane: dispatch`, `go` copied from the `go names` line); showing n+1 closes the earlier one.
 5. **The go:** the user's own typed turn in the hub's pane, after that showing, naming what its `go names` line
    says — the branch or `T`'s first 8 characters while `T` is the only tree shown on the branch, only those 8 once a
    second one has been. An earlier go, a
