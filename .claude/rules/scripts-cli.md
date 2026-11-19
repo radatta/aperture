@@ -4,10 +4,11 @@ paths:
   - 'scripts/src/mailroom/**'
   - 'scripts/src/lane/**'
   - 'scripts/src/board/cli.ts'
+  - 'scripts/src/claude-edit/**'
   - 'package.json'
 ---
 
-# Editing the bot, mailroom, lane and board CLIs
+# Editing the bot, mailroom, lane, board and claude-edit CLIs
 
 - **Every command has a `FLAGS` entry and calls `cliGuard` first** — before any token, git, network or stdin read
   (`scripts/src/bot/help.ts`: `deploy-dev --help` once ran a real dev deploy). Each CLI's test pins that every usage
