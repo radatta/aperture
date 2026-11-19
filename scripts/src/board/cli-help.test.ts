@@ -56,7 +56,6 @@ describe('board cli … refuses what it does not know', () => {
     [['back', 'x']],
     [['stop', '22:30', 'extra']],
     [['wi', 'a', 'b']],
-    [['merge-line', '--json']],
   ])('%j → throws (exit 2), nothing read', (argv) => {
     expect(() => main(argv, noStdin)).toThrow(/unknown|unexpected|takes no value|needs a value/);
     expect(noStdin).not.toHaveBeenCalled();

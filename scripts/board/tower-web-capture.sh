@@ -58,9 +58,6 @@ function stress(v) {
     { id: 'd7', asked: now - 60000, text: LONG('pane ask'), options: [], pick: null, lane: null, needsPane: true, pane: 'a-fifty-character-branch-name-for-the-dev-slot-card', go: 'go 1a2b3c4d', status: 'open', answer: null, answeredAt: null },
     ...(v.asks ?? []),
   ];
-  // the merge line (mergeline.ts): three pinned merges, the longest line the page shows
-  const pin = (n) => `GH_PAGER=cat gh pr merge ${n} --squash --admin --body "" --match-head-commit ${'f'.repeat(40)}`;
-  v.mergeLine = { head: 'MERGE 3 · landing order: PR 241 a, PR 242 b, PR 243 c', line: `cd <mac-repo> && ${[241, 242, 243].map(pin).join(' && ')}`, notes: [LONG('left out')] };
   for (const r of v.active.slice(0, 2)) r.detail = LONG('detail');
   if (v.active[2]) {
     v.active[2].hold = LONG('hold');
@@ -174,13 +171,8 @@ async function boardChecks(page, tag, variant, phone) {
     // dispatch's asks (asks.ts): rows badged D<n> in NEEDS YOU; expanded, under their own heading
     const askRows = [...document.querySelectorAll('#needs .badge')].filter((e) => /^D\d+$/.test(e.textContent) && shown(e)).length;
     const askHead = [...document.querySelectorAll('#needs h3')].some((e) => /^Asks/.test(e.textContent) && shown(e));
-    // the merge line's row in NEXT: its badge, and its copy button only where a desk can copy
-    const ml = [...document.querySelectorAll('#next .badge')].find((e) => e.textContent === 'MERGE LINE' && shown(e));
-    const mlRow = ml?.closest('.item');
-    const mlCopy = !!mlRow && [...mlRow.querySelectorAll('button')].some((b) => b.textContent === 'copy' && shown(b));
-    const mlMac = !!mlRow && [...mlRow.querySelectorAll('.only-phone')].some((e) => e.textContent === 'on the Mac' && shown(e));
     // innerText: what shows, not a hidden span
-    return { askRows, askHead, mlRow: !!mlRow, mlCopy, mlMac, board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow, cfRow, cfToned, cfDim, cfSlot, cfCut };
+    return { askRows, askHead, board: shown(b), bText: b?.innerText ?? '', bCls: b?.className ?? '', sText: s?.innerText ?? '', sCls: s?.className ?? '', rows, ctx: shown(cx), cCls: cx?.className ?? '', ctxRow, cfRow, cfToned, cfDim, cfSlot, cfCut };
   });
   const loud = /t-(warn|bad)/;
   if (variant === 'empty') {
@@ -192,10 +184,6 @@ async function boardChecks(page, tag, variant, phone) {
   // the fixtures' queue.json has two open asks (one a pane ask), stress two more; NEXT expanded hides NEEDS YOU
   if (variant !== 'xnext' && variant !== 'xstress' && r.askRows < (variant === 'stress' ? 4 : 2)) fails.push(`${tag}: ${r.askRows} ask rows in NEEDS YOU`);
   if (variant === 'xneeds' && !r.askHead) fails.push(`${tag}: no Asks heading in NEEDS YOU expanded`);
-  // only the stress view has a merge line (the fixtures hold their one PR): its row, a copy on the desk, the Mac said on a phone
-  const wantMl = variant === 'stress' || variant === 'xstress';
-  if (wantMl !== r.mlRow) fails.push(`${tag}: a MERGE LINE row ${r.mlRow ? 'with no merge line in the view' : 'missing'}`);
-  if (r.mlRow && (phone ? r.mlCopy || !r.mlMac : !r.mlCopy)) fails.push(`${tag}: the MERGE LINE row's copy/Mac label (copy ${r.mlCopy}, on the Mac ${r.mlMac})`);
   // context (F240): the fixtures have a session over 50 %, so it leads the phone chip and shows on the desktop
   if (phone ? !/^\d+ ctx≥50/.test(r.sText) : !r.ctx || !/t-bad/.test(r.cCls)) fails.push(`${tag}: no context count (${phone ? r.sText : r.cCls})`);
   if (!variant.startsWith('x') && !r.ctxRow) fails.push(`${tag}: no row shows its session's ctx %`);

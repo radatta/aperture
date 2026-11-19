@@ -629,19 +629,6 @@ function next(v) {
   }
   // the glance: a merge waiting on you, then the next few plan rows with what they cost you; expanded, the
   // whole plan table first
-  // the merge line (mergeline.ts): every MERGE ME PR in one Mac line, copied on the desk; the phone says where it runs
-  const ml = v.mergeLine;
-  if (ml?.line)
-    items.push(
-      item('next:mergeline', {
-        c: 'c-good',
-        badge: 'MERGE LINE',
-        sig: ml.line,
-        text: [short(ml.head.replace(/^MERGE /, ''), 90)],
-        meta: [copyButton(ml.line), el('span', 'meta only-phone', 'on the Mac')],
-        more: [el('code', null, ml.line), ...ml.notes],
-      }),
-    );
   if (inFull) {
     items.push(planTable(v));
     for (const r of v.next.soon) rendered.add(planKey(r)); // a glance row opened stays open for the glance's return

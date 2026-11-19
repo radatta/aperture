@@ -299,7 +299,6 @@ its output verbatim — the script composes, the hub doesn't; `/nm` also acts on
 | `/nm [d3 b…\|ok]` | `pnpm board asks list` / `asks answer …`     | what needs the user; answer asks (`/nm ok`: each pick shown)                        |
 | `/sr`             | `pnpm board brief`                           | status                                                                              |
 | `/q <lane>…`      | `autoStart[]` entries, or `pnpm lanes start` | queue or start the lanes named (the approval for those; autonomous unless `collab`) |
-| `/ml`             | `pnpm board merge-line`                      | the merge line, printed only                                                        |
 | `/away [ping]`    | `pnpm board away`                            | terse replies until `/back`; pings only on asks if `ping`                           |
 | `/back`           | `pnpm board back`, then `pnpm board brief`   | what moved while the user was away                                                  |
 | `/hs <HH:MM>`     | `pnpm board stop <HH:MM>\|off`               | a hard stop at a time (pace-watch exit 12)                                          |
@@ -307,7 +306,7 @@ its output verbatim — the script composes, the hub doesn't; `/nm` also acts on
 | `/wi <id>`        | `pnpm board wi <id>`                         | what F209, PR 206, d3 or a lane is                                                  |
 | `/eta`            | `pnpm board eta` (once board-eta lands)      | lane and plan ETAs; until then the brief's LANES block                              |
 
-**What stays human:** `/ml` only prints — the user runs the line, and `merge-watch.sh` sees it land. No shortcut sets
+**What stays human:** merge lines stay the hub's to write and the user's to run. No shortcut sets
 an effort above `high`, writes Aperture data (an MCP write stays one at a time, shown first, on the user's explicit ask), or
 merges. `/nm ok` never answers a pane ask (it lists each as `GO NEEDED` with the pane and the words), an explicit ask
 or one the user wasn't shown.

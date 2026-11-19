@@ -7,7 +7,6 @@
 // Plain `node` (Node 22 strips types): erasable syntax, node: builtins only, no dependencies.
 import { BRIEF_FILE, briefText, type BriefView } from '../brief.ts';
 import { budgetNow } from '../../budget-read.ts';
-import { MERGE_LINE_FILE, mergeLine, mergeLineText, type MergeLine } from '../../mergeline.ts';
 import { PRS_FILE, prsFile } from '../../lookup.ts';
 import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
@@ -300,7 +299,6 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
     sparks: Record<string, (number | null)[]>;
     startedAt: number;
     usage: UsageLine | null;
-    mergeLine: MergeLine;
   } {
     const now = clock();
     const tower = source.refresh(now);
@@ -328,8 +326,7 @@ export function build(a: Args, deps: { behind?: () => Behind | null } = {}) {
       mainSync: readMainSync(paths.boardDir),
       ctx: readCtx(paths.boardDir, fx ? now : null),
     };
-    const d = derive(inputs);
-    const v = { ...d, mergeLine: viewMergeLine(d, prs?.list ?? [], MAC) };
+    const v = derive(inputs);
     const sparks = {
       anon: sparkBuckets(
         tower.points.map((p) => [p.t, p.anon]),
@@ -417,34 +414,16 @@ export function briefBudget(
   }
 }
 
-// the merge line (mergeline.ts) for a derived board: MERGE ME in landing order, each pinned to the head sha the PR list
-// has, and unknown while the gh PRs source isn't ok
-export const viewMergeLine = (d: ReturnType<typeof derive>, prs: Pr[], root: string) =>
-  mergeLine(
-    d.next.merge,
-    d.next.order.map((o) => o.branch),
-    prs,
-    root,
-    d.sources.find((x) => x.name === 'gh PRs'),
-  );
-
-// brief.txt (brief.ts): `pnpm board brief` prints it; merge-line.txt (`board merge-line`) and pr-index.json (`board wi`)
-// beside it. Their own writer, beside writeDerived's two files; each file tmp + rename. pr-index.json carries when the
+// brief.txt (brief.ts): `pnpm board brief` prints it; pr-index.json (`board wi`) beside it. Their own writer, beside writeDerived's two files; each file tmp + rename. pr-index.json carries when the
 // PR list was fetched (`prsAt`, the cache's last success; null before the first), not when it was written, so `wi`
 // can say how old it is.
-export function writeBrief(
-  dir: string,
-  v: BriefView & { mergeLine?: MergeLine },
-  prs: Pr[] = [],
-  prsAt: number | null = null,
-) {
+export function writeBrief(dir: string, v: BriefView, prs: Pr[] = [], prsAt: number | null = null) {
   const put = (name: string, text: string) => {
     const tmp = join(dir, `.${name}.tmp.${process.pid}`);
     writeFileSync(tmp, text);
     renameSync(tmp, join(dir, name));
   };
   put(BRIEF_FILE, briefText(v));
-  if (v.mergeLine) put(MERGE_LINE_FILE, mergeLineText(v.mergeLine));
   put(PRS_FILE, prsFile(prs, prsAt));
 }
 

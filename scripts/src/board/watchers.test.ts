@@ -6,6 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -552,6 +553,15 @@ describe('pace-watch.sh: the hard stop (exit 12)', () => {
       status: 12,
       tick: 6,
     });
+  });
+  it('an unwritable stop-fired exits 74, naming the stop that is due, never 12 on every restart', () => {
+    const d = paceFake(T10, 8, all(stop(st)));
+    const sf = join(d, 'board', 'stop-fired');
+    mkdirSync(sf); // a read-only directory: the read fails, and sb_write's mv into it fails too
+    chmodSync(sf, 0o555);
+    const r = run(d, 'pace-watch.sh');
+    expect([r.status, r.tick]).toEqual([74, 5]);
+    expect(r.stdout).toBe('10:05 STOP at 10:15 is due, but stop-fired is unwritable\n');
   });
   it('a stop over an hour past, a garbled stopAt or none never fires', () => {
     expect(pace(T10, 4, all(stop(T10 - 3600))).quiet).toBe(true);

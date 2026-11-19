@@ -8,7 +8,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -212,6 +211,27 @@ describe('asks', { timeout: 30_000 }, () => {
     expect(queue().asks.map((a: { id: string }) => a.id)).toEqual(['d2']);
   });
 
+  it('a pruned entry never hides a new problem with the same message', () => {
+    seed({
+      askSeq: 1,
+      asks: [
+        {
+          id: 'd1',
+          asked: '2026-11-10T10:00:00Z',
+          text: 'old',
+          options: ['only'],
+          status: 'answered',
+          answeredAt: '2026-11-10T10:05:00Z',
+        },
+      ],
+    });
+    const before = readFileSync(queueFile(), 'utf8');
+    expect(
+      cli(['asks', 'add'], { input: JSON.stringify({ text: 't', options: ['x'] }) }).err,
+    ).toMatch(/would not parse: asks\[0\]: wants 2 to 6 options \(has 1\)/);
+    expect(readFileSync(queueFile(), 'utf8')).toBe(before);
+  });
+
   it('prunes answered asks past a day on the next write, keeping askSeq', () => {
     seed({
       askSeq: 4,
@@ -232,77 +252,6 @@ describe('asks', { timeout: 30_000 }, () => {
     ).toBe('d5');
     expect(queue().asks.map((a: { id: string }) => a.id)).toEqual(['d5']);
     expect(queue().askSeq).toBe(5);
-  });
-});
-
-describe('merge-line', { timeout: 30_000 }, () => {
-  const file = () => join(board, 'merge-line.txt');
-  it('no file yet: refuses, naming the tower', () => {
-    rmSync(file(), { force: true });
-    expect(cli(['merge-line']).err).toMatch(/no .*merge-line.txt yet: the web tower writes it/);
-  });
-  const SHA = 'a'.repeat(40);
-  const cmd = (n: number) =>
-    `GH_PAGER=cat gh pr merge ${n} --squash --admin --body "" --match-head-commit ${SHA}`;
-  it('a fresh file: the line gets a fresh ran marker (and the root note here, with no mac-root)', () => {
-    writeFileSync(
-      file(),
-      `MERGE 1 · landing order: PR 7 a\ncd <mac-repo> && ${cmd(7)}\nleft out, on hold: PR 5 b\u001b[2J\n`,
-    );
-    const r = cli(['merge-line']);
-    expect(r.status).toBe(0);
-    const [head, line, note, rootNote] = r.out.split('\n');
-    expect(head).toBe('MERGE 1 · landing order: PR 7 a');
-    expect(line).toMatch(
-      /^cd <mac-repo> && .* --match-head-commit a{40}; \(r=\$\?; set -C; echo \$r > <mac-repo>\/localNotes\/board\/ran\/merge-[0-9a-z]{4}\)$/,
-    );
-    expect(note).toBe('left out, on hold: PR 5 b [2J'); // a shared file's control bytes never reach the terminal
-    expect(rootNote).toMatch(/^\(<mac-repo> is the Mac repo path/);
-    const id = /ran\/(merge-[0-9a-z]{4})\)$/.exec(line!)![1]!;
-    expect(existsSync(join(board, 'ran', `.${id}`))).toBe(true); // reserved, create-only
-    expect(cli(['merge-line']).out).not.toContain(`ran/${id})`); // the next print gets its own id
-  });
-  it("the file is shared, so every line is re-checked: anything but the tower's shape for this root prints nothing", () => {
-    for (const bad of [
-      `\u0001cd <mac-repo> && touch x`, // a control byte would hide a command line from a cd-only check
-      'touch x', // a line that is neither the command nor a note
-      'left out, on hold: PR 9 z; touch x', // shell syntax in a note
-      'cd <mac-repo> && GH_PAGER=cat gh pr merge 7 --squash', // unpinned
-      `cd <mac-repo> && ${cmd(7)} && touch x`,
-      `cd <mac-repo> && ${cmd(7)}; rm x`,
-      `cd /elsewhere && ${cmd(7)}`, // a root the CLI doesn't have (a tower started before mac-root)
-      `cd <mac-repo> && ${cmd(7)}\ncd <mac-repo> && ${cmd(8)}`, // two lines
-      `cd <mac-repo> && ${cmd(7).replace(SHA, 'b'.repeat(39))}`,
-    ]) {
-      writeFileSync(file(), `MERGE 1 · landing order: PR 7 a\n${bad}\n`);
-      const r = cli(['merge-line']);
-      expect([r.status, r.out]).toEqual([2, '']);
-      expect(r.err).toMatch(
-        /merge-line.txt is not what the tower writes \(.*\), so nothing printed/,
-      );
-    }
-    writeFileSync(
-      file(),
-      `MERGE 2 · landing order: PR 7 a, PR 8 b\ncd <mac-repo> && ${cmd(7)} && ${cmd(8)}\n`,
-    );
-    expect(cli(['merge-line']).status).toBe(0);
-  });
-  it('nothing to merge: the file as is, no marker minted', () => {
-    writeFileSync(file(), 'MERGE none\n');
-    expect(cli(['merge-line']).out).toBe('MERGE none');
-  });
-  it('a stale file prints no line to run, and is checked first like a fresh one', () => {
-    writeFileSync(file(), `MERGE 1 · landing order: PR 7 a\ncd <mac-repo> && ${cmd(7)}\n`);
-    const old = Date.now() / 1000 - 600;
-    utimesSync(file(), old, old);
-    const r = cli(['merge-line']);
-    expect(r.out).toMatch(
-      /^TOWER DOWN: the merge line is from \d\d:\d\d, no line printed .*\nMERGE 1 · landing order: PR 7 a$/,
-    );
-    expect(r.out).not.toMatch(/^cd /m);
-    writeFileSync(file(), 'MERGE 1 · landing order: PR 7 a\ntouch x\n');
-    utimesSync(file(), old, old);
-    expect(cli(['merge-line']).status).toBe(2);
   });
 });
 

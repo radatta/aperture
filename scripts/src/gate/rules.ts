@@ -401,7 +401,6 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/board/conflicts.test.ts': 'temp repo',
   'scripts/src/board/main-lock.test.ts': 'temp lock files',
   'scripts/src/board/merge-record.test.ts': 'temp dir',
-  'scripts/src/board/mergeline.test.ts': 'spawns zsh -n on a string it builds (no files)',
   'scripts/src/board/ran.test.ts': 'temp dir; spawns board/cli.ts (same area) and bash/zsh',
   'scripts/src/board/shortcuts-cli.test.ts':
     'temp board dir and temp repo; spawns board/cli.ts (same area)',

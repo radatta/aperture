@@ -109,7 +109,9 @@ const SECTIONS: ((v: BriefView, f: Fmt) => string[])[] = [
   ],
   (v) =>
     v.asks === null
-      ? ['ASKS unknown (queue.json unreadable)']
+      ? [
+          `ASKS unknown (queue.json ${v.sources.find((x) => x.name === 'queue.json')?.state === 'missing' ? 'missing' : 'unreadable'})`,
+        ]
       : askBriefLines(v.asks ?? [], LIST_MAX),
   (v) => [
     v.needs.length

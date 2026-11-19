@@ -41,9 +41,9 @@ import { readMacStats } from './tower/health.ts';
 import { formatStale } from './tower/stale.ts';
 import { compactJob } from './tower/history.ts';
 import { machine } from './machine.ts';
-import { ranId, ranOut, ranSuffix } from './ran.ts';
-import { BRIEF_FILE, BRIEF_STALE_MS, briefOut } from './tower/brief.ts';
-import { MAC_PLACEHOLDER, MAC_ROOT_NOTE, macRoot } from '../mac-root.ts';
+import { ranId, ranOut } from './ran.ts';
+import { BRIEF_FILE, briefOut } from './tower/brief.ts';
+import { macRoot } from '../mac-root.ts';
 import { parseQueue } from './tower/queue.ts';
 import {
   addAsk,
@@ -55,7 +55,6 @@ import {
   pruneAsks,
 } from './tower/asks.ts';
 import { readLanes } from './tower/lanes.ts';
-import { fileShapeOk, MERGE_LINE_FILE, withSuffix } from './mergeline.ts';
 import { PRS_FILE, readPrIndex, whatIs } from './lookup.ts';
 import {
   AWAY_FILE,
@@ -95,7 +94,6 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
       answer <id> <letter|ok>           mark it answered; prints the meaning and the [relay] line (never a pane ask's go)
       answer all ok <newest>            each pick, for the asks up to <newest> (the last id the user was shown), bar explicit ones
       close <id>                        withdrawn, answered in words, or a pane go that arrived
-  merge-line                            the one Mac line that merges every MERGE ME PR in landing order (prints only)
   wi <id>                               what an F-number, PR n, d<n> or lane name is
   away [ping]                           stamp the maintainer away (the hub's /away)
   back                                  what moved since /away, then clear the stamp
@@ -121,16 +119,11 @@ export const FLAGS: Record<string, Spec> = {
   'asks show': { args: 1 },
   'asks answer': { args: 3 },
   'asks close': { args: 1 },
-  'merge-line': {},
   wi: { args: 1 },
   away: { args: 1 },
   back: {},
   stop: { args: 1 },
 };
-
-// a control byte but the newline: what merge-line prints from a shared file never moves a cursor
-// eslint-disable-next-line no-control-regex
-const CTRL_NL = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g;
 
 // Board flags are bare (--json); lane, the one with values, is skipped by the guard.
 const bareFlags = (argv: string[]) => ({
@@ -323,30 +316,6 @@ function hubBoard(verb: string): string {
   return board();
 }
 
-// Each ran id is handed out once: a create-only `.<id>` (the watcher reads no dot-file) reserves it, and an id taken
-// (reserved, or its marker already written) moves to the next second's, within the minute.
-function mintRan(dir: string, slug: string, now: Date): string {
-  // the suffix writes <mac-repo>/localNotes/board/ran: a board dir anywhere else is a different folder
-  if (!/\/localNotes\/board\/?$/.test(dir))
-    throw new Error(
-      `ran: the board dir ${dir} is not <repo>/localNotes/board, where the suffix writes`,
-    );
-  const ran = join(dir, 'ran');
-  mkdirSync(ran, { recursive: true }); // the suffix never makes it: a missing folder fails loud
-  for (let k = 0; k < 60; k++) {
-    const next = ranId(slug, new Date(now.getTime() + k * 1000));
-    if (existsSync(join(ran, next))) continue;
-    try {
-      writeFileSync(join(ran, `.${next}`), '', { flag: 'wx' });
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
-      throw e;
-    }
-    return next;
-  }
-  throw new Error(`ran: every ${slug} id for the next minute is already on disk: try again later`);
-}
-
 // lane starts: lifecycle/<branch>.json `startedAt`
 function lifecycle(dir: string): Started[] {
   let files: string[];
@@ -400,7 +369,10 @@ function asks(args: string[], rest: string[], stdin: () => string, now: number):
   } catch (e) {
     throw new Error(`queue.json is not JSON (${(e as Error).message}): fix it first`, { cause: e });
   }
-  const before = parseQueue(text);
+  // prune first and judge the write against the pruned file: the op then only appends (add) or edits in place
+  // (answer, close), so a problem's index never moves and a pruned entry never hides a new problem
+  raw = pruneAsks(raw, now);
+  const before = parseQueue(JSON.stringify(raw));
   if (!before.data) throw new Error(`queue.json: ${before.problems.join('; ')}`);
   const list = before.data.asks ?? [];
   let next: Record<string, unknown>;
@@ -429,20 +401,10 @@ function asks(args: string[], rest: string[], stdin: () => string, now: number):
     out = `CLOSED ${a1.toLowerCase()}`;
   } else throw new Error(`unknown asks subcommand "${sub ?? ''}"`);
   // updatedAt stays: it is the hub's last look at the whole queue (the tower's queue age), which an ask write isn't
-  next = pruneAsks(next, now);
   const body = JSON.stringify(next, null, 2) + '\n';
-  // only a problem this write made refuses it: one already on file (a hand edit) never locks the hub out of closing it.
-  // Counted by message, not index — a prune shifts every index after it
-  const msg = (p: string) => p.replace(/^asks\[\d+\]: /, '');
-  const had = new Map<string, number>();
-  for (const p of before.problems.filter((p) => /^asks|^askSeq/.test(p)))
-    had.set(msg(p), (had.get(msg(p)) ?? 0) + 1);
-  const bad = parseQueue(body).problems.filter((p) => {
-    if (!/^asks|^askSeq/.test(p)) return false;
-    const n = had.get(msg(p)) ?? 0;
-    had.set(msg(p), n - 1);
-    return n <= 0;
-  });
+  // only a problem this write made refuses it: one already on file (a hand edit) never locks the hub out of closing it
+  const had = new Set(before.problems);
+  const bad = parseQueue(body).problems.filter((p) => /^asks|^askSeq/.test(p) && !had.has(p));
   if (bad.length)
     throw new Error(`asks ${sub}: refused, the result would not parse: ${bad.join('; ')}`);
   put(f, body);
@@ -614,39 +576,35 @@ export function main(argv: string[], stdin: () => string): string {
     case 'ran': {
       const [slug] = args;
       if (!slug) throw new Error('usage: ran <slug>');
-      return ranOut(macRoot(), mintRan(board(), slug, now));
+      const id = ranId(slug, now);
+      const dir = boardDir((c, a) => execFileSync(c, a, { encoding: 'utf8' }).trim());
+      if (!dir) throw new Error('no board dir (set APERTURE_BOARD_DIR)');
+      // the suffix writes <mac-repo>/localNotes/board/ran: a board dir anywhere else is a different folder
+      if (!/\/localNotes\/board\/?$/.test(dir))
+        throw new Error(
+          `ran: the board dir ${dir} is not <repo>/localNotes/board, where the suffix writes`,
+        );
+      const ran = join(dir, 'ran');
+      mkdirSync(ran, { recursive: true }); // the suffix never makes it: a missing folder fails loud
+      // Each id is handed out once: a create-only `.<id>` (the watcher reads no dot-file) reserves it, and an id
+      // taken (reserved, or its marker already written) moves to the next second's, within the minute.
+      for (let k = 0; k < 60; k++) {
+        const next = k ? ranId(slug, new Date(now.getTime() + k * 1000)) : id;
+        if (existsSync(join(ran, next))) continue;
+        try {
+          writeFileSync(join(ran, `.${next}`), '', { flag: 'wx' });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue;
+          throw e;
+        }
+        return ranOut(macRoot(), next);
+      }
+      throw new Error(
+        `ran: every ${slug} id for the next minute is already on disk: try again later`,
+      );
     }
     case 'asks':
       return asks(args, rest, stdin, now.getTime());
-    case 'merge-line': {
-      const dir = board();
-      const f = join(dir, MERGE_LINE_FILE);
-      let text: string, mtime: number;
-      try {
-        text = readFileSync(f, 'utf8');
-        mtime = statSync(f).mtimeMs;
-      } catch {
-        throw new Error(`no ${f} yet: the web tower writes it every 30 s (board.sh tower start)`);
-      }
-      // the file is shared: none of its bytes moves a cursor here, and every line is the tower's shape or nothing prints
-      text = text.replace(CTRL_NL, ' ');
-      const root = macRoot();
-      const bad = fileShapeOk(text, root);
-      if (bad)
-        throw new Error(
-          `merge-line.txt is not what the tower writes (${bad}), so nothing printed: a tower started before .local/mac-root reads <mac-repo> (board.sh tower restart), else the file was edited`,
-        );
-      // a stale file never prints a line to run: what it would merge is no longer known
-      if (now.getTime() - mtime > BRIEF_STALE_MS)
-        return `TOWER DOWN: the merge line is from ${hhmm(mtime)}, no line printed (board.sh tower status; board.sh tower start)\n${text
-          .replace(/\n$/, '')
-          .split('\n')
-          .filter((l) => !l.startsWith('cd '))
-          .join('\n')}`;
-      if (!text.split('\n').some((l) => l.startsWith('cd '))) return text.replace(/\n$/, '');
-      const out = withSuffix(text, ranSuffix(root, mintRan(dir, 'merge', now)));
-      return root === MAC_PLACEHOLDER ? `${out}\n${MAC_ROOT_NOTE}` : out;
-    }
     case 'wi': {
       const [id] = args;
       if (!id) throw new Error('usage: wi <F-number | PR n | d<n> | lane>');
@@ -716,7 +674,7 @@ export function main(argv: string[], stdin: () => string): string {
     }
     default:
       throw new Error(
-        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | budget | budget-report | lane | sync-main | stale | brief | ran | asks | merge-line | wi | away | back | stop (got ${cmd ?? 'nothing'})`,
+        `usage: cli.ts decide-heavy | staleness | overlap | report | barriers | machine | budget | budget-report | lane | sync-main | stale | brief | ran | asks | wi | away | back | stop (got ${cmd ?? 'nothing'})`,
       );
   }
 }

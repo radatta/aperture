@@ -23,11 +23,11 @@ const queue = parseQueue(
     followups: [
       {
         id: 'F209',
-        what: 'script the merge line',
+        what: 'warm the caches',
         owner: 'lane',
         after: 'now',
         status: 'open',
-        source: 'his 11-14',
+        source: 'the 11-14 ask',
         since: '2026-11-14',
       },
     ],
@@ -78,7 +78,7 @@ const src = (over: Partial<WiSources> = {}): WiSources => ({
 describe('whatIs', () => {
   it("an F-number: its followups row, else the roadmap's first two lines naming it, else not found", () => {
     expect(whatIs('F209', src(), f)).toBe(
-      'F209 · open · lane · after now · since 11-14 · script the merge line (his 11-14)',
+      'F209 · open · lane · after now · since 11-14 · warm the caches (the 11-14 ask)',
     );
     expect(whatIs('f300', src(), f)).toBe(
       'F300 (roadmap, not in followups[]):\n  - F300 the tower charts tab (queued)\n  - F300 again',
