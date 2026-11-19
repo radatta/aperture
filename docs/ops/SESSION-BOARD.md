@@ -220,14 +220,14 @@ keeps the old `sampler.sh` and `lib.sh` in memory but re-reads `sample.awk` each
 
 **`mac-load` rows** add `vmCpuPct`, `top`, `sim` and `jobs` (_Watchers_).
 
-**Measured cost** (2026-11-18, interleaved A/B on the live box; medians): a sampler tick 27 → 28 ms (+1 ms of a 30 s
-period; the three lxcfs reads are ~0.5 ms of it); the RTT probe 20–35 ms of CPU (bash, `jq` and `curl` cold; the
-loop's own run is a subshell and a `curl`) and ~80–190 ms of wall time beside the tick, once per 25 s or more; a
-heavy.sh run around a 1 s command +6–8 ms end to end on a quiet box (the first design, 11-18 morning; the fork-free
-one on a box 4–8 cores busy: inside the run-to-run noise), all outside `wallSec` — the run's own path adds builtins only, and the background git job's fork, its
-stamp and its sweep happen beside the command; a warm `pnpm typecheck`'s `wallSec` unchanged at its 0.1 s
-resolution; the vitest `globalSetup` one import and one small write per process; `macstats.sh` the same single
-`ps` with one more column.
+**Measured cost** (2026-11-18, interleaved A/B on the live box, quiet unless noted; medians):
+
+- **Sampler tick:** 27 → 28 ms, +1 ms of a 30 s period (the three lxcfs reads are ~0.5 ms of it).
+- **RTT probe:** 20–35 ms of CPU, measured with a cold bash, `jq` and `curl`; the loop's own run is a subshell and a `curl`. About 80–190 ms of wall time beside the tick, once per 25 s or more.
+- **heavy.sh around a 1 s command:** level with detail on and off, at 1172 vs 1172 ms for a cache class and 1052 vs 1054 ms for a test class. The run's own path adds builtins only; the background git job (`ls-files -o` 38 ms, `diff` 13 ms, `rev-parse` 3 ms, about 42 ms of CPU) runs beside the command.
+- **A warm `pnpm typecheck`:** `wallSec` identical (×20), end to end 538 → 553 ms. That 1.5–2.7% on the warmest typecheck, the one case over the 1% budget, ships on the maintainer's call (2026-11-18); `nice` on the background job is the follow-up.
+- **The vitest `globalSetup`:** one import and one small write per process.
+- **`macstats.sh`:** the same single `ps`, with one more column.
 
 ## Heavy wrapper — `scripts/board/heavy.sh [--wait SEC] -- <cmd…>`
 
