@@ -44,7 +44,9 @@ function scanTree(root: string): string[] {
 }
 
 describe('tracked files carry no personal identifier', () => {
-  it('only identifiers.json and the sim runner pin hold one', () => {
+  // Reading every tracked file is I/O over the container's host mount (virtiofs): ~1.5 s idle, 2–4 s under load,
+  // which ran past vitest's 5 s default three times on 11-18 (F292). The rule checks are ~0.1 s of it.
+  it('only identifiers.json and the sim runner pin hold one', { timeout: 30_000 }, () => {
     expect(scanTree(ROOT)).toEqual([]);
   });
 
@@ -65,6 +67,49 @@ describe('tracked files carry no personal identifier', () => {
 
 describe('rules', () => {
   const kinds = (s: string) => findIdentifiers(s, rules).map((h) => h.kind);
+
+  // findIdentifiers skips the per-line pass for rules that miss the whole text; that must find exactly what checking
+  // every line finds, whatever the neighbouring lines hold.
+  it('the whole-text prefilter finds what a per-line scan finds', () => {
+    const [first] = IDS.maintainer.name.split(' ') as [string];
+    const id = IDS.aws.devAccountId;
+    const home = ['', 'Users', 'someone', 'x'].join('/');
+    const lines = [
+      `asked by ${first}`,
+      `${first.toLowerCase()}_todo`,
+      `x${first}y`,
+      `${IDS.email.contact.split('@')[0]}+a@gmail.com`,
+      `cd ${home}`,
+      '/Users/Shared',
+      'x',
+      `${id}`,
+      `9${id}`,
+      `${id}9`,
+      id.slice(0, 4),
+      id.slice(4),
+      `${id.slice(0, 4)}-${id.slice(4, 8)}-${id.slice(8)}`,
+      simCognitoPin(),
+      '',
+      '\r',
+      'plain text',
+    ];
+    lines.push('~/Alpha/x', '${HOME:-', '}/Alpha/b', 'alpha\\beta', 'Alpha', 'Beta/x', '$HOME');
+    // the projects-folder rule exists only where the Mac root is known (not on CI): build it from a made-up one
+    const all = identifierRules(IDS, ['', 'Users', 'someone', 'Alpha', 'Beta', 'repo'].join('/'));
+    expect(all.map(([k]) => k)).toContain('projects-folder');
+    const reference = (text: string, path: string) =>
+      text
+        .split('\n')
+        .flatMap((l, i) => findIdentifiers(l, all, path).map((h) => ({ ...h, line: i + 1 })));
+    for (const path of ['', 'docs/a.md', SIM_RUNNER, IDENTIFIERS_FILE])
+      for (const a of lines)
+        for (const b of lines) {
+          const text = `${a}\n${b}\n${a}${b}`;
+          expect(findIdentifiers(text, all, path), JSON.stringify([path, text])).toEqual(
+            reference(text, path),
+          );
+        }
+  });
   const [first, last] = IDS.maintainer.name.split(' ') as [string, string];
   const mailbox = IDS.email.contact.split('@')[0]!;
 

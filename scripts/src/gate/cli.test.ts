@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +21,7 @@ import {
   isWide,
   main,
   outerEnv,
+  reconcile,
   parseArgs,
   readDiff,
   schedule,
@@ -109,6 +118,7 @@ describe('readDiff', () => {
         { path: 'app/src/new.test.ts', deleted: false },
       ],
       testFiles: ['app/src/a.test.ts', 'app/src/new.test.ts'],
+      mb: 'abc',
     });
   });
 });
@@ -476,7 +486,7 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
     const { dir, f } = stub('echo "args: $*"; echo "label: $HEAVY_LABEL"; echo oops >&2; exit 3');
     const r = await spawnExec(s, f, dir).done;
     expect(r.code).toBe(3);
-    expect(r.out).toMatch(/args: -- pnpm lint/);
+    expect(r.out).toMatch(/args: -- sh \S+\/gate\/step\.sh pnpm lint/);
     expect(r.out).toMatch(/label: lint/);
     expect(r.out).toMatch(/oops/);
   });
@@ -489,6 +499,33 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
     expect(r.out).toMatch(/couldn't start heavy\.sh/);
   });
 
+  // The step reports its own code through step.sh: heavy.sh's 0 alone is never a pass.
+  it('a heavy.sh that runs the step: its code comes through, even when heavy.sh itself says 0', async () => {
+    const passes = stub('shift; "$@"');
+    expect(
+      (await spawnExec({ ...s, argv: ['sh', '-c', 'exit 5'] }, passes.f, passes.dir).done).code,
+    ).toBe(5);
+    expect((await spawnExec({ ...s, argv: ['true'] }, passes.f, passes.dir).done).code).toBe(0);
+    const swallows = stub('shift; "$@"; exit 0');
+    const r = await spawnExec({ ...s, argv: ['false'] }, swallows.f, swallows.dir).done;
+    expect(r.code).toBe(1);
+    expect(r.out).toMatch(/heavy\.sh exited 0, but lint exited 1/);
+  });
+
+  it('a step that really exits 2 under a swallowing heavy.sh says so, not "never reported"', async () => {
+    const { dir, f } = stub('shift; "$@"; exit 0');
+    const r = await spawnExec({ ...s, argv: ['sh', '-c', 'exit 2'] }, f, dir).done;
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/heavy\.sh exited 0, but lint exited 2/);
+  });
+
+  it('a heavy.sh that exits 0 without running the step: 2, never a pass', async () => {
+    const { dir, f } = stub('exit 0');
+    const r = await spawnExec(s, f, dir).done;
+    expect(r.code).toBe(2);
+    expect(r.out).toMatch(/heavy\.sh exited 0, but lint never reported/);
+  });
+
   it('stop sends TERM', async () => {
     const { dir, f } = stub("trap 'kill $!; exit 99' TERM; sleep 30 & wait");
     const c = spawnExec(s, f, dir);
@@ -498,9 +535,9 @@ describe('spawnExec / spawnOuter (real processes, a stand-in heavy.sh)', () => {
   });
 
   it('a pipe held open past exit ends the step within the drain bound, not with the holder', async () => {
-    const { dir, f } = stub('sleep 8 & exit 0'); // holds the pipes 8 s
+    const { dir, f } = stub('shift; sleep 8 & "$@"'); // holds the pipes 8 s
     const t0 = Date.now();
-    expect((await spawnExec(s, f, dir).done).code).toBe(0);
+    expect((await spawnExec({ ...s, argv: ['true'] }, f, dir).done).code).toBe(0);
     expect(Date.now() - t0).toBeLessThan(6000); // the 2 s bound, not the holder
   }, 10000);
 
@@ -582,11 +619,48 @@ describe('main', () => {
       HEAVY_CLASS: 'gate-narrow',
       HEAVY_SLOT_CLASS: 'test-fast',
       HEAVY_LABEL: 'gate:narrow',
+      GATE_RESULT: expect.stringMatching(/gate-result-[^/]+\/code$/),
     });
     expect(out.join('\n')).toMatch(/gate:fast — 1 changed path/);
     expect(out.at(-1)).toMatch(
       /no slot in time: run `pnpm gate:fast --wait 600` in the background/,
     );
+  });
+
+  // The inner pass reports its exit code through GATE_RESULT: heavy.sh's 0 alone is never a pass.
+  it.each([
+    ['writes nothing', undefined, 2, /never reported: nothing was checked/],
+    ['reports 0', '0', 0, null],
+    ['reports 1', '1', 1, /heavy.sh exited 0, but the gate’s inner pass exited 1/],
+  ] as const)('heavy.sh exits 0 and the inner pass %s', async (_, wrote, want, msg) => {
+    const out: string[] = [];
+    let file = '';
+    const code = await main([], {
+      run: git(z('M', 'docs/a.md')).run,
+      outer: async (_h, _r, _a, e) => {
+        file = e.GATE_RESULT!;
+        if (wrote !== undefined) writeFileSync(file, wrote);
+        return 0;
+      },
+      log: (l) => out.push(l),
+      env: {},
+    });
+    expect(code).toBe(want);
+    if (msg) expect(out.at(-1)).toMatch(msg);
+    else expect(out.join('\n')).not.toMatch(/heavy.sh exited 0/);
+    expect(existsSync(file)).toBe(false); // the temp dir is gone
+  });
+
+  it('reconcile: heavy.sh’s failure wins; else the report; a missing or garbled one is 2', () => {
+    expect(reconcile(75, () => '0')).toBe(75);
+    expect(reconcile(0, () => '0\n')).toBe(0);
+    expect(reconcile(0, () => '1')).toBe(1);
+    expect(reconcile(0, () => 'x')).toBe(2);
+    expect(
+      reconcile(0, () => {
+        throw new Error('ENOENT');
+      }),
+    ).toBe(2);
   });
 
   it('a wide diff takes a `test` slot; --full too', async () => {
@@ -721,6 +795,58 @@ describe('main', () => {
     expect(out.join('\n')).toMatch(/at once: one `test-fast` slot, uncapped, up to 6 tokens/);
   });
 
+  // A rules.ts change plans with the merge-base's copy too (base.ts): here that copy is today's rules.ts.
+  const RULES_TEXT = readFileSync(fileURLToPath(new URL('./rules.ts', import.meta.url)), 'utf8');
+  const noOuter = async () => {
+    throw new Error('re-ran');
+  };
+  const withBase = (show: () => string) => {
+    const g = git(z('M', 'scripts/src/gate/rules.ts', 'M', 'scripts/board/limits.json'));
+    const calls: string[][] = [];
+    const run: typeof g.run = (cmd, args, o) => {
+      if (args[0] === 'show') return (calls.push(args), show());
+      return g.run(cmd, args, o);
+    };
+    return { run, calls };
+  };
+
+  it('a rules.ts change reads the merge-base copy and runs the union (rules.ts + limits.json: narrow)', async () => {
+    const { run, calls } = withBase(() => RULES_TEXT);
+    const out: string[] = [];
+    const code = await main(['--dry-run'], {
+      run,
+      exec: record().exec,
+      outer: noOuter,
+      log: (l) => out.push(l),
+      env: {},
+    });
+    expect(code).toBe(0);
+    expect(calls).toEqual([['show', 'abc:scripts/src/gate/rules.ts']]);
+    const text = out.join('\n');
+    expect(text).toMatch(/planned with the merge-base's rules too; the union runs/);
+    expect(text).toMatch(/at once: one `test-fast` slot/);
+    expect(text).not.toMatch(/would run: test$/m);
+  });
+
+  it('a merge-base copy git can’t show runs the full suite', async () => {
+    const { run } = withBase(() => {
+      throw new Error("fatal: invalid object name 'abc'");
+    });
+    const out: string[] = [];
+    await main(['--dry-run'], {
+      run,
+      exec: record().exec,
+      outer: noOuter,
+      log: (l) => out.push(l),
+      env: {},
+    });
+    const text = out.join('\n');
+    expect(text).toMatch(
+      /merge-base's copy couldn't be loaded \(fatal: invalid object name 'abc'\)/,
+    );
+    expect(text).toMatch(/would run: test$/m);
+  });
+
   it('a diff it can’t read runs the full suite, in a wide slot', async () => {
     const { ran, exec } = record();
     const { run } = fakeRun([
@@ -745,6 +871,18 @@ describe('main', () => {
     expect(env.GATE_WIDE).toBe('1');
     const inner = { ...INNER, GATE_WIDE: '1' };
     expect(await main([], { run, exec, onSignal: noSignal, log: quiet, env: inner })).toBe(0);
+    // the inner pass reports its code where the caller asked
+    const d = mkdtempSync(join(tmpdir(), 'gate-res-'));
+    const res = join(d, 'code');
+    await main([], {
+      run,
+      exec,
+      onSignal: noSignal,
+      log: quiet,
+      env: { ...inner, GATE_RESULT: res },
+    });
+    expect(readFileSync(res, 'utf8')).toBe('0');
+    rmSync(d, { recursive: true, force: true });
     expect(ran.at(-1)!.argv).toEqual(['pnpm', 'test']);
   });
 

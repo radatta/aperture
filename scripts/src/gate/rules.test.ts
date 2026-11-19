@@ -39,14 +39,29 @@ const only = (kind: Problem['kind']) => formatProblems(problems.filter((p) => p.
 describe('gate rules', () => {
   it('every literal path a rule names exists', () => {
     const named = [
-      ...REPO_FULL.flatMap((r) => r.match),
-      ...PACKAGE_FULL.flatMap((r) => r.match),
+      ...REPO_FULL.flatMap((r) => [...r.match, ...(r.except ?? [])]),
+      ...PACKAGE_FULL.flatMap((r) => [...r.match, ...(r.except ?? [])]),
       ...INPUT_RULES.flatMap((r) => [...r.inputs, ...r.tests]),
       ...ALWAYS_RUN,
       ...Object.keys(SELF_CONTAINED),
       ...Object.keys(MODULE_READERS),
     ].filter(literal);
     expect(named.filter((p) => !exists(p))).toEqual([]);
+  });
+
+  // The gate dir's whole-suite rule: only these leave it. A new name here narrows what a gate change runs, so it is a
+  // reviewed edit to this list too.
+  it('only the classed gate files leave the selection-code rule; no PACKAGE_FULL rule has an except', () => {
+    const gate = REPO_FULL.find((r) => r.match.includes('scripts/src/gate/'))!;
+    expect(gate.except).toEqual([
+      'scripts/src/gate/rules.ts',
+      'scripts/src/gate/ci.ts',
+      'scripts/src/gate/miss.ts',
+      'scripts/src/gate/related.ts',
+      'scripts/src/gate/*.test.ts',
+    ]);
+    expect(REPO_FULL.filter((r) => r.except).length).toBe(1);
+    expect(PACKAGE_FULL.filter((r) => r.except)).toEqual([]);
   });
 
   // No test imports a setupFile, so the graph never sees one or what it imports, yet both run around every test of
@@ -120,30 +135,36 @@ describe('gate rules', () => {
       expect(JSON.parse(read(`${p.dir}/package.json`)).name, p.dir).toBe(p.name);
   });
 
-  it("each package's `reaches` covers every other package its code imports", () => {
-    const byName = new Map(PACKAGES.map((p) => [p.name, p.dir]));
-    for (const p of PACKAGES) {
-      const found = new Set<string>();
-      for (const f of tracked.filter(
-        (t) => t.startsWith(`${p.dir}/`) && /\.(?:ts|tsx|mts|js|mjs)$/.test(t),
-      )) {
-        for (const [, spec] of read(f).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
-          const scoped = /^(@aperture\/[^/]+)/.exec(spec!)?.[1];
-          if (scoped && byName.has(scoped)) found.add(byName.get(scoped)!);
-          if (spec!.startsWith('.')) {
-            const abs = join(f, '..', spec!);
-            const other = PACKAGES.find((q) => abs.startsWith(`${q.dir}/`));
-            if (other) found.add(other.dir);
+  // Reads every package's source over the container's host mount (virtiofs): ~2.6 s alone, past vitest's 5 s default
+  // under load (a gate on 11-18), like tracked-identifiers' scan (F292).
+  it(
+    "each package's `reaches` covers every other package its code imports",
+    { timeout: 30_000 },
+    () => {
+      const byName = new Map(PACKAGES.map((p) => [p.name, p.dir]));
+      for (const p of PACKAGES) {
+        const found = new Set<string>();
+        for (const f of tracked.filter(
+          (t) => t.startsWith(`${p.dir}/`) && /\.(?:ts|tsx|mts|js|mjs)$/.test(t),
+        )) {
+          for (const [, spec] of read(f).matchAll(/(?:from|import)\s*\(?\s*['"]([^'"]+)['"]/g)) {
+            const scoped = /^(@aperture\/[^/]+)/.exec(spec!)?.[1];
+            if (scoped && byName.has(scoped)) found.add(byName.get(scoped)!);
+            if (spec!.startsWith('.')) {
+              const abs = join(f, '..', spec!);
+              const other = PACKAGES.find((q) => abs.startsWith(`${q.dir}/`));
+              if (other) found.add(other.dir);
+            }
           }
         }
+        found.delete(p.dir);
+        expect(
+          [...found].filter((d) => !p.reaches.includes(d)),
+          p.dir,
+        ).toEqual([]);
       }
-      found.delete(p.dir);
-      expect(
-        [...found].filter((d) => !p.reaches.includes(d)),
-        p.dir,
-      ).toEqual([]);
-    }
-  });
+    },
+  );
 
   it('every graph-blind test file and module is registered', () => {
     expect(only('blind')).toBe('');

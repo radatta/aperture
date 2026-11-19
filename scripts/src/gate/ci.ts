@@ -4,12 +4,15 @@
 // Read-only, through the container's `gh` (no bot token). Plain `node`: erasable syntax, node: builtins only.
 import { fileURLToPath } from 'node:url';
 import { run as execRun, type Run } from '../bot/sh.ts';
+import { missCheck } from './miss.ts';
 
 export const USAGE = `pnpm gate:ci [--wait] [--sha <sha>] [--timeout <s>]
   the GitHub CI verdict for <sha> (default HEAD): the PR run if there is one, else the Branch push run.
   --wait     poll every 30 s until it finishes (default timeout 1500 s)
   Exit: 0 green · 1 red, cancelled or failed (names the jobs) · 75 still running, or no run yet (not pushed?)
-        · 2 a bad argument, or git/gh failed (no verdict; --wait retries gh until its timeout)`;
+        · 2 a bad argument, or git/gh failed (no verdict; --wait retries gh until its timeout)
+  On a failed run it also checks each failing test file against the local gate:fast plan, and prints and logs a
+  miss (docs/ops/GATE.md → A miss); that check never changes the exit code.`;
 
 export interface GhRun {
   databaseId: number;
@@ -19,6 +22,7 @@ export interface GhRun {
   conclusion: string;
   createdAt: string;
   url: string;
+  headBranch?: string;
 }
 
 // The run that speaks for this sha: the newest PR run, else the newest Branch run.
@@ -33,6 +37,7 @@ export function pick(runs: GhRun[]): GhRun | undefined {
 export interface Verdict {
   code: 0 | 1 | 75;
   line: string;
+  run?: GhRun; // check(): the run that spoke
 }
 
 export function verdict(sha: string, r: GhRun | undefined, failedJobs: string[] = []): Verdict {
@@ -49,7 +54,7 @@ export function verdict(sha: string, r: GhRun | undefined, failedJobs: string[] 
   return { code: 1, line: `${what}: ${r.conclusion}${jobs} — ${r.url}` };
 }
 
-const FIELDS = 'databaseId,workflowName,event,status,conclusion,createdAt,url';
+const FIELDS = 'databaseId,workflowName,event,status,conclusion,createdAt,url,headBranch';
 // A hung gh is a failure (exit 2, retried under --wait), and its minute counts toward --timeout.
 const GH = { timeoutMs: 60_000 };
 
@@ -69,7 +74,7 @@ export function check(run: Run, sha: string): Verdict {
       .filter((j) => j.conclusion && j.conclusion !== 'success' && j.conclusion !== 'skipped')
       .map((j) => j.name);
   }
-  return verdict(sha, r, failed);
+  return { ...verdict(sha, r, failed), run: r };
 }
 
 export async function main(
@@ -78,6 +83,7 @@ export async function main(
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
   log = console.log,
   now = Date.now,
+  miss: typeof missCheck = missCheck,
 ): Promise<number> {
   if (argv.some((a) => a === '-h' || a === '--help')) return (log(USAGE), 0);
   let wait = false;
@@ -109,7 +115,19 @@ export async function main(
       if (!wait || waited >= timeoutSec) return (log(`gate:ci — gh failed: ${msg(err)}`), 2);
       log(`gate:ci — gh failed (${msg(err)}): retrying in 30 s`);
     }
-    if (v && (v.code !== 75 || !wait || waited >= timeoutSec)) return (log(v.line), v.code);
+    if (v && (v.code !== 75 || !wait || waited >= timeoutSec)) {
+      log(v.line);
+      // Only a failed run has failing tests to compare; whatever the check does, the verdict stands.
+      if (v.run?.conclusion === 'failure')
+        try {
+          await miss(v.run, sha, { run, log, now });
+        } catch (err) {
+          log(`gate:ci — miss check failed: ${msg(err)} (the verdict stands)`);
+        } finally {
+          log(v.line); // the verdict stays the last line
+        }
+      return v.code;
+    }
     await sleep(30_000);
   }
 }

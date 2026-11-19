@@ -29,7 +29,8 @@ export const CODE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 // Anything vitest's default include would call a test, wider than plan.ts's isTest: a `.spec.ts` or `.test.mjs` no
 // include here matches is a test that silently never runs.
 export const TEST_NAMED = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
-// The gate's own files: any change to them is REPO_FULL, and they name the API in their rules and strings.
+// The gate's own files: they name the API in their rules and strings, and any change to them runs every gate test (the
+// gate same-area rule; the selection code is REPO_FULL).
 export const GATE_DIR = 'scripts/src/gate/';
 // Directories whose every test is graph-blind through a shared loader, named whole by a rule.
 export const DIR_CLAIMS = ['extension/test/'];

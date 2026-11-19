@@ -74,10 +74,77 @@ describe('main', () => {
         run,
         async () => {},
         (l) => out.push(l),
+        Date.now,
+        async () => null,
       ),
     ).toBe(1);
-    expect(out[0]).toMatch(/Branch run 1 on 35fe83b8: failure \(branch \/ check\)/);
+    expect(out).toEqual([
+      expect.stringMatching(/Branch run 1 on 35fe83b8: failure \(branch \/ check\)/),
+      out[0],
+    ]);
   });
+
+  // The miss check (miss.ts) runs after a failed verdict's line, and never changes the exit code.
+  const red = (conclusion: string) =>
+    fakeRun([
+      ['git rev-parse --verify HEAD^{commit}', SHA],
+      [`gh run list --commit ${SHA}`, list([r({ conclusion })])],
+      ['gh run view 1 --json jobs', JSON.stringify({ jobs: [] })],
+    ]).run;
+  const go = async (
+    conclusion: string,
+    miss: Parameters<typeof main>[5],
+    out: string[],
+  ): Promise<number> =>
+    main(
+      [],
+      red(conclusion),
+      async () => {},
+      (l) => out.push(l),
+      Date.now,
+      miss,
+    );
+
+  it('a failed run: the verdict line first, then the miss check; its error is printed, the exit stays 1', async () => {
+    const out: string[] = [];
+    const seen: unknown[] = [];
+    expect(
+      await go(
+        'failure',
+        async (run, sha) => {
+          seen.push([run.databaseId, sha]);
+          out.push('!! miss');
+          return null;
+        },
+        out,
+      ),
+    ).toBe(1);
+    expect(seen).toEqual([[1, SHA]]);
+    expect(out).toEqual([expect.stringMatching(/: failure/), '!! miss', out[0]]); // the verdict last too
+    const broken: string[] = [];
+    const boom = async () => {
+      throw new Error('gh: log not found');
+    };
+    expect(await go('failure', boom, broken)).toBe(1);
+    expect(broken[1]).toBe('gate:ci — miss check failed: gh: log not found (the verdict stands)');
+  });
+
+  it.each([['cancelled'], ['success'], ['timed_out']])(
+    'a %s run has no miss check',
+    async (conclusion) => {
+      const out: string[] = [];
+      let called = false;
+      await go(
+        conclusion,
+        async () => {
+          called = true;
+          return null;
+        },
+        out,
+      );
+      expect(called).toBe(false);
+    },
+  );
 
   it('--wait polls until the run finishes', async () => {
     let n = 0;
