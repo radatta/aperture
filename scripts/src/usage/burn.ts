@@ -38,7 +38,7 @@ function land(
 ): { pct: number; full: number | null } {
   if (rate <= 0) return { pct: p, full: null };
   const full = now + hoursTo100(p, at, rate, now) * 3_600_000;
-  if (t < full) return { pct: Math.min(99, p + (rate * (t - at)) / 3_600_000), full: null };
+  if (t < full) return { pct: Math.min(99, 100 - (rate * (full - t)) / 3_600_000), full: null }; // the same clock
   return { pct: 100, full };
 }
 

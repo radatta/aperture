@@ -40,6 +40,12 @@ describe('rates', () => {
       hi: 4,
     });
     expect(rates(model({}, null)).range).toBeNull();
+    // a point from the fit (no ticks: since null) carries no λ, so neither does its range
+    expect(rates(model({ since: null }, { lo: 0.01, hi: 0.02 }, 0.5)).range).toEqual({
+      point: 4,
+      lo: 1,
+      hi: 4,
+    });
     expect(rates(model({ quPerHour: null })).range).toBeNull();
   });
 });
@@ -62,6 +68,10 @@ describe('burnLines', () => {
     // what `usage line` says too; the plain reading-plus-2.5 h would have said 21:30
     const old = burnLines(model({ pct: 90, pctPerHour: 4, at: NOW - H }), null, NOW, f, fd);
     expect(old[1]).toMatch(/^ {2}at reset {3}100% from ~22:15 /);
+    // and the % before then reads off the same clock: at 21:15, an hour short of 100% at 4 %/h
+    expect(
+      burnLines(model({ pct: 90, pctPerHour: 4, at: NOW - H }), NOW + 75 * 60e3, NOW, f, fd)[2],
+    ).toMatch(/^ {2}at 21:15 {3}96% /);
   });
   it('reaching 100%: when, fastest to slowest; the fast end alone says possible', () => {
     const fast = burnLines(model({ pct: 90, pctPerHour: 4 }), null, NOW, f, fd);

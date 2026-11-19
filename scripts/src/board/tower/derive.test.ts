@@ -471,7 +471,7 @@ describe('the accuracy audit (2026-11-14)', () => {
         asks: [ask('d9', 'open'), ask('d2', 'open'), ask('d1', 'answered'), ask('d3', 'closed')],
       }),
     );
-    expect(v.asks.map((a) => a.id)).toEqual(['d2', 'd9']);
+    expect(v.asks!.map((a) => a.id)).toEqual(['d2', 'd9']);
     expect(v.next).toMatchObject({ maintainer: 'd2 ask d2', more: 2 });
     expect(v.heads.needs).toBe('3');
     const none = derive(inputs({ maintainer: [{ text: 'a todo', since: null }] }));

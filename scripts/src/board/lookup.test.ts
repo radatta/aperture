@@ -91,6 +91,10 @@ describe('whatIs', () => {
     for (const id of ['206', 'PR 206', 'pr206', '#206']) expect(whatIs(id, src(), f)).toBe(want);
     expect(whatIs('999', src(), f)).toBe("PR 999: not in the tower's newest PRs (as of 20:00)");
     expect(whatIs('206', src({ prs: null }), f)).toMatch(/^PR 206: no pr-index.json yet/);
+    expect(whatIs('206', src({ prs: { at: null, prs: [] } }), f)).toBe(
+      'PR 206: the tower has no PR list yet (gh PRs not answered since it started)',
+    );
+    expect(readPrIndex(prsFile([], null))).toEqual({ at: null, prs: [] });
     // the list's own fetch time: past 10 min old, wi says so (a failing gh keeps serving the last list)
     expect(whatIs('206', src({ now: NOW + 11 * 60e3 }), f).split('\n')[0]).toMatch(
       /· https:\/\/github.com\/o\/r\/pull\/206 \(the list is from 20:00: gh PRs failing\?\)$/,
@@ -123,6 +127,9 @@ describe('whatIs', () => {
         '  autoStart 2 p0 · after warm-caches · after warm-caches',
         '  kickoff: [kickoff] gate-trims: trim the gate',
       ].join('\n'),
+    );
+    expect(whatIs('gate-trims', src({ queue: null, queueWhy: 'queue.json bad' }), f)).toContain(
+      '  devQueue, autoStart: unknown (queue.json bad)',
     );
     expect(whatIs('nobody', src(), f)).toBe(
       'not found: nobody (no lane file, queue entry, PR or kickoff)',

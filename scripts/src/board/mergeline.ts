@@ -17,8 +17,11 @@ export type MergeLine = {
 
 // eslint-disable-next-line no-control-regex
 const CTRL = /[\u0000-\u001f\u007f-\u009f]/g; // a control byte becomes a space: board text never moves a cursor
+// shell syntax: the head and notes are free text (a hold reason, gh's error) printed beside the line a user pastes
+// into zsh, so none of it can chain or substitute a command (fileShapeOk refuses a file that has any)
+const SHELL = /[;&|$`<>\\]/g;
 const one = (s: string, max = 60) => {
-  const t = s.replace(CTRL, ' ').replace(/\s+/g, ' ').trim();
+  const t = s.replace(CTRL, ' ').replace(SHELL, ' ').replace(/\s+/g, ' ').trim();
   return t.length > max ? `${t.slice(0, max - 1)}…` : t;
 };
 
@@ -76,6 +79,29 @@ const MERGE_CMD =
   'GH_PAGER=cat gh pr merge [1-9]\\d{0,6} --squash --admin --body "" --match-head-commit [0-9a-f]{40}';
 export const lineShapeOk = (line: string, root: string) =>
   new RegExp(`^cd ${esc(root)} && ${MERGE_CMD}( && ${MERGE_CMD})*$`).test(line);
+
+// The whole file, as the tower writes it: a `MERGE …` head, at most one command line (lineShapeOk), then `left out, …`
+// notes — none of them carrying shell syntax. Anything else (a disguised command line, an extra line) is refused:
+// null when it is fine, else what is wrong. `text` has had its control bytes turned to spaces.
+export function fileShapeOk(text: string, root: string): string | null {
+  const lines = text.replace(/\n$/, '').split('\n');
+  const [head, ...rest] = lines;
+  if (!head || !/^MERGE (none|unknown \(|\d+ · landing order: )/.test(head))
+    return 'its first line is no MERGE head';
+  let cds = 0;
+  for (const l of rest) {
+    if (l.startsWith('cd ')) {
+      cds++;
+      if (cds > 1 || !lineShapeOk(l, root))
+        return `its line is not the pinned shape for cd ${root}`;
+    } else if (!l.startsWith('left out, '))
+      return `a line is neither the command nor a note: ${JSON.stringify(l.slice(0, 40))}`;
+  }
+  for (const l of lines)
+    if (!l.startsWith('cd ') && new RegExp(SHELL.source).test(l))
+      return `a note or the head carries shell syntax: ${JSON.stringify(l.slice(0, 40))}`;
+  return null;
+}
 
 // What the CLI prints: the file with the marker suffix on its command line (the one starting `cd `).
 export const withSuffix = (text: string, suffix: string) =>

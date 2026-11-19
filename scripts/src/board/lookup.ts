@@ -12,11 +12,11 @@ export const PRS_FILE = 'pr-index.json'; // the tower writes it beside brief.txt
 const PRS_OLD_MS = 10 * 60e3; // the tower refetches every minute or so: a list past this is a failing fetch
 
 export type PrIndexRow = Pick<Pr, 'number' | 'title' | 'branch' | 'state' | 'url'>;
-export type PrIndex = { at: number; prs: PrIndexRow[] };
+export type PrIndex = { at: number | null; prs: PrIndexRow[] }; // at null: gh never answered since the tower started
 
-export const prsFile = (prs: Pr[], at: number) =>
+export const prsFile = (prs: Pr[], at: number | null) =>
   JSON.stringify({
-    at: new Date(at).toISOString(),
+    at: at === null ? null : new Date(at).toISOString(),
     prs: prs.map(({ number, title, branch, state, url }) => ({
       number,
       title,
@@ -30,8 +30,8 @@ export function readPrIndex(text: string | null): PrIndex | null {
   if (text === null) return null;
   try {
     const raw = JSON.parse(text) as { at?: unknown; prs?: unknown };
-    const at = typeof raw.at === 'string' ? Date.parse(raw.at) : NaN;
-    if (!Array.isArray(raw.prs) || !(at > 0)) return null;
+    const at = raw.at === null ? null : typeof raw.at === 'string' ? Date.parse(raw.at) : NaN;
+    if (!Array.isArray(raw.prs) || (at !== null && !(at > 0))) return null;
     const prs = raw.prs.flatMap((x) => {
       const p = (x ?? {}) as Record<string, unknown>;
       if (!Number.isInteger(p.number)) return [];
@@ -86,6 +86,7 @@ export function whatIs(idIn: string, s: WiSources, f: Fmt = hhmm): string {
 
 function followup(id: string, s: WiSources): string {
   const fu = s.queue?.followups.find((x) => x.id === id);
+  const unk = s.queue ? '' : ` (${s.queueWhy ?? 'no queue.json'}: followups[] unknown)`;
   if (fu)
     return `${fu.id} · ${fu.status} · ${fu.owner} · after ${one(fu.after, 80)}${fu.sinceDay ? ` · since ${fu.sinceDay}` : ''} · ${one(fu.what)}${fu.source ? ` (${one(fu.source, 80)})` : ''}`;
   const re = new RegExp(`\\b${id}\\b`);
@@ -94,15 +95,20 @@ function followup(id: string, s: WiSources): string {
     .filter((l) => re.test(l))
     .slice(0, 2);
   if (lines.length)
-    return [`${id} (roadmap, not in followups[]):`, ...lines.map((l) => `  ${one(l)}`)].join('\n');
-  return `not found: ${id} (not in followups[] or the roadmap)`;
+    return [`${id} (roadmap, not in followups[]${unk}):`, ...lines.map((l) => `  ${one(l)}`)].join(
+      '\n',
+    );
+  return `not found: ${id} (not in followups[] or the roadmap)${unk}`;
 }
 
 function prInfo(n: number, s: WiSources, f: Fmt): string {
   if (!s.prs)
     return `PR ${n}: no pr-index.json yet (the web tower writes it every 30 s: board.sh tower start)`;
+  if (s.prs.at === null)
+    return `PR ${n}: the tower has no PR list yet (gh PRs not answered since it started)`;
   const p = s.prs.prs.find((x) => x.number === n);
-  const age = s.now - s.prs.at > PRS_OLD_MS ? ` (the list is from ${f(s.prs.at)}: gh PRs failing?)` : '';
+  const age =
+    s.now - s.prs.at > PRS_OLD_MS ? ` (the list is from ${f(s.prs.at)}: gh PRs failing?)` : '';
   if (!p) return `PR ${n}: not in the tower's newest PRs (as of ${f(s.prs.at)})${age}`;
   const out = [
     `PR ${n} · ${p.state} · ${p.branch} · "${one(p.title, 120)}"${p.url ? ` · ${p.url}` : ''}${age}`,
@@ -138,6 +144,7 @@ function lane(b: string, s: WiSources, f: Fmt): string {
     );
   const pr = s.prs?.prs.filter((x) => x.branch === b).sort((x, y) => y.number - x.number)[0];
   if (pr) out.push(`  PR ${pr.number} · ${pr.state} · "${one(pr.title, 100)}"`);
+  if (!s.queue) out.push(`  devQueue, autoStart: unknown (${s.queueWhy ?? 'no queue.json'})`);
   const k = s.kickoff(b);
   const first = k?.split('\n').find((x) => x.trim());
   if (first) out.push(`  kickoff: ${one(first, 160)}`);

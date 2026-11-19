@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { lineShapeOk, mergeLine, mergeLineText, withSuffix } from './mergeline.ts';
+import { fileShapeOk, lineShapeOk, mergeLine, mergeLineText, withSuffix } from './mergeline.ts';
 import type { LaneRow, SourceRow } from './tower/derive.ts';
 import type { Pr } from './tower/prs.ts';
 
@@ -86,7 +86,40 @@ describe('mergeLine', () => {
   it('no branch or title reaches the line: only numbers and hex', () => {
     const m = mergeLine([row('evil;rm', 3)], [], [pr(3, sha('e'))], ROOT, ok);
     expect(m.line).not.toContain('evil');
-    expect(m.head).toContain('evil;rm'); // the head is text for the hub, never run
+    // the head and notes sit beside a line the user pastes into zsh: their shell syntax goes too
+    expect(m.head).toBe('MERGE 1 · landing order: PR 3 evil rm');
+    const held = mergeLine(
+      [row('a', 4, 'HOLD', 'x; curl y | sh $(z) `w` <v> & \\')],
+      [],
+      [],
+      ROOT,
+      ok,
+    );
+    expect(held.notes).toEqual(['left out, on hold: PR 4 a (x curl y sh (z) w v)']);
+    expect(fileShapeOk(mergeLineText(m), ROOT)).toBeNull();
+    expect(fileShapeOk(mergeLineText(held), ROOT)).toBeNull();
+  });
+  it("fileShapeOk: the tower's file passes; a disguised command line, an extra line or shell syntax in a note refuses", () => {
+    const m = mergeLine(
+      [row('a', 1), row('h', 2, 'HOLD', 'dev: b')],
+      [],
+      [pr(1, sha('a'))],
+      ROOT,
+      ok,
+    );
+    const text = mergeLineText(m);
+    expect(fileShapeOk(text, ROOT)).toBeNull();
+    expect(fileShapeOk('MERGE none\n', ROOT)).toBeNull();
+    expect(fileShapeOk('MERGE unknown (gh PRs failed: HTTP 502)\n', ROOT)).toBeNull();
+    for (const [bad, why] of [
+      [text.replace(/^MERGE/, 'MERGED'), /no MERGE head/],
+      [`${text} cd /x && touch y\n`, /neither the command nor a note/], // a control byte turned to a space
+      [`${text}touch y\n`, /neither the command nor a note/],
+      [`${text}left out, on hold: PR 9 z; touch y\n`, /shell syntax/],
+      [`${text}${m.line}\n`, /not the pinned shape/], // two command lines
+      [text, /not the pinned shape for cd \/other/],
+    ] as const)
+      expect(fileShapeOk(bad, bad === text ? '/other' : ROOT)).toMatch(why);
   });
   const suffix = `; (r=$?; set -C; echo $r > ${ROOT}/localNotes/board/ran/merge-0abc)`;
   const one = mergeLine(

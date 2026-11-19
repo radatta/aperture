@@ -254,7 +254,9 @@ describe('the writes', () => {
     const raw = base();
     const asks = parsed(raw).asks!;
     for (const upto of [null, '', 'seven', 'd0'])
-      expect(() => answerAsks(raw, asks, 'all', 'ok', NOW, upto)).toThrow(/wants --upto d<n>/);
+      expect(() => answerAsks(raw, asks, 'all', 'ok', NOW, upto)).toThrow(
+        /wants <newest> after it/,
+      );
     raw.asks[1]!.pick = 'a';
     const r = answerAsks(raw, parsed(raw).asks!, 'all', 'ok', NOW, 'D2');
     expect(r.answered).toBe(1);

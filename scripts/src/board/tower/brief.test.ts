@@ -237,6 +237,11 @@ describe('briefText on an empty board', () => {
 });
 
 describe('the brief file and pnpm board brief', () => {
+  it('an unreadable queue.json is ASKS unknown, never none', () => {
+    expect(briefText({ ...fx, asks: null }, utc)).toMatch(
+      /^ASKS unknown \(queue.json unreadable\)$/m,
+    );
+  });
   it('writeBrief writes the brief, the merge line and the PR index by rename, and leaves no tmp file', () => {
     const dir = tmp();
     writeBrief(dir, fx, [
@@ -262,10 +267,8 @@ describe('the brief file and pnpm board brief', () => {
     expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).prs).toEqual([
       { number: 41, title: 't', branch: 'charlie-branch', state: 'OPEN', url: null },
     ]);
-    // pr-index.json is stamped with the list's fetch time when the tower has one, else the view's
-    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBe(
-      new Date(fx.now).toISOString(),
-    );
+    // pr-index.json is stamped with the list's fetch time; null before gh first answers (wi says so)
+    expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBeNull();
     writeBrief(dir, fx, [], Date.parse('2026-11-08T05:00:00Z'));
     expect(JSON.parse(readFileSync(join(dir, PRS_FILE), 'utf8')).at).toBe(
       '2026-11-08T05:00:00.000Z',

@@ -1,13 +1,14 @@
 // The hub's /away, /back and /hs (docs/ops/HUB.md → Shortcuts): `pnpm board away` stamps when the maintainer left,
 // `board back` prints what moved since from what the board already records (merge events, lane starts, lane phase
-// changes, asks, the usage row) and clears the stamp, and `board stop <HH:MM>` puts a hard-stop time into
-// pace-control.json, which pace-watch.sh turns into exit 12 ahead of it. Pure; the CLI reads and writes the files.
+// changes, asks, the usage row) and clears the stamp, and `board stop <HH:MM>` writes the hard-stop time to
+// stop.json, which pace-watch.sh turns into exit 12 ahead of it. Pure; the CLI reads and writes the files.
 import { countdown, hhmm, pad2 } from './tower/fmt.ts';
 import type { LaneFile } from './tower/lanes.ts';
 import type { Ask } from './tower/queue.ts';
 
 export const AWAY_FILE = 'away.json';
 export const AWAY_LAST = 'away-last.json'; // the last stamp, kept after /back
+export const AWAY_STALE_MS = 18 * 3600e3; // a stamp older than this had no /back: the next /away starts fresh
 export const STOP_LEAD_SEC = 600; // pace-watch.sh's STOP_LEAD: exit 12 this long before the stop, so lanes stop clean by it
 
 type Fmt = (t: number) => string;

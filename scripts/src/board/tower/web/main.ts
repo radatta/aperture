@@ -430,7 +430,8 @@ export const viewMergeLine = (d: ReturnType<typeof derive>, prs: Pr[], root: str
 
 // brief.txt (brief.ts): `pnpm board brief` prints it; merge-line.txt (`board merge-line`) and pr-index.json (`board wi`)
 // beside it. Their own writer, beside writeDerived's two files; each file tmp + rename. pr-index.json carries when the
-// PR list was fetched (`prsAt`, the cache's last success), not when it was written, so `wi` can say how old it is.
+// PR list was fetched (`prsAt`, the cache's last success; null before the first), not when it was written, so `wi`
+// can say how old it is.
 export function writeBrief(
   dir: string,
   v: BriefView & { mergeLine?: MergeLine },
@@ -444,7 +445,7 @@ export function writeBrief(
   };
   put(BRIEF_FILE, briefText(v));
   if (v.mergeLine) put(MERGE_LINE_FILE, mergeLineText(v.mergeLine));
-  put(PRS_FILE, prsFile(prs, prsAt ?? v.now));
+  put(PRS_FILE, prsFile(prs, prsAt));
 }
 
 // devlock.sh keeps the lock caches fresh; the TUI calls it the same way (main.ts → refreshDevlock).

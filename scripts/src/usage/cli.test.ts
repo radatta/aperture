@@ -251,7 +251,12 @@ describe('stale meter after a reset', () => {
       calls: [],
       now: Date.parse('2026-01-05T13:00:00Z'),
     });
-    expect(f.burn).toMatchObject({ resetAt: resetsAt * 1000, pct: null, nextReset: null, at: null });
+    expect(f.burn).toMatchObject({
+      resetAt: resetsAt * 1000,
+      pct: null,
+      nextReset: null,
+      at: null,
+    });
     expect(boardLine(f)).toMatch(/^usage reset .* no reading since$/);
   });
 

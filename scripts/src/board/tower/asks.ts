@@ -146,7 +146,7 @@ export function addAsk(raw: Raw, input: unknown, now: number): { raw: Raw; id: s
   return { raw: { ...raw, askSeq: seq + 1, asks: [...rawAsks(raw), entry] }, id };
 }
 
-// `asks answer <id|all> <letter|ok> [--upto d<n>]`: what it printed and the new raw (unchanged when nothing was
+// `asks answer <id> <letter|ok>` | `asks answer all ok <newest>`: what it printed and the new raw (unchanged when nothing was
 // answered). A pane ask is never answered here, by a letter or by `ok`: its go is typed in the pane (GO NEEDED). `ok`
 // takes the pick; an ask with no pick needs a letter (NO PICK). `all ok` covers only what the user was shown — the
 // asks up to `upto`, the newest id dispatch last put in front of them — and never an explicit ask (OWN REPLY).
@@ -169,7 +169,7 @@ export function answerAsks(
       throw new Error('asks answer all: only `all ok` (each pick), never one letter for every ask');
     if (!upto || !ASK_ID.test(upto.toLowerCase()))
       throw new Error(
-        'asks answer all ok: wants --upto d<n>, the newest ask the user was shown (`asks list` prints it)',
+        'asks answer all ok: wants <newest> after it (`all ok d7`), the newest ask the user was shown (`asks list` prints it)',
       );
     todo = asks.filter((a) => a.status === 'open').sort((x, y) => num(x.id) - num(y.id));
     if (!todo.length) return { raw, out: ['ASKS none open'], answered: 0 };
@@ -187,7 +187,9 @@ export function answerAsks(
   const cap = upto ? num(upto.toLowerCase()) : Infinity;
   for (const a of todo) {
     if (num(a.id) > cap) {
-      out.push(`NOT SHOWN ${a.id}: newer than ${upto}, so not covered by all ok · show it: asks show ${a.id}`);
+      out.push(
+        `NOT SHOWN ${a.id}: newer than ${upto}, so not covered by all ok · show it: asks show ${a.id}`,
+      );
       continue;
     }
     if (a.needsPane) {
@@ -195,7 +197,9 @@ export function answerAsks(
       continue;
     }
     if (target === 'all' && a.explicit) {
-      out.push(`OWN REPLY ${a.id}: its own reply only (${a.id} ok or ${a.id} <letter>), never all ok`);
+      out.push(
+        `OWN REPLY ${a.id}: its own reply only (${a.id} ok or ${a.id} <letter>), never all ok`,
+      );
       continue;
     }
     const l = r === 'ok' ? a.pick : r;

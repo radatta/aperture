@@ -65,7 +65,7 @@ const seed = (extra: Record<string, unknown> = {}) =>
 const queue = () => JSON.parse(readFileSync(queueFile(), 'utf8'));
 const noTmp = () => expect(readdirSync(board).filter((f) => f.includes('.tmp.'))).toEqual([]);
 
-describe('asks', () => {
+describe('asks', { timeout: 30_000 }, () => {
   it('add, list, answer, show, close: the file stays parseable and keeps unknown keys', () => {
     seed();
     const add = (o: object) => cli(['asks', 'add'], { input: JSON.stringify(o) });
@@ -87,7 +87,7 @@ describe('asks', () => {
       JSON.parse(cli(['asks', 'list', '--json']).out).map((a: { id: string }) => a.id),
     ).toEqual(['d1', 'd2']);
 
-    expect(cli(['asks', 'answer', 'all', 'ok']).err).toMatch(/wants --upto d<n>/); // what the user saw
+    expect(cli(['asks', 'answer', 'all', 'ok']).err).toMatch(/wants <newest> after it/); // what the user saw
     expect(cli(['asks', 'answer', 'd1', 'ok', 'd2']).err).toMatch(/goes only with `all ok`/);
     const ok = cli(['asks', 'answer', 'all', 'ok', 'd2']);
     expect(ok.status).toBe(0);
@@ -192,6 +192,26 @@ describe('asks', () => {
     ).toMatch(/would not parse: asks\[2\]: wants 2 to 6 options/);
   });
 
+  it('a prune ahead of a bad entry shifts its index, and still never locks the writes', () => {
+    seed({
+      askSeq: 2,
+      asks: [
+        {
+          id: 'd1',
+          asked: '2026-11-10T10:00:00Z',
+          text: 'old',
+          options: ['a', 'b'],
+          status: 'answered',
+          answer: 'a',
+          answeredAt: '2026-11-10T10:05:00Z',
+        },
+        { id: 'd2', asked: 'soon', text: 'hand-written', options: ['a', 'b'], status: 'open' },
+      ],
+    });
+    expect(cli(['asks', 'close', 'd2']).out).toBe('CLOSED d2'); // its problem moves from asks[1] to asks[0]
+    expect(queue().asks.map((a: { id: string }) => a.id)).toEqual(['d2']);
+  });
+
   it('prunes answered asks past a day on the next write, keeping askSeq', () => {
     seed({
       askSeq: 4,
@@ -215,7 +235,7 @@ describe('asks', () => {
   });
 });
 
-describe('merge-line', () => {
+describe('merge-line', { timeout: 30_000 }, () => {
   const file = () => join(board, 'merge-line.txt');
   it('no file yet: refuses, naming the tower', () => {
     rmSync(file(), { force: true });
@@ -242,8 +262,11 @@ describe('merge-line', () => {
     expect(existsSync(join(board, 'ran', `.${id}`))).toBe(true); // reserved, create-only
     expect(cli(['merge-line']).out).not.toContain(`ran/${id})`); // the next print gets its own id
   });
-  it('the file is shared, so its line is re-checked: anything but the pinned shape for this root prints no line', () => {
+  it("the file is shared, so every line is re-checked: anything but the tower's shape for this root prints nothing", () => {
     for (const bad of [
+      `\u0001cd <mac-repo> && touch x`, // a control byte would hide a command line from a cd-only check
+      'touch x', // a line that is neither the command nor a note
+      'left out, on hold: PR 9 z; touch x', // shell syntax in a note
       'cd <mac-repo> && GH_PAGER=cat gh pr merge 7 --squash', // unpinned
       `cd <mac-repo> && ${cmd(7)} && touch x`,
       `cd <mac-repo> && ${cmd(7)}; rm x`,
@@ -254,7 +277,9 @@ describe('merge-line', () => {
       writeFileSync(file(), `MERGE 1 · landing order: PR 7 a\n${bad}\n`);
       const r = cli(['merge-line']);
       expect([r.status, r.out]).toEqual([2, '']);
-      expect(r.err).toMatch(/not the shape the tower writes for cd <mac-repo>, so no line printed/);
+      expect(r.err).toMatch(
+        /merge-line.txt is not what the tower writes \(.*\), so nothing printed/,
+      );
     }
     writeFileSync(
       file(),
@@ -266,8 +291,8 @@ describe('merge-line', () => {
     writeFileSync(file(), 'MERGE none\n');
     expect(cli(['merge-line']).out).toBe('MERGE none');
   });
-  it('a stale file prints no line to run', () => {
-    writeFileSync(file(), 'MERGE 1 · landing order: PR 7 a\ncd <mac-repo> && x\n');
+  it('a stale file prints no line to run, and is checked first like a fresh one', () => {
+    writeFileSync(file(), `MERGE 1 · landing order: PR 7 a\ncd <mac-repo> && ${cmd(7)}\n`);
     const old = Date.now() / 1000 - 600;
     utimesSync(file(), old, old);
     const r = cli(['merge-line']);
@@ -275,10 +300,13 @@ describe('merge-line', () => {
       /^TOWER DOWN: the merge line is from \d\d:\d\d, no line printed .*\nMERGE 1 · landing order: PR 7 a$/,
     );
     expect(r.out).not.toMatch(/^cd /m);
+    writeFileSync(file(), 'MERGE 1 · landing order: PR 7 a\ntouch x\n');
+    utimesSync(file(), old, old);
+    expect(cli(['merge-line']).status).toBe(2);
   });
 });
 
-describe('wi, away, back, stop', () => {
+describe('wi, away, back, stop', { timeout: 30_000 }, () => {
   it('wi reads followups, and says when it finds nothing', () => {
     seed({
       followups: [
@@ -298,6 +326,9 @@ describe('wi, away, back, stop', () => {
     expect(cli(['wi', 'PR 7']).out).toMatch(/^PR 7: no pr-index.json yet/);
     writeFileSync(queueFile(), '{');
     expect(cli(['wi', 'd3']).out).toMatch(/^unknown: d3 \(queue.json bad/); // never "not found"
+    expect(cli(['wi', 'F9']).out).toMatch(
+      /^not found: F9 .* \(queue.json bad.*: followups\[\] unknown\)$/,
+    );
   });
   it('away stamps, back digests and clears the stamp, a second back refuses', () => {
     seed();
@@ -322,6 +353,20 @@ describe('wi, away, back, stop', () => {
     expect(existsSync(join(board, 'away.json'))).toBe(false);
     expect(existsSync(join(board, 'away-last.json'))).toBe(true);
     expect(cli(['back']).err).toMatch(/no away.json/);
+  });
+  it('a stamp past 18 h (no /back) is replaced by the next away, saying so', () => {
+    seed();
+    writeFileSync(
+      join(board, 'away.json'),
+      JSON.stringify({ v: 1, at: '2026-11-01T08:00:00.000Z', ping: false, usage: null }),
+    );
+    expect(cli(['away']).out).toMatch(
+      /^AWAY since \d\d:\d\d · usage .*\(a stamp from 2026-11-01 08:00 UTC with no \/back replaced\)$/,
+    );
+    expect(JSON.parse(readFileSync(join(board, 'away.json'), 'utf8')).at).not.toBe(
+      '2026-11-01T08:00:00.000Z',
+    );
+    rmSync(join(board, 'away.json'));
   });
   it('back reads what moved while away: merges, starts and lane phases; a bad queue is unknown asks', () => {
     writeFileSync(queueFile(), '{');

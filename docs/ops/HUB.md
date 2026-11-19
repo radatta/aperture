@@ -225,7 +225,7 @@ is follow-up F274). What each exit asks:
 | 12    | pace    | the hard stop (`/hs`, `stop.json`) is ten minutes away: send each lane `[hold]` to stop clean by then, then a hard stop (below); fires once per time  |
 | 124   | any     | an hour with nothing to report: restart with the same arguments                                                                                       |
 | 78    | any     | a `limits.json` key is missing or bad, or (merge) jq is missing: stderr and `<board>/<watcher>.log` name it; fix it, then restart                     |
-| 74    | pace    | `stop-fired` unwritable (so 12 would fire on every restart): fix the board dir, then restart                                                          |
+| 74    | pace    | `stop-fired` unwritable with a hard stop due: send each lane `[hold]` first (as for 12), then fix the board dir and restart                           |
 | other | any     | 2 (a bad argument or override), 74 (merge: a state file unwritable, after its lines), 1, 126 …: read stderr and the log, fix it — never restart blind |
 
 **Soft and hard stop** (the user's rule, 2026-11-17). Soft: no new lane starts, and running lanes park at a clean

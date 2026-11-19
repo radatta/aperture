@@ -84,7 +84,8 @@ while :; do
   if [[ "$st" =~ ^[0-9]{1,12}$ ]] && [ "$now" -ge $((st - STOP_LEAD)) ] && [ "$now" -lt $((st + 3600)) ] &&
     [ "$(cat "$BOARD_DIR/stop-fired" 2>/dev/null)" != "$st" ]; then
     # an unwritable stop-fired would fire 12 on every restart for the hour: fail loud instead (74, as merge-watch does)
-    echo "$st" | sb_write "$BOARD_DIR/stop-fired" || { wl_say $W "$(wl_at +%H:%M) stop-fired unwritable"; exit 74; }
+    echo "$st" | sb_write "$BOARD_DIR/stop-fired" ||
+      { wl_say $W "$(wl_at +%H:%M) STOP at $(date -d "@$st" +%H:%M) is due, but stop-fired is unwritable"; exit 74; }
     wl_say $W "$(wl_at +%H:%M) STOP at $(date -d "@$st" +%H:%M): hard stop, lanes stop clean by then"
     exit 12
   fi

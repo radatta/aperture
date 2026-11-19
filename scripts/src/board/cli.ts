@@ -55,7 +55,7 @@ import {
   pruneAsks,
 } from './tower/asks.ts';
 import { readLanes } from './tower/lanes.ts';
-import { MERGE_LINE_FILE, lineShapeOk, withSuffix } from './mergeline.ts';
+import { fileShapeOk, MERGE_LINE_FILE, withSuffix } from './mergeline.ts';
 import { PRS_FILE, readPrIndex, whatIs } from './lookup.ts';
 import {
   AWAY_FILE,
@@ -66,7 +66,9 @@ import {
   stopAt,
   stopLine,
   usageRow,
-  STOP_FILE, stopFile,
+  STOP_FILE,
+  stopFile,
+  AWAY_STALE_MS,
   type Merged,
   type Started,
 } from './away.ts';
@@ -97,7 +99,7 @@ export const USAGE = `node scripts/src/board/cli.ts <command>   (-h / --help on 
   wi <id>                               what an F-number, PR n, d<n> or lane name is
   away [ping]                           stamp the maintainer away (the hub's /away)
   back                                  what moved since /away, then clear the stamp
-  stop <HH:MM>|off                      the hub's hard stop: pace-control.json stopAt (pace-watch.sh exit 12)`;
+  stop <HH:MM>|off                      the hub's hard stop: stop.json stopAt (pace-watch.sh exit 12)`;
 
 // Every command's allowed flags and positionals; anything else refuses before it runs (bot/help.ts). lane parses its own.
 export const FLAGS: Record<string, Spec> = {
@@ -429,9 +431,18 @@ function asks(args: string[], rest: string[], stdin: () => string, now: number):
   // updatedAt stays: it is the hub's last look at the whole queue (the tower's queue age), which an ask write isn't
   next = pruneAsks(next, now);
   const body = JSON.stringify(next, null, 2) + '\n';
-  // only a problem this write made refuses it: one already on file (a hand edit) never locks the hub out of closing it
-  const had = new Set(before.problems);
-  const bad = parseQueue(body).problems.filter((p) => /^asks|^askSeq/.test(p) && !had.has(p));
+  // only a problem this write made refuses it: one already on file (a hand edit) never locks the hub out of closing it.
+  // Counted by message, not index — a prune shifts every index after it
+  const msg = (p: string) => p.replace(/^asks\[\d+\]: /, '');
+  const had = new Map<string, number>();
+  for (const p of before.problems.filter((p) => /^asks|^askSeq/.test(p)))
+    had.set(msg(p), (had.get(msg(p)) ?? 0) + 1);
+  const bad = parseQueue(body).problems.filter((p) => {
+    if (!/^asks|^askSeq/.test(p)) return false;
+    const n = had.get(msg(p)) ?? 0;
+    had.set(msg(p), n - 1);
+    return n <= 0;
+  });
   if (bad.length)
     throw new Error(`asks ${sub}: refused, the result would not parse: ${bad.join('; ')}`);
   put(f, body);
@@ -617,6 +628,14 @@ export function main(argv: string[], stdin: () => string): string {
       } catch {
         throw new Error(`no ${f} yet: the web tower writes it every 30 s (board.sh tower start)`);
       }
+      // the file is shared: none of its bytes moves a cursor here, and every line is the tower's shape or nothing prints
+      text = text.replace(CTRL_NL, ' ');
+      const root = macRoot();
+      const bad = fileShapeOk(text, root);
+      if (bad)
+        throw new Error(
+          `merge-line.txt is not what the tower writes (${bad}), so nothing printed: a tower started before .local/mac-root reads <mac-repo> (board.sh tower restart), else the file was edited`,
+        );
       // a stale file never prints a line to run: what it would merge is no longer known
       if (now.getTime() - mtime > BRIEF_STALE_MS)
         return `TOWER DOWN: the merge line is from ${hhmm(mtime)}, no line printed (board.sh tower status; board.sh tower start)\n${text
@@ -624,15 +643,7 @@ export function main(argv: string[], stdin: () => string): string {
           .split('\n')
           .filter((l) => !l.startsWith('cd '))
           .join('\n')}`;
-      text = text.replace(CTRL_NL, ' '); // the file is shared: none of its bytes moves a cursor here
-      const cds = text.split('\n').filter((l) => l.startsWith('cd '));
-      if (!cds.length) return text.replace(/\n$/, '');
-      const root = macRoot();
-      // what the user pastes into zsh is re-checked here, never trusted from the file (mergeline.ts lineShapeOk)
-      if (cds.length > 1 || !lineShapeOk(cds[0]!, root))
-        throw new Error(
-          `merge-line.txt's line is not the shape the tower writes for cd ${root}, so no line printed: a tower started before .local/mac-root reads <mac-repo> (board.sh tower restart), else the file was edited`,
-        );
+      if (!text.split('\n').some((l) => l.startsWith('cd '))) return text.replace(/\n$/, '');
       const out = withSuffix(text, ranSuffix(root, mintRan(dir, 'merge', now)));
       return root === MAC_PLACEHOLDER ? `${out}\n${MAC_ROOT_NOTE}` : out;
     }
@@ -657,14 +668,14 @@ export function main(argv: string[], stdin: () => string): string {
       const dir = hubBoard('away');
       const usage = usageRow(readOr(join(dir, 'board.line')));
       // already away (no /back since): the first stamp stands, so /back still covers the whole time; only ping changes
-      const prev = readStamp(readOr(join(dir, AWAY_FILE)));
-      const stamp = prev
-        ? { ...prev, ping: !!ping }
-        : awayStamp(now.getTime(), !!ping, usage);
+      const was = readStamp(readOr(join(dir, AWAY_FILE)));
+      // a stamp past AWAY_STALE_MS had no /back: a new away starts fresh, and says the old one went
+      const prev = was && now.getTime() - Date.parse(was.at) <= AWAY_STALE_MS ? was : null;
+      const stamp = prev ? { ...prev, ping: !!ping } : awayStamp(now.getTime(), !!ping, usage);
       put(join(dir, AWAY_FILE), JSON.stringify(stamp) + '\n');
       return prev
         ? `AWAY still, since ${hhmm(Date.parse(prev.at))}${ping ? ' · ping on asks' : ''} · usage then ${prev.usage ?? 'unknown'}`
-        : `AWAY since ${hhmm(now.getTime())}${ping ? ' · ping on asks' : ''} · usage ${usage ?? 'unknown'}`;
+        : `AWAY since ${hhmm(now.getTime())}${ping ? ' · ping on asks' : ''} · usage ${usage ?? 'unknown'}${was ? ` (a stamp from ${was.at.slice(0, 16).replace('T', ' ')} UTC with no /back replaced)` : ''}`;
     }
     case 'back': {
       const dir = hubBoard('back');
