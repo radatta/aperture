@@ -34,7 +34,10 @@ const REVIEW_KEYBOARD: IosOp[] = [
   // …010744Z…-6102). ios-standalone's CAPTURE waits 4 for the same settle.
   { op: 'wait', s: 4 },
   { op: 'tap', label: 'Task', scan: DOCK(110, MODE_ROW), role: 'AXCheckBox' },
-  { op: 'keys', text: R_SIM_CHIP },
+  // `in`: the runner reads the field back and retypes a dropped key (sim.sh sim_op_keys) — without it a drop went
+  // unseen and the parse got "shim the flux gaskt" (run 2026-11-18T23-43-42-full). Found as ios-standalone finds it.
+  { op: 'find', label: 'Capture task', scan: DOCK(300), role: 'AXTextArea', as: 'field' },
+  { op: 'keys', text: R_SIM_CHIP, in: 'field' },
   // Send, since review-first (2026-11-17): the first press parses; ✨ beside it is the read-with-AI toggle now.
   { op: 'tap', label: 'Review before saving', scan: DOCK(395) },
   { op: 'wait', s: 6 },

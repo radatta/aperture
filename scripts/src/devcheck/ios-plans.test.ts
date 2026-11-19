@@ -34,6 +34,20 @@ describe('recordIosPlans', () => {
       }
   });
 
+  it('every keys op names the field it types into, found earlier in its plan: the runner checks and retypes only then', async () => {
+    for (const s of SCENARIOS)
+      for (const j of await recordIosPlans(s, { nonce: 'plans' })) {
+        const found = new Set<string>();
+        for (const op of j.steps as { op: string; as?: string; in?: string }[]) {
+          if (op.op === 'keys')
+            expect(op.in && found.has(op.in), `${s.id}/${j.name}: keys without a found field`).toBe(
+              true,
+            );
+          if (op.as) found.add(op.as);
+        }
+      }
+  });
+
   it('counts the setup writes a step makes before its job', async () => {
     const s: Scenario = {
       id: 'fake',
