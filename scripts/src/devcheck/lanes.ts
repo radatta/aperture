@@ -155,9 +155,17 @@ export function mergeRuns(
     endSha: base.endSha ?? iphone?.endSha,
     deployUrl: base.deployUrl ?? iphone?.deployUrl,
     ios: iphone?.ios ?? base.ios,
-    // the browser lane's (base's) pipeline phases: one lane's split, under the wall it never exceeds; the iPhone
-    // lane's own time is lanes.iphoneMs, and its steps are in steps (heavy-detail.ts reads both)
-    ...(base.phases ? { phases: base.phases } : {}),
+    // the browser lane's (base's) pipeline phases, under the wall they never exceed — but the deploy wait is the
+    // lane that waited's: they share one (run.ts waitOnce), and in serial the iPhone lane, first, takes it all. The
+    // iPhone lane's own time is lanes.iphoneMs (heavy-detail.ts reads both).
+    ...(base.phases
+      ? {
+          phases: {
+            ...base.phases,
+            deployWaitMs: Math.max(base.phases.deployWaitMs, iphone?.phases?.deployWaitMs ?? 0),
+          },
+        }
+      : {}),
     lanes: {
       mode: o.mode,
       ...(parts.some((p) => p.lane === 'browser') ? { browserMs: base.durationMs } : {}),

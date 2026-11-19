@@ -255,6 +255,18 @@ describe('mergeRuns', () => {
     expect(both.phases).toEqual(phases);
   });
 
+  it('serial: the deploy wait the iPhone lane took (first) counts, not the browser lane’s ~0', () => {
+    const phases = { deployWaitMs: 0, openMs: 2, setupMs: 3, stepsMs: 4, cleanupMs: 5 };
+    const s = mergeRuns(
+      [
+        { lane: 'iphone', r: { ...iphone, phases: { ...phases, deployWaitMs: 60_000 } } },
+        { lane: 'browser', r: { ...browser, phases } },
+      ],
+      { order, mode: 'serial', wallMs: 900_000 },
+    );
+    expect(s.phases).toEqual({ ...phases, deployWaitMs: 60_000 });
+  });
+
   it('the build, budget and deploy are the browser lane’s; the Simulator section the iPhone lane’s', () => {
     expect(m.startSha).toBe('b'.repeat(40));
     expect(m.sittingStarts).toBe(4);
