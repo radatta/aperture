@@ -30,9 +30,8 @@ The user names the mode; collaborative is the default.
   came up, what was chosen, why, and how to undo it. Present the log at the end of development; the PR body
   summarises it. Parking is only allowed _as_ a logged decision, never a quiet "ask later".
   - **"Build it, autonomous" is the execute.** The review takes no round count: its lenses come from what the diff
-    touches and its rechecks from what it finds (phase 6). Risk classes — auth, IAM/cdk, finance, migrations,
-    external-service writes — add the infra lens and get the fix-diff recheck whenever round 1 led to a code fix.
-    Lenses or a recheck named in the kickoff are added, never taken away.
+    touches and its rechecks from what it finds (phase 6). Lenses or a recheck named in the kickoff are added, never
+    taken away.
   - **Every plan opens with _Operator steps_** — the exact one-line Mac commands, in order, each marked before Build
     / at dev test / at PR / at Cleanup (a `.github/workflows/` branch's push, which the bot can't do, and a
     `.github/` branch's admission to the `dev` environment, only when Claude asks for them — phase 8; its removal at
@@ -117,10 +116,10 @@ hub message (the checkpoints stay).
      pass, run the gate once, commit. Findings that need a product call or add scope: collaborative → one
      `[ask-maintainer]` with the list; autonomous → decide and log.
    - **Round 2 and later** recheck only the fix diff, and run while a round finds something serious or leaves an
-     S1/S2 unfixed, and once after a risk class's code fix (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again
+     S1/S2 unfixed, or when its fixes bring a lens back (when, and which lenses rerun: `docs/ops/REVIEW.md` → _Round 2 and later_). Serious again
      (unless the review stops and asks, below) → fix, gate, commit, next round on that fix. Minor only → fix, gate,
-     commit, done.
-   - **Stop** when a round has no serious finding; stop and ask, in either mode, as `docs/ops/REVIEW.md` →
+     commit, done, unless the fixes bring a lens back.
+   - **Stop** when a round has no serious finding, leaves no S1/S2 unfixed and its fixes bring no lens back; stop and ask, in either mode, as `docs/ops/REVIEW.md` →
      _Round 2 and later_ says (the round cap, no fewer serious bugs, a twin).
    - A serious finding in round 2 or later that the fixes didn't cause is a **lens gap**: recorded in the report and
      sent to the hub (`docs/ops/REVIEW.md` → _Lens gaps_).

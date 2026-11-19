@@ -1,6 +1,6 @@
 ---
 name: review-infra
-description: Infra and architecture lens of the feature workflow's review round (docs/ops/REVIEW.md) — blast radius, IAM, SCPs and deploy roles, recurring cost, deploy order, rollback, workflows, dev slots, Lambda wiring. Runs when a diff touches cdk/, .github/, the bot, or deploy and dev-slot rules; not for general use.
+description: Infra and architecture lens of the feature workflow's review round (docs/ops/REVIEW.md) — blast radius, IAM, SCPs and deploy roles, recurring cost, deploy order, rollback, workflows, dev slots, Lambda wiring. Runs when docs/ops/REVIEW.md picks it (Infra triggers; Round 2 and later); not for general use.
 tools: Read, Grep, Glob, Bash
 model: fable
 effort: high
