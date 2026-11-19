@@ -12,16 +12,16 @@ recheck of the fix diff alone, only while a round still finds something serious.
 Each lens is a read-only agent in `.claude/agents/`. `code-reviewer` is the base: run alone before any non-trivial
 commit, it behaves as before (and says what it left to the other lenses).
 
-| Lens        | Agent                | Model           | Runs when the diff touches                                                                                                                           | Owns                                                                                                                                         |
-| ----------- | -------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| rules       | `code-reviewer`      | session's, high | every diff                                                                                                                                           | security, BFF writes, secrets, public content, conventions, docs, data-model invariants, architecture fit, merged neighbours, approval holes |
-| correctness | `review-correctness` | opus, high      | any code, config or script                                                                                                                           | logic, ordering, reads and writes, failure paths, time, contracts, model output, unsourced outside assumptions                               |
-| tests       | `review-tests`       | sonnet, high    | any code, config or script                                                                                                                           | test gaps, assertions that can't fail, isolation, clocks, CI parity, fakes, the dev-test matrix and its scenario                             |
-| infra       | `review-infra`       | fable, high     | the infra triggers below                                                                                                                             | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
-| shell       | `review-shell`       | opus, high      | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`, `scripts/src/{lane,board,mailroom,gate}/`; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
-| UI          | `review-ui`          | sonnet, high    | `app/`; `packages/shared` when it changes what renders                                                                                               | the headless pass, first-open state, focus, input size, probe points                                                                         |
-| extension   | `review-extension`   | opus, high      | `extension/`                                                                                                                                         | research before fixing, the WebKit quirks, the wire contract                                                                                 |
-| fix recheck | `review-fixes`       | opus, high      | rounds 2 and later; a dev fix; a rebase that resolved conflicts                                                                                      | fix closed, fix regressions, sibling call sites, drop reasons                                                                                |
+| Lens        | Agent                | Model           | Runs when the diff touches                                                                                                                                       | Owns                                                                                                                                         |
+| ----------- | -------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| rules       | `code-reviewer`      | session's, high | every diff                                                                                                                                                       | security, BFF writes, secrets, public content, conventions, docs, data-model invariants, architecture fit, merged neighbours, approval holes |
+| correctness | `review-correctness` | opus, high      | any code, config or script                                                                                                                                       | logic, ordering, reads and writes, failure paths, time, contracts, model output, unsourced outside assumptions                               |
+| tests       | `review-tests`       | sonnet, high    | any code, config or script                                                                                                                                       | test gaps, assertions that can't fail, isolation, clocks, CI parity, fakes, the dev-test matrix and its scenario                             |
+| infra       | `review-infra`       | fable, high     | the infra triggers below                                                                                                                                         | blast radius, IAM and SCPs, cost and quotas, deploy order and rollback, workflows, dev slots and the bot, Lambda wiring, the synth pass      |
+| shell       | `review-shell`       | opus, high      | `*.sh`, `.claude/`, `CLAUDE.md`, `tools/`, `scripts/board/`, `scripts/src/{lane,board,mailroom,gate,claude-edit}/`; a doc adding or changing an operator command | portability, fail-open checks, file modes, guard bypass, the Mac trust boundary, container safety, operator commands, CLI footguns           |
+| UI          | `review-ui`          | sonnet, high    | `app/`; `packages/shared` when it changes what renders                                                                                                           | the headless pass, first-open state, focus, input size, probe points                                                                         |
+| extension   | `review-extension`   | opus, high      | `extension/`                                                                                                                                                     | research before fixing, the WebKit quirks, the wire contract                                                                                 |
+| fix recheck | `review-fixes`       | opus, high      | rounds 2 and later; a dev fix; a rebase that resolved conflicts                                                                                                  | fix closed, fix regressions, sibling call sites, drop reasons                                                                                |
 
 **Infra triggers** — anything that can change a deploy, a dev slot or a monthly bill:
 
@@ -42,7 +42,7 @@ commit, it behaves as before (and says what it left to the other lenses).
 - an `app/` change adding an `/api` call at load (the BFF's reserved concurrency), and a devcheck scenario that adds
   load against the kill thresholds (`docs/ops/CI-BOT.md` → _What's capped_, _Kill switch_);
 - `docs/arch/INFRA.md`, `docs/ops/CI-BOT.md`, and any deploy, slot, lock or approval rule, the review's lens and round
-  rules included wherever they are stated;
+  rules included wherever they are stated, and `scripts/src/claude-edit/` (the code that holds the agent-rule approval);
 - on a risk-class branch (_A risk class_, below), any `lambdas/` or `packages/shared` code.
 
 **A risk class** is judged at the lens pick (_Picking lenses_) and recorded with it in `localNotes/decisions.md`; on
@@ -82,7 +82,14 @@ What each touched package still brings, as before:
 
 `git diff --name-only origin/main...HEAD` against the table and the infra triggers; when unsure, add the lens. The
 pick goes in `localNotes/decisions.md`. The triggered lenses are a floor: a kickoff or a relay can add lenses or
-rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_ 1).
+rechecks, never remove one (the one exception, a lens that couldn't run: _Merge_ 1). A pending
+`localNotes/claude-edit-<n>.patch` (`docs/ops/HUB.md` → _Agent-rule edits_) is part of the diff: its paths count
+here, each lens's prompt names it to read as if applied. A patch that is new or changed after its review (an n+1
+after a refusal, a change the user asked for, a rebase that skipped the hub's commit, a fix pass) gets
+`review-fixes` and `review-shell` on the patch-to-patch diff before the ask, plus each lens this section picks for the
+changed text (an approval rule's: infra), whatever the last round found: a patch is never a commit range, so no
+other recheck reads it. The lane keeps the old patch beside the new one; each prompt names both files as its range
+(it stands in for `review-fixes`' commit range), and a patch first written after the review is read whole.
 
 - **Docs only** — `code-reviewer` alone; plus shell if an operator command changed, infra if a deploy, slot, lock or
   approval rule changed.
@@ -111,7 +118,9 @@ Run `git fetch` first. All of a round's lenses go out in one message. Each promp
 risk class). A session that started before an agent file existed, or whose checkout lacks it, runs a general-purpose
 agent told to Read the lens file from the lane's own checkout and follow it, on the file's model and effort (set on the launch), told in words that
 it is read-only and given the container rule — read-only by instruction only, an accepted residual. Nothing moves a
-lens below its file's model or effort. A branch that edits a lens file is reviewed by that lens as the branch wrote it: say so in the round record.
+lens below its file's model or effort. A branch that edits a lens file: outside a lane that lens runs as the branch wrote it; in a lane the edit is a
+pending patch (`docs/ops/HUB.md` → _Agent-rule edits_), so it runs as main wrote it, with the patch named in its
+prompt. Say which in the round record.
 
 **Effort stays at `high`** (the rule's home is `CLAUDE.md` → _Claude behavior_): every lens file pins `effort: high`
 or lower, and going above is proposed to the hub with the numbers that show it, never raised in place.
@@ -236,7 +245,8 @@ back, or an infra-kind dev defect on a branch infra never read, is a trigger gap
   `lens-gap: <lens> <kind> — <line>` per gap in its `[pr-open]`.
 - **The hub** keeps the ledger, `/workspace/localNotes/review-gaps.md` (`docs/ops/HUB.md` → _The hub's duties_). A
   second gap of the same lens and kind becomes a follow-up to widen that lens's checklist — an edit to
-  `.claude/agents/`, so it needs the maintainer's go in that lane's pane.
+  `.claude/agents/`, so it goes as a patch the hub applies on the maintainer's go (`docs/ops/HUB.md` →
+  _Agent-rule edits_).
 - The archived lane reports are the backup if the ledger is lost.
 
 ## The round record

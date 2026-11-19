@@ -6,8 +6,10 @@ paths:
 
 # Editing the agent rules: `CLAUDE.md` and `.claude/`
 
-- **The user's go, in this pane.** Any edit here needs the user's go typed in the acting session's own pane — a hub
-  relay never covers it (`docs/ops/HUB.md` → _Approval_).
+- **A lane never edits these files**: it writes a patch and asks, and the hub applies it on the user's go typed in
+  the hub's pane; no relay covers it. A session outside a lane, other than the hub (its own rule changes go as a
+  lane), takes the go typed in its own pane (CLAUDE.md → _Approval_; the steps: `docs/ops/HUB.md` → _Agent-rule
+  edits_).
 - **One home per fact.** Root `CLAUDE.md` holds what every session needs every time, above all the safety rules
   (the COI command rule, `.secrets/`, hard-blocked git, MCP write approval). Phase detail lives in
   `docs/ops/FEATURE-WORKFLOW.md`; edit-time detail in a path-scoped file here. A rule here loads only when a
@@ -22,7 +24,8 @@ paths:
 - **Kill-shape text goes through Write/Edit only.** A fixture or rule quoting the COI command rule's shapes, or the
   force-push and force-delete words the hooks match, is written with the Write or Edit tool, never echoed in a Bash
   line (CLAUDE.md → _Commands_).
-- **`.claude/settings.json` and `settings.local.json` are read-only mounts** in the container; a hook registration
-  changes from the Mac (`docs/ops/COI-SANDBOX.md`). A new hook reaches only sessions started after it is registered.
+- **`.claude/settings.json` and `settings.local.json` are read-only mounts** in `/workspace`; a hook registration
+  changes from the Mac (`docs/ops/COI-SANDBOX.md`). A worktree's copies are ordinary tracked files, so a patch can
+  change them: its ask says so. A new hook reaches only sessions started after it is registered.
 - `.claude/**` also matches `.claude/worktrees/**`, so a session in `/workspace` (the hub) loads this file when it
-  reads any lane's files: noise, not a rule change.
+  reads any lane's files: noise, except when the hub applies a lane's patch (first bullet).

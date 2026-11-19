@@ -11,8 +11,9 @@ The rule — no phone pings, no asking in the pane, every need as `[ask-maintain
 as `[info]` — and its message shapes live in `docs/ops/HUB.md` → _Messages_, _Checkpoints_. What it means here: in a
 lane, "ask the user", "tell the user" and "hand the user" anywhere in the docs mean an `[ask-maintainer]` to the
 hub, with the options and the lane's pick or the exact one-line Mac command; the answer comes back as `[relay]`.
-Which hub messages count as the user's approval: `docs/ops/HUB.md` → _Approval_; for a go only the pane can give,
-the `[ask-maintainer]` says "needs your go typed in `<branch>`'s pane".
+Which hub messages count as the user's approval, and where a go no relay can give is typed — the hub's pane for a
+`CLAUDE.md` / `.claude/` edit, which the lane sends as a patch and never makes itself; `<branch>`'s pane for the
+rest: `docs/ops/HUB.md` → _Approval_.
 
 ## Two modes
 
@@ -126,10 +127,13 @@ hub message (the checkpoints stay).
 
 7. **Ready for dev** — once the review has stopped with no serious finding open (or the stop-and-ask is answered),
    every picked lens ran, and nothing is held open (`docs/ops/REVIEW.md` → _Merge_ 1 and 5): committed on the feature branch (one commit after the build, one
-   per round's fixes), `gate:fast` green, PR body current.
+   per round's fixes), `gate:fast` green, PR body current. An agent-rule patch is asked for here, before phase 8
+   (`docs/ops/HUB.md` → _Agent-rule edits_).
 8. **Dev test** — first make sure the branch sits on the latest `origin/main`; if main moved, read the merged PRs and
    rebase (CLAUDE.md → _Claude behavior_), then re-run the gate (and the recheck, after a rebase that resolved
-   conflicts: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_). Then a green
+   conflicts: `docs/ops/REVIEW.md` → _After a dev fix or a rebase_; a conflict in the hub's agent-rule commit:
+   `docs/ops/HUB.md` → _Agent-rule edits_). An agent-rule patch that turns up now is asked for at once, or, once
+   the lane holds a dev lock, after the dev run ends (same section). Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
    the lock, a green one proves nothing about dev.
    - **Before the first `pnpm bot push`, scan for publication.** The repo is public, so a push publishes; an amend
@@ -179,7 +183,8 @@ hub message (the checkpoints stay).
    scenario's row likewise (_Other scenarios (regression)_) — a row the report shows `fail` or `skipped` is untested
    (a `deferred` slow row counts like off dev, with `ios-standalone`'s caveat: `docs/ops/DEV-CHECK.md` → _Slow
    tier_), whatever the status line says. Autonomous: the all-clear is the green full run with every row so.
-10. **PR** — on the all-clear, scan the PR title, body and the report against `docs/ops/PUBLIC-CONTENT.md`, then
+10. **PR** — a pending agent-rule patch blocks it, and the hub verifies the branch's agent-rule commits
+    (`docs/ops/HUB.md` → _Agent-rule edits_). On the all-clear, scan the PR title, body and the report against `docs/ops/PUBLIC-CONTENT.md`, then
     `pnpm bot lock release` (**→ hub:** `[lock]` released), `pnpm bot push`, then `pnpm mailroom open-pr`
     (`docs/ops/MAILROOM.md` → _Using it_; **→ hub:** `[pr-open]` with the URL, or `[pr-ready]` when the mailroom was
     unreachable). A push to an open PR after a rebase is `pnpm bot push --after-rebase` (a `.github/workflows/`
