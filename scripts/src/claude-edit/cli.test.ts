@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { usageKeys } from '../bot/help.ts';
 import { FLAGS, USAGE, main } from './cli.ts';
-import { DIFF_FLAGS, EMPTY_TREE, GIT_PRE, hardenedEnv } from './git.ts';
+import { DIFF_FLAGS, EMPTY_TREE, GIT_PRE, MERGE_FLAGS, hardenedEnv } from './git.ts';
 import type { Git } from './git.ts';
 import { Refusal, Stuck } from './rules.ts';
 import type { Deps } from './steps.ts';
@@ -76,20 +76,53 @@ describe('claude-edit cli', () => {
   });
 });
 
+// An exact snapshot: dropping or changing any pin fails here. Which pins change behaviour, each with its control, is
+// in steps.test.ts (attributes, hooks, merge.default, replace objects); the rest can't change plumbing output by
+// construction (safe-charset paths read with -z, fixed prefixes) and are pinned so a git upgrade can't make them.
 describe('the hardened git', () => {
-  it('pins attributes, hooks, external diff and the diff shape before every subcommand', () => {
-    expect(GIT_PRE[0]).toBe(`--attr-source=${EMPTY_TREE}`);
-    for (const kv of [
-      'core.attributesFile=/dev/null',
-      'core.hooksPath=/dev/null',
-      'core.fsmonitor=false',
-      'diff.external=',
-      'diff.noprefix=false',
-      'core.autocrlf=false',
-    ])
-      expect(GIT_PRE[GIT_PRE.indexOf(kv) - 1]).toBe('-c');
-    for (const f of ['--no-ext-diff', '--no-textconv', '--no-renames', '--full-index', '--binary'])
-      expect(DIFF_FLAGS).toContain(f);
+  it('pins attributes, hooks, external diff, the diff shape and the merge before every subcommand', () => {
+    expect(GIT_PRE).toEqual([
+      `--attr-source=${EMPTY_TREE}`,
+      ...[
+        'core.attributesFile=/dev/null',
+        'core.hooksPath=/dev/null',
+        'core.fsmonitor=false',
+        'core.autocrlf=false',
+        'core.safecrlf=false',
+        'core.eol=lf',
+        'core.quotePath=false',
+        'core.whitespace=',
+        'apply.whitespace=nowarn',
+        'apply.ignoreWhitespace=no',
+        'diff.noprefix=false',
+        'diff.mnemonicPrefix=false',
+        'diff.relative=false',
+        'diff.suppressBlankEmpty=false',
+        'diff.external=',
+        'merge.default=text',
+      ].flatMap((kv) => ['-c', kv]),
+    ]);
+    expect(DIFF_FLAGS).toEqual([
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-renames',
+      '--no-color',
+      '--full-index',
+      '--binary',
+      '--inter-hunk-context=0',
+      '--diff-algorithm=myers',
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
+      '-O/dev/null',
+    ]);
+    expect(MERGE_FLAGS).toEqual([
+      '--write-tree',
+      '--no-messages',
+      '-X',
+      'no-renames',
+      '-X',
+      'diff-algorithm=histogram',
+    ]);
   });
 });
 
@@ -113,6 +146,7 @@ describe('hardenedEnv', () => {
       GIT_ATTR_NOSYSTEM: '1',
       GIT_TERMINAL_PROMPT: '0',
       GIT_OPTIONAL_LOCKS: '0',
+      GIT_NO_REPLACE_OBJECTS: '1',
     });
   });
 });

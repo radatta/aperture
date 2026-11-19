@@ -10,7 +10,6 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
-  readFileSync,
   readSync,
   realpathSync,
   rmSync,
@@ -19,10 +18,11 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Git } from './git.ts';
-import { DIFF_FLAGS } from './git.ts';
+import { DIFF_FLAGS, MERGE_FLAGS } from './git.ts';
 import {
   BRANCH,
   Refusal,
+  approvedRows,
   SHA,
   Stuck,
   caseTwins,
@@ -30,6 +30,7 @@ import {
   decodeStrict,
   extractDiff,
   flagsFor,
+  hiddenIn,
   judgeEntries,
   lastShownFile,
   lineCount,
@@ -42,7 +43,6 @@ import {
   safePath,
   showingFile,
   showingNumber,
-  unapproved,
   wasShown,
 } from './rules.ts';
 import type { Entry, Row } from './rules.ts';
@@ -58,19 +58,41 @@ export interface Deps {
 
 const PATHS = [':(icase)CLAUDE.md', ':(icase).claude'];
 const MAX_PATCH = 1 << 20;
+const MAX_SHOWING = 4 << 20;
+const MAX_LEDGER = 16 << 20;
+const MAX_ATTRS = 64 << 10;
 export const ledgerPath = (d: Deps) => join(d.main, 'localNotes', 'claude-edits.jsonl');
 const SHOWINGS = ['localNotes', 'claude-edits'];
 export const showingPath = (d: Deps, branch: string, tree: string) =>
   join(d.main, ...SHOWINGS, showingFile(branch, tree));
 const sha256 = (s: string | Buffer) => createHash('sha256').update(s).digest('hex');
 
-function readRows(d: Deps): Row[] {
+// A file read once through one descriptor: no symlink, no FIFO or device, at most `max` bytes. Null when missing.
+export function readSmall(file: string, max: number): Buffer | null {
+  let fd: number;
   try {
-    return parseLedger(readFileSync(ledgerPath(d), 'utf8'));
-  } catch {
-    return [];
+    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Refusal(`${file} is not a regular file`);
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new Refusal(`${file} is not a regular file`);
+    const over = () => new Refusal(`${file} is over ${max} bytes`);
+    if (st.size > max) throw over();
+    const buf = Buffer.alloc(max + 1);
+    let n = 0;
+    for (let r; n <= max && (r = readSync(fd, buf, n, max + 1 - n, null)) > 0;) n += r;
+    if (n > max) throw over();
+    return buf.subarray(0, n);
+  } finally {
+    closeSync(fd);
   }
 }
+
+const readRows = (d: Deps): Row[] =>
+  parseLedger(readSmall(ledgerPath(d), MAX_LEDGER)?.toString('utf8') ?? '');
 const addRow = (d: Deps, r: Omit<Row, 't'>) =>
   appendFileSync(ledgerPath(d), JSON.stringify({ t: d.now().toISOString(), ...r }) + '\n');
 
@@ -94,7 +116,7 @@ function mainOnly(d: Deps, cmd: string) {
 function worktree(d: Deps, branch: string, offBranch: typeof Refusal = Refusal): string {
   if (!BRANCH.test(branch)) throw new Refusal(`bad branch name "${branch}"`);
   const w = join(d.main, '.claude', 'worktrees', branch);
-  const notOwn = () => new Refusal(`${w} is not a worktree of its own`);
+  const notOwn = () => new Refusal(`${w} is not its own worktree`);
   if (!real(w)) throw notOwn();
   const top = d.git.exec(['rev-parse', '--show-toplevel'], { cwd: w });
   if (top.status !== 0 || real(top.stdout.toString().trim()) !== real(w)) throw notOwn();
@@ -108,17 +130,24 @@ function worktree(d: Deps, branch: string, offBranch: typeof Refusal = Refusal):
   const head = d.git.exec(['symbolic-ref', '--short', 'HEAD'], { cwd: w });
   if (head.status !== 0 || head.stdout.toString().trim() !== branch)
     throw new offBranch(`${w} is not on ${branch}`);
-  // info/attributes (the worktree's and the common one) outranks --attr-source: it must be missing or empty.
-  for (const at of [abs('--git-path', 'info/attributes'), join(common, 'info', 'attributes')]) {
-    let body = '';
-    try {
-      body = readFileSync(at, 'utf8');
-    } catch {
-      // missing is fine
-    }
-    if (body.trim()) throw new Refusal(`${at} is not empty`);
-  }
+  repoPlain(d, w);
   return w;
+}
+
+// What no -c pin reaches: info/attributes (the worktree's and the common one) outranks --attr-source, info/grafts
+// rewrites parents, a shallow clone hides them. Each must be missing or empty.
+function repoPlain(d: Deps, cwd: string) {
+  const abs = (...a: string[]) => d.git.out(['rev-parse', '--path-format=absolute', ...a], { cwd });
+  const common = abs('--git-common-dir');
+  const files = [
+    abs('--git-path', 'info/attributes'),
+    join(common, 'info', 'attributes'),
+    join(common, 'info', 'grafts'),
+  ];
+  for (const f of files)
+    if (readSmall(f, MAX_ATTRS)?.toString('utf8').trim()) throw new Refusal(`${f} is not empty`);
+  if (d.git.out(['rev-parse', '--is-shallow-repository'], { cwd }) !== 'false')
+    throw new Refusal(`${cwd} is a shallow clone`);
 }
 
 // No staged change anywhere, no unstaged one under the agent-rule paths. `diff` refreshes the stat cache in memory
@@ -141,24 +170,9 @@ function withScratch<T>(fn: (index: string) => T): T {
 
 // The lane's patch, read once through one descriptor: no symlink, no FIFO or device, at most 1 MiB.
 function readPatch(file: string): Buffer {
-  let fd: number;
-  try {
-    fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  } catch {
-    throw new Refusal(`${file} is not a regular file`);
-  }
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile()) throw new Refusal(`${file} is not a regular file`);
-    if (st.size > MAX_PATCH) throw new Refusal(`${file} is over 1 MiB`);
-    const buf = Buffer.alloc(MAX_PATCH + 1);
-    let n = 0;
-    for (let r; n <= MAX_PATCH && (r = readSync(fd, buf, n, MAX_PATCH + 1 - n, null)) > 0;) n += r;
-    if (n > MAX_PATCH) throw new Refusal(`${file} is over 1 MiB`);
-    return buf.subarray(0, n);
-  } finally {
-    closeSync(fd);
-  }
+  const b = readSmall(file, MAX_PATCH);
+  if (!b) throw new Refusal(`${file} is not a regular file`);
+  return b;
 }
 
 // T: base B with the patch applied, in a scratch index (the worktree's own index is never touched).
@@ -184,18 +198,9 @@ function treeFromText(d: Deps, w: string, base: string, text: string): string | 
   });
 }
 
-// The diff git derives from the two objects: what is shown, staged, backed out and patch-id'd.
+// The diff git derives from the two objects: what is shown, staged and backed out.
 const objectDiff = (d: Deps, w: string, from: string, to: string) =>
   d.git.raw(['diff-tree', '-p', '-r', ...DIFF_FLAGS, '-U3', from, to, '--'], { cwd: w });
-
-// At -U3: the context pins where a line sits, so the same line moved to another section is another patch. A clean
-// rebase keeps it; one that changes a context line makes the lane send n+1.
-export function patchId(d: Deps, cwd: string, from: string, to: string): string {
-  const diff = objectDiff(d, cwd, from, to);
-  const id = d.git.out(['patch-id', '--verbatim'], { cwd, input: diff }).split(' ')[0] ?? '';
-  if (!SHA.test(id)) throw new Refusal(`no patch-id for ${from}..${to}`);
-  return id;
-}
 
 // Every check on B..T that check and stage both run (stage never trusts the ledger for them). Returns what the
 // showing prints; `exec` is the --exec list (check) or every new 100755 file (stage, which shows nothing new).
@@ -224,8 +229,10 @@ function judge(d: Deps, w: string, base: string, tree: string, exec: string[] | 
   if (problems.length) throw new Refusal(problems.join('\n'));
   const raw = objectDiff(d, w, base, tree);
   const text = decodeStrict(raw);
-  const hidden = charProblems(text);
-  if (hidden.length) throw new Refusal(`hidden characters: ${hidden.slice(0, 10).join(', ')}`);
+  // Hidden characters the patch adds refuse; ones already in B (context, removed lines) are told.
+  const hidden = hiddenIn(text);
+  if (hidden.added.length)
+    throw new Refusal(`hidden characters on added lines: ${hidden.added.slice(0, 10).join(', ')}`);
   // The round trip: the shown text applied to B must give T, or some config shaped the text.
   const back = treeFromText(d, w, base, text);
   if (back !== tree)
@@ -234,7 +241,15 @@ function judge(d: Deps, w: string, base: string, tree: string, exec: string[] | 
     const e = entries.find((x) => x.path === n.path);
     return `${e?.status ?? '?'} ${n.path} (+${n.added} -${n.deleted})`;
   });
-  return { raw, text, files, flags: flagsFor(entries) };
+  const flags = flagsFor(entries);
+  if (hidden.other.length)
+    flags.push(
+      `hidden characters on lines this patch does not add: ${hidden.other.slice(0, 5).join(', ')}`,
+    );
+  // Never the opener itself in the flag: it would open a comment in the showing file.
+  if (text.split('\n').some((l) => l.startsWith('+') && l.includes('<!--')))
+    flags.push('an HTML comment opener on an added line');
+  return { raw, text, files, flags };
 }
 
 export function check(d: Deps, a: { branch: string; n: number; exec: string[] }): number {
@@ -271,6 +286,8 @@ export function check(d: Deps, a: { branch: string; n: number; exec: string[] })
     return 0;
   }
   const md = renderFile(s);
+  if (Buffer.byteLength(md) > MAX_SHOWING)
+    throw new Refusal(`the showing file would be over ${MAX_SHOWING} bytes`);
   mkdirSync(join(d.main, ...SHOWINGS), { recursive: true });
   writeFileSync(showingPath(d, a.branch, tree), md);
   const file = sha256(md);
@@ -287,12 +304,9 @@ function shas(base: string, tree: string) {
 // The showing file the user read: byte for byte the one check last wrote for this B and T, its diff exactly B..T.
 function showingHolds(d: Deps, branch: string, base: string, tree: string, raw: Buffer) {
   const again = `run check and show it again`;
-  let md: string;
-  try {
-    md = readFileSync(showingPath(d, branch, tree), 'utf8');
-  } catch {
-    throw new Refusal(`no showing file for T ${tree}: ${again}`);
-  }
+  const buf = readSmall(showingPath(d, branch, tree), MAX_SHOWING);
+  if (!buf) throw new Refusal(`no showing file for T ${tree}: ${again}`);
+  const md = buf.toString('utf8');
   if (sha256(md) !== lastShownFile(readRows(d), branch, base, tree))
     throw new Refusal(`the showing file changed since check wrote it: ${again}`);
   if (extractDiff(md) !== raw.toString('utf8'))
@@ -317,20 +331,28 @@ export function stage(
   const { raw } = judge(d, w, a.base, a.tree, null);
   showingHolds(d, a.branch, a.base, a.tree, raw);
   const before = d.git.out(['write-tree'], o);
-  // From here the lane's index may hold part of T: every failure backs out to `before`, or is Stuck.
+  const others = untrackedNames(d, w);
+  // From here the lane's index and files may hold part of T: every failure backs out to `before`, or is Stuck.
   let got: string | null = null;
+  let err: string;
   try {
     const r = d.git.exec(['apply', '--index', '-'], { ...o, input: raw });
+    err = r.stderr;
     if (r.status === 0) got = d.git.out(['write-tree'], o);
-  } catch {
-    got = null;
+  } catch (e) {
+    err = e instanceof Error ? e.message : String(e);
   }
   if (got !== a.tree) {
+    const why = err ? ` (${err})` : '';
+    if (settled(d, w, before, others))
+      throw new Refusal(`apply did not give T${why}: nothing changed`);
     const now = d.git.exec(['write-tree'], o);
     if (now.status === 0 && now.stdout.toString().trim() === before)
-      throw new Refusal(`apply did not give T: nothing changed`);
-    backOut(d, w, raw, before);
-    throw new Refusal(`staged ${got ?? 'nothing whole'}, not T: backed out, nothing changed`);
+      throw new Stuck(
+        `apply failed and left files changed in ${w}${why}: needs a person, no reset`,
+      );
+    backOut(d, w, raw, before, others);
+    throw new Refusal(`staged ${got ?? 'nothing whole'}, not T${why}: backed out, nothing changed`);
   }
   const q = (s: string) => `'${s}'`;
   d.log(
@@ -348,14 +370,32 @@ export function stage(
   return 0;
 }
 
+// Every untracked or ignored name under the agent-rule paths.
+const untrackedNames = (d: Deps, w: string) =>
+  d.git.out(['ls-files', '--others', '-z', '--', ...PATHS], { cwd: w });
+
+// The lane's worktree is back where it was: the index is `tree`, no file under the paths differs from it, and the
+// untracked names are the same.
+function settled(d: Deps, w: string, tree: string, others: string): boolean {
+  const o = { cwd: w };
+  try {
+    const t = d.git.exec(['write-tree'], o);
+    if (t.status !== 0 || t.stdout.toString().trim() !== tree) return false;
+    if (!d.git.ok(['diff', '--quiet', '--no-ext-diff', '--no-textconv', '--', ...PATHS], o))
+      return false;
+    return untrackedNames(d, w) === others;
+  } catch {
+    return false;
+  }
+}
+
 // The reverse apply of B..T, checked back to `to`; Stuck when it can't be.
-function backOut(d: Deps, w: string, raw: Buffer, to: string) {
+function backOut(d: Deps, w: string, raw: Buffer, to: string, others: string) {
   const o = { cwd: w };
   const ok = (() => {
     try {
       const r = d.git.exec(['apply', '--index', '-R', '-'], { ...o, input: raw });
-      const t = d.git.exec(['write-tree'], o);
-      return r.status === 0 && t.status === 0 && t.stdout.toString().trim() === to;
+      return r.status === 0 && settled(d, w, to, others);
     } catch {
       return false;
     }
@@ -374,7 +414,7 @@ export function unstage(d: Deps, a: { branch: string; base: string; tree: string
   if (d.git.out(['write-tree'], o) !== a.tree)
     throw new Refusal(`the index is not T: nothing to unstage`);
   const raw = objectDiff(d, w, a.base, a.tree);
-  backOut(d, w, raw, d.git.out(['rev-parse', `${a.base}^{tree}`], o));
+  backOut(d, w, raw, d.git.out(['rev-parse', `${a.base}^{tree}`], o), untrackedNames(d, w));
   d.log(`unstaged T ${a.tree} in ${w}: the index is B again`);
   return 0;
 }
@@ -397,7 +437,12 @@ export function record(d: Deps, a: { branch: string; base: string; tree: string 
     );
   // The commit is T on B: from here a failure leaves a commit with no row, which needs a person.
   try {
-    const id = patchId(d, w, a.base, head);
+    // The approved commit pinned, so gc keeps it for verify's replay. Named by its sha: a rerun is a no-op and a
+    // moved ref is put back.
+    const pin = `refs/claude-edits/${a.branch}/${head}`;
+    d.git.out(['update-ref', pin, head], { cwd: d.main });
+    if (d.git.out(['rev-parse', '--verify', pin], { cwd: d.main }) !== head)
+      throw new Error(`${pin} does not point at ${head}`);
     const n =
       [...rows]
         .reverse()
@@ -410,10 +455,9 @@ export function record(d: Deps, a: { branch: string; base: string; tree: string 
         base: a.base,
         tree: a.tree,
         commit: head,
-        patchId: id,
       });
     d.log(
-      `recorded ${a.branch} claude-edit-${n}: B ${a.base} T ${a.tree} commit ${head} patch-id ${id}`,
+      `recorded ${a.branch} claude-edit-${n}: B ${a.base} T ${a.tree} commit ${head} pinned ${pin}`,
     );
   } catch (e) {
     throw new Stuck(
@@ -423,13 +467,48 @@ export function record(d: Deps, a: { branch: string; base: string; tree: string 
   return 0;
 }
 
-// Every commit on origin/<branch> past origin/main that touches CLAUDE.md or .claude/ must carry an applied
-// patch-id for that branch. Run after `git fetch origin`.
+const parentsOf = (d: Deps, sha: string): string[] | null => {
+  const r = d.git.exec(['rev-list', '--parents', '-n', '1', sha], { cwd: d.main });
+  return r.status === 0 ? r.stdout.toString().trim().split(' ').slice(1) : null;
+};
+
+// git's replay of approved commit `a` onto `parent`, the way a rebase makes it: the tree, or null on a conflict.
+// A non-match leaves unreachable loose objects in main's .git; gc prunes them.
+function replay(d: Deps, a: Row, parent: string): string | null {
+  const args = ['merge-tree', ...MERGE_FLAGS, `--merge-base=${a.base}`, parent, a.commit!];
+  const r = d.git.exec(args, { cwd: d.main });
+  if (r.status === 1) return null;
+  if (r.status !== 0) throw new Refusal(`git merge-tree failed: ${r.stderr || `exit ${r.status}`}`);
+  const t = r.stdout.toString('utf8').split('\n')[0] ?? '';
+  return SHA.test(t) ? t : null;
+}
+
+// What a commit changes, as `M path` items; a name the showing couldn't print is quoted.
+function changed(d: Deps, parent: string, c: string): { status: string; path: string }[] {
+  const z = d.git
+    .raw(['diff-tree', '-r', '-z', '--no-renames', '--name-status', parent, c, '--'], {
+      cwd: d.main,
+    })
+    .toString('utf8')
+    .split('\0');
+  const out: { status: string; path: string }[] = [];
+  for (let i = 0; i + 1 < z.length; i += 2) {
+    const p = z[i + 1]!;
+    out.push({ status: z[i]!, path: safePath(p) ? p : JSON.stringify(p) });
+  }
+  return out;
+}
+
+// Every commit on origin/<branch> past origin/main that touches CLAUDE.md or .claude/ must be an approved commit
+// (one the hub recorded for this branch) or git's clean replay of one onto the commit's own parent, whole tree
+// equal: a clean rebase passes, a moved, altered, hand-merged or mixed edit doesn't. One approval covers one
+// commit. Run after `git fetch origin`.
 export function verify(d: Deps, a: { branch: string }): number {
   mainOnly(d, 'verify');
   const b = a.branch;
   if (!BRANCH.test(b)) throw new Refusal(`bad branch name "${b}": claude-edit can't approve it`);
   const o = { cwd: d.main };
+  repoPlain(d, d.main);
   const mainSha = d.git.out(['rev-parse', '--verify', 'refs/remotes/origin/main'], o);
   const ref = `refs/remotes/origin/${b}`;
   const r = d.git.exec(['rev-parse', '--verify', ref], o);
@@ -440,19 +519,70 @@ export function verify(d: Deps, a: { branch: string }): number {
   const merges = d.git.out(['rev-list', '--merges', range], o);
   if (merges) bad.push(`${b}: merge commits ${merges.split('\n').join(' ')}`);
   const touched = d.git
-    .out(['rev-list', range, '--', ...PATHS], o)
+    .out(['rev-list', '--reverse', range, '--', ...PATHS], o)
     .split('\n')
     .filter(Boolean);
-  const commits = touched.map((sha) => ({ sha, patchId: patchId(d, d.main, `${sha}^`, sha) }));
-  for (const sha of unapproved(commits, readRows(d), b))
-    bad.push(`${b}: ${sha} has no approved patch`);
   d.log(
     `${b}: origin/main ${mainSha.slice(0, 8)}, head ${head.slice(0, 8)}, ${touched.length} agent-rule commit(s)`,
   );
+  // The ledger's approvals, each confirmed by git: the commit exists and is exactly T on B.
+  const approved: Row[] = [];
+  for (const row of approvedRows(readRows(d), b)) {
+    const at = `approved commit ${row.commit!.slice(0, 8)} (claude-edit-${row.n})`;
+    const ps = d.git.ok(['cat-file', '-e', `${row.commit}^{commit}`], o)
+      ? parentsOf(d, row.commit!)
+      : null;
+    if (!ps) d.log(`  ${at} is missing: its pin is gone`);
+    else if (
+      ps.length !== 1 ||
+      ps[0] !== row.base ||
+      d.git.out(['rev-parse', `${row.commit}^{tree}`], o) !== row.tree
+    )
+      d.log(`  ${at} is not T on B: ignored`);
+    else approved.push(row);
+  }
+  const used = new Set<Row>();
+  const match = new Map<string, { row: Row; how: string }>();
+  for (const c of touched) {
+    const row = approved.find((x) => !used.has(x) && x.commit === c);
+    if (!row) continue;
+    used.add(row);
+    match.set(c, { row, how: 'as committed' });
+  }
+  for (const c of touched) {
+    if (match.has(c)) continue;
+    const ps = parentsOf(d, c);
+    if (ps?.length !== 1) continue;
+    const ct = d.git.out(['rev-parse', `${c}^{tree}`], o);
+    const row = approved.find((x) => !used.has(x) && replay(d, x, ps[0]!) === ct);
+    if (!row) continue;
+    used.add(row);
+    match.set(c, { row, how: `replayed onto ${ps[0]!.slice(0, 8)}` });
+  }
+  const files = new Set<string>();
+  const trees: string[] = [];
+  for (const c of touched) {
+    const ch = changed(d, `${c}^`, c);
+    const list = ch.map((x) => `${x.status} ${x.path}`).join('; ');
+    const m = match.get(c);
+    if (!m) {
+      bad.push(
+        `${b}: ${c} is not an approved commit or a clean replay of one (${list}): send n+1, or check an old-rule commit by hand`,
+      );
+      continue;
+    }
+    ch.forEach((x) => files.add(x.path));
+    trees.push(m.row.tree.slice(0, 8));
+    d.log(
+      `  ${c.slice(0, 8)} claude-edit-${m.row.n}, approved T ${m.row.tree.slice(0, 8)}, ${m.how}: ${list}`,
+    );
+  }
   if (bad.length) throw new Refusal(bad.join('\n'));
   d.log(
-    `verify: every agent-rule commit on ${b} has an approved patch. Merge line: --match-head-commit ${head}` +
-      (touched.length ? `; it changes agent rules (${touched.length} commit(s))` : ''),
+    `verify: every agent-rule commit on ${b} is an approved commit or a clean replay of one. Merge line: --match-head-commit ${head}` +
+      (touched.length
+        ? `; changes agent rules: ${[...files].join(', ')}, approved ${trees.join(', ')}`
+        : ''),
   );
   return 0;
 }

@@ -1,9 +1,11 @@
 // End to end on temp repos: a main checkout with a lane worktree at .claude/worktrees/<branch>, driven through the
 // hardened runner exactly as the hub runs it. History is seeded with commit-tree; the hub's commit is `git commit`.
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -15,14 +17,15 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { makeExec, makeGit } from './git.ts';
+import { DIFF_FLAGS, GIT_PRE, makeExec, makeGit } from './git.ts';
 import type { Git, GitExec, GitOpts, GitResult } from './git.ts';
-import { Refusal, Stuck } from './rules.ts';
+import { Refusal, Stuck, renderFile } from './rules.ts';
 import {
   check,
   ledgerPath,
-  patchId,
+  readSmall,
   record,
   showingPath,
   stage,
@@ -42,6 +45,7 @@ const ENV = {
 };
 const sh = (cwd: string, args: string[], input?: string) =>
   execFileSync('git', args, { cwd, env: ENV, input, encoding: 'utf8' }).trim();
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
 let dirs: string[] = [];
 const tmp = (prefix: string) => {
@@ -119,6 +123,14 @@ const wrapped = (
   const real = makeExec();
   return makeGit((args, o) => hook(args, o, real) ?? real(args, o));
 };
+// The hardened git with some pins dropped: the control that shows a pin matters.
+const without = (...kvs: string[]): Git => {
+  const pre = GIT_PRE.filter(
+    (x, i, xs) => !kvs.includes(x) && !(x === '-c' && kvs.includes(xs[i + 1]!)),
+  );
+  expect(pre.length).toBeLessThan(GIT_PRE.length);
+  return makeGit(makeExec(process.env, pre));
+};
 const writePatch = (n: number, body: string | Buffer) =>
   writeFileSync(join(wt, 'localNotes', `claude-edit-${n}.patch`), body);
 const patchFile = (n: number) => join(wt, 'localNotes', `claude-edit-${n}.patch`);
@@ -128,13 +140,18 @@ const stageIt = (base: string, tree: string, d = deps()) =>
   stage(d, { branch: BR, base, tree, message: MSG });
 const commitHub = () => sh(wt, ['-c', 'core.hooksPath=/dev/null', 'commit', '-q', '-m', MSG]);
 const staged = () => sh(wt, ['diff', '--cached', '--name-only']);
-type R = { kind: string; branch: string; patchId?: string; file?: string };
+type R = { kind: string; branch: string; commit?: string; file?: string };
 const rows = (): R[] =>
   readFileSync(ledgerPath(deps()), 'utf8')
     .trim()
     .split('\n')
     .map((l) => JSON.parse(l) as R);
 const checkIt = (n = 1, exec: string[] = [], d = deps()) => check(d, { branch: BR, n, exec });
+const forgeShown = (base: string, tree: string, file?: string) =>
+  appendFileSync(
+    ledgerPath(deps()),
+    JSON.stringify({ t: '', kind: 'shown', branch: BR, n: 1, base, tree, file }) + '\n',
+  );
 
 beforeEach(() => {
   logs = [];
@@ -157,7 +174,7 @@ beforeEach(() => {
 const EDIT = () => udiff('CLAUDE.md', CL0, CL0.replace('line two', 'line TWO'));
 
 describe('check → stage → commit → record → verify', () => {
-  it('shows T, stages exactly T, the printed line commits it, records it and verifies the branch', () => {
+  it('shows T, stages exactly T, the printed line commits it, records and pins it, and verifies the branch', () => {
     writePatch(1, EDIT());
     const base = B();
     expect(checkIt()).toBe(0);
@@ -165,7 +182,9 @@ describe('check → stage → commit → record → verify', () => {
     expect(out).toContain(`B ${base}`);
     expect(out).not.toContain('+line TWO');
     expect(out).toMatch(/^file: <mac-repo>\/localNotes\/claude-edits\/lane-x-[0-9a-f]{8}\.md$/m);
-    expect(readFileSync(showingPath(deps(), BR, shownT()), 'utf8')).toContain('\n+line TWO\n');
+    const f = showingPath(deps(), BR, shownT());
+    expect(readFileSync(f, 'utf8')).toContain('\n+line TWO\n');
+    expect(rows()[0]!.file).toBe(sha256(readFileSync(f, 'utf8')));
     expect(out).toContain('go names: the branch or');
     expect(out).toContain('files: M CLAUDE.md (+1 -1)');
     const tree = shownT();
@@ -188,14 +207,67 @@ describe('check → stage → commit → record → verify', () => {
     expect(spawnSync('bash', ['-c', line], { cwd: wt, env: ENV }).status).toBe(0);
     expect(sh(wt, ['rev-parse', 'HEAD^{tree}'])).toBe(tree);
     expect(sh(wt, ['log', '-1', '--format=%s'])).toBe(MSG);
-    expect(record(deps(), { branch: BR, base, tree })).toBe(0);
-    expect(record(deps(), { branch: BR, base, tree })).toBe(0); // twice: still one applied row
-    expect(rows().map((r) => r.kind)).toEqual(['shown', 'applied']);
     const head = sh(wt, ['rev-parse', 'HEAD']);
+    logs = [];
+    expect(record(deps(), { branch: BR, base, tree })).toBe(0);
+    expect(logs.join('\n')).toContain(`pinned refs/claude-edits/${BR}/${head}`);
+    expect(record(deps(), { branch: BR, base, tree })).toBe(0); // twice: still one applied row, one ref
+    expect(rows().map((r) => r.kind)).toEqual(['shown', 'applied']);
+    expect(
+      sh(main, ['for-each-ref', '--format=%(objectname) %(refname)', 'refs/claude-edits']),
+    ).toBe(`${head} refs/claude-edits/${BR}/${head}`);
     sh(main, ['update-ref', `refs/remotes/origin/${BR}`, head]);
     logs = [];
     expect(verify(deps(), { branch: BR })).toBe(0);
-    expect(logs.join('\n')).toContain(`--match-head-commit ${head}`);
+    const v = logs.join('\n');
+    expect(v).toContain(
+      `${head.slice(0, 8)} claude-edit-1, approved T ${tree.slice(0, 8)}, as committed: M CLAUDE.md`,
+    );
+    expect(v).toContain(
+      `--match-head-commit ${head}; changes agent rules: CLAUDE.md, approved ${tree.slice(0, 8)}`,
+    );
+  });
+
+  it('the printed commit line refuses an extra add, a moved HEAD and a lookalike clone; repo hooks never run', () => {
+    writePatch(1, EDIT());
+    const base = B();
+    checkIt();
+    const tree = shownT();
+    logs = [];
+    stageIt(base, tree);
+    const line = logs.join('\n').split('\n')[2]!;
+    const run = (cwd: string) => spawnSync('bash', ['-c', line], { cwd, env: ENV }).status;
+    // Something staged after stage: the index is not T.
+    writeFileSync(join(wt, 'docs/d.md'), 'extra\n');
+    sh(wt, ['add', 'docs/d.md']);
+    expect(run(wt)).not.toBe(0);
+    expect(B()).toBe(base);
+    sh(wt, ['reset', '-q', '--', 'docs/d.md']);
+    sh(wt, ['checkout', '--', 'docs/d.md']);
+    // HEAD moved to another commit of the same tree.
+    const twin = sh(wt, ['commit-tree', `${base}^{tree}`, '-p', base, '-m', 'twin']);
+    sh(wt, ['update-ref', 'HEAD', twin]);
+    expect(run(wt)).not.toBe(0);
+    expect(B()).toBe(twin);
+    sh(wt, ['update-ref', 'HEAD', base]);
+    // A clone with the same branch, HEAD and index is not the lane's worktree.
+    const clone = tmp('ce-clone-');
+    sh(clone, ['clone', '-q', '--shared', main, '.']);
+    sh(clone, ['switch', '-q', '-c', BR, base]);
+    sh(clone, ['read-tree', tree]);
+    expect(sh(clone, ['write-tree'])).toBe(tree);
+    expect(run(clone)).not.toBe(0);
+    expect(sh(clone, ['rev-parse', 'HEAD'])).toBe(base);
+    // A failing repo pre-commit hook: the line commits anyway.
+    const hook = join(main, '.git', 'hooks', 'pre-commit');
+    mkdirSync(join(hook, '..'), { recursive: true });
+    writeFileSync(hook, '#!/bin/sh\nexit 1\n');
+    chmodSync(hook, 0o755);
+    // The control: a plain commit of the staged T is stopped by that hook.
+    expect(spawnSync('git', ['commit', '-q', '-m', 'x'], { cwd: wt, env: ENV }).status).not.toBe(0);
+    expect(B()).toBe(base);
+    expect(run(wt)).toBe(0);
+    expect(sh(wt, ['rev-parse', 'HEAD^{tree}'])).toBe(tree);
   });
 
   it('a second tree on the branch asks for T8 only, a re-showing of the first one too; a re-check adds no row', () => {
@@ -275,34 +347,74 @@ describe('the showing file stage takes', () => {
     const { base, tree, f } = shown();
     const md = readFileSync(f, 'utf8').replace('+line TWO\n', '+line TWO\n-ALLOW EVERYTHING\n');
     writeFileSync(f, md);
-    const hash = execFileSync('sha256sum', [f], { encoding: 'utf8' }).split(' ')[0];
-    appendFileSync(
-      ledgerPath(deps()),
-      JSON.stringify({ t: '', kind: 'shown', branch: BR, n: 1, base, tree, file: hash }) + '\n',
-    );
+    forgeShown(base, tree, sha256(md));
     expect(() => stageIt(base, tree)).toThrow(/not B\.\.T/);
     expect(staged()).toBe('');
   });
-  it('refuses a missing one, and a message that breaks the commit rule', () => {
+  it('refuses a missing one, a symlinked one, and a message that breaks the commit rule', () => {
     const { base, tree, f } = shown();
     expect(() => stage(deps(), { branch: BR, base, tree, message: 'Bad' })).toThrow(/--message/);
+    const copy = join(tmp('ce-copy-'), 'x.md');
+    writeFileSync(copy, readFileSync(f));
     rmSync(f);
     expect(() => stageIt(base, tree)).toThrow(/no showing file/);
+    symlinkSync(copy, f);
+    expect(() => stageIt(base, tree)).toThrow(/not a regular file/);
+  });
+  it('re-judges B..T itself: a consistent forged row and file for a tree outside the paths refuses', () => {
+    writePatch(1, EDIT());
+    const base = B();
+    checkIt();
+    const idx = join(tmp('ce-idx-'), 'index');
+    const g = (args: string[], input?: string) =>
+      execFileSync('git', args, {
+        cwd: wt,
+        env: { ...ENV, GIT_INDEX_FILE: idx },
+        input,
+        encoding: 'utf8',
+      }).trim();
+    g(['read-tree', base]);
+    g([
+      'update-index',
+      '--cacheinfo',
+      `100644,${g(['hash-object', '-w', '--stdin'], 'EVIL\n')},docs/d.md`,
+    ]);
+    const bad = g(['write-tree']);
+    const text = makeGit()
+      .raw(['diff-tree', '-p', '-r', ...DIFF_FLAGS, '-U3', base, bad, '--'], { cwd: wt })
+      .toString('utf8');
+    const md = renderFile({
+      branch: BR,
+      n: 1,
+      showing: 2,
+      trees: 2,
+      base,
+      tree: bad,
+      files: [],
+      flags: [],
+      untracked: [],
+      text,
+    });
+    writeFileSync(showingPath(deps(), BR, bad), md);
+    forgeShown(base, bad, sha256(md));
+    expect(() => stageIt(base, bad)).toThrow(/outside CLAUDE.md/);
+    expect(staged()).toBe('');
+  });
+  it('refuses a forged row for T = B: the patch changes nothing', () => {
+    const base = B();
+    forgeShown(base, sh(wt, ['rev-parse', `${base}^{tree}`]));
+    expect(() => stageIt(base, sh(wt, ['rev-parse', `${base}^{tree}`]))).toThrow(/changes nothing/);
   });
 });
 
 describe('stage after the apply', () => {
   // The apply succeeds, then the next write-tree on the lane's index lies (or a lock makes it fail).
-  function lying(reverse: 'ok' | 'fails') {
+  function lying(reverse: 'ok' | 'fails' | 'noop') {
     let applied = false;
     return wrapped((args, o, real) => {
-      if (
-        args[0] === 'apply' &&
-        args.includes('--index') &&
-        args.includes('-R') &&
-        reverse === 'fails'
-      )
-        return { status: 1, stdout: Buffer.alloc(0), stderr: 'no' };
+      const rev = args[0] === 'apply' && args.includes('--index') && args.includes('-R');
+      if (rev && reverse === 'fails') return { status: 1, stdout: Buffer.alloc(0), stderr: 'no' };
+      if (rev && reverse === 'noop') return { status: 0, stdout: Buffer.alloc(0), stderr: '' };
       if (args[0] === 'apply' && args.includes('--index') && !args.includes('-R')) {
         applied = true;
         return real(args, o);
@@ -314,18 +426,45 @@ describe('stage after the apply', () => {
       return undefined;
     });
   }
+  const shown = () => {
+    writePatch(1, EDIT());
+    const base = B();
+    checkIt();
+    return { base, tree: shownT() };
+  };
   it('backs out a T it can not confirm and refuses; nothing stays staged', () => {
-    writePatch(1, EDIT());
-    const base = B();
-    checkIt();
-    expect(() => stageIt(base, shownT(), deps({ git: lying('ok') }))).toThrow(/backed out/);
+    const { base, tree } = shown();
+    expect(() => stageIt(base, tree, deps({ git: lying('ok') }))).toThrow(/backed out/);
     expect(staged()).toBe('');
+    expect(readFileSync(join(wt, 'CLAUDE.md'), 'utf8')).toBe(CL0);
   });
-  it('is stuck when the back-out fails too', () => {
-    writePatch(1, EDIT());
-    const base = B();
-    checkIt();
-    expect(() => stageIt(base, shownT(), deps({ git: lying('fails') }))).toThrow(Stuck);
+  it('is stuck when the back-out fails, or reports success but leaves T', () => {
+    const { base, tree } = shown();
+    expect(() => stageIt(base, tree, deps({ git: lying('fails') }))).toThrow(Stuck);
+    sh(wt, ['read-tree', base]);
+    sh(wt, ['checkout', '--', 'CLAUDE.md']);
+    expect(() => stageIt(base, tree, deps({ git: lying('noop') }))).toThrow(Stuck);
+  });
+  // The apply itself fails: `side` is what it left behind.
+  const failing = (side?: () => void) =>
+    wrapped((args) => {
+      if (args[0] !== 'apply' || !args.includes('--index') || args.includes('-R')) return undefined;
+      side?.();
+      return { status: 1, stdout: Buffer.alloc(0), stderr: 'boom' };
+    });
+  it('refuses with git’s words when the apply fails and changed nothing', () => {
+    const { base, tree } = shown();
+    expect(() => stageIt(base, tree, deps({ git: failing() }))).toThrow(
+      /\(boom\): nothing changed/,
+    );
+  });
+  it('is stuck when a failed apply left a file changed or a new file under .claude/', () => {
+    const { base, tree } = shown();
+    const dirty = () => writeFileSync(join(wt, 'CLAUDE.md'), 'half\n');
+    expect(() => stageIt(base, tree, deps({ git: failing(dirty) }))).toThrow(Stuck);
+    sh(wt, ['checkout', '--', 'CLAUDE.md']);
+    const dropped = () => writeFileSync(join(wt, '.claude', 'left.md'), 'x\n');
+    expect(() => stageIt(base, tree, deps({ git: failing(dropped) }))).toThrow(Stuck);
   });
 });
 
@@ -338,9 +477,18 @@ describe('check refuses', () => {
     writePatch(1, udiff('claude.md', null, 'x\n'));
     refuses(/outside CLAUDE.md/);
   });
-  it('two paths that differ only in case', () => {
+  it('upper case in a directory under .claude/, and a .gitattributes', () => {
+    writePatch(1, udiff('.claude/Agents/x.md', null, 'x\n'));
+    refuses(/upper case in a directory name/);
+    writePatch(1, udiff('.claude/.gitattributes', null, '* -diff\n'));
+    refuses(/gitattributes/);
+  });
+  it('two paths that differ only in case, in the patch or already in B', () => {
     writePatch(1, udiff('.claude/rules/R.md', null, 'x\n'));
     refuses(/differ only in case/);
+    seed(wt, { '.Claude/a.md': 'x\n', '.claude/a.md': 'y\n' }, B());
+    writePatch(1, EDIT());
+    refuses(/\.Claude\/a\.md and \.claude\/a\.md differ only in case/);
   });
   it('an exec bit dropped on a guard', () => {
     writePatch(
@@ -368,9 +516,9 @@ describe('check refuses', () => {
   it.each([
     ['zero-width space', '​'],
     ['variation selector', '️'],
-  ])('hidden characters: %s', (_, c) => {
+  ])('hidden characters on an added line: %s', (_, c) => {
     writePatch(1, udiff('CLAUDE.md', CL0, CL0.replace('line two', `line${c} two`)));
-    refuses(/hidden characters/);
+    refuses(/hidden characters on added lines/);
   });
   it('a diff that is not UTF-8', () => {
     writePatch(
@@ -395,16 +543,22 @@ describe('check refuses', () => {
     writePatch(1, udiff('CLAUDE.md', long, null));
     expect(checkIt()).toBe(0);
   });
-  it('a patch file that is a symlink, a FIFO or over 1 MiB', () => {
+  it('a patch file that is a symlink or over 1 MiB; exactly 1 MiB is fine', () => {
     writeFileSync(join(wt, 'localNotes', 'real.patch'), EDIT());
     symlinkSync(join(wt, 'localNotes', 'real.patch'), patchFile(1));
     refuses(/not a regular file/);
     rmSync(patchFile(1));
-    expect(spawnSync('mkfifo', [patchFile(1)]).status).toBe(0);
-    refuses(/not a regular file/);
-    rmSync(patchFile(1));
     writePatch(1, Buffer.alloc((1 << 20) + 1, 0x61));
-    refuses(/over 1 MiB/);
+    refuses(/over 1048576 bytes/);
+    const edit = EDIT();
+    writePatch(1, 'x'.repeat((1 << 20) - edit.length - 1) + '\n' + edit);
+    expect(statSync(patchFile(1)).size).toBe(1 << 20);
+    expect(checkIt()).toBe(0);
+  });
+  it('a ledger that is not a regular file', () => {
+    writePatch(1, EDIT());
+    mkdirSync(ledgerPath(deps()));
+    refuses(/not a regular file/);
   });
   it('an untracked name the showing could not print; a safe one, any case, is listed', () => {
     writePatch(1, EDIT());
@@ -425,27 +579,36 @@ describe('check refuses', () => {
     writeFileSync(join(wt, '.claude/rules/r.md'), 'dirty\n');
     refuses(/unstaged changes/);
   });
-  it('a worktree on another branch, a plain directory, a separate repo, a bad or deploy name', () => {
+  it('a worktree on another branch, a plain directory, a separate repo', () => {
     writePatch(1, EDIT());
     sh(wt, ['switch', '-q', '-c', 'other']);
     refuses(/not on lane-x/);
     const d = deps();
-    expect(() => check(d, { branch: 'nope', n: 1, exec: [] })).toThrow(/not a worktree/);
+    expect(() => check(d, { branch: 'nope', n: 1, exec: [] })).toThrow(/not its own worktree/);
     mkdirSync(join(main, '.claude', 'worktrees', 'plain'));
-    expect(() => check(d, { branch: 'plain', n: 1, exec: [] })).toThrow(/not a worktree/);
+    expect(() => check(d, { branch: 'plain', n: 1, exec: [] })).toThrow(/not its own worktree/);
     const clone = tmp('ce-clone-');
     sh(clone, ['init', '-q', '-b', 'sep']);
     seed(clone, { 'x.md': 'x\n' });
     symlinkSync(clone, join(main, '.claude', 'worktrees', 'sep'));
     expect(() => check(d, { branch: 'sep', n: 1, exec: [] })).toThrow(/not a worktree of/);
-    expect(() => check(d, { branch: '../x', n: 1, exec: [] })).toThrow(/bad branch/);
-    expect(() => check(d, { branch: 'main', n: 1, exec: [] })).toThrow(/bad branch/);
   });
-  it('a non-empty info/attributes', () => {
+  it.each(['../x', 'main', 'dev', 'master', 'HEAD', 'feature/x'])('the branch name %s', (b) =>
+    expect(() => check(deps(), { branch: b, n: 1, exec: [] })).toThrow(/bad branch/),
+  );
+  it('a non-empty or symlinked info/attributes; a whitespace-only one is fine', () => {
     writePatch(1, EDIT());
-    mkdirSync(join(main, '.git', 'info'), { recursive: true });
-    writeFileSync(join(main, '.git', 'info', 'attributes'), '* binary\n');
+    const at = join(main, '.git', 'info', 'attributes');
+    mkdirSync(join(at, '..'), { recursive: true });
+    writeFileSync(at, ' \n\t\n');
+    expect(checkIt()).toBe(0);
+    writeFileSync(at, '* binary\n');
     refuses(/not empty/);
+    rmSync(at);
+    const elsewhere = join(tmp('ce-at-'), 'a');
+    writeFileSync(elsewhere, '');
+    symlinkSync(elsewhere, at);
+    refuses(/not a regular file/);
   });
   it('a showing whose text git did not derive from the objects (the round trip)', () => {
     writePatch(1, EDIT());
@@ -455,6 +618,59 @@ describe('check refuses', () => {
       return { ...r, stdout: Buffer.from(r.stdout.toString().replace('+line TWO', '+line TOO')) };
     });
     expect(() => checkIt(1, [], deps({ git }))).toThrow(/round trip/);
+  });
+});
+
+describe('check tells', () => {
+  it('hidden characters already in B, on a context or a removed line, as a flag', () => {
+    const nb = CL0.replace('line one', 'line one');
+    seed(wt, { 'CLAUDE.md': nb }, B());
+    writePatch(1, udiff('CLAUDE.md', nb, nb.replace('line two', 'line TWO')));
+    checkIt();
+    expect(logs.join('\n')).toMatch(
+      /^flags: hidden characters on lines this patch does not add: line \d+: U\+00A0$/m,
+    );
+    writePatch(1, udiff('CLAUDE.md', nb, nb.replace('line one', 'line one')));
+    logs = [];
+    checkIt();
+    expect(logs.join('\n')).toMatch(/does not add: line \d+: U\+00A0/);
+    writePatch(1, udiff('CLAUDE.md', nb, nb.replace('line two', 'line TWO')));
+    expect(() => checkIt()).toThrow(/hidden characters on added lines/);
+  });
+  it('an added HTML comment opener, and never writes one outside the fence', () => {
+    writePatch(1, udiff('CLAUDE.md', CL0, CL0.replace('line two', 'line two <!-- hidden')));
+    checkIt();
+    expect(logs.join('\n')).toContain('flags: an HTML comment opener on an added line');
+    const md = readFileSync(showingPath(deps(), BR, shownT()), 'utf8');
+    const fenced = md.slice(md.indexOf('```diff'), md.lastIndexOf('```') + 3);
+    expect(md.replace(fenced, '')).not.toContain('<!--');
+  });
+});
+
+describe('readSmall', () => {
+  it('reads up to max bytes, refuses one more, and is null for a missing file', () => {
+    const d = tmp('ce-small-');
+    writeFileSync(join(d, 'ten'), 'x'.repeat(10));
+    writeFileSync(join(d, 'eleven'), 'x'.repeat(11));
+    expect(readSmall(join(d, 'ten'), 10)?.length).toBe(10);
+    expect(() => readSmall(join(d, 'eleven'), 10)).toThrow(/over 10 bytes/);
+    expect(readSmall(join(d, 'none'), 10)).toBeNull();
+    expect(() => readSmall(d, 10)).toThrow(/not a regular file/);
+  });
+  it('refuses a FIFO without blocking (in a child with a timeout, so a regression hangs only it)', () => {
+    const d = tmp('ce-fifo-');
+    const fifo = join(d, 'f');
+    expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+    const script = join(d, 'read.mjs');
+    const steps = fileURLToPath(new URL('./steps.ts', import.meta.url));
+    writeFileSync(
+      script,
+      `import { readSmall } from ${JSON.stringify(steps)};\ntry { readSmall(process.argv[2], 10); process.exit(0); } catch (e) { process.stderr.write(String(e.message)); process.exit(1); }\n`,
+    );
+    const r = spawnSync(process.execPath, [script, fifo], { timeout: 10_000, encoding: 'utf8' });
+    expect(r.signal).toBeNull();
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/not a regular file/);
   });
 });
 
@@ -474,6 +690,10 @@ describe('hostile config', () => {
     sh(main, ['config', 'diff.fake.textconv', fake]);
     sh(main, ['config', 'core.attributesFile', attrs]);
     sh(main, ['config', 'diff.noprefix', 'true']);
+    sh(main, ['config', 'diff.algorithm', 'patience']);
+    sh(main, ['config', 'apply.whitespace', 'fix']);
+    sh(main, ['config', 'core.autocrlf', 'true']);
+    sh(main, ['config', 'merge.default', 'union']);
     writeFileSync(join(wt, '.gitattributes'), '* diff=fake binary\n');
     const home = tmp('ce-home-');
     writeFileSync(join(home, '.gitconfig'), `[diff]\n\texternal = ${fake}\n`);
@@ -495,9 +715,44 @@ describe('hostile config', () => {
     expect(logs.join('\n')).toBe(clean);
     expect(readFileSync(f, 'utf8')).toBe(before);
   });
+  it('--attr-source and core.attributesFile each keep a -diff attribute out of the showing', () => {
+    writePatch(1, EDIT());
+    writeFileSync(join(wt, '.gitattributes'), '* -diff\n');
+    expect(checkIt()).toBe(0);
+    expect(() => checkIt(1, [], deps({ git: without(GIT_PRE[0]!) }))).toThrow(/binary/);
+    rmSync(join(wt, '.gitattributes'));
+    const attrs = join(main, 'attrs');
+    writeFileSync(attrs, '* -diff\n');
+    sh(main, ['config', 'core.attributesFile', attrs]);
+    expect(checkIt()).toBe(0);
+    expect(() => checkIt(1, [], deps({ git: without('core.attributesFile=/dev/null') }))).toThrow(
+      /binary/,
+    );
+  });
+  it('core.hooksPath keeps a repo hook out of record', () => {
+    writePatch(1, EDIT());
+    const base = B();
+    checkIt();
+    const tree = shownT();
+    stageIt(base, tree);
+    commitHub();
+    const pin = `refs/claude-edits/${BR}/${B()}`;
+    const marker = join(main, 'hooked');
+    const hook = join(main, '.git', 'hooks', 'reference-transaction');
+    mkdirSync(join(hook, '..'), { recursive: true });
+    writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`);
+    chmodSync(hook, 0o755);
+    record(deps({ git: without('core.hooksPath=/dev/null') }), { branch: BR, base, tree });
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+    sh(main, ['-c', 'core.hooksPath=/dev/null', 'update-ref', '-d', pin]);
+    record(deps(), { branch: BR, base, tree });
+    expect(existsSync(marker)).toBe(false);
+    expect(sh(main, ['rev-parse', pin])).toBe(B());
+  });
 });
 
-describe('stage and record refuse', () => {
+describe('stage, unstage and record refuse', () => {
   it('a B and T never shown, and a moved HEAD', () => {
     writePatch(1, EDIT());
     const base = B();
@@ -513,7 +768,7 @@ describe('stage and record refuse', () => {
     checkIt();
     writeFileSync(join(wt, 'docs/d.md'), 'later\n');
     sh(wt, ['add', 'docs/d.md']);
-    expect(() => stageIt(base, shownT())).toThrow(Refusal);
+    expect(() => stageIt(base, shownT())).toThrow(/staged changes/);
   });
   function stagedT() {
     writePatch(1, EDIT());
@@ -523,6 +778,12 @@ describe('stage and record refuse', () => {
     stageIt(base, tree);
     return { branch: BR, base, tree };
   }
+  it('unstage takes full shas, and refuses once the commit is made', () => {
+    const a = stagedT();
+    expect(() => unstage(deps(), { ...a, base: a.base.slice(0, 8) })).toThrow(/full shas/);
+    commitHub();
+    expect(() => unstage(deps(), a)).toThrow(/HEAD is not B/);
+  });
   it('record refuses before the commit, and is stuck on a commit that is not exactly T on B', () => {
     const a = stagedT();
     expect(() => record(deps(), a)).toThrow(/still B/);
@@ -531,19 +792,36 @@ describe('stage and record refuse', () => {
     commitHub();
     expect(() => record(deps(), a)).toThrow(Stuck);
   });
-  it('record is stuck on T committed twice over (the right tree, the wrong parent)', () => {
+  it('record is stuck on T committed twice over, or as a two-parent commit', () => {
     const a = stagedT();
     commitHub();
     sh(wt, ['-c', 'core.hooksPath=/dev/null', 'commit', '-q', '--allow-empty', '-m', MSG]);
     expect(() => record(deps(), a)).toThrow(/parents/);
+    const side = sh(wt, ['commit-tree', `${a.base}^{tree}`, '-m', 'side']);
+    sh(wt, [
+      'update-ref',
+      'HEAD',
+      sh(wt, ['commit-tree', a.tree, '-p', a.base, '-p', side, '-m', MSG]),
+    ]);
+    expect(() => record(deps(), a)).toThrow(Stuck);
+    expect(() => record(deps(), a)).toThrow(/parents/);
   });
-  it('record is stuck when the branch moved off, or the patch-id fails, after the commit', () => {
+  it('record refuses a commit of a tree never shown', () => {
+    writePatch(1, EDIT());
+    checkIt();
+    const base = B();
+    seed(wt, { '.claude/rules/r.md': 'by hand\n' }, base);
+    const tree = sh(wt, ['rev-parse', 'HEAD^{tree}']);
+    expect(() => record(deps(), { branch: BR, base, tree })).toThrow(/never shown/);
+  });
+  it('record is stuck when the branch moved off, or the pin fails, after the commit', () => {
     const a = stagedT();
     commitHub();
-    const noId = wrapped((args) =>
-      args[0] === 'patch-id' ? { status: 1, stdout: Buffer.alloc(0), stderr: 'x' } : undefined,
+    const noRef = wrapped((args) =>
+      args[0] === 'update-ref' ? { status: 1, stdout: Buffer.alloc(0), stderr: 'x' } : undefined,
     );
-    expect(() => record(deps({ git: noId }), a)).toThrow(/not recorded/);
+    expect(() => record(deps({ git: noRef }), a)).toThrow(Stuck);
+    expect(() => record(deps({ git: noRef }), a)).toThrow(/not recorded/);
     sh(wt, ['switch', '-q', '-c', 'elsewhere']);
     expect(() => record(deps(), a)).toThrow(Stuck);
   });
@@ -562,10 +840,10 @@ describe('stage and record refuse', () => {
 });
 
 describe('verify', () => {
-  function applied(patch = EDIT()) {
-    writePatch(1, patch);
+  function applied(patch = EDIT(), n = 1) {
+    writePatch(n, patch);
     const base = B();
-    checkIt();
+    checkIt(n);
     const tree = shownT();
     stageIt(base, tree);
     commitHub();
@@ -574,74 +852,250 @@ describe('verify', () => {
   }
   const push = () =>
     sh(main, ['update-ref', `refs/remotes/origin/${BR}`, sh(wt, ['rev-parse', 'HEAD'])]);
+  const ok = () => verify(deps(), { branch: BR });
+  const red = () => expect(ok).toThrow(/not an approved commit or a clean replay/);
   const amendTo = (body: string) => {
     writeFileSync(join(wt, 'CLAUDE.md'), body);
     sh(wt, ['add', 'CLAUDE.md']);
     sh(wt, ['-c', 'core.hooksPath=/dev/null', 'commit', '-q', '--amend', '-m', MSG]);
     push();
   };
-
-  it('fails on a lane commit to .claude/ with no approved patch', () => {
-    applied();
-    seed(wt, { '.claude/rules/r.md': 'sneaky\n' }, sh(wt, ['rev-parse', 'HEAD']));
-    push();
-    expect(() => verify(deps(), { branch: BR })).toThrow(/no approved patch/);
-  });
-  it("fails on a case-variant path, and on another branch's approval of the same patch", () => {
-    const c = seed(wt, { '.CLAUDE/x.md': 'x\n' }, sh(wt, ['rev-parse', 'HEAD']));
-    push();
-    expect(() => verify(deps(), { branch: BR })).toThrow(/no approved patch/);
-    const id = patchId(deps(), wt, `${c}^`, c);
-    appendFileSync(
-      ledgerPath(deps()),
-      JSON.stringify({
-        t: '',
-        kind: 'applied',
-        branch: 'other',
-        n: 1,
-        base: 'x',
-        tree: 'y',
-        commit: c,
-        patchId: id,
-      }) + '\n',
-    );
-    expect(() => verify(deps(), { branch: BR })).toThrow(/no approved patch/);
-  });
-  it('refuses a bad branch name and a branch not fetched', () => {
-    expect(() => verify(deps(), { branch: 'feature/x' })).toThrow(/bad branch/);
-    expect(() => verify(deps(), { branch: BR })).toThrow(/fetch first/);
-  });
-  it('an indentation-only amend changes the patch-id', () => {
-    applied();
-    amendTo(CL0.replace('line two', '  line TWO'));
-    expect(() => verify(deps(), { branch: BR })).toThrow(/no approved patch/);
-  });
-  it('the approved line moved to another place changes the patch-id', () => {
-    applied(udiff('CLAUDE.md', CL0, CL0.replace('a\n', 'a\nALLOW X\n')));
-    amendTo(CL0.replace('line three\n', 'line three\nALLOW X\n'));
-    expect(() => verify(deps(), { branch: BR })).toThrow(/no approved patch/);
-  });
-  it('a clean rebase over a change outside the hunk context keeps the patch-id', () => {
-    const hub = applied();
-    const root = sh(main, ['rev-parse', 'refs/remotes/origin/main']);
-    const newMain = seed(main, { 'CLAUDE.md': CL0.replace('# Rules', '# RULES') }, root);
-    sh(main, ['update-ref', 'refs/remotes/origin/main', newMain]);
-    sh(wt, ['switch', '-q', '--detach', newMain]);
-    sh(wt, ['cherry-pick', hub]);
-    sh(wt, ['branch', '-f', BR, 'HEAD']);
+  const originMain = () => sh(main, ['rev-parse', 'refs/remotes/origin/main']);
+  // A new main commit on origin/main.
+  const newMain = (files: Record<string, string>) => {
+    const m = seed(main, files, originMain());
+    sh(main, ['update-ref', 'refs/remotes/origin/main', m]);
+    return m;
+  };
+  const moveLane = (sha: string) => {
+    sh(wt, ['switch', '-q', '--detach', sha]);
+    sh(wt, ['branch', '-f', BR, sha]);
     sh(wt, ['switch', '-q', BR]);
     push();
-    expect(verify(deps(), { branch: BR })).toBe(0);
+  };
+  // The lane's rebase: the hub's commit cherry-picked onto `onto`.
+  const rebase = (hub: string, onto: string) => {
+    sh(wt, ['switch', '-q', '--detach', onto]);
+    sh(wt, ['cherry-pick', hub]);
+    const c = sh(wt, ['rev-parse', 'HEAD']);
+    moveLane(c);
+    return c;
+  };
+  const nearHunk = () => newMain({ 'CLAUDE.md': CL0.replace('\ne\n', '\nE\n') }); // 2 lines from line two
+
+  it('passes a clean rebase whose main change sits inside the hunk context', () => {
+    const hub = applied();
+    const tree = sh(wt, ['rev-parse', `${hub}^{tree}`]);
+    const m = nearHunk();
+    const c = rebase(hub, m);
+    logs = [];
+    expect(ok()).toBe(0);
+    const v = logs.join('\n');
+    expect(v).toContain(
+      `${c.slice(0, 8)} claude-edit-1, approved T ${tree.slice(0, 8)}, replayed onto ${m.slice(0, 8)}: M CLAUDE.md`,
+    );
+    expect(v).toContain(
+      `--match-head-commit ${c}; changes agent rules: CLAUDE.md, approved ${tree.slice(0, 8)}`,
+    );
+  });
+  it('fails on a lane commit to .claude/ with no approval, listing its files', () => {
+    applied();
+    seed(wt, { '.claude/rules/r.md': 'sneaky\n' }, B());
+    push();
+    expect(ok).toThrow(/\(M \.claude\/rules\/r\.md\): send n\+1/);
+  });
+  it("fails on a case-variant path, and on another branch's approval of the same commit", () => {
+    const c = seed(wt, { '.CLAUDE/x.md': 'x\n' }, B());
+    push();
+    red();
+    appendFileSync(
+      ledgerPath(deps()),
+      [
+        {
+          kind: 'shown',
+          branch: 'other',
+          n: 1,
+          base: `${'1'.repeat(40)}`,
+          tree: `${'2'.repeat(40)}`,
+        },
+        {
+          kind: 'applied',
+          branch: 'other',
+          n: 1,
+          base: `${'1'.repeat(40)}`,
+          tree: `${'2'.repeat(40)}`,
+          commit: c,
+        },
+      ]
+        .map((r) => JSON.stringify({ t: '', ...r }) + '\n')
+        .join(''),
+    );
+    red();
+  });
+  it('refuses a bad branch name, a branch not fetched, a non-empty info/grafts', () => {
+    expect(() => verify(deps(), { branch: 'feature/x' })).toThrow(/bad branch/);
+    expect(ok).toThrow(/fetch first/);
+    push();
+    writeFileSync(join(main, '.git', 'info', 'grafts'), `${B()}\n`);
+    expect(ok).toThrow(/grafts is not empty/);
+  });
+  it('fails on an indentation-only amend', () => {
+    applied();
+    amendTo(CL0.replace('line two', '  line TWO'));
+    red();
+  });
+  it('fails on the approved line moved to another place', () => {
+    applied(udiff('CLAUDE.md', CL0, CL0.replace('a\n', 'a\nALLOW X\n')));
+    amendTo(CL0.replace('line three\n', 'line three\nALLOW X\n'));
+    red();
+  });
+  it('fails on the same edit moved to an identical-looking block', () => {
+    const blk = 'p\nq\nr\nTARGET\ns\nt\nu\n';
+    const two = `# R\n${blk}mid\n${blk}`;
+    moveLane(newMain({ 'CLAUDE.md': two }));
+    applied(udiff('CLAUDE.md', two, `# R\n${blk.replace('TARGET', 'TARGET ALLOW')}mid\n${blk}`));
+    amendTo(`# R\n${blk}mid\n${blk.replace('TARGET', 'TARGET ALLOW')}`);
+    red();
+  });
+  it('fails on a hand-merged conflict', () => {
+    applied();
+    const m = newMain({ 'CLAUDE.md': CL0.replace('line two', 'line 2') });
+    seed(wt, { 'CLAUDE.md': CL0.replace('line two', 'line TWO') }, m);
+    push();
+    red();
+  });
+  it('fails on other files mixed into the hub commit, naming both', () => {
+    applied();
+    writeFileSync(join(wt, 'docs/d.md'), 'mixed\n');
+    sh(wt, ['add', 'docs/d.md']);
+    amendTo(CL0.replace('line two', 'line TWO'));
+    expect(ok).toThrow(/\(M CLAUDE\.md; M docs\/d\.md\)/);
+  });
+  it('one approval covers one commit: an approved revert then the edit again fails', () => {
+    const hub = applied();
+    applied(udiff('CLAUDE.md', CL0.replace('line two', 'line TWO'), CL0), 2);
+    push();
+    expect(ok()).toBe(0);
+    sh(wt, ['cherry-pick', hub]);
+    push();
+    red();
+  });
+  it('says which approvals it dropped: a missing commit, one not T on B', () => {
+    const hub = applied();
+    push();
+    const r0 = rows().find((r) => r.kind === 'shown') as unknown as { base: string; tree: string };
+    const shown = { base: r0.base, tree: r0.tree };
+    const other = sh(wt, ['commit-tree', `${hub}^{tree}`, '-m', 'not on B']);
+    appendFileSync(
+      ledgerPath(deps()),
+      [`${'f'.repeat(40)}`, other]
+        .map(
+          (commit) =>
+            JSON.stringify({ t: '', kind: 'applied', branch: BR, n: 9, ...shown, commit }) + '\n',
+        )
+        .join(''),
+    );
+    logs = [];
+    expect(ok()).toBe(0);
+    expect(logs.join('\n')).toContain(
+      `approved commit ffffffff (claude-edit-9) is missing: its pin is gone`,
+    );
+    expect(logs.join('\n')).toContain(
+      `approved commit ${other.slice(0, 8)} (claude-edit-9) is not T on B`,
+    );
+  });
+  it('the pin keeps the approved commit through gc; without it the rebased commit fails', () => {
+    const hub = applied();
+    rebase(hub, nearHunk());
+    const gc = () => {
+      sh(main, ['reflog', 'expire', '--expire=now', '--all']);
+      sh(main, ['gc', '-q', '--prune=now']);
+    };
+    gc();
+    expect(ok()).toBe(0);
+    sh(main, [
+      '-c',
+      'core.hooksPath=/dev/null',
+      'update-ref',
+      '-d',
+      `refs/claude-edits/${BR}/${hub}`,
+    ]);
+    gc();
+    expect(
+      spawnSync('git', ['cat-file', '-e', `${hub}^{commit}`], { cwd: main, env: ENV }).status,
+    ).not.toBe(0);
+    logs = [];
+    red();
+    expect(logs.join('\n')).toContain('is missing');
+  });
+  it('a replace ref can not hide an unapproved commit', () => {
+    const hub = applied();
+    const x = seed(wt, { '.claude/rules/r.md': 'sneaky\n' }, hub);
+    push();
+    sh(main, [
+      'replace',
+      x,
+      sh(main, ['commit-tree', `${hub}^{tree}`, '-p', hub, '-m', 'innocent']),
+    ]);
+    // The control: under the replace ref a plain rev-list doesn't see the commit.
+    expect(sh(main, ['rev-list', `${originMain()}..${x}`, '--', '.claude'])).toBe('');
+    expect(ok).toThrow(new RegExp(`${x} is not an approved commit`));
+  });
+  it('merge.default=union can not turn a conflict into a clean replay', () => {
+    const hub = applied();
+    const base = sh(wt, ['rev-parse', `${hub}^`]);
+    const m = newMain({ 'CLAUDE.md': CL0.replace('line two', 'line 2') });
+    // The control: git's union merge of the conflict is clean, and that is the lane's commit.
+    const u = sh(main, [
+      '-c',
+      'merge.default=union',
+      'merge-tree',
+      '--write-tree',
+      `--merge-base=${base}`,
+      m,
+      hub,
+    ]);
+    moveLane(sh(wt, ['commit-tree', u.split('\n')[0]!, '-p', m, '-m', MSG]));
+    sh(main, ['config', 'merge.default', 'union']);
+    red();
+    expect(verify(deps({ git: without('merge.default=text') }), { branch: BR })).toBe(0);
+  });
+  it('a rename on main does not carry the edit to the new name', () => {
+    const hub = applied(udiff('.claude/rules/r.md', 'rule a\nrule b\n', 'rule a\nrule B\n'));
+    const base = sh(wt, ['rev-parse', `${hub}^`]);
+    sh(main, ['mv', '.claude/rules/r.md', '.claude/rules/s.md']);
+    const m = newMain({});
+    const c = rebase(hub, m);
+    expect(readFileSync(join(wt, '.claude/rules/s.md'), 'utf8')).toBe('rule a\nrule B\n');
+    // The control: git's default merge (renames on) gives exactly the lane's commit.
+    const plain = sh(main, ['merge-tree', '--write-tree', `--merge-base=${base}`, m, hub]).split(
+      '\n',
+    )[0];
+    expect(plain).toBe(sh(main, ['rev-parse', `${c}^{tree}`]));
+    red();
+  });
+  it('a merge-tree that prints junk is no match; one that errors refuses', () => {
+    const hub = applied();
+    rebase(hub, nearHunk());
+    const mt = (status: number, out: string) =>
+      deps({
+        git: wrapped((args) =>
+          args[0] === 'merge-tree'
+            ? { status, stdout: Buffer.from(out), stderr: 'bad' }
+            : undefined,
+        ),
+      });
+    expect(() => verify(mt(0, 'garbage\n'), { branch: BR })).toThrow(/not an approved commit/);
+    expect(() => verify(mt(2, ''), { branch: BR })).toThrow(/merge-tree failed: bad/);
   });
   it('refuses merge commits', () => {
     const hub = applied();
-    const side = seed(
-      wt,
-      { 'docs/d.md': 'side\n' },
-      sh(main, ['rev-parse', 'refs/remotes/origin/main']),
-    );
+    const side = seed(wt, { 'docs/d.md': 'side\n' }, originMain());
     const m = sh(wt, ['commit-tree', `${hub}^{tree}`, '-p', hub, '-p', side, '-m', 'merge']);
     sh(main, ['update-ref', `refs/remotes/origin/${BR}`, m]);
-    expect(() => verify(deps(), { branch: BR })).toThrow(/merge commits/);
+    expect(ok).toThrow(/merge commits/);
   });
 });
+
+// Refusal stays imported for the type checks above that name it.
+void Refusal;

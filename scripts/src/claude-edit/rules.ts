@@ -1,5 +1,5 @@
 // Pure rules for `pnpm claude-edit` (docs/ops/HUB.md → Agent-rule edits): what a lane's agent-rule patch may change,
-// what the showing looks like, and how the ledger ties commits to approved patches. No git, no files.
+// what the showing looks like, and how the ledger ties commits to approved commits. No git, no files.
 
 export const EXIT = { ok: 0, refused: 1, usage: 2, stuck: 3 } as const;
 
@@ -44,15 +44,26 @@ const SAFE = /^[A-Za-z0-9._/@+-]+$/;
 export const safePath = (p: string) =>
   SAFE.test(p) && !p.split('/').some((s) => s === '' || s === '.' || s === '..');
 
-// Exactly CLAUDE.md or .claude/**, never .claude/worktrees. Case-exact: the checkout folds case (core.ignorecase,
-// a case-insensitive mount), so `claude.md` or `.Claude/x` would land beside the real file or under another name.
-export function pathAllowed(p: string): boolean {
-  if (!safePath(p)) return false;
-  if (p === 'CLAUDE.md') return true;
-  if (!p.startsWith('.claude/')) return false;
+// Why a path may not be in a patch, or null: exactly CLAUDE.md or .claude/**, never .claude/worktrees. One case rule:
+// the checkout folds case (core.ignorecase, a case-insensitive mount), so `.claude/Agents/x.md` lands in the real
+// agents/ and `Settings.local.json` is settings.local.json. Under .claude/ every directory is lowercase and a file
+// name is lowercase or an ALL-CAPS .md (README.md, SKILL.md).
+export function pathProblem(p: string): string | null {
+  if (!safePath(p)) return 'unsafe characters';
+  if (p === 'CLAUDE.md') return null;
+  if (!p.startsWith('.claude/')) return 'outside CLAUDE.md and .claude/';
   const l = p.toLowerCase(); // .claude/WORKTREES is the worktrees directory on this checkout
-  return l !== '.claude/worktrees' && !l.startsWith('.claude/worktrees/');
+  if (l === '.claude/worktrees' || l.startsWith('.claude/worktrees/')) return 'a worktree';
+  const segs = p.split('/');
+  const name = segs.pop()!;
+  if (segs.some((s) => s !== s.toLowerCase())) return 'upper case in a directory name';
+  if (name !== name.toLowerCase() && !/^[A-Z][A-Z0-9_-]*\.md$/.test(name))
+    return 'upper case in a file name (only an ALL-CAPS .md name may have it)';
+  if (name.toLowerCase() === '.gitattributes')
+    return 'a .gitattributes changes how git reads the files beside it';
+  return null;
 }
+export const pathAllowed = (p: string) => pathProblem(p) === null;
 
 // Paths in a tree that differ only in case: on this checkout they are one file.
 export function caseTwins(paths: string[]): string[] {
@@ -78,8 +89,8 @@ export function judgeEntries(
   const regular = (m: string) => m === '100644' || m === '100755';
   for (const e of entries) {
     const at = `${e.status} ${e.path}`;
-    if (!pathAllowed(e.path))
-      problems.push(`${at}: outside CLAUDE.md and .claude/ (or a worktree)`);
+    const why = pathProblem(e.path);
+    if (why) problems.push(`${at}: ${why}`);
     if (e.status === 'M') {
       if (e.srcMode !== e.dstMode) problems.push(`${at}: mode ${e.srcMode} → ${e.dstMode}`);
       else if (!regular(e.dstMode)) problems.push(`${at}: not a regular file (${e.dstMode})`);
@@ -97,21 +108,21 @@ export function judgeEntries(
   return problems;
 }
 
-// What the user is told in words, beside the diff.
+// What the user is told in words, beside the diff. Classified on the lowercased path, as the checkout reads it.
 export function flagsFor(entries: Entry[]): string[] {
   const out: string[] = [];
   for (const e of entries) {
     const p = e.path;
+    const l = p.toLowerCase();
     const how = e.status === 'A' ? 'new' : e.status === 'D' ? 'deleted' : 'changed';
     const x = e.status !== 'D' && e.dstMode === '100755' ? ' (executable)' : '';
-    if (/^\.claude\/settings[^/]*\.json$/.test(p))
+    if (/^\.claude\/settings[^/]*\.json$/.test(l))
       out.push(`permissions or hook registration ${how}: ${p}`);
-    else if (p.startsWith('.claude/hooks/')) out.push(`guard ${how}${x}: ${p}`);
-    else if (p.startsWith('.claude/agents/')) out.push(`agent ${how}${x}: ${p}`);
-    else if (p.startsWith('.claude/skills/') || p.startsWith('.claude/commands/'))
+    else if (l.startsWith('.claude/hooks/')) out.push(`guard ${how}${x}: ${p}`);
+    else if (l.startsWith('.claude/agents/')) out.push(`agent ${how}${x}: ${p}`);
+    else if (l.startsWith('.claude/skills/') || l.startsWith('.claude/commands/'))
       out.push(`skill or command ${how}${x}: ${p}`);
     else if (x) out.push(`executable ${how}: ${p}`);
-    if (p.endsWith('.gitattributes')) out.push(`checkout attributes ${how}: ${p}`);
   }
   return out;
 }
@@ -126,6 +137,19 @@ export function decodeStrict(buf: Uint8Array): string {
   } catch {
     throw new Refusal('the diff is not valid UTF-8');
   }
+}
+// A diff's hidden characters split by line: `added` on lines starting + (every byte T adds is on one; a +++ header
+// carries only a safe path, so it never lands here), `other` on context, removed and header lines, already in B.
+export function hiddenIn(text: string): { added: string[]; other: string[] } {
+  const added: string[] = [];
+  const other: string[] = [];
+  text.split('\n').forEach((line, i) => {
+    for (const m of line.matchAll(HIDDEN)) {
+      const cp = m[0].codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0');
+      (line.startsWith('+') ? added : other).push(`line ${i + 1}: U+${cp}`);
+    }
+  });
+  return { added, other };
 }
 export function charProblems(text: string): string[] {
   const out: string[] = [];
@@ -182,16 +206,19 @@ export function renderHeader(s: Showing, file: string | null): string {
 // sits in one fence longer than any backtick run in it, so `extractDiff` takes it back byte for byte.
 export function renderFile(s: Showing): string {
   const f = fence(s.text);
+  // Names in code spans, so `a_b_c.md` isn't italics. None can hold a backtick: safe-charset paths, fixed flag words.
+  const tick = (xs: string[], sep: string) =>
+    xs.length ? xs.map((x) => `\`${x}\``).join(sep) : 'none';
   return [
-    `# claude-edit — ${s.branch} claude-edit-${s.n}`,
+    `# claude-edit — \`${s.branch}\` claude-edit-${s.n}`,
     '',
     `Showing ${s.showing} on this branch. Your go names ${goNames(s.tree, s.trees)}.`,
     '',
     `- B \`${s.base}\``,
     `- T \`${s.tree}\``,
-    `- files: ${s.files.join('; ')}`,
-    `- flags: ${s.flags.length ? s.flags.join('; ') : 'none'}`,
-    `- untracked under .claude/: ${s.untracked.length ? s.untracked.join(', ') : 'none'}`,
+    `- files: ${tick(s.files, '; ')}`,
+    `- flags: ${tick(s.flags, '; ')}`,
+    `- untracked under .claude/: ${tick(s.untracked, ', ')}`,
     `- diff: ${lineCount(s.text)} lines`,
     '',
     `${f}diff`,
@@ -275,7 +302,6 @@ export interface Row {
   base: string;
   tree: string;
   commit?: string;
-  patchId?: string;
   file?: string; // shown: sha256 of the showing file check wrote
 }
 
@@ -316,20 +342,21 @@ export const wasShown = (rows: Row[], branch: string, base: string, tree: string
 export const lastShownFile = (rows: Row[], branch: string, base: string, tree: string) =>
   shownRows(rows, branch, base, tree).at(-1)?.file;
 
-// Commits on a branch that touch CLAUDE.md or .claude/ with no applied row for that branch.
-export function unapproved(
-  commits: { sha: string; patchId: string }[],
-  rows: Row[],
-  branch: string,
-): string[] {
-  const ok = new Set(
-    rows.filter((r) => r.kind === 'applied' && r.branch === branch).map((r) => r.patchId),
-  );
-  return commits.filter((c) => !ok.has(c.patchId)).map((c) => c.sha);
-}
-
 export const BRANCH = /^(?!(?:main|dev|master|HEAD)$)[A-Za-z0-9][A-Za-z0-9._-]*$/; // never a deploy branch
 export const SHA = /^[0-9a-f]{40}$/; // sha1 repos only: EMPTY_TREE is sha1's
+
+// The applied rows verify may match a branch's commits against: this branch's, well-formed, each of a B and T that
+// was shown there, one per commit in ledger order. git confirms each one before it counts (steps.ts → verify).
+export function approvedRows(rows: Row[], branch: string): Row[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => {
+    if (r.kind !== 'applied' || r.branch !== branch) return false;
+    if (!r.commit || !SHA.test(r.commit) || !SHA.test(r.base) || !SHA.test(r.tree)) return false;
+    if (seen.has(r.commit) || !wasShown(rows, branch, r.base, r.tree)) return false;
+    seen.add(r.commit);
+    return true;
+  });
+}
 
 // The hub's commit message, checked before it is printed into a shell line: CLAUDE.md's rule (one lowercase line,
 // 4–6 words) and nothing a shell or the guard would read differently.

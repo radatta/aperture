@@ -464,7 +464,6 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/board/budget-read.ts': `${RUNTIME}: the board dir, /proc`,
   'scripts/src/board/cli.ts': `${RUNTIME}: board dir, cgroup, git; limits.json (the scripts/board/ rule)`,
   'scripts/src/claude-edit/git.ts': `${RUNTIME}: git`,
-  'scripts/src/claude-edit/steps.ts': `${RUNTIME}: lane worktrees, their patches and the hub's ledger`,
   'scripts/src/board/main-lock.ts': `${RUNTIME}: a flock file`,
   'scripts/src/board/merge-record.ts': `${RUNTIME}: the board dir`,
   'scripts/src/board/sessions.ts': `${RUNTIME}: the board dir`,

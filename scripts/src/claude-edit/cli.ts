@@ -21,9 +21,9 @@ export const USAGE = `pnpm -C /workspace claude-edit <command>   (the hub, main'
   unstage <branch> --base <B> --tree <T>
         a staged T that was never committed (the commit denied, the go withdrawn): back to B
   record <branch> --base <B> --tree <T>
-        after the commit: HEAD is one commit of T on B; writes the ledger row and prints the record for the [relay]
+        after the commit: HEAD is one commit of T on B; writes the ledger row, pins the commit under refs/claude-edits/ and prints the record for the [relay]
   verify <branch>
-        after git fetch origin: every commit on it touching CLAUDE.md or .claude/ has an approved patch
+        after git fetch origin: every commit on it touching CLAUDE.md or .claude/ is an approved commit or a clean replay of one
 exit: 0 ok · 1 refused (nothing changed; for record, fix the call and rerun) · 2 usage · 3 stuck, needs a person`;
 
 export const FLAGS: Record<string, Spec> = {

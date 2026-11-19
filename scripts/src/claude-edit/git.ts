@@ -18,13 +18,14 @@ export function hardenedEnv(base: NodeJS.ProcessEnv, extra: Record<string, strin
     GIT_ATTR_NOSYSTEM: '1',
     GIT_TERMINAL_PROMPT: '0',
     GIT_OPTIONAL_LOCKS: '0',
+    GIT_NO_REPLACE_OBJECTS: '1', // a refs/replace/<sha> could hide a branch's commits from rev-list
   };
   if (base.TMPDIR) env.TMPDIR = base.TMPDIR;
   return { ...env, ...extra };
 }
 
 // Before every subcommand. The repo's own config can't be switched off by env, so each key a session could plant
-// there that changes a diff, an apply or a commit is pinned here; the round trip in `check` catches the rest.
+// there that changes a diff, an apply, a merge or a commit is pinned here; the round trip in `check` catches the rest.
 export const GIT_PRE = [
   `--attr-source=${EMPTY_TREE}`,
   ...[
@@ -43,10 +44,11 @@ export const GIT_PRE = [
     'diff.relative=false',
     'diff.suppressBlankEmpty=false',
     'diff.external=',
+    'merge.default=text', // needs no attribute: `union` would turn a conflict into a clean replay
   ].flatMap((kv) => ['-c', kv]),
 ];
 
-// Every diff the showing, the apply, the back-out and the patch-id read.
+// Every diff the showing, the apply and the back-out read.
 export const DIFF_FLAGS = [
   '--no-ext-diff',
   '--no-textconv',
@@ -61,6 +63,17 @@ export const DIFF_FLAGS = [
   '-O/dev/null',
 ];
 
+// verify's replay of an approved commit: renames off (a rename could carry an edit to another path; with none,
+// directory renames have nothing to act on), the algorithm fixed so diff.algorithm can't steer the result.
+export const MERGE_FLAGS = [
+  '--write-tree',
+  '--no-messages',
+  '-X',
+  'no-renames',
+  '-X',
+  'diff-algorithm=histogram',
+];
+
 export interface GitResult {
   status: number;
   stdout: Buffer;
@@ -73,9 +86,10 @@ export interface GitOpts {
 }
 export type GitExec = (args: string[], opts: GitOpts) => GitResult;
 
-export function makeExec(base: NodeJS.ProcessEnv = process.env): GitExec {
+// `pre` is a test seam: a test drops one pin to show it matters.
+export function makeExec(base: NodeJS.ProcessEnv = process.env, pre: string[] = GIT_PRE): GitExec {
   return (args, opts) => {
-    const r = spawnSync('git', [...GIT_PRE, ...args], {
+    const r = spawnSync('git', [...pre, ...args], {
       cwd: opts.cwd,
       input: opts.input,
       env: hardenedEnv(base, opts.index ? { GIT_INDEX_FILE: opts.index } : {}),
