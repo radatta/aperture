@@ -28,12 +28,15 @@ const REVIEW_KEYBOARD: IosOp[] = [
   { op: 'kill', method: 'terminate' },
   { op: 'launch' },
   { op: 'nav', tab: 'Home' },
-  { op: 'tap', label: 'Capture', near: { x: 220, y: 895 }, radius: 10 },
-  // 4 s, not 2: since the mode-row scan starts at MODE_ROW (315) it can read the Task toggle mid-settle (y 374/402 on
-  // 2026-11-12, against 464 settled), and a tap there misses the moving dock and blurs the field (jobs …011648Z…-8c62,
-  // …010744Z…-6102). ios-standalone's CAPTURE waits 4 for the same settle.
+  // Task first, on the docked bar before any keyboard: a mode change doesn't focus the field (CaptureBar
+  // changeMode), and the bar sits still at the bottom. Tapped on the lifted dock instead, the toggle could be read
+  // mid-settle and the tap missed and blurred the field (jobs …011648Z…-8c62, …010744Z…-6102, and run
+  // 2026-11-19T02-21-16-full even after a 4 s wait). `selects`: a dropped tap is tapped again.
+  { op: 'tap', label: 'Task', scan: { x: 110, from: 780, to: 940 }, role: 'AXCheckBox', selects: true },
+  // A text area's tap must bring the keyboard up, else the runner taps it once more.
+  { op: 'tap', label: 'Capture task', near: { x: 220, y: 895 }, radius: 10, role: 'AXTextArea' },
+  // The dock lifts over the keyboard: let it settle before reading the field there (ios-standalone waits 4 too).
   { op: 'wait', s: 4 },
-  { op: 'tap', label: 'Task', scan: DOCK(110, MODE_ROW), role: 'AXCheckBox' },
   // `in`: the runner reads the field back and retypes a dropped key (sim.sh sim_op_keys) — without it a drop went
   // unseen and the parse got "shim the flux gaskt" (run 2026-11-18T23-43-42-full). Found as ios-standalone finds it.
   { op: 'find', label: 'Capture task', scan: DOCK(300), role: 'AXTextArea', as: 'field' },
