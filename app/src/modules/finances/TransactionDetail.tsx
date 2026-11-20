@@ -406,7 +406,7 @@ function RefundSuggestions({
     txns: view.allTxns,
     accounts: [...view.accounts.values()],
     moves: view.moves,
-    links: view.links,
+    claims: view.claims,
   };
   const suggest = (anyMerchant: boolean) =>
     suggestRefundMatches({ ...args, anyMerchant }).slice(0, 5);

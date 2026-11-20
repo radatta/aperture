@@ -3,7 +3,14 @@
 // edge) with the wrong shape is a ShapeError — a 400 naming the problem — never a TypeError deep in a
 // handler or a nested object stored as sent. The `satisfies` keeps this table in lockstep with ApiClient:
 // a new method, a changed arity or a new input field without a check here fails typecheck.
-import { BACKFILL_MAX, COMPETENCY_TAGS, TOKEN_SCOPES } from '@aperture/shared';
+import {
+  BACKFILL_MAX,
+  COMPETENCY_TAGS,
+  FINANCE_REFUND_MAX_PARTS,
+  FINANCE_RULE_SPLIT_MAX_PARTS,
+  FINANCE_SPLIT_MAX_PARTS,
+  TOKEN_SCOPES,
+} from '@aperture/shared';
 import type {
   ApiClient,
   ApiMethod,
@@ -14,6 +21,9 @@ import type {
   CreateTaskInput,
   DateRange,
   FinanceBucket,
+  FinanceRefundPart,
+  FinanceRuleSplitPart,
+  FinanceSplitPartInput,
   IdeaStatus,
   PulseInput,
   LinkAccountMeta,
@@ -580,6 +590,32 @@ export const RPC_ARGS = {
   setFinanceNote: [id, named('note', nullable(str(TEXT_MAX)))],
   setFinancePeriodStart: [id, named('marked', bool)],
   linkFinanceRefund: [idAs('refundId'), named('chargeId', nullable(str(ID_MAX)))],
+  setFinanceSplit: [
+    id,
+    named(
+      'parts',
+      nullable(
+        arr(
+          obj<FinanceSplitPartInput>('split part', {
+            bucket: strOf<FinanceBucket>(KEY_MAX),
+            cents: num,
+            period: nullable(lit('current', 'previous', 'next')),
+          }),
+          FINANCE_SPLIT_MAX_PARTS,
+        ),
+      ),
+    ),
+  ],
+  setFinanceRefundParts: [
+    idAs('refundId'),
+    named(
+      'parts',
+      arr(
+        obj<FinanceRefundPart>('refund part', { chargeId: str(ID_MAX), cents: num }),
+        FINANCE_REFUND_MAX_PARTS,
+      ),
+    ),
+  ],
   listFinanceRules: [],
   upsertFinanceRule: [
     obj('rule', {
@@ -587,6 +623,17 @@ export const RPC_ARGS = {
       pattern: str(NAME_MAX),
       bucket: strOf<FinanceBucket>(KEY_MAX),
       active: opt(bool),
+      split: opt(
+        nullable(
+          arr(
+            obj<FinanceRuleSplitPart>('rule split part', {
+              bucket: strOf<FinanceBucket>(KEY_MAX),
+              percent: num,
+            }),
+            FINANCE_RULE_SPLIT_MAX_PARTS,
+          ),
+        ),
+      ),
     }),
   ],
   deleteFinanceRule: [id],

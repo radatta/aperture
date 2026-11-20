@@ -35,6 +35,8 @@ function txn(id: string, date: string, over: Partial<FinanceTransaction> = {}): 
     note: null,
     refundOfId: null,
     startsPeriod: false,
+    splits: null,
+    refundParts: null,
     ...over,
   };
 }
@@ -66,11 +68,18 @@ describe('Repo finances', () => {
     const legacy = financeTxnItem(U, txn('old', '2026-09-02'));
     delete legacy.startsPeriod;
     delete legacy.refundOfId;
+    delete legacy.splits;
+    delete legacy.refundParts;
     await doc.put(legacy);
     const got = await repo.listFinanceTxnsInRange('2026-09-01', '2026-09-10');
     expect(got.map((t) => t.id).sort()).toEqual(['a', 'b', 'old']);
     const old = got.find((t) => t.id === 'old')!;
-    expect([old.startsPeriod, old.refundOfId]).toEqual([false, null]);
+    expect([old.startsPeriod, old.refundOfId, old.splits, old.refundParts]).toEqual([
+      false,
+      null,
+      null,
+      null,
+    ]);
     expect((await repo.listFinanceTxnsInRange('2026-09-10')).map((t) => t.id).sort()).toEqual([
       'b',
       'c',
@@ -171,5 +180,23 @@ describe('Repo finances', () => {
     );
     expect([merged.bucket, merged.rawAmountCents]).toEqual(['budget', 999]);
     expect((await repo.getFinanceTxn('e'))!.bucket).toBe('budget');
+  });
+});
+
+describe('Repo finance rules', () => {
+  it('a rule stored before split rules reads as a one-bucket rule', async () => {
+    const doc = new InMemoryDoc();
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const base = { id: 'r1', userId: U, createdAt: 1, updatedAt: 1, deletedAt: null };
+    await doc.put({
+      PK: pk(U),
+      SK: sk.finRule('r1'),
+      ...base,
+      pattern: 'store a',
+      bucket: 'budget',
+      active: true,
+    });
+    expect((await repo.listFinanceRules())[0]!.split).toBeNull();
+    expect((await repo.getFinanceRule('r1'))!.split).toBeNull();
   });
 });

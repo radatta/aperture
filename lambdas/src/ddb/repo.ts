@@ -60,6 +60,7 @@ import {
   taskRemindAt,
   toEntity,
   toFinanceSyncState,
+  toFinanceRule,
   toFinanceTxn,
 } from './mapping';
 import { mapLimit } from '../util/mapLimit';
@@ -1084,7 +1085,7 @@ export class Repo {
   finRuleShape(id: string): CasShape<FinanceRule> {
     return {
       sk: sk.finRule(id),
-      read: (i) => toEntity<FinanceRule>(i),
+      read: (i) => toFinanceRule(i),
       toItem: (t) => entityItem(this.userId, sk.finRule(t.id), t),
     };
   }
@@ -1172,13 +1173,11 @@ export class Repo {
     }
   }
   async listFinanceRules(): Promise<FinanceRule[]> {
-    return alive(
-      (await this.doc.query(this.p(), sk.finRulePrefix())).map((i) => toEntity<FinanceRule>(i)),
-    );
+    return alive((await this.doc.query(this.p(), sk.finRulePrefix())).map((i) => toFinanceRule(i)));
   }
   async getFinanceRule(id: string): Promise<FinanceRule | null> {
     const it = await this.doc.get(this.p(), sk.finRule(id));
-    return it ? toEntity<FinanceRule>(it) : null;
+    return it ? toFinanceRule(it) : null;
   }
   // casUpdate a batch of rows, a bounded number at a time.
   async casMany<T extends BaseEntity, U>(

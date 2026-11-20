@@ -456,6 +456,8 @@ describe('runFinanceSync — the review findings', () => {
           note: null,
           refundOfId: null,
           startsPeriod: false,
+          splits: null,
+          refundParts: null,
         }),
       ),
     );

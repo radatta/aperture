@@ -20,6 +20,12 @@ import {
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
   financeBucketError,
+  financeRuleFields,
+  financeSplitError,
+  orderRefundParts,
+  refundPartsError,
+  refundPartsFrom,
+  splitSortError,
   FIXTURE_ACCOUNTS,
   FIXTURE_INSTITUTION,
   FIXTURE_ITEM_ID,
@@ -27,7 +33,6 @@ import {
   fixturePageAfter,
   duplicateItemMessage,
   isDuplicateItem,
-  normalizeRulePattern,
   reconcileSyncPage,
   periodStartError,
   refundLinkError,
@@ -255,7 +260,9 @@ import type {
   FinanceItem,
   FinanceOverview,
   FinancePeriodOverride,
+  FinanceRefundPart,
   FinanceRule,
+  FinanceSplitPartInput,
   FinanceSyncState,
   FinanceTransaction,
   GcalSeen,
@@ -659,7 +666,11 @@ class StubClient implements ApiClient {
         ...t,
         refundOfId: t.refundOfId ?? null,
         startsPeriod: t.startsPeriod ?? false,
+        splits: t.splits ?? null,
+        refundParts: t.refundParts ?? null,
       }));
+      // Rules from before split rules read as one-bucket rules.
+      store.financeRules = store.financeRules.map((r) => ({ ...r, split: r.split ?? null }));
       // Tasks from before places read as off every list.
       store.tasks = store.tasks.map((t) => ({ ...t, place: t.place ?? null }));
       store.financeSyncStates = store.financeSyncStates.map((x) => ({
@@ -3193,6 +3204,7 @@ class StubClient implements ApiClient {
         pattern,
         bucket,
         active: true,
+        split: null,
       });
     this.linkFixtureItem({
       publicToken: 'seed',
@@ -3244,7 +3256,12 @@ class StubClient implements ApiClient {
     const bucketError = financeBucketError(input.bucket, { nullable: true });
     if (bucketError) throw new Error(bucketError);
     if (input.rule && input.bucket === null) throw new Error('A rule needs a bucket');
-    for (const id of input.ids) this.mustFind(this.store.financeTransactions, id);
+    const accounts = new Map(this.alive(this.store.financeAccounts).map((a) => [a.id, a]));
+    for (const id of input.ids) {
+      const t = this.mustFind(this.store.financeTransactions, id);
+      const error = splitSortError(t, accounts.get(t.accountId));
+      if (error) throw new Error(error);
+    }
     const changed = new Map<string, FinanceTransaction>();
     for (const id of input.ids)
       changed.set(
@@ -3253,6 +3270,8 @@ class StubClient implements ApiClient {
           bucket: input.bucket,
           bucketSetBy: input.bucket ? 'user' : null,
           refundOfId: null, // sorting a refund yourself unlinks it
+          refundParts: null,
+          splits: null, // only a broken split gets here: sorting it replaces it
         }),
       );
     if (input.rule && input.bucket) {
@@ -3261,7 +3280,14 @@ class StubClient implements ApiClient {
         bucket: input.bucket,
       });
       for (const x of this.alive(this.store.financeTransactions)) {
-        if (x.bucket !== null || x.refundOfId !== null || x.startsPeriod) continue;
+        if (
+          x.bucket !== null ||
+          x.refundOfId !== null ||
+          x.refundParts !== null ||
+          x.splits !== null ||
+          x.startsPeriod
+        )
+          continue;
         if (!applyRules([rule], x)) continue;
         changed.set(
           x.id,
@@ -3281,12 +3307,16 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.financeTransactions, id, {
       periodOverride: override,
       refundOfId: null, // moving a refund yourself unlinks it
+      refundParts: null,
     });
   }
   async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
     const refund = this.mustFind(this.store.financeTransactions, refundId);
     if (chargeId === null)
-      return this.writes.patch(this.store.financeTransactions, refundId, { refundOfId: null });
+      return this.writes.patch(this.store.financeTransactions, refundId, {
+        refundOfId: null,
+        refundParts: null,
+      });
     const charge = this.mustFind(this.store.financeTransactions, chargeId);
     const accounts = this.alive(this.store.financeAccounts);
     // Moves over the same window the overview reads, so pairing at the edge matches the page.
@@ -3302,9 +3332,70 @@ class StubClient implements ApiClient {
     if (error) throw new Error(error);
     return this.writes.patch(this.store.financeTransactions, refundId, {
       refundOfId: chargeId,
+      refundParts: null,
       bucket: null,
       bucketSetBy: null,
       periodOverride: null,
+    });
+  }
+  async setFinanceSplit(
+    id: string,
+    parts: FinanceSplitPartInput[] | null,
+  ): Promise<FinanceTransaction> {
+    const txn = this.mustFind(this.store.financeTransactions, id);
+    if (parts === null)
+      return this.writes.patch(this.store.financeTransactions, id, {
+        splits: null,
+        bucket: null,
+        bucketSetBy: null,
+      });
+    const accounts = this.alive(this.store.financeAccounts);
+    const from = addDays(this.finToday(), -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+    const recent = this.alive(this.store.financeTransactions).filter((x) => x.date >= from);
+    const error = financeSplitError({
+      txn,
+      account: accounts.find((a) => a.id === txn.accountId),
+      moves: detectInternalMoves(recent, accounts),
+      parts,
+    });
+    if (error) throw new Error(error);
+    return this.writes.patch(this.store.financeTransactions, id, {
+      splits: parts.map((p) => ({ bucket: p.bucket, cents: p.cents, period: p.period })),
+      bucket: null,
+      bucketSetBy: 'user',
+      refundOfId: null,
+      refundParts: null,
+    });
+  }
+  async setFinanceRefundParts(
+    refundId: string,
+    parts: FinanceRefundPart[],
+  ): Promise<FinanceTransaction> {
+    const refund = this.mustFind(this.store.financeTransactions, refundId);
+    const accounts = this.alive(this.store.financeAccounts);
+    const today = this.finToday();
+    const lookback = addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+    const alive = this.alive(this.store.financeTransactions);
+    const charges = parts.flatMap((p) => alive.filter((x) => x.id === p.chargeId));
+    const from = refundPartsFrom(today, charges);
+    const error = refundPartsError({
+      refund,
+      parts,
+      txns: alive.filter((x) => x.date >= from),
+      accounts,
+      moves: detectInternalMoves(
+        alive.filter((x) => x.date >= lookback),
+        accounts,
+      ),
+    });
+    if (error) throw new Error(error);
+    return this.writes.patch(this.store.financeTransactions, refundId, {
+      refundParts: orderRefundParts(parts),
+      refundOfId: null,
+      bucket: null,
+      bucketSetBy: null,
+      periodOverride: null,
+      splits: null,
     });
   }
   async setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction> {
@@ -3323,6 +3414,8 @@ class StubClient implements ApiClient {
       bucketSetBy: null,
       periodOverride: null,
       refundOfId: null,
+      refundParts: null,
+      splits: null,
     });
   }
   async listFinanceRules(): Promise<FinanceRule[]> {
@@ -3330,11 +3423,8 @@ class StubClient implements ApiClient {
   }
   // One live rule per pattern: saving an existing pattern updates it.
   async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
-    const bucketError = financeBucketError(input.bucket, { nullable: false });
-    if (bucketError) throw new Error(bucketError);
-    const pattern = normalizeRulePattern(input.pattern);
-    if (!pattern) throw new Error('A rule needs a pattern');
-    const fields = { pattern, bucket: input.bucket, active: input.active ?? true };
+    const fields = financeRuleFields(input);
+    const pattern = fields.pattern;
     const id =
       input.id ?? this.alive(this.store.financeRules).find((r) => r.pattern === pattern)?.id;
     if (id) return this.writes.patch(this.store.financeRules, id, fields);

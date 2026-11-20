@@ -9,6 +9,7 @@ import { TASK_NOTES_MAX, TASK_REFLECTION_MAX } from './taskNotes';
 import { addDays, dayKeyInZone, USER_TIME_ZONE } from './dates';
 import { fluxWeekStart } from './flux/history';
 import { REP_NO_SPLIT_ERROR } from './split';
+import { financeSplitContract } from './financeSplitContract';
 import { FUTURE_DAY_ERROR, TIMED_NO_PLAN_ERROR } from './machines';
 import { PULSE_GRACE_MIN, PULSE_PARENT_ERROR, PULSE_WINDOW_MIN } from './pulse';
 import {
@@ -2922,6 +2923,8 @@ export function runApiContract(
       await api.setFinancePeriodOverride('fx-card-14', 'current');
       expect((await api.getFinanceOverview({ today: finToday() })).spentCents).toBe(2500 - 1500);
     });
+
+    financeSplitContract({ api: () => api, finToday, connect, advance, finRange });
 
     it('finance: refund link validation', async () => {
       await connect();

@@ -1,5 +1,11 @@
 import { planFireAt, taskFireAt, userDueEpoch } from '@aperture/shared';
-import type { FinanceSyncState, FinanceTransaction, Task, TaskPlan } from '@aperture/shared';
+import type {
+  FinanceRule,
+  FinanceSyncState,
+  FinanceTransaction,
+  Task,
+  TaskPlan,
+} from '@aperture/shared';
 import type { Item } from './DocClient';
 import { gsi1, pk, sk } from './keys';
 
@@ -110,7 +116,18 @@ export function financeTxnItem(userId: string, t: FinanceTransaction): Item {
 }
 export function toFinanceTxn(item: Item): FinanceTransaction {
   const t = toEntity<FinanceTransaction>(item);
-  return { ...t, refundOfId: t.refundOfId ?? null, startsPeriod: t.startsPeriod ?? false };
+  return {
+    ...t,
+    refundOfId: t.refundOfId ?? null,
+    startsPeriod: t.startsPeriod ?? false,
+    splits: t.splits ?? null,
+    refundParts: t.refundParts ?? null,
+  };
+}
+// Rules from before split rules read as one-bucket rules.
+export function toFinanceRule(item: Item): FinanceRule {
+  const r = toEntity<FinanceRule>(item);
+  return { ...r, split: r.split ?? null };
 }
 export function toFinanceSyncState(item: Item): FinanceSyncState {
   const s = toEntity<FinanceSyncState>(item);

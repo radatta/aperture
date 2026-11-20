@@ -1044,6 +1044,44 @@ export function refundPartsFrom(today: string, charges: FinanceTransaction[]): s
   return oldest < from ? addDays(oldest, -REFUND_DATE_SLACK_DAYS) : from;
 }
 
+// Why setFinanceBucket refuses this row, or null: a split that still adds up is changed from its
+// detail (Edit split / Remove split), never silently replaced by one bucket. A broken split may be sorted.
+export function splitSortError(
+  t: FinanceTransaction,
+  account: FinanceAccount | undefined,
+): string | null {
+  return splitOf(t, amountOf(t, account))
+    ? `${t.merchantName ?? t.name} is split — change it from its detail`
+    : null;
+}
+
+// How both impls store an allocation: only the two fields, largest part first (the primary link —
+// where the refund is listed), ties in the order given.
+export const orderRefundParts = (parts: FinanceRefundPart[]): FinanceRefundPart[] =>
+  parts.map((p) => ({ chargeId: p.chargeId, cents: p.cents })).sort((a, b) => b.cents - a.cents);
+
+// A rule's stored fields from an upsert, or a thrown refusal — both impls. A split rule's bucket is
+// its largest part, so anything reading `bucket` alone still gets a sensible answer.
+export function financeRuleFields(
+  input: UpsertFinanceRuleInput,
+): Pick<FinanceRule, 'pattern' | 'bucket' | 'active' | 'split'> {
+  const bucketError = financeBucketError(input.bucket, { nullable: false });
+  if (bucketError) throw new Error(bucketError);
+  const pattern = normalizeRulePattern(input.pattern);
+  if (!pattern) throw new Error('A rule needs a pattern');
+  const split = input.split ?? null;
+  if (split) {
+    const splitError = financeRuleSplitError(split);
+    if (splitError) throw new Error(splitError);
+  }
+  return {
+    pattern,
+    bucket: split ? ruleSplitBucket(split) : input.bucket,
+    active: input.active ?? true,
+    split: split ? split.map((p) => ({ bucket: p.bucket, percent: p.percent })) : null,
+  };
+}
+
 export const REFUND_SET_POOL = 12;
 export const REFUND_SET_SHOWN = 3;
 
