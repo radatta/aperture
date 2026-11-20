@@ -46,8 +46,7 @@ function task(over: Partial<Task> = {}): Task {
 const NOW = Date.parse('2026-11-19T20:00:00Z');
 const TODAY = '2026-11-19';
 const row = (id = 't', over = {}) => ({ id, actualMin: 40, completedDay: '2026-11-10', ...over });
-const plan = (tasks: Task[], inputs: unknown[]) =>
-  planBackfill(tasks, inputs as never, TODAY, NOW);
+const plan = (tasks: Task[], inputs: unknown[]) => planBackfill(tasks, inputs as never, TODAY, NOW);
 
 describe('scoresGap and laneOf', () => {
   it('a rollup and a backfilled point never score; an unmarked one does', () => {
@@ -66,7 +65,13 @@ describe('scoresGap and laneOf', () => {
 
 describe('calibrationPoints', () => {
   const done = (over: Partial<Task>) =>
-    task({ status: 'done', estimateLockedMin: 30, actualAccruedMin: 40, completedAt: NOW, ...over });
+    task({
+      status: 'done',
+      estimateLockedMin: 30,
+      actualAccruedMin: 40,
+      completedAt: NOW,
+      ...over,
+    });
   it('joins the category’s area live; no category, or a missing one, reads Personal', () => {
     const pts = calibrationPoints(
       [
@@ -145,9 +150,19 @@ describe('planBackfill', () => {
   it('bounds the batch: empty and over the cap are refused', () => {
     expect(() => plan([], [])).toThrow(/at least one/);
     const many = Array.from({ length: BACKFILL_MAX + 1 }, (_, i) => task({ id: `t${i}` }));
-    expect(() => plan(many, many.map((t) => row(t.id)))).toThrow(/at most 100/);
+    expect(() =>
+      plan(
+        many,
+        many.map((t) => row(t.id)),
+      ),
+    ).toThrow(/at most 100/);
     const max = many.slice(0, BACKFILL_MAX);
-    expect(plan(max, max.map((t) => row(t.id)))).toHaveLength(BACKFILL_MAX);
+    expect(
+      plan(
+        max,
+        max.map((t) => row(t.id)),
+      ),
+    ).toHaveLength(BACKFILL_MAX);
   });
 
   it('a done and backfilled task is skipped (a rerun); a garbage row is refused', () => {
@@ -158,7 +173,12 @@ describe('planBackfill', () => {
 });
 
 describe('withBackfilled', () => {
-  const done = task({ status: 'done', estimateLockedMin: 30, actualAccruedMin: 40, completedAt: 5 });
+  const done = task({
+    status: 'done',
+    estimateLockedMin: 30,
+    actualAccruedMin: 40,
+    completedAt: 5,
+  });
   it('sets and clears on a done point; the completion never moves', () => {
     const on = withBackfilled(done, [done], true, NOW);
     expect(on).toMatchObject({ backfilled: true, completedAt: 5, updatedAt: NOW });

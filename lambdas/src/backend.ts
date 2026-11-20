@@ -2408,7 +2408,9 @@ export class BackendClient implements ApiClient {
     const writes = rows.flatMap((r) => (r.next ? [r.next] : []));
     if (writes.length) await this.repo.putTasks(writes);
     return rows.map(({ id, next, task }) =>
-      next ? { id, outcome: 'done' as const, task: next } : { id, outcome: 'skipped' as const, task },
+      next
+        ? { id, outcome: 'done' as const, task: next }
+        : { id, outcome: 'skipped' as const, task },
     );
   }
   async setTaskBackfilled(id: string, backfilled: boolean): Promise<Task> {

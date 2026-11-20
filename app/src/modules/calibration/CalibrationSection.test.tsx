@@ -13,7 +13,13 @@ beforeEach(() => globalThis.localStorage?.clear());
 
 const stub = () => createStubClient({ seed: false, storageKey: `cal-${Math.random()}` });
 
-async function finish(api: ApiClient, title: string, est: number, actual: number, categoryId?: string) {
+async function finish(
+  api: ApiClient,
+  title: string,
+  est: number,
+  actual: number,
+  categoryId?: string,
+) {
   const t = await api.createTask({ title, estimateMin: est, categoryId: categoryId ?? null });
   await api.transitionTask(t.id, 'in_progress');
   await api.setTaskActual(t.id, actual);

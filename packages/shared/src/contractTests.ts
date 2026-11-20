@@ -2346,7 +2346,12 @@ export function runApiContract(
       const parent = await api.createTask({ title: 'parent' });
       const part = await api.createTask({ title: 'part', estimateMin: 10, parentId: parent.id });
       const none = await api.createTask({ title: 'no estimate' });
-      const row = (id: string, over = {}) => ({ id, actualMin: 10, completedDay: '2026-11-10', ...over });
+      const row = (id: string, over = {}) => ({
+        id,
+        actualMin: 10,
+        completedDay: '2026-11-10',
+        ...over,
+      });
       const refused: [unknown[], RegExp][] = [
         [[], /at least one/],
         [[row(ok.id), row('nope')], /Row 2 \(nope\): not found/],
@@ -2407,7 +2412,9 @@ export function runApiContract(
       expect(marked).toMatchObject({ backfilled: true, completedAt: done.completedAt });
       expect((await api.getCalibration(ALL)).find((p) => p.taskId === t.id)?.backfilled).toBe(true);
       expect((await api.setTaskBackfilled(t.id, false)).backfilled).toBe(false);
-      expect((await api.getCalibration(ALL)).find((p) => p.taskId === t.id)?.backfilled).toBe(false);
+      expect((await api.getCalibration(ALL)).find((p) => p.taskId === t.id)?.backfilled).toBe(
+        false,
+      );
       const open = await api.createTask({ title: 'open', estimateMin: 30 });
       await expect(api.setTaskBackfilled(open.id, true)).rejects.toThrow(/done task/);
       expect((await api.setTaskBackfilled(open.id, false)).backfilled ?? false).toBe(false);
@@ -2424,7 +2431,8 @@ export function runApiContract(
         await api.setTaskActual(id, 30);
         await api.transitionTask(id, 'done');
       }
-      const point = async (id: string) => (await api.getCalibration(ALL)).find((p) => p.taskId === id);
+      const point = async (id: string) =>
+        (await api.getCalibration(ALL)).find((p) => p.taskId === id);
       expect(await point(t.id)).toMatchObject({ area: 'aperture', backfilled: false });
       expect(await point(loose.id)).toMatchObject({ area: 'personal', backfilled: false });
       await api.setCategoryArea(cat.id, 'school');

@@ -114,6 +114,7 @@ describe('createMcpClient', () => {
       'toolsList',
     ]);
     expect(Object.keys(c.writes).sort()).toEqual([
+      'backfillTasks',
       'completeTask',
       'createCategory',
       'createSeries',

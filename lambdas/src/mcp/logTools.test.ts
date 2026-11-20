@@ -292,7 +292,11 @@ describe('get_day', () => {
       deltaMin: null,
       backfilled: true,
     });
-    expect(row(scored.id)).toMatchObject({ isCalibrationPoint: true, deltaMin: 10, backfilled: false });
+    expect(row(scored.id)).toMatchObject({
+      isCalibrationPoint: true,
+      deltaMin: 10,
+      backfilled: false,
+    });
   });
 
   it('buckets a finish before the day start into the previous day', async () => {

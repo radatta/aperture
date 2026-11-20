@@ -136,6 +136,13 @@ export function tasksWrites(c: Core, reads: Reads) {
       assertLedgerTask(id);
       return call<DevTask>('setTaskEstimate', [id, estimateMin, bufferMin]);
     },
+    // backfillTasks over the BFF (calibration-dev-lane): every id must be one this run recorded.
+    async backfillTasks(
+      inputs: { id: string; actualMin: number; estimateMin?: number; completedDay: string }[],
+    ): Promise<{ id: string; outcome: string; task: DevTask }[]> {
+      for (const i of inputs) assertLedgerTask(i.id);
+      return call('backfillTasks', [inputs]);
+    },
     async deleteTask(id: string): Promise<void> {
       assertLedgerTask(id);
       await call<null>('deleteTask', [id]);

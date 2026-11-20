@@ -26,13 +26,24 @@ import {
   type ToolResult,
 } from './core';
 
+// The prefix of a task id no row can have (ULIDs are Crockford base32, upper case, no hyphen).
+export const UNKNOWN_TASK_ID = 'devcheck-nope-';
+
 export function tasksReads(c: Core) {
   const { data } = c;
   const reads = {
     listTasks: () => data<DevTask[]>('list_tasks'),
     listBacklog: () => data<DevTask[]>('list_backlog'),
     getCalibration: (range: { from: string; to: string }) =>
-      data<{ taskId: string; reflection?: string | null }[]>('get_calibration', range),
+      data<
+        {
+          taskId: string;
+          reflection?: string | null;
+          area?: string;
+          backfilled?: boolean;
+          day?: string;
+        }[]
+      >('get_calibration', range),
     listAttachments: (taskId: string) => data<DevAttachment[]>('list_attachments', { taskId }),
     getAttachmentDownloadUrl: (id: string) => data<string>('get_attachment_download_url', { id }),
     listPlaces: () => data<DevPlace[]>('list_places'),
@@ -99,6 +110,7 @@ export function tasksWrites(c: Core, reads: Reads) {
         reflection?: string | null;
         estimateMin?: number;
         status?: 'in_progress' | 'done';
+        backfilled?: boolean | string; // a string only to prove the refusal
       },
     ): Promise<DevTask> {
       assertLedgerTask(id);
@@ -136,6 +148,23 @@ export function tasksWrites(c: Core, reads: Reads) {
         ...(reflection === undefined ? {} : { reflection }),
         ...(estimateMin === undefined ? {} : { estimateMin }),
       });
+    },
+    // backfill_tasks (docs/areas/calibration/dev-lane.md) over this run's tasks: every id a row names must be one
+    // the ledger recorded, bar an id starting UNKNOWN_TASK_ID, which no row can have (sent to prove the refusal).
+    // Returns the rows, or the refusal's text — a param error or the tool's own — so a step can read either.
+    async backfillTasks(
+      rows: Record<string, unknown>[],
+    ): Promise<{ rows: { id: string; outcome: string; task: DevTask }[] } | { refused: string }> {
+      for (const r of rows)
+        if (typeof r?.id === 'string' && !r.id.startsWith(UNKNOWN_TASK_ID)) assertLedgerTask(r.id);
+      try {
+        const r = await tool('backfill_tasks', { tasks: rows });
+        if (r.isError) return { refused: r.text };
+        return { rows: JSON.parse(r.text) as { id: string; outcome: string; task: DevTask }[] };
+      } catch (err) {
+        if (err instanceof McpRpcError && err.code === PARAM_ERROR) return { refused: err.message };
+        throw err;
+      }
     },
     // Split one of this run's tasks; what it creates is recorded from the response, so cleanup can remove it.
     async splitTask(

@@ -137,7 +137,10 @@ describe('the Aperture lane and backfilled points', () => {
 
   it('a backfilled point never moves the gap; it is counted apart', () => {
     const scored = aggregate([p({})]);
-    const withBackfill = aggregate([p({}), p({ backfilled: true, estimateLockedMin: 600, actualAccruedMin: 5 })]);
+    const withBackfill = aggregate([
+      p({}),
+      p({ backfilled: true, estimateLockedMin: 600, actualAccruedMin: 5 }),
+    ]);
     expect(withBackfill).toMatchObject({
       count: scored.count,
       totalEstimateMin: scored.totalEstimateMin,

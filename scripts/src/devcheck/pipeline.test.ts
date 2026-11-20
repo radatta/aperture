@@ -399,6 +399,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       startCatalogImport: async () => {
         throw new Error('unused');
       },
+      backfillTasks: async () => {
+        throw new Error('unused');
+      },
       updateSettings: async (patch) => {
         settings = { ...settings, ...patch };
         return settings;
