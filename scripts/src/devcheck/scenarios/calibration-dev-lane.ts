@@ -50,7 +50,11 @@ function expected(points: DevCalibrationPoint[], lane: 'life' | 'aperture') {
   };
 }
 // Every one of `want` on the server's points (the list read lags a write), over the page's window.
-async function pointsWith(ctx: Ctx, want: string[], check = (_: DevCalibrationPoint) => true) {
+async function pointsWith(
+  ctx: Ctx,
+  want: string[],
+  check: (p: DevCalibrationPoint) => boolean = () => true,
+) {
   const range = await window(ctx);
   for (let i = 0; ; i++) {
     const all = await ctx.api.reads.getCalibration(range);
