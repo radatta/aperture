@@ -108,6 +108,12 @@ export function PeriodHeader({
           </div>
         ))}
       </dl>
+      {/* Split parts set to the next period: in no total until you mark the payment that starts it. */}
+      {overview.upcoming.count > 0 && (
+        <Text size="sm" tone="muted">
+          {fmtMoney(overview.upcoming.totalCents)} waiting for next period
+        </Text>
+      )}
       {unsortedCount > 0 && (
         <Link
           to="/finances"

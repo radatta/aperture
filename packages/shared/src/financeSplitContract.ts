@@ -139,6 +139,14 @@ export function financeSplitContract(h: FinanceSplitHarness) {
       { bucket: 'i_pay', cents: 1040, period: null, percent: 40 },
       { bucket: 'budget', cents: 1560, period: null, percent: 60 },
     ]);
+    // A Pause (same bucket, no split sent — an older client too) keeps the split.
+    const paused = await api.upsertFinanceRule({
+      id: rule.id,
+      pattern: 'sweetgreen',
+      bucket: 'budget',
+      active: false,
+    });
+    expect([paused.active, paused.split]).toEqual([false, rule.split]);
     // Back to one bucket: the split goes.
     const plain = await api.upsertFinanceRule({
       id: rule.id,

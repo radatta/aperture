@@ -3278,6 +3278,7 @@ class StubClient implements ApiClient {
       const rule = await this.upsertFinanceRule({
         pattern: input.rule.pattern,
         bucket: input.bucket,
+        split: null, // "Always put it in <bucket>"
       });
       for (const x of this.alive(this.store.financeTransactions)) {
         if (
@@ -3423,10 +3424,13 @@ class StubClient implements ApiClient {
   }
   // One live rule per pattern: saving an existing pattern updates it.
   async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
-    const fields = financeRuleFields(input);
-    const pattern = fields.pattern;
-    const id =
-      input.id ?? this.alive(this.store.financeRules).find((r) => r.pattern === pattern)?.id;
+    const rules = this.alive(this.store.financeRules);
+    const pattern = financeRuleFields({ ...input, split: null }).pattern;
+    const id = input.id ?? rules.find((r) => r.pattern === pattern)?.id;
+    const fields = financeRuleFields(
+      input,
+      rules.find((r) => r.id === id),
+    );
     if (id) return this.writes.patch(this.store.financeRules, id, fields);
     return this.writes.insert(this.store.financeRules, { ...this.base(), ...fields });
   }

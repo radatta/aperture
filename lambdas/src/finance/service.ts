@@ -145,6 +145,7 @@ export class FinanceService {
       const rule = await this.upsertFinanceRule({
         pattern: input.rule.pattern,
         bucket: input.bucket,
+        split: null, // "Always put it in <bucket>"
       });
       const sweepable = (x: FinanceTransaction) =>
         x.deletedAt === null &&
@@ -337,10 +338,13 @@ export class FinanceService {
 
   // One live rule per pattern: saving an existing pattern updates it.
   async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
-    const fields = financeRuleFields(input);
-    const pattern = fields.pattern;
-    const id =
-      input.id ?? (await this.repo.listFinanceRules()).find((r) => r.pattern === pattern)?.id;
+    const pattern = financeRuleFields({ ...input, split: null }).pattern;
+    const rules = await this.repo.listFinanceRules();
+    const id = input.id ?? rules.find((r) => r.pattern === pattern)?.id;
+    const fields = financeRuleFields(
+      input,
+      rules.find((r) => r.id === id),
+    );
     const t = this.d.now();
     if (id)
       return this.repo.casUpdate(this.repo.finRuleShape(id), id, (r) => ({ ...r, ...fields }), t);

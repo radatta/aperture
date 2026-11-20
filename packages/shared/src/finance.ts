@@ -230,7 +230,9 @@ export interface UpsertFinanceRuleInput {
   pattern: string;
   bucket: FinanceBucket;
   active?: boolean;
-  split?: FinanceRuleSplitPart[] | null; // omitted or null = a one-bucket rule; else bucket = its largest part
+  // null = a one-bucket rule; else bucket = its largest part. Omitted keeps a split rule's split while
+  // the bucket is unchanged (a Pause, or an older client that doesn't know splits), else one bucket.
+  split?: FinanceRuleSplitPart[] | null;
 }
 // A user's split part over the wire: never `percent` (an edit overrides a rule's split).
 export type FinanceSplitPartInput = Omit<FinanceSplitPart, 'percent'>;
@@ -1060,16 +1062,19 @@ export function splitSortError(
 export const orderRefundParts = (parts: FinanceRefundPart[]): FinanceRefundPart[] =>
   parts.map((p) => ({ chargeId: p.chargeId, cents: p.cents })).sort((a, b) => b.cents - a.cents);
 
-// A rule's stored fields from an upsert, or a thrown refusal — both impls. A split rule's bucket is
-// its largest part, so anything reading `bucket` alone still gets a sensible answer.
+// A rule's stored fields from an upsert (over `existing`, the rule it updates), or a thrown refusal —
+// both impls. A split rule's bucket is its largest part, so anything reading `bucket` alone still gets
+// a sensible answer.
 export function financeRuleFields(
   input: UpsertFinanceRuleInput,
+  existing?: FinanceRule,
 ): Pick<FinanceRule, 'pattern' | 'bucket' | 'active' | 'split'> {
   const bucketError = financeBucketError(input.bucket, { nullable: false });
   if (bucketError) throw new Error(bucketError);
   const pattern = normalizeRulePattern(input.pattern);
   if (!pattern) throw new Error('A rule needs a pattern');
-  const split = input.split ?? null;
+  const kept = existing?.split && existing.bucket === input.bucket ? existing.split : null;
+  const split = input.split === undefined ? kept : input.split;
   if (split) {
     const splitError = financeRuleSplitError(split);
     if (splitError) throw new Error(splitError);
