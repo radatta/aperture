@@ -9,7 +9,7 @@
 # `/compact`. `send` run by hand skips the lane and hub checks `stop` made: it gains nothing over a raw tmux call.
 # Nothing read from a file reaches an argv but validated numbers and a charset-checked cwd.
 set -u
-export LC_ALL=C GIT_OPTIONAL_LOCKS=0
+export LC_ALL=C GIT_OPTIONAL_LOCKS=0 GIT_NO_REPLACE_OBJECTS=1 # HEAD: reads main's real commit
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 SC="$BOARD_DIR/self-compact"

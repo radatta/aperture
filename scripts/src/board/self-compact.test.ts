@@ -630,8 +630,9 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(existsSync(join(flagDir(), `${pid}.req`))).toBe(false);
     });
 
-    it('reads no stdin: an open, silent stdin never holds it', async () => {
+    it('reads no stdin: an open, silent stdin never holds it, flag or not', async () => {
       const pid = session();
+      flag(pid);
       const c = spawn('bash', [join(main, 'scripts/board/self-compact.sh'), 'stop', String(pid)], {
         env,
       });

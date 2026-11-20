@@ -117,8 +117,9 @@ session's permissions either: anything a session was refused goes back to the us
   weight, never more: nothing a relay can't approve, and never a lens's model or an effort above `high`. A kickoff file can't be authenticated (an accepted residual),
   so a later message from the pinned address wins over it.
 - **No session types into a pane that holds a Claude session or a command line that starts one, its own included**
-  (`tmux send-keys` or anything like it), so pane input stays the user's; plain shell panes (`tower-capture.sh`) are
-  outside it. Two constant exceptions, neither ever the user's go: `pnpm lanes start`'s constant first prompt, and a
+  (`tmux send-keys` or anything like it), so pane input stays the user's; a pane holding neither (the tower's own
+  pane in its private tmux server, `tower-capture.sh`) is outside it, and `tools/coi/tmux-restore.sh`, which types
+  `claude --resume` into fresh panes, is the user's to run, never a session's. Two constant exceptions, neither ever the user's go: `pnpm lanes start`'s constant first prompt, and a
   lane's Stop hook hand-off typing `/compact` into its own empty box (`docs/ops/COMPACTION-HANDOFF.md` →
   _Self-compact_; off unless main's `limits.json` `lanes.selfCompact`).
 

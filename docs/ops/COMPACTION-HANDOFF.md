@@ -135,9 +135,11 @@ it at once. It ships `false`.
   file written in the last 10 min and a clean tree; not the hub (branch, worktree or record name); the box is on
   screen and empty. It runs mid-turn, under the working footer, so it reads no busy markers: `send` does. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
 - **The hand-off** (`.claude/hooks/board-heartbeat.sh idle`, after the board write): only with a flag for this
-  session's pid, and not on a Stop a stop hook continued (`stop_hook_active`: the flag waits), it runs **main's
+  session's pid, and not on a Stop a stop hook continued (`stop_hook_active`: the request lapses, since the next Stop follows a new
+  prompt and skips as `prompted`), it runs **main's
   committed** `scripts/board/self-compact.sh stop <pid>`, only when that file and the `lib.sh` it sources hash, on
-  disk, to main's `HEAD` blobs (`git hash-object --no-filters` against `HEAD:`, global and system git config off; not
+  disk, to main's `HEAD` blobs (`git hash-object --no-filters` against `HEAD:`, with no replace refs and global and system git config off for those
+  two calls; not
   `git diff`: an empty diff proves nothing about a missing path, and a skip-worktree flag hides an edit), detached
   (`setsid -f`, `timeout -k 1 10`, stdio on `/dev/null`, exit ignored), so it can never fail or delay Stop. With no flag a Stop costs
   one `stat`. No `settings.json` change: it rides the registered Stop entry.

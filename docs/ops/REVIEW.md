@@ -43,30 +43,34 @@ commit, it behaves as before (and says what it left to the other lenses).
   load against the kill thresholds (`docs/ops/CI-BOT.md` → _What's capped_, _Kill switch_);
 - `docs/arch/INFRA.md`, `docs/ops/CI-BOT.md`, and any deploy, slot, lock or approval rule, the review's lens and round
   rules included wherever they are stated, and `scripts/src/claude-edit/` (the code that holds the agent-rule approval);
-- in round 1 on a risk-class branch (_A risk class_, below), the branch's `lambdas/` and `packages/shared` code; in a
-  later round, a fix, dev-fix, rebase or re-plan range that itself falls in a class.
+- a risk class, in a round 1 and in a later range, each as _A risk class_ (below) says.
 
-**A risk class** is judged at the lens pick (_Picking lenses_) and recorded with it in `localNotes/decisions.md`; on
-such a branch the branch's `lambdas/` and `packages/shared` code is an infra trigger, since that is the code that is
-wired, stored and deployed. That is round 1's trigger only: a later fix, dev-fix or rebase range on a class branch
-brings infra back through the other triggers, or by itself falling in a class (a fix that changes a stored shape, key,
-TTL stamp or retention is a migration). A class only ever widens: a later fix, dev-fix, rebase or re-plan range that
-itself falls in a class makes it a risk-class branch from then on (logged), never the reverse; that range brings infra
-back on itself, and on the branch's `lambdas/` and `packages/shared` diff (`origin/main...HEAD` on those paths) unless
-infra already read that diff.
+**A risk class** is judged at the lens pick (_Picking lenses_) and recorded with it in `localNotes/decisions.md`. What
+a class adds is stated in this paragraph only; the other sections point here. In a round 1 (the branch's, or a
+re-plan's own over its diff: _Round 2 and later_ → _The pick_) on a risk-class branch, that diff's `lambdas/` and
+`packages/shared` code is an infra trigger, since that is the code that is wired, stored and deployed. A class only
+ever widens: a later fix, dev-fix, rebase or re-plan range that itself falls in a class makes it a risk-class branch
+from then on (logged), never the reverse. After round 1, a fix, dev-fix or rebase range brings infra by class only
+when (a) its `lambdas/` or `packages/shared` code is a migration (the class as _Picking lenses_ → _Risk classes_ lists
+it), whatever classes the branch carries; (b) its `lambdas/` or `packages/shared` code falls in a class in which the
+branch had no `lambdas/` or `packages/shared` code before that range; or (c) it makes the branch a risk-class branch
+while infra has not read the branch's `lambdas/` and `packages/shared` diff. Any other such range brings no infra by
+class, on a class branch or off it; the other triggers still apply to it. Infra that a class brings after the
+branch's round 1 reads its range, and the rest of the branch's `lambdas/` and `packages/shared` diff
+(`origin/main...HEAD` on those paths) unless infra already read that diff.
 Where the class has no `lambdas/` or `packages/shared` code to point at (`app/`, `scripts/`, `extension/` or `tools/`
 alone), it adds no infra by itself; the other triggers still apply. On the two such auth diffs (f226, app-401) infra
 found 0 serious; no finance, migration or external-write diff was measured (the lens measurement, 2026-11-18).
 Accepted residuals, as on main: a stage branch, limit or cost cap in `lambdas/` or shared code that belongs to no
 class has no trigger of its own, and a kickoff add still brings infra, as does doubt whether a listed trigger
-matches; "when unsure" with no trigger candidate no longer does (`dev-sitting-cap` got infra that way under the old
-rule, 0 serious). New with these cuts, unmeasured: a stored shape an `extension/` payload carries verbatim (the
-extension lens owns the wire contract); on a class branch, a fix to `lambdas/` or `packages/shared` code outside the
-other triggers and in no class itself gets no infra reread, serious round or not; on any branch, a fix to an
-infra-raised or infra-kind finding that lies outside the triggers gets none either (its unfixed S1/S2 still does:
-_Merge_ 6), and a fix to a UI-lens finding that changes nothing that renders gets no re-shoot — `review-fixes` reads
-them all (main reread every class branch's fixes and every infra or UI finding's fix; _Round 2 and later_ keeps one
-synth reread for `cdk/`; cut 2026-11-19).
+matches. New with these cuts, unmeasured: "when unsure" with no trigger candidate no longer brings infra
+(`dev-sitting-cap` got infra that way under the old rule, 0 serious); a stored shape an `extension/` payload carries
+verbatim (the extension lens owns the wire contract); a later range that brings no infra by class (above) and touches
+no other trigger gets no infra read, serious round or not — a fix in class code on a class branch, say; on any branch,
+a fix to an infra-raised or infra-kind finding that lies outside the triggers gets none either, the finding-led reads
+aside (_Picking lenses_), and a fix to a UI-lens finding that changes nothing that renders gets no re-shoot —
+`review-fixes` reads them all (main reread every class branch's fixes and every infra or UI finding's fix; _Round 2
+and later_ keeps one synth reread for `cdk/` and the infra round a class brings; cut 2026-11-19).
 
 What each touched package still brings, as before:
 
@@ -89,7 +93,9 @@ What each touched package still brings, as before:
 ## Picking lenses
 
 `git diff --name-only origin/main...HEAD` against the table and the infra triggers; when unsure, add the lens —
-except infra, which runs only when a listed trigger matches or a kickoff or relay adds it. Doubt whether a listed
+except infra, which runs only when a listed trigger matches or a kickoff or relay adds it (the finding-led reads
+aside: _Merge_ 6, the cap in _Round 2 and later_ → _The pick_, a dev fix of a deploy, slot or cost defect). Doubt
+whether a listed
 trigger matches means it matches, infra's included (as in _A small diff_ below); only infra wanted with no trigger
 candidate at all is cut. The
 pick goes in `localNotes/decisions.md`. The triggered lenses are a floor: a kickoff or a relay can add lenses or
@@ -111,9 +117,9 @@ other recheck reads it. The lane keeps the old patch beside the new one; each pr
 - **Risk classes** — auth (JWT, Cognito, tokens, the origin secret), IAM/cdk (`cdk/`, roles, policies), finance
   (`lambdas/src/finance*`, `packages/shared/src/finance*`, Plaid, `app/src/modules/finances`), migrations (a stored
   shape, key, TTL stamp or retention that changes, a backfill),
-  external-service writes (Google Calendar, S3, push, model calls that write). A class adds infra in round 1, through the
-  branch's `lambdas/` and `packages/shared` code (_A risk class_, above), and is named in the infra prompt; it adds no
-  recheck and no later infra round by itself (a later range that itself falls in a class does: _A risk class_). It still counts for the dev-fix skip (_After a dev fix or a rebase_) and at the round cap
+  external-service writes (Google Calendar, S3, push, model calls that write). What a class adds, in round 1 and
+  after, is in _A risk class_ (above); the class is named in the infra prompt and adds no `review-fixes` recheck by
+  itself. It still counts for the dev-fix skip (_After a dev fix or a rebase_) and at the round cap
   (_Round 2 and later_ → _The pick_).
 - **A small diff** — 3 files or fewer, no infra, shell, UI or extension trigger (a file under `scripts/` or `tools/`, or
   the root `package.json`'s `scripts`, counts as a shell trigger here): round 1 is `code-reviewer`,
@@ -190,8 +196,9 @@ commit for the round. No new Plan (`docs/ops/FEATURE-WORKFLOW.md` → phase 2).
 ## Round 2 and later
 
 - **Only after a serious finding**, an S1/S2 left unfixed (_Merge_ 6), or a fix range that brings a lens back: it
-  touches the trigger of a lens no round on this branch ran, or touches `cdk/` when no infra round has read a `cdk/`
-  fix range yet (infra with the synth pass; once). A round entered for that alone is a lens-only round: just that
+  touches the trigger of a lens no round on this branch ran, touches `cdk/` when no infra round has read a `cdk/`
+  fix range yet (infra with the synth pass; once), or brings infra by class (_A risk class_, which also names what
+  infra reads). A round entered for that alone is a lens-only round: just that
   lens on the fix range, not `review-fixes`, told to tag `cause=` against the previous round's list; its findings are that round's
   list, and it counts toward the cap. Otherwise the review has stopped, risk class or not; go to phase 7. Every
   serious `review-fixes` find so far followed a round with serious fixes (the lens measurement).
@@ -199,7 +206,7 @@ commit for the round. No new Plan (`docs/ops/FEATURE-WORKFLOW.md` → phase 2).
   `round-<n>.md`. Beside it, of the round-1 lenses only `review-ui` and `review-infra`, and only when the fix range itself
   triggers them (`review-correctness` and `review-tests` don't rerun: `review-fixes` reads the fix): `review-ui` re-shoots just the changed
   screens when the range changes what renders (`app/` components or styles); `review-infra` reruns on it (with the
-  synth pass for `cdk/`) when the range touches an infra trigger other than the risk-class one (_A risk class_) — not
+  synth pass for `cdk/`) when the range touches an infra trigger (by class: only as _A risk class_ says) — not
   because the branch ran infra in round 1, nor because the fixed finding was the infra lens's or of an infra kind:
   `review-fixes` reads that fix; a lens the fix range brings back runs on it too, and infra reads the reason of an
   unfixed infra-kind S1/S2 (_Merge_ 6). No other round-1 lens reruns.
@@ -214,7 +221,7 @@ commit for the round. No new Plan (`docs/ops/FEATURE-WORKFLOW.md` → phase 2).
   with it); or, from round 2 on, at a **twin** — a serious `cause=fix` or `cause=sibling` finding in
   the mechanism an earlier round's fix already patched (one regex family, one parser, one state machine): the
   design is wrong, not the code. Round 2 counts; a serious regression elsewhere (a caller, another module) does
-  not. A lens-only round has no twin stop (its lens reads that mechanism for the first time): a serious find there
+  not. A lens-only round has no twin stop (its lens reads that range for the first time): a serious find there
   is serious again. The round file names, for each serious `cause=fix` or `cause=sibling` finding, the earlier finding whose
   fix patched that mechanism, or why it lies elsewhere. At any stop the round's findings stay unpatched:
   `[ask-maintainer]` with the open list and three options — patch it and recheck, re-plan that piece, or ship with
@@ -235,8 +242,8 @@ commit for the round. No new Plan (`docs/ops/FEATURE-WORKFLOW.md` → phase 2).
 ## After a dev fix or a rebase
 
 A fix from dev testing (phases 8–9, a red `Branch` run included), or a rebase that resolved conflicts, is committed and gated, then gets
-`review-fixes`, plus `review-ui` or `review-infra` when the fix or rebase range itself touches their triggers (the
-round-1 risk-class trigger aside; a range that itself falls in a class still brings infra: _A risk class_),
+`review-fixes`, plus `review-ui` or `review-infra` when the fix or rebase range itself touches their triggers (infra
+by class: only as _A risk class_ says),
 `review-infra` too when it fixes a deploy, slot or cost defect (a red deploy run, a slot or lock fault, a kill trip),
 and any lens the range brings back (_Only after_), as in round 2 — whatever its size. Only a fix that touches no
 infra, shell, UI or extension trigger and falls in no risk class itself (whatever the branch's class), and is
@@ -254,7 +261,7 @@ fix to that mechanism (a rebase chain has no twin stop: a bad resolution is seri
 
 A serious finding in round 2 or later, or in any recheck of a dev, rebase or re-plan chain, that the fixes didn't cause
 (`cause=pre-existing`) means an earlier lens should have seen it. One found by a lens a lens-only round brought
-back, or an infra-kind dev defect on a branch infra never read or in a fix range infra did not reread, is a trigger gap
+back for its first read of the branch, or an infra-kind dev defect on a branch infra never read or in a fix range infra did not reread, is a trigger gap
 instead:
 `lens-gap: <lens> trigger — <line>`, a follow-up to widen that lens's trigger, not its checklist.
 
