@@ -35,7 +35,8 @@ Category ──── area: 'school' | 'aperture' | 'recruiting' | 'personal' | 
   Personal too. Rows from before the field read back `undefined` and both impls list them as `null`, so a
   reader never sees three states. No migration.
 - **Live, never snapshotted.** `isWork` stays as it is (snapshotted onto sessions as `wasWork` for the time
-  budget); the area is a grouping read live, like the label — change it and history regroups.
+  budget); the area is a grouping read live, like the label — change it and history regroups. Calibration
+  reads it the same way: the Aperture area is its own calibration lane ([dev-lane](../calibration/dev-lane.md)).
 - **A course is a School-area category**, not a second entity (the `courseId` memo's won't-do): per-course
   calibration is per category, balance is per area, and a course ends by retiring its category — it keeps
   its area, so an old term's time still lands under School.

@@ -45,6 +45,7 @@ import type {
   LegacyLeetcodeAttempt,
 } from './types';
 import type { Area } from './areas';
+import type { BackfillResult, BackfillTaskInput } from './calibration';
 import type {
   CoachAttemptInput,
   CoachSlotInput,
@@ -477,6 +478,12 @@ export interface ApiClient {
   // reflection rides the same write: undefined KEEPS the current one (an older caller sends two params),
   // null clears, a string is normalized — over the cap rejects and writes nothing, the actual included.
   setTaskActual(id: string, actualMin: number, reflection?: string | null): Promise<Task>;
+  // Backfill (calibration.ts; docs/areas/calibration/dev-lane.md): close old tickets with their real minutes,
+  // dated to the day each shipped and marked backfilled — points that never move the gap. All-or-nothing on
+  // validation (planBackfill names the bad row); a task already done and backfilled comes back `skipped`, so a
+  // rerun is safe. Plain tasks only. setTaskBackfilled sets or clears the mark on a done task.
+  backfillTasks(inputs: BackfillTaskInput[]): Promise<BackfillResult[]>;
+  setTaskBackfilled(id: string, backfilled: boolean): Promise<Task>;
   // Split always yields parent + parts (split.ts): the original finishes or keeps going, the rest becomes a
   // new part on the original's plan day (else backlog). A standalone original becomes Part 1 under a NEW
   // parent that takes its title, deadline and lock; a part gains a sibling. Never cancels, never edits a lock.

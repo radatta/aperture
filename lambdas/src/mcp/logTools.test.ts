@@ -280,6 +280,21 @@ describe('get_day', () => {
     expect(out.leetcode).toEqual([]);
   });
 
+  it('a backfilled ticket is listed with no delta and never reads as a calibration point', async () => {
+    const scored = await finishAt('Scored', at('2026-11-05', '10:00'));
+    const old = await finishAt('Old ticket', at('2026-11-05', '11:00'));
+    await backend.setTaskBackfilled(old.id, true);
+    const out = (await run('get_day', { day: '2026-11-05' })) as DayOut;
+    const row = (id: string) => out.tasks.done.find((t) => t.id === id);
+    expect(row(old.id)).toMatchObject({
+      actualMin: 40,
+      isCalibrationPoint: false,
+      deltaMin: null,
+      backfilled: true,
+    });
+    expect(row(scored.id)).toMatchObject({ isCalibrationPoint: true, deltaMin: 10, backfilled: false });
+  });
+
   it('buckets a finish before the day start into the previous day', async () => {
     const late = await finishAt('Late', at('2026-11-06', '03:59'));
     const early = await finishAt('Early', at('2026-11-06', '04:00'));

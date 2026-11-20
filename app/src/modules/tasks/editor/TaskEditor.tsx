@@ -377,6 +377,8 @@ export function TaskEditor({
           {task.startedAt != null && <Row label="Started">{fmtDateTime(task.startedAt)}</Row>}
           {task.completedAt != null && <Row label="Completed">{fmtDateTime(task.completedAt)}</Row>}
           {task.cancelledAt != null && <Row label="Dropped">{fmtDateTime(task.cancelledAt)}</Row>}
+          {/* closed after the fact (docs/areas/calibration/dev-lane.md): its delta is shown, never scored */}
+          {task.backfilled && <Row label="Calibration">Backfilled · not scored</Row>}
           {showDelta && (
             <DeltaBar
               estimateMin={task.estimateLockedMin!}

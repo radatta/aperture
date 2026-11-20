@@ -727,7 +727,7 @@ the wave grouped by state (in flight, open, not started; merged only counted) an
       "what": "",
       "kind": "dev | merge | maintainer | ci",
       "who": "",
-      "you": "<optional: the maintainer's cost, 2 min | talk | 1 line + a mode>",
+      "you": "<optional: the maintainer's cost, 2 min | talk | 1 line + a mode; a lane's row: <n> min>",
       "eta": { "from": "<ISO>", "to": "<ISO>", "source": "measured | guess" },
       "lane": "<optional: the branch whose ETA this row waits on>",
       "done": "<optional: true, or the ISO time it finished>"
@@ -783,7 +783,7 @@ read it differently. A `queue.json` that won't parse leaves the tower on its las
 statusline reads the new file. No `plan` is an empty plan, not a problem.
 
 The plan-table fields (the web tower's NEXT, TOWER.md → _Expand_) are all optional, and a file without them reads as
-before. `you` is what the row costs the maintainer; `eta` is the window the row finishes in (`at` stays its start,
+before. `you` is what the row costs the maintainer (a lane's row as `<n> min`: it is that dev ticket's estimate, [dev-lane](../areas/calibration/dev-lane.md)); `eta` is the window the row finishes in (`at` stays its start,
 its sort key and the statusline's time), `measured` from board history or a `guess`; `lane` names the lane whose ETA
 the row waits on, so the tower can mark it slipping; `done` strikes it (`true`, or the ISO time it finished, which
 the expanded view sets against its due as est vs actual). A `done` row leaves the PLAN panel and the next merge. `planAt` is when the hub last rewrote the plan; `planNotes` its

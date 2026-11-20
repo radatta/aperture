@@ -3,11 +3,12 @@
 // edge) with the wrong shape is a ShapeError — a 400 naming the problem — never a TypeError deep in a
 // handler or a nested object stored as sent. The `satisfies` keeps this table in lockstep with ApiClient:
 // a new method, a changed arity or a new input field without a check here fails typecheck.
-import { COMPETENCY_TAGS, TOKEN_SCOPES } from '@aperture/shared';
+import { BACKFILL_MAX, COMPETENCY_TAGS, TOKEN_SCOPES } from '@aperture/shared';
 import type {
   ApiClient,
   ApiMethod,
   Area,
+  BackfillTaskInput,
   CalendarRef,
   CreateLinkTokenInput,
   CreateTaskInput,
@@ -260,6 +261,21 @@ export const RPC_ARGS = {
     named('actualMin', minutes),
     named('reflection', opt(nullable(str(TEXT_MAX)))),
   ],
+  backfillTasks: [
+    named(
+      'inputs',
+      arr(
+        obj<BackfillTaskInput>('task', {
+          id: str(ID_MAX),
+          actualMin: minutes,
+          estimateMin: opt(nullable(minutes)),
+          completedDay: str(KEY_MAX),
+        }),
+        BACKFILL_MAX,
+      ),
+    ),
+  ],
+  setTaskBackfilled: [id, named('backfilled', bool)],
   splitTask: [
     id,
     obj('split', {

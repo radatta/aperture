@@ -182,6 +182,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
         gcalCalendarId: null,
         gcalEventId: null,
         gcalSyncError: null,
+        // The oldest Deep Work (Aperture) one was closed after the fact, so the lane's footnote shows.
+        ...(d === 12 ? { backfilled: true } : {}),
       };
       store.tasks.push(task);
       const session: PomodoroSession = {

@@ -2303,6 +2303,134 @@ export function runApiContract(
       expect(points.find((p) => p.taskId === late.id)?.estimateSource).toBe('retro');
     });
 
+    // Backfill (calibration.ts; docs/areas/calibration/dev-lane.md): old tickets closed with real minutes,
+    // dated to the day they shipped, kept as points that never score the gap.
+    const ALL = { from: '2000-01-01', to: '2100-01-01' };
+    it('backfill: closes tickets done on their day, marked, as points with their area', async () => {
+      at('2026-11-19');
+      const dev = await api.upsertCategory({ label: 'Dev', isWork: true, area: 'aperture' });
+      const a = await api.createTask({ title: 'shipped a', estimateMin: 30, categoryId: dev.id });
+      const b = await api.createTask({ title: 'shipped b', categoryId: dev.id });
+      await api.transitionTask(a.id, 'planned');
+      const res = await api.backfillTasks([
+        { id: a.id, actualMin: 45, completedDay: '2026-11-10' },
+        { id: b.id, actualMin: 20, estimateMin: 15, completedDay: '2026-11-12' },
+      ]);
+      expect(res.map((r) => [r.id, r.outcome])).toEqual([
+        [a.id, 'done'],
+        [b.id, 'done'],
+      ]);
+      expect(res[0]!.task).toMatchObject({
+        status: 'done',
+        backfilled: true,
+        actualAccruedMin: 45,
+        estimateLockedMin: 30,
+        estimateSource: 'planned',
+      });
+      expect(res[1]!.task).toMatchObject({ estimateLockedMin: 15, estimateSource: 'retro' });
+      const got = (await api.getTask(a.id))!;
+      expect(dayKeyInZone(got.completedAt!, USER_TIME_ZONE, 4)).toBe('2026-11-10');
+      expect(got.startedAt!).toBeLessThanOrEqual(got.completedAt!);
+      const points = await api.getCalibration(ALL);
+      expect(points.find((p) => p.taskId === a.id)).toMatchObject({
+        day: '2026-11-10',
+        area: 'aperture',
+        backfilled: true,
+      });
+      expect(points.find((p) => p.taskId === b.id)?.day).toBe('2026-11-12');
+    });
+
+    it('backfill: one bad row refuses the whole batch, naming it, and writes nothing', async () => {
+      at('2026-11-19');
+      const ok = await api.createTask({ title: 'ok', estimateMin: 30 });
+      const parent = await api.createTask({ title: 'parent' });
+      const part = await api.createTask({ title: 'part', estimateMin: 10, parentId: parent.id });
+      const none = await api.createTask({ title: 'no estimate' });
+      const row = (id: string, over = {}) => ({ id, actualMin: 10, completedDay: '2026-11-10', ...over });
+      const refused: [unknown[], RegExp][] = [
+        [[], /at least one/],
+        [[row(ok.id), row('nope')], /Row 2 \(nope\): not found/],
+        [[row(ok.id), row(ok.id)], /listed twice/],
+        [[row(ok.id, { actualMin: 0 })], /actualMin/],
+        [[row(ok.id, { actualMin: 1.5 })], /actualMin/],
+        [[row(ok.id, { estimateMin: 0 })], /estimateMin/],
+        [[row(ok.id, { completedDay: '2026-11-20' })], /after today/],
+        [[row(ok.id, { completedDay: '11/10/2026' })], /completedDay/],
+        [[row(ok.id), row(parent.id)], /has parts/],
+        [[row(part.id)], /is a part/],
+        [[row(none.id)], /no estimate/],
+      ];
+      for (const [inputs, msg] of refused)
+        await expect(api.backfillTasks(inputs as never)).rejects.toThrow(msg);
+      expect((await api.getTask(ok.id))!.status).toBe('backlog');
+      expect((await api.getCalibration(ALL)).some((p) => p.taskId === ok.id)).toBe(false);
+    });
+
+    it('backfill: refuses the shapes with side effects — errand, cancelled, done unmarked', async () => {
+      at('2026-11-19');
+      await api.upsertPlace({ name: 'Store', slug: 'store' });
+      const errand = await api.createTask({ title: 'milk', place: 'store' });
+      const dropped = await api.createTask({ title: 'dropped', estimateMin: 5 });
+      await api.transitionTask(dropped.id, 'cancelled');
+      const closed = await api.createTask({ title: 'closed', estimateMin: 5 });
+      await api.transitionTask(closed.id, 'in_progress');
+      await api.setTaskActual(closed.id, 5);
+      await api.transitionTask(closed.id, 'done');
+      const row = (id: string) => [{ id, actualMin: 10, completedDay: '2026-11-10' }];
+      await expect(api.backfillTasks(row(errand.id))).rejects.toThrow(/errand/);
+      await expect(api.backfillTasks(row(dropped.id))).rejects.toThrow(/cancelled/);
+      await expect(api.backfillTasks(row(closed.id))).rejects.toThrow(/update_task backfilled/);
+    });
+
+    it('backfill: a rerun skips what landed and changes nothing', async () => {
+      at('2026-11-19');
+      const a = await api.createTask({ title: 'a', estimateMin: 30 });
+      const batch = [{ id: a.id, actualMin: 45, completedDay: '2026-11-10' }];
+      const first = (await api.backfillTasks(batch))[0]!.task;
+      advance(60_000);
+      const again = await api.backfillTasks([{ ...batch[0]!, actualMin: 99 }]);
+      expect(again.map((r) => r.outcome)).toEqual(['skipped']);
+      expect(await api.getTask(a.id)).toMatchObject({
+        actualAccruedMin: 45,
+        completedAt: first.completedAt,
+        updatedAt: first.updatedAt,
+      });
+    });
+
+    it('backfill: the mark is set and cleared on a done task, never on an open one or a parent', async () => {
+      at('2026-11-19');
+      const t = await api.createTask({ title: 'closed by hand', estimateMin: 30 });
+      await api.transitionTask(t.id, 'in_progress');
+      await api.setTaskActual(t.id, 40);
+      const done = await api.transitionTask(t.id, 'done');
+      const marked = await api.setTaskBackfilled(t.id, true);
+      expect(marked).toMatchObject({ backfilled: true, completedAt: done.completedAt });
+      expect((await api.getCalibration(ALL)).find((p) => p.taskId === t.id)?.backfilled).toBe(true);
+      expect((await api.setTaskBackfilled(t.id, false)).backfilled).toBe(false);
+      expect((await api.getCalibration(ALL)).find((p) => p.taskId === t.id)?.backfilled).toBe(false);
+      const open = await api.createTask({ title: 'open', estimateMin: 30 });
+      await expect(api.setTaskBackfilled(open.id, true)).rejects.toThrow(/done task/);
+      expect((await api.setTaskBackfilled(open.id, false)).backfilled ?? false).toBe(false);
+      await expect(api.setTaskBackfilled('nope', true)).rejects.toThrow();
+    });
+
+    it('calibration: a point carries its category’s area now, and an unmarked one reads scored', async () => {
+      at('2026-11-19');
+      const cat = await api.upsertCategory({ label: 'Side', isWork: true, area: 'aperture' });
+      const t = await api.createTask({ title: 't', estimateMin: 30, categoryId: cat.id });
+      const loose = await api.createTask({ title: 'loose', estimateMin: 30 });
+      for (const id of [t.id, loose.id]) {
+        await api.transitionTask(id, 'in_progress');
+        await api.setTaskActual(id, 30);
+        await api.transitionTask(id, 'done');
+      }
+      const point = async (id: string) => (await api.getCalibration(ALL)).find((p) => p.taskId === id);
+      expect(await point(t.id)).toMatchObject({ area: 'aperture', backfilled: false });
+      expect(await point(loose.id)).toMatchObject({ area: 'personal', backfilled: false });
+      await api.setCategoryArea(cat.id, 'school');
+      expect((await point(t.id))?.area).toBe('school');
+    });
+
     it('calibration integrity: rollover keeps the lock through a rescope', async () => {
       const t = await api.createTask({ title: 'rolled', estimateMin: 30 });
       await api.transitionTask(t.id, 'in_progress');

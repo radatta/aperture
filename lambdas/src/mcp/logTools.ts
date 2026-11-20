@@ -144,9 +144,11 @@ function doneRow(t: Task, point: CalibrationPoint | undefined, parts: number) {
     estimateMin: t.estimateMin,
     estimateSource: t.estimateSource ?? null,
     actualMin: t.actualAccruedMin,
-    // Only a calibration point has a delta: a done task with a frozen estimate (get_calibration's rule).
-    isCalibrationPoint: point !== undefined,
-    deltaMin: point ? point.actualAccruedMin - point.estimateLockedMin : null,
+    // Only a scored calibration point has a delta: a done task with a frozen estimate (get_calibration's
+    // rule), not backfilled — a backfilled ticket's estimate was no forecast, so a summing reader skips it.
+    isCalibrationPoint: point !== undefined && !point.backfilled,
+    deltaMin: point && !point.backfilled ? point.actualAccruedMin - point.estimateLockedMin : null,
+    backfilled: point?.backfilled === true,
     parts,
     reflection: t.reflection ?? null,
   };
@@ -347,7 +349,7 @@ export const LOG_TOOLS: Tool[] = [
   },
   {
     name: 'get_day',
-    description: `One day as data — the Log page and the night review in one call. day is an ISO date (an app day: it runs from the user's day-start hour, 4am by default, to the next, Pacific time — see window). Returns: dayPlan (intent, capacity, reflection — null if the app never opened that day); log (that day's entries, in capture order); tasks.done (finished that day: estimateLockedMin vs actualMin, deltaMin for a calibration point; a parent's parts are points of their own, so don't total a parent with its parts); tasks.planned (timed tasks whose deadline falls on the day, byTime, then the day's plan rows) and stillOpen; tasks.due (dueDay is this date — by date, so a 00:30 deadline tomorrow is due tomorrow yet planned tonight); calendar (busy time and the day's shape over the focus window, or a reason; an account whose Google sign-in lapsed reads as free — list_calendars shows reconnectRequired); flux (sets and a summary); leetcode (sittings started that day — get_sitting reads one in full). Read-only: it never spawns recurring tasks or moves stale plans (the app does that when opened). ${PRIVACY}`,
+    description: `One day as data — the Log page and the night review in one call. day is an ISO date (an app day: it runs from the user's day-start hour, 4am by default, to the next, Pacific time — see window). Returns: dayPlan (intent, capacity, reflection — null if the app never opened that day); log (that day's entries, in capture order); tasks.done (finished that day: estimateLockedMin vs actualMin, deltaMin for a scored calibration point — a backfilled ticket, closed after the fact, has backfilled: true and no delta; a parent's parts are points of their own, so don't total a parent with its parts); tasks.planned (timed tasks whose deadline falls on the day, byTime, then the day's plan rows) and stillOpen; tasks.due (dueDay is this date — by date, so a 00:30 deadline tomorrow is due tomorrow yet planned tonight); calendar (busy time and the day's shape over the focus window, or a reason; an account whose Google sign-in lapsed reads as free — list_calendars shows reconnectRequired); flux (sets and a summary); leetcode (sittings started that day — get_sitting reads one in full). Read-only: it never spawns recurring tasks or moves stale plans (the app does that when opened). ${PRIVACY}`,
     inputSchema: {
       type: 'object',
       properties: { day: { type: 'string', description: 'YYYY-MM-DD' } },

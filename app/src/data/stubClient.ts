@@ -7,6 +7,9 @@
 //   - LAZY stale sweep: getDay() also returns planned tasks with no plan row on/after the day to backlog.
 
 import {
+  calibrationPoints,
+  planBackfill,
+  withBackfilled,
   addDays,
   applyRules,
   assertAttachmentAllowed,
@@ -85,7 +88,6 @@ import {
   followUpPlanMinutes,
   assertCanBePart,
   becomeParent,
-  calibrationTasks,
   cancelParent,
   completeParent,
   freezeParentLock,
@@ -103,7 +105,6 @@ import {
   PARENT_NO_START_ERROR,
   parentOf,
   partsOf,
-  rollupParts,
   releaseParent,
   splitFollowUp,
   rescopedPlanMinutes,
@@ -213,6 +214,8 @@ import {
   sittingRepTitle,
 } from '@aperture/shared';
 import type {
+  BackfillResult,
+  BackfillTaskInput,
   CoachAttempt,
   CoachAttemptInput,
   Mock,
@@ -2029,6 +2032,23 @@ class StubClient implements ApiClient {
     assertActualAllowed(this.mustFind(this.store.tasks, id), actualMin);
     return this.writes.patch(this.store.tasks, id, { actualAccruedMin: actualMin, ...note });
   }
+  // Parity with the backend: the whole batch is checked first (planBackfill), then each row is one write.
+  async backfillTasks(inputs: BackfillTaskInput[]): Promise<BackfillResult[]> {
+    const now = this.now();
+    const today = dayKeyInZone(now, USER_TIME_ZONE, this.dayStartHour());
+    const rows = planBackfill(this.alive(this.store.tasks), inputs, today, now);
+    return rows.map(({ id, next, task }) =>
+      next
+        ? { id, outcome: 'done' as const, task: this.writes.put(this.store.tasks, next) }
+        : { id, outcome: 'skipped' as const, task },
+    );
+  }
+  async setTaskBackfilled(id: string, backfilled: boolean): Promise<Task> {
+    const tasks = this.alive(this.store.tasks);
+    const task = this.mustFind(this.store.tasks, id);
+    const next = withBackfilled(task, tasks, backfilled, this.now());
+    return next === task ? task : this.writes.put(this.store.tasks, next);
+  }
   async splitTask(
     id: string,
     input: SplitTaskInput,
@@ -3379,23 +3399,8 @@ class StubClient implements ApiClient {
 
   // --- Calibration ---------------------------------------------------------
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
-    const start = this.dayStartHour();
     const tasks = this.alive(this.store.tasks);
-    return calibrationTasks(tasks)
-      .filter((t) => t.completedAt !== null)
-      .map((t) => ({
-        taskId: t.id,
-        day: dayKeyInZone(t.completedAt!, USER_TIME_ZONE, start),
-        estimateLockedMin: t.estimateLockedMin!,
-        estimateMin: t.estimateMin,
-        estimateSource: t.estimateSource ?? null,
-        actualAccruedMin: t.actualAccruedMin,
-        categoryId: t.categoryId,
-        reflection: t.reflection ?? null,
-        parts: rollupParts(tasks, t.id),
-      }))
-      .filter((p) => p.day >= range.from && p.day <= range.to)
-      .sort((a, b) => a.day.localeCompare(b.day));
+    return calibrationPoints(tasks, this.alive(this.store.categories), this.dayStartHour(), range);
   }
 
   // Enumerated, not spread. The spread silently tracked whatever Store happened to hold — which hid
