@@ -167,8 +167,8 @@ waits for its next message: `request` belongs only where the lane waits for the 
 
 Unmeasured anywhere, run-only at the switch flip: a Stop another Stop hook blocks still runs the hand-off (the
 heartbeat can't see a peer hook's block on the same Stop; only `send`'s 2 s wait and busy check cover it, and no
-blocking Stop hook is registered today); that an ordinary Stop payload carries `stop_hook_active: false` (documented
-in the hooks reference; without it nothing fires, and the log shows a `request` with no `claim`); whether UserPromptSubmit fires for a message queued mid-turn and for
+blocking Stop hook is registered today); that an ordinary Stop payload carries `stop_hook_active: false` (the hooks
+reference shows the field, not that a plain Stop sends it as `false`; without it nothing fires, and the log shows a `request` with no `claim`); whether UserPromptSubmit fires for a message queued mid-turn and for
 a turn a finished background task starts (if not, `lastPromptAt` misses it and the dirty-tree and busy checks are the
 only cover); the box with the slash menu open after typing.
 
