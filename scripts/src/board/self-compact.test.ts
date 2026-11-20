@@ -213,9 +213,13 @@ function claudeBin(dir: string, target: string) {
 const panePid = (pane: 'own' | 'parent' | 'other' | undefined, pid: number) =>
   pane === 'other' ? 1 : pane === 'parent' ? process.pid : pid;
 
-// A live `claude` process (sleep) for stop/send, with its board record and pane.
+// A live `claude` process for stop/send, with its board record and pane: bash blocked in its builtin `read` on a
+// pipe this test never closes. Not a `sleep` symlink: a multicall coreutils (uutils, Ubuntu 25.10+) dispatches on the
+// name, exits at once as `claude`, and leaves a zombie that reads as not alive.
 function session(patch: object = {}, pane: 'own' | 'parent' = 'own') {
-  const c = spawn(claudeBin('claude-sleep', '/bin/sleep'), ['300'], { stdio: 'ignore' });
+  const c = spawn(claudeBin('claude-bin', '/bin/bash'), ['-c', 'read -r _'], {
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
   children.push(c);
   const pid = c.pid!;
   record(pid, patch);
