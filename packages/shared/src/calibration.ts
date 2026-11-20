@@ -24,7 +24,7 @@ import type { CalibrationPoint, Category, Task } from './types';
 export const scoresGap = (p: Pick<CalibrationPoint, 'parts' | 'backfilled'>): boolean =>
   !p.parts && !p.backfilled;
 
-// The Aperture life area is its own lane (dev work: his attention minutes); everything else is Life. A
+// The Aperture life area is its own lane (dev work: the user's attention minutes); everything else is Life. A
 // point with no area (an older Lambda) reads as Life, as a category with none reads as Personal.
 export type CalibrationLane = 'life' | 'aperture';
 export const laneOf = (p: Pick<CalibrationPoint, 'area'>): CalibrationLane =>
@@ -72,7 +72,8 @@ export interface BackfillResult {
   task: Task;
 }
 export const BACKFILL_MAX = 100;
-// Noon of the day: inside the app day whatever the day-start hour, and never near a DST edge.
+// Noon of the day: inside the app day for any day-start hour Settings allows (0–12), and never near a DST
+// edge. A backfill dated today before noon is stamped now instead, so it never finishes in the future.
 export const BACKFILL_HOUR = '12:00';
 
 const minutesOk = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1;
@@ -137,9 +138,15 @@ export function planBackfill(
     if (needsEstimate(t))
       throw new Error(`${at}: it has no estimate — pass estimateMin (what it would have been)`);
     t = taskTransition({ ...t, actualAccruedMin: input.actualMin }, 'done', now);
-    const completedAt = zonedEpoch(input.completedDay, BACKFILL_HOUR, USER_TIME_ZONE);
+    const completedAt = Math.min(
+      zonedEpoch(input.completedDay, BACKFILL_HOUR, USER_TIME_ZONE),
+      now,
+    );
     const startedAt = Math.min(t.startedAt ?? completedAt, completedAt);
-    return { id: task.id, next: { ...t, completedAt, startedAt, backfilled: true }, task };
+    // A failed-sync note on a task with no event is moot once it's done (transitionOne's syncCalendar
+    // clears it on a finish; the batch never calls it).
+    const next = { ...t, completedAt, startedAt, gcalSyncError: null, backfilled: true };
+    return { id: task.id, next, task };
   });
 }
 

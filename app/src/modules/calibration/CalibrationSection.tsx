@@ -94,7 +94,7 @@ export function CalibrationSection() {
 }
 
 // One lane's headline. With no lane named it's the whole page's, worded as it always was. The Aperture lane is
-// dev work, its minutes his attention (docs/areas/calibration/dev-lane.md); backfilled tickets are counted
+// dev work, its minutes the user's attention (docs/areas/calibration/dev-lane.md); backfilled tickets are counted
 // under it, never in its number.
 function GapCard({ agg, lane }: { agg: CalibrationAggregate; lane?: string }) {
   return (
@@ -108,7 +108,9 @@ function GapCard({ agg, lane }: { agg: CalibrationAggregate; lane?: string }) {
         {agg.count === 0 ? (
           <div className="flex flex-col gap-1">
             <Text tone="muted" size="sm">
-              No finished tasks with an estimate yet.
+              {agg.backfilledCount > 0
+                ? 'Nothing scored yet.'
+                : 'No finished tasks with an estimate yet.'}
             </Text>
             {!lane && (
               <Text tone="muted" size="sm">

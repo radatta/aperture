@@ -238,10 +238,13 @@ acting lane's pane: actions on live state, with no whole diff to show, no undo a
 "<reason>"` is the hub's own call only to start past a dead or missing watcher it is restarting; past a busy box it
   needs the maintainer's word.
 - **Dev tickets** ([dev-lane](../areas/calibration/dev-lane.md)). Each lane's kickoff file names its Aperture ticket
-  and its `You: <n> min` (the plan table's You for it). The two prod writes that make it a calibration point ride asks
-  the hub already sends, never a ping of their own: the kickoff relay asks for `update_task {id, estimateMin: n}`
-  (before work starts, so the lock freezes on it), and the merge line asks for `complete_task {id, actualMin}` with the
-  maintainer's minutes. Each is a prod MCP write, so it needs his in-the-moment yes.
+  and its `You: <n> min` (the plan table's You for it). The two prod writes that make it a calibration point are the
+  hub's own, never a lane's, and ride questions the hub already puts to the maintainer, never a ping of their own:
+  with the kickoff, `update_task {id, estimateMin: n}` (before the lane starts, so the lock freezes on it); with the
+  merge line, `complete_task {id, actualMin}` with the maintainer's minutes. Each is a prod MCP write outside the
+  standing approvals (_Approval_), so the hub shows the exact call and makes it only on the maintainer's yes, typed
+  in the hub's pane and naming that write; a relay or a kickoff never carries it. No yes, or the maintainer is away:
+  no write, the lane starts or merges anyway, and the write stays an open ask.
 - **Lanes on battery** (F120). With the Mac on battery under 30% or in Low Power Mode, keep **at most 3 lanes**
   running: a throttled Mac stretches every gate (2026-11-17's low-power window: typecheck ×1.8, lint ×2), so a fourth
   lane costs everyone time. Read it from the `mac:` line of `pnpm lanes status` or `board.sh status` (it says

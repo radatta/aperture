@@ -146,9 +146,10 @@ function doneRow(t: Task, point: CalibrationPoint | undefined, parts: number) {
     actualMin: t.actualAccruedMin,
     // Only a scored calibration point has a delta: a done task with a frozen estimate (get_calibration's
     // rule), not backfilled — a backfilled ticket's estimate was no forecast, so a summing reader skips it.
-    isCalibrationPoint: point !== undefined && !point.backfilled,
-    deltaMin: point && !point.backfilled ? point.actualAccruedMin - point.estimateLockedMin : null,
-    backfilled: point?.backfilled === true,
+    // The mark is read off the row's own task, so the row never disagrees with itself when the points' read lags.
+    isCalibrationPoint: point !== undefined && !t.backfilled,
+    deltaMin: point && !t.backfilled ? point.actualAccruedMin - point.estimateLockedMin : null,
+    backfilled: t.backfilled === true,
     parts,
     reflection: t.reflection ?? null,
   };

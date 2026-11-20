@@ -41,7 +41,11 @@ export function useUpsertCategory() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: UpsertCategoryInput) => api.upsertCategory(input),
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.categories() }),
+    onSettled: (_d, _e, input) => {
+      void qc.invalidateQueries({ queryKey: qk.categories() });
+      // calibration points carry their category's area, joined at read (docs/areas/calibration/dev-lane.md)
+      if (input.area !== undefined) void qc.invalidateQueries({ queryKey: ['calibration'] });
+    },
   });
 }
 
@@ -62,7 +66,11 @@ export function useSetCategoryArea() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (v: { id: string; area: Area | null }) => api.setCategoryArea(v.id, v.area),
-    onSettled: () => qc.invalidateQueries({ queryKey: qk.categories() }),
+    onSettled: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: qk.categories() }),
+        qc.invalidateQueries({ queryKey: ['calibration'] }), // the points' lane is the area, read live
+      ]),
   });
 }
 

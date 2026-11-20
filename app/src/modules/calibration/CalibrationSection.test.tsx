@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { addDays, todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderWithProviders } from '../../test/utils';
+import { useSetCategoryArea } from '../../data/hooks/useCategories';
 import { CalibrationSection } from './CalibrationSection';
 
 // The lanes on the page (docs/areas/calibration/dev-lane.md): Aperture's dev work apart from the rest, and a
@@ -75,8 +76,30 @@ describe('CalibrationSection lanes', () => {
     renderWithProviders(<CalibrationSection />, { api });
     await screen.findByText('Aperture');
     const ap = lane('aperture')!;
-    expect(within(ap).getByText('No finished tasks with an estimate yet.')).toBeTruthy();
+    expect(within(ap).getByText('Nothing scored yet.')).toBeTruthy();
     expect(within(ap).getByText('1 backfilled · 30m, not scored')).toBeTruthy();
     expect(within(lane('life')!).getAllByText('+50%').length).toBeGreaterThan(0);
+  });
+
+  it('moving the category out of Aperture regroups the page on the spot, not after the cache ages', async () => {
+    const api = stub();
+    const dev = await api.upsertCategory({ label: 'Dev', isWork: true, area: 'aperture' });
+    await finish(api, 'Essay', 60, 90);
+    await finish(api, 'Ship it', 100, 50, dev.id);
+    function Move() {
+      const move = useSetCategoryArea();
+      return <button onClick={() => move.mutate({ id: dev.id, area: 'school' })}>move</button>;
+    }
+    renderWithProviders(
+      <>
+        <Move />
+        <CalibrationSection />
+      </>,
+      { api },
+    );
+    await screen.findByText('Aperture');
+    fireEvent.click(screen.getByText('move'));
+    await waitFor(() => expect(lane('aperture')).toBeNull());
+    expect(screen.getByText(/2 tasks · last 30 days/)).toBeTruthy();
   });
 });

@@ -126,6 +126,18 @@ describe('planBackfill', () => {
     expect(next).toMatchObject({ estimateLockedMin: 25, estimateSource: 'retro' });
   });
 
+  it('dated today before noon, it finishes now, never in the future', () => {
+    const morning = zonedEpoch(TODAY, '09:00', USER_TIME_ZONE);
+    const [r] = planBackfill([task()], [row('t', { completedDay: TODAY })], TODAY, morning);
+    expect(r!.next!.completedAt).toBe(morning);
+    expect(r!.next!.startedAt).toBe(morning);
+  });
+
+  it('a stale failed-sync note goes with the finish, as transitionOne’s would', () => {
+    const [r] = plan([task({ gcalSyncError: 'calendar sync failed' })], [row()]);
+    expect(r!.next!.gcalSyncError).toBeNull();
+  });
+
   it('today is allowed, tomorrow is not', () => {
     expect(plan([task()], [row('t', { completedDay: TODAY })])[0]!.next!.status).toBe('done');
     expect(() => plan([task()], [row('t', { completedDay: '2026-11-20' })])).toThrow(/after today/);

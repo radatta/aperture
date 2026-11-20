@@ -2,7 +2,7 @@
 // shows in its own lane, apart from Life; `backfill_tasks` closes old tickets on their day, marked, as points
 // that never move a gap. The gap rows compare the page with an aggregate the harness computes from the API's
 // points over the page's window, so other scenarios' points can't break them. Titles use `devcheck-lane
-// <nonce>`; every task and the category are this run's, and the tasks go at the end (the 60-row batch would
+// <nonce>`; every task and the category are this run's, and the tasks go at the end (the bulk batch would
 // otherwise sit in every later scenario's lists).
 import type { DevCalibrationPoint, DevTask } from '../api';
 import { UNKNOWN_TASK_ID } from '../mcp/tasks';
@@ -10,7 +10,9 @@ import { laDay, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
 
 const name = (ctx: Ctx, what: string) => `devcheck-lane ${ctx.nonce} ${what}`;
 const MAX = 100; // calibration.ts BACKFILL_MAX
-const BATCH = 60; // the shipped-ticket table's size
+// Past the store's 25-item chunk, so the batch spans two; kept small for dev's capped table (100 read and 50
+// write units a second) and the run's length. Prod's real table is about twice this, on an uncapped table.
+const BATCH = 26;
 
 const addDays = (day: string, n: number): string =>
   new Date(Date.parse(`${day}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -28,6 +30,7 @@ const id = (what: string) => {
   return v;
 };
 let categoryId = '';
+let placeId = '';
 let bulk: string[] = [];
 
 // The page's lanes as the harness expects them: scored points only (no rollup, not backfilled), per lane.
@@ -59,8 +62,8 @@ async function pointsWith(
   for (let i = 0; ; i++) {
     const all = await ctx.api.reads.getCalibration(range);
     if (want.every((w) => all.some((p) => p.taskId === w && check(p)))) return all;
-    if (i >= 40) throw new Error(`points never showed: ${want.join(', ')}`);
-    await new Promise((r) => setTimeout(r, 250));
+    if (i >= 20) throw new Error(`points never showed: ${want.join(', ')}`);
+    await new Promise((r) => setTimeout(r, 500));
   }
 }
 const lane = (ctx: Ctx, which: 'life' | 'aperture') => ctx.page.locator(`[data-lane="${which}"]`);
@@ -101,14 +104,14 @@ export const calibrationDevLane: Scenario = {
       offDev: {
         file: 'app/src/modules/calibration/CalibrationSection.test.tsx',
         test: 'with no Aperture point, one headline as it always was',
-        why: 'the dev test user always has other scenarios’ points, and Deep Work-like categories may sit in the Aperture area, so dev can’t be guaranteed to have none',
+        why: 'the dev test user can hold another scenario’s Aperture point in the window, so the state isn’t certain; area-live checks the page whenever it does occur',
       },
     },
     {
       id: 'backfill-nominal',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'backfill_tasks with two rows (one scoped, one given its estimate): both done, backfilled, on their completedDay',
+      what: 'backfill_tasks with two rows (an Aperture one scoped, a Life one given its estimate): both done, backfilled, on their completedDay',
     },
     {
       id: 'gap-unmoved',
@@ -144,17 +147,17 @@ export const calibrationDevLane: Scenario = {
       id: 'invalid',
       entry: 'mcp',
       kind: 'edge',
-      what: 'actual 0, a future day, an unknown id, a parent, a part, an id twice: each refused naming the row, nothing written',
+      what: 'actual 0, a future day, an unknown id, a parent, a part, an errand, a cancelled task, an id twice: each refused naming the row, nothing written',
     },
     {
       id: 'invalid-shapes',
       entry: 'mcp',
       kind: 'edge',
-      what: 'An errand, a Roll rep, a recurring occurrence, a calendar-linked or a cancelled task is refused toward complete_task',
+      what: 'A Roll rep, a recurring occurrence or a calendar-linked task is refused toward complete_task',
       offDev: {
         file: 'packages/shared/src/calibration.test.ts',
         test: 'refuses every shape with side effects, naming the row and the way round it',
-        why: 'the same refusal path `invalid` proves on dev (planBackfill notPlain); making a Roll rep, a series or a calendar link on dev only to be refused costs a Google event and a series for no new path',
+        why: 'a Roll rep needs a LeetCode roll and a calendar link a real Google event on the test user’s calendar; an occurrence’s id comes from its series, never ledgered as a task, so the harness’s id guard won’t send it',
       },
     },
     {
@@ -173,13 +176,19 @@ export const calibrationDevLane: Scenario = {
       id: 'mark-clear',
       entry: 'mcp',
       kind: 'edge',
-      what: 'update_task backfilled: true on a done task marks its point, false clears it; true on an open task is refused',
+      what: 'update_task backfilled: true on a done task marks its point, false clears it; true on an open task, and a string, are refused',
     },
     {
       id: 'neighbour',
       entry: 'ui',
       kind: 'edge',
-      what: 'A Life point finished in the same run: the Life headline is the API’s Life gap, untouched by the backfill',
+      what: 'A Life point finished and a Life ticket backfilled in the same run: the Life headline is the API’s scored Life gap, its footnote counts the backfill',
+    },
+    {
+      id: 'editor-mark',
+      entry: 'ui',
+      kind: 'nominal',
+      what: 'The task editor of a backfilled ticket says “Backfilled · not scored”; a scored one has no such row',
     },
     {
       id: 'area-live',
@@ -212,7 +221,7 @@ export const calibrationDevLane: Scenario = {
       offDev: {
         file: 'lambdas/src/backend.backfill.test.ts',
         test: 'a stored row from before the field reads as scored',
-        why: 'every task dev makes now is written by the new code; neighbour proves an unmarked point scores',
+        why: 'the test user’s older done tasks are such rows, but which ones sit in the window isn’t fixed; neighbour proves an unmarked point scores',
       },
     },
     {
@@ -243,17 +252,24 @@ export const calibrationDevLane: Scenario = {
       async run(ctx) {
         ids.clear();
         bulk = [];
+        placeId = '';
         const cat = await ctx.api.writes.upsertCategory({
           label: `devcheck-lane ${ctx.nonce}`,
           isWork: true,
           area: 'aperture',
         });
         categoryId = cat.id;
-        const make = async (what: string, estimateMin?: number, inCat = true) => {
+        const place = await ctx.api.writes.upsertPlace({
+          name: `Devcheck ${ctx.nonce} lane`,
+          slug: `devcheck-${ctx.nonce.toLowerCase()}-lane`,
+        });
+        placeId = place.id;
+        const make = async (what: string, estimateMin?: number, inCat = true, more = {}) => {
           const t = await ctx.api.writes.createTask({
             title: name(ctx, what),
             ...(estimateMin ? { estimateMin } : {}),
             categoryId: inCat ? categoryId : null,
+            ...more,
           });
           ids.set(what, t.id);
           return t;
@@ -261,9 +277,11 @@ export const calibrationDevLane: Scenario = {
         await make('scored', 30);
         await make('livework', 30, false);
         await make('bfone', 10);
-        await make('bftwo');
+        await make('bftwo', undefined, false);
         await make('marked', 20);
         await make('stays', 30);
+        await make('errand', 10, true, { place: place.slug });
+        await ctx.api.writes.finishTask((await make('cancelled', 30)).id, 'cancelled');
         const parent = await make('parent');
         const part = await ctx.api.writes.createTask({
           title: name(ctx, 'part'),
@@ -296,7 +314,8 @@ export const calibrationDevLane: Scenario = {
       id: 'backfill',
       entry: 'mcp',
       proves: ['backfill-nominal', 'get-calibration'],
-      title: 'backfill_tasks: two old tickets, one given its estimate, on two past days',
+      title:
+        'backfill_tasks: two old tickets (Aperture, Life), one given its estimate, on two past days',
       async run(ctx) {
         const { to } = await window(ctx);
         const r = await ctx.mcp.writes.backfillTasks([
@@ -348,7 +367,7 @@ export const calibrationDevLane: Scenario = {
         const points = await pointsWith(
           ctx,
           [id('bfone'), id('bftwo'), id('scored'), id('livework')],
-          (p) => p.taskId !== id('bfone') || p.backfilled === true,
+          (p) => ![id('bfone'), id('bftwo')].includes(p.taskId) || p.backfilled === true,
         );
         const ap = expected(points, 'aperture');
         if (ap.headline === ap.withBackfill)
@@ -357,13 +376,22 @@ export const calibrationDevLane: Scenario = {
           );
         await ctx.ui.goto('/tasks?lens=calibration');
         await untilHeadline(ctx, 'aperture', ap.headline!);
-        await untilHeadline(ctx, 'life', expected(points, 'life').headline!);
-        const note = lane(ctx, 'aperture').getByText(/^\d+ backfilled · .+, not scored$/);
-        await note.waitFor({ timeout: 10_000 });
-        const n = Number((await note.textContent())!.split(' ')[0]);
-        if (n !== ap.backfilled)
-          throw new Error(`the footnote counts ${n}, the API ${ap.backfilled}`);
-        await note.scrollIntoViewIfNeeded();
+        const life = expected(points, 'life');
+        if (life.headline === life.withBackfill)
+          ctx.log(`the Life backfill doesn't move the rounded Life gap (${life.headline})`);
+        await untilHeadline(ctx, 'life', life.headline!);
+        for (const [which, want] of [
+          ['life', life.backfilled],
+          ['aperture', ap.backfilled],
+        ] as const) {
+          const note = lane(ctx, which).getByText(/^\d+ backfilled · .+, not scored$/);
+          await note.waitFor({ timeout: 10_000 });
+          const n = Number((await note.textContent())!.split(' ')[0]);
+          if (n !== want) throw new Error(`${which}: the footnote counts ${n}, the API ${want}`);
+        }
+        await lane(ctx, 'aperture')
+          .getByText(/^\d+ backfilled · .+, not scored$/)
+          .scrollIntoViewIfNeeded();
         await ctx.shot('backfill-footnote');
         await ctx.page.getByText(name(ctx, 'scored'), { exact: true }).waitFor({ timeout: 10_000 });
         for (const what of ['bfone', 'bftwo'])
@@ -386,6 +414,27 @@ export const calibrationDevLane: Scenario = {
         await lane(ctx, 'aperture')
           .getByText(/backfilled · .+, not scored$/)
           .waitFor({ timeout: 10_000 });
+      },
+    },
+    {
+      id: 'editor-mark',
+      entry: 'ui',
+      proves: ['editor-mark'],
+      title: 'The editor: a backfilled ticket says so; the scored task doesn’t',
+      async run(ctx) {
+        for (const [what, marked] of [
+          ['bfone', true],
+          ['scored', false],
+        ] as const) {
+          await ctx.ui.goto(`/tasks?task=${id(what)}`);
+          const dialog = ctx.page.getByRole('dialog', { name: `Task: ${name(ctx, what)}` });
+          await dialog.getByText('Completed', { exact: true }).first().waitFor({ timeout: 15_000 });
+          const row = dialog.getByText('Backfilled · not scored', { exact: true });
+          if (marked) await row.waitFor({ timeout: 10_000 });
+          else if (await row.count()) throw new Error('the scored task reads as backfilled');
+          if (marked) await ctx.shot('editor-backfilled');
+          await ctx.page.keyboard.press('Escape');
+        }
       },
     },
     {
@@ -427,6 +476,8 @@ export const calibrationDevLane: Scenario = {
           ['unknown id', [ok, { ...ok, id: `${UNKNOWN_TASK_ID}1` }], /Row 2 .*not found/],
           ['parent', [ok, row('parent')], /Row 2 .*has parts/],
           ['part', [row('part')], /is a part/],
+          ['errand', [ok, row('errand')], /Row 2 .*errand/],
+          ['cancelled', [row('cancelled')], /cancelled/],
           ['twice', [ok, ok], /listed twice/],
         ];
         for (const [what, rows, msg] of cases) {
@@ -492,6 +543,11 @@ export const calibrationDevLane: Scenario = {
         );
         if (!open || !/done task/.test(open))
           throw new Error(`open task: ${open ?? 'it was marked'}`);
+        const str = await ctx.mcp.writes.updateTask(tid, { backfilled: 'yes' }).then(
+          () => null,
+          (e: unknown) => String(e),
+        );
+        if (!str || !/backfilled/.test(str)) throw new Error(`a string: ${str ?? 'it was taken'}`);
       },
     },
     {
@@ -519,7 +575,18 @@ export const calibrationDevLane: Scenario = {
       title: 'The category moves to School: its points leave the Aperture lane on the next read',
       async run(ctx) {
         await ctx.api.writes.setCategoryArea(categoryId, 'school');
-        await pointsWith(ctx, [id('scored')], (p) => p.area === 'school');
+        const points = await pointsWith(ctx, [id('scored')], (p) => p.area === 'school');
+        // lane-absent, when the window holds no other Aperture point: the page is one headline again.
+        if (!points.some((p) => p.area === 'aperture')) {
+          await ctx.ui.goto('/tasks?lens=calibration');
+          await ctx.page
+            .getByText(/ · last 30 days$/)
+            .first()
+            .waitFor({ timeout: 15_000 });
+          if (await ctx.page.locator('[data-lane]').count())
+            throw new Error('no Aperture point, yet the page shows lanes');
+          ctx.log('lane-absent: checked on dev (no other Aperture point in the window)');
+        } else ctx.log('lane-absent: another Aperture point in the window; left to the unit test');
         await ctx.api.writes.setCategoryArea(categoryId, 'aperture');
       },
     },
@@ -532,6 +599,7 @@ export const calibrationDevLane: Scenario = {
           if (tid === id('part')) continue; // its parent takes it
           await ctx.api.writes.deleteTask(tid);
         }
+        await ctx.api.writes.deletePlace(placeId, null);
       },
     },
     noConsoleErrors,

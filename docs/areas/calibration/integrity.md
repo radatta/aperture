@@ -48,3 +48,7 @@ the same transition, so the lock freezes there; it credits tracked minutes as a 
 and never takes any back. Its `done` runs the done gate: refused, it answers `needs` (an estimate, or the user's own
 actual through `complete_task`) and finishes nothing. A timer or a sitting on the task blocks it, so no minute counts
 twice.
+
+## Backfilled tickets
+
+A task marked `backfilled` (an old ticket closed after the fact by `backfill_tasks`) stays a point but never scores a gap, and the page splits off an Aperture lane: [dev-lane](dev-lane.md). Not to be confused with _Backfill, once_ above, the one-time retro estimate, which scores like any other point.
