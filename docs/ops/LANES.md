@@ -112,8 +112,8 @@ Then it runs these steps, each registering an undo:
    and a kickoff quoting the safety rules would kill the container. The window starts a shell, not Claude, so
    `tools/coi/tmux-restore.sh save` finds Claude as the shell's child. No permission flag: sessions here start in
    bypass mode anyway (the maintainer dropped `--skip-permissions`, 2026-11-15). The line carries
-   `--autocompact <tokens>`, from `scripts/board/limits.json` → `lanes.autoCompactWindow` (500000, about half a 1M
-   window, so a long lane compacts on its own; 0 drops it; a value outside 100000–1000000 is noted and defaulted). A
+   `--autocompact <tokens>`, from `scripts/board/limits.json` → `lanes.autoCompactWindow` (300000 since 2026-11-19, since
+   cost per turn rises with context; 500000 before; so a long lane compacts on its own; 0 drops it; a value outside 100000–1000000 is noted and defaulted). A
    flag, not the `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env var: the PreCompact hook's handoff fork
    (`docs/ops/COMPACTION-HANDOFF.md`) would inherit an env var and, resuming a transcript just under the window, compact
    itself; the fork's own argv carries no flag (inference: unmeasured until a lane's first compaction, whose

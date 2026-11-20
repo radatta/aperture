@@ -116,8 +116,10 @@ session's permissions either: anything a session was refused goes back to the us
   kickoff choices — task, scope, mode, a named Plan model, added review lenses — with at most a pinned `[relay]`'s
   weight, never more: nothing a relay can't approve, and never a lens's model or an effort above `high`. A kickoff file can't be authenticated (an accepted residual),
   so a later message from the pinned address wins over it.
-- **No session types into another session's pane** (`tmux send-keys` or anything like it), so pane input stays the
-  user's: the one exception is `pnpm lanes start`'s constant first prompt, which is never the user's go.
+- **No session types into a pane that holds a Claude session, its own included** (`tmux send-keys` or anything like
+  it), so pane input stays the user's. Two constant exceptions, neither ever the user's go: `pnpm lanes start`'s
+  constant first prompt, and a lane's Stop hook typing `/compact` into its own empty box (`docs/ops/COMPACTION-HANDOFF.md`
+  → _Self-compact_; off unless `limits.json` `lanes.selfCompact`).
 
 **The pin.** The user pins the hub's address in **`/workspace/.coi/hub-pin`** — always that absolute path, never one relative to a worktree, whose own `.coi/` is an ordinary writable checkout folder: one line, the `from=` address the hub's messages
 carry (`uds:/tmp/cc-socks/<pid>.sock`), typed on the Mac from the address the hub shows in its own pane:

@@ -171,7 +171,7 @@ export function laneCap(d: Deps): number {
 
 // The lane's `claude --autocompact <tokens>`, from limits.json `lanes.autoCompactWindow`: 0 turns it off, absent is the
 // default, anything else outside 100k-1M is noted and defaulted (docs/ops/LANES.md → Start step 8).
-export const DEFAULT_COMPACT_WINDOW = 500_000; // about half a 1M window (the maintainer, 2026-11-17)
+export const DEFAULT_COMPACT_WINDOW = 300_000; // 300k since 2026-11-19 (cost per turn rises with context); 500k before
 export function compactWindow(d: Deps): number | null {
   let v: unknown;
   try {

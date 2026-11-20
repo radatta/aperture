@@ -2,7 +2,7 @@
   "v": 1,
   "enforce": true,
   "concurrency": { "test": 2 },
-  "lanes": { "maxActive": 5, "autoCompactWindow": 500000 },
+  "lanes": { "maxActive": 5, "autoCompactWindow": 300000, "selfCompact": false },
   "budget": {
     "enforce": false,
     "base": 0.5,

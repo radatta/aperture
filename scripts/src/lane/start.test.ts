@@ -256,7 +256,7 @@ describe('lane start: the nominal run', () => {
       `git worktree add --no-track -b ${B} .claude/worktrees/${B} ${SHA}`,
       'pnpm install',
       `tmux new-window -d -P -F #{window_id}\t#{pane_id} -t $0: -n ${B} -c ${wt}`,
-      `tmux send-keys -t %9 -l -- claude -n ${B} --autocompact 500000 '${KICKOFF_PROMPT}'`,
+      `tmux send-keys -t %9 -l -- claude -n ${B} --autocompact 300000 '${KICKOFF_PROMPT}'`,
       'tmux send-keys -t %9 Enter',
     ]);
     const install = t.calls.find((c) => c.line === 'pnpm install')!;
@@ -299,7 +299,7 @@ describe('lane start: the nominal run', () => {
     expect(await start(t.d, args())).toBe(0);
     expect(mutated(t.calls)[0]).toBe(`git switch --detach ${SHA}`);
     expect(t.calls.find((c) => c.line.includes('send-keys -t %9 -l'))!.args.at(-1)).toBe(
-      `claude -n ${B} --autocompact 500000`,
+      `claude -n ${B} --autocompact 300000`,
     );
   });
 
@@ -1023,28 +1023,28 @@ describe('lane start: the auto-compact window', () => {
     };
   };
 
-  it('limits.json sets it, 0 turns it off, absent is 500000', async () => {
-    expect((await sent({ autoCompactWindow: 300000 })).line).toBe(
-      `claude -n ${B} --autocompact 300000`,
+  it('limits.json sets it, 0 turns it off, absent is 300000', async () => {
+    expect((await sent({ autoCompactWindow: 400000 })).line).toBe(
+      `claude -n ${B} --autocompact 400000`,
     );
     expect((await sent({ autoCompactWindow: 0 })).line).toBe(`claude -n ${B}`);
-    expect((await sent(null)).line).toBe(`claude -n ${B} --autocompact 500000`);
+    expect((await sent(null)).line).toBe(`claude -n ${B} --autocompact 300000`);
   });
 
   it.each([[99999], [1000001], [250000.5], ['500k'], ['1; rm x'], [null]])(
     'a bad value %j is noted and defaulted, never typed',
     async (v) => {
       const r = await sent({ autoCompactWindow: v });
-      expect(r.line).toBe(`claude -n ${B} --autocompact 500000`);
+      expect(r.line).toBe(`claude -n ${B} --autocompact 300000`);
       expect(r.out).toMatch(
-        /note: limits.json lanes.autoCompactWindow .* is not 0 or 100000-1000000 tokens; using 500000/,
+        /note: limits.json lanes.autoCompactWindow .* is not 0 or 100000-1000000 tokens; using 300000/,
       );
     },
   );
 
-  it('the tracked limits.json sets 500000', () => {
+  it('the tracked limits.json sets 300000 (since 2026-11-19)', () => {
     const l = JSON.parse(readFileSync(new URL('../../board/limits.json', import.meta.url), 'utf8'));
-    expect(l.lanes.autoCompactWindow).toBe(500000);
+    expect(l.lanes.autoCompactWindow).toBe(300000);
   });
 });
 

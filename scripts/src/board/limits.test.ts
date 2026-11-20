@@ -19,7 +19,7 @@ describe('limits.json', () => {
     const l = parseLimits(shipped);
     expect(l.enforce).toBe(true);
     expect(l.concurrency).toEqual({ test: 2 });
-    expect(l.lanes).toEqual({ maxActive: 5, autoCompactWindow: 500000 });
+    expect(l.lanes).toEqual({ maxActive: 5, autoCompactWindow: 300000, selfCompact: false });
     expect(l.tuning).toEqual({ test: { maxWorkers: 4 } });
     expect(l.measuredLimits).toEqual({ pidsMax: 4096, highMiB: 18432 });
     expect(Object.keys(l.classes)).toEqual(
