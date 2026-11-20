@@ -113,7 +113,7 @@ After compaction, re-read docs/ops/FEATURE-WORKFLOW.md before acting.
 A lane is a toplevel at `<main>/.claude/worktrees/<branch>`, its branch `^[a-z0-9][a-z0-9-]{0,62}$`, neither named as the
 hub (`scripts/board/hub.json`); anywhere else, in the fork included, the hook prints nothing. Only three values come
 from outside, each checked: the branch, the phase (one of the board's phase words, else `unknown`) and the lane file's
-path (`[A-Za-z0-9._/-]` only). No free text from the lane file reaches the summary. The block is inline in the hook,
+path (`[A-Za-z0-9_./-]` only). No free text from the lane file reaches the summary. The block is inline in the hook,
 not a `scripts/board/` helper: a helper would run the branch's own copy, and its text feeds the summary.
 
 ## Self-compact (lanes, off)
@@ -133,8 +133,9 @@ it at once. It ships `false`.
   file written in the last 10 min and a clean tree; not the hub (branch, worktree or record name); the box is on
   screen, empty and not busy. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
 - **The hand-off** (`.claude/hooks/board-heartbeat.sh idle`, after the board write): only with a flag for this
-  session's pid, it runs **main's committed** `scripts/board/self-compact.sh stop <pid>`, only when that file is
-  committed on main's `HEAD` and present, and main's `scripts/board/` equals `HEAD`, detached (`setsid -f`,
+  session's pid, it runs **main's committed** `scripts/board/self-compact.sh stop <pid>`, only when that file and
+  the `lib.sh` it sources hash, on disk, to main's `HEAD` blobs (`git hash-object` against `HEAD:`, not `git diff`:
+  an empty diff proves nothing about a missing path, and a skip-worktree flag hides an edit), detached (`setsid -f`,
   `timeout -k 1 10`, stdio on `/dev/null`, exit ignored), so it can never fail or delay Stop. With no flag a Stop costs
   one `stat`. No `settings.json` change: it rides the registered Stop entry.
 - **`stop`** prints nothing, always exits 0: sweeps flags over 15 min old, leaves the flag while `stop_hook_active`,
