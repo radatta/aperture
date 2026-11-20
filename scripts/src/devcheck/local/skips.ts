@@ -44,6 +44,7 @@ export const LOCAL_SKIPS: Record<string, { steps?: string[]; reason: string }> =
     reason: 'local: the reminder poller’s minute schedule is dev’s — runs on dev',
   },
   finance: { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
+  'finance-splits': { reason: 'local: the Plaid Sandbox fixture bank is dev’s — runs on dev' },
   'lc-sittings': {
     steps: ['draft-real', 'grace-over'],
     reason:

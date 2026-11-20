@@ -188,6 +188,8 @@ export class FinanceService {
       periodOverride: override,
       refundOfId: null,
       refundParts: null,
+      // An allocation's marker goes with it (a split keeps its own: the two are never on one row).
+      bucketSetBy: t.refundParts ? null : t.bucketSetBy,
     }));
   }
 
@@ -220,7 +222,12 @@ export class FinanceService {
     const refund = await this.repo.getFinanceTxn(refundId);
     if (!refund || refund.deletedAt !== null) throw new Error(`Not found: ${refundId}`);
     if (chargeId === null)
-      return this.txnUpdate(refundId, (t) => ({ ...t, refundOfId: null, refundParts: null }));
+      return this.txnUpdate(refundId, (t) => ({
+        ...t,
+        refundOfId: null,
+        refundParts: null,
+        bucketSetBy: t.refundParts ? null : t.bucketSetBy, // an allocation's marker goes with it
+      }));
     const charge = await this.repo.getFinanceTxn(chargeId);
     if (!charge || charge.deletedAt !== null) throw new Error(`Not found: ${chargeId}`);
     const accounts = await this.repo.listFinanceAccounts();

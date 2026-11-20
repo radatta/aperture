@@ -270,7 +270,12 @@ export function financeSplitContract(h: FinanceSplitHarness) {
       { chargeId: 'fx-card-4', cents: 1000 },
     ];
     await api.setFinanceRefundParts('fx-refund-1', parts);
-    expect((await api.setFinancePeriodOverride('fx-refund-1', 'current')).refundParts).toBeNull();
+    // An allocation's marker goes with it: no stray "user sorted it" on an unsorted row.
+    const pinned = await api.setFinancePeriodOverride('fx-refund-1', 'current');
+    expect([pinned.refundParts, pinned.bucketSetBy]).toEqual([null, null]);
+    await api.setFinanceRefundParts('fx-refund-1', parts);
+    const unlinked = await api.linkFinanceRefund('fx-refund-1', null);
+    expect([unlinked.refundParts, unlinked.bucketSetBy]).toEqual([null, null]);
     await api.setFinanceRefundParts('fx-refund-1', parts);
     const marked = await api.setFinancePeriodStart('fx-refund-1', true);
     expect([marked.refundParts, marked.splits]).toEqual([null, null]);

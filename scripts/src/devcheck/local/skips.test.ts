@@ -19,6 +19,9 @@ describe('LOCAL_SKIPS', () => {
     expect(localSkip('smoke', { id: 'x', entry: 'ios' })).toBe(IOS_LOCAL);
     expect(localSkip('smoke', { id: 'x', entry: 'ui' })).toBeNull();
     expect(localSkip('finance', { id: 'any', entry: 'api' })).toBe(LOCAL_SKIPS.finance!.reason);
+    expect(localSkip('finance-splits', { id: 'any', entry: 'ui' })).toBe(
+      LOCAL_SKIPS['finance-splits']!.reason,
+    );
   });
   it('smoke always runs locally', () => {
     const smoke = SCENARIOS.find((x) => x.id === 'smoke')!;

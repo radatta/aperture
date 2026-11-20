@@ -855,5 +855,8 @@ describe('split rules', () => {
     );
     expect(postedDep.refundParts).toEqual(dep.refundParts);
     expect(postedDep.bucket).toBeNull();
+    // The marker carries with it, else the posted allocation would read as gone.
+    expect(postedDep.bucketSetBy).toBe('user');
+    expect(liveRefundParts(postedDep)).toEqual(dep.refundParts);
   });
 });

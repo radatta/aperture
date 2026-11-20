@@ -3306,10 +3306,13 @@ class StubClient implements ApiClient {
     id: string,
     override: FinancePeriodOverride | null,
   ): Promise<FinanceTransaction> {
+    const t = this.mustFind(this.store.financeTransactions, id);
     return this.writes.patch(this.store.financeTransactions, id, {
       periodOverride: override,
       refundOfId: null, // moving a refund yourself unlinks it
       refundParts: null,
+      // An allocation's marker goes with it (a split keeps its own: the two are never on one row).
+      bucketSetBy: t.refundParts ? null : t.bucketSetBy,
     });
   }
   async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
@@ -3318,6 +3321,7 @@ class StubClient implements ApiClient {
       return this.writes.patch(this.store.financeTransactions, refundId, {
         refundOfId: null,
         refundParts: null,
+        bucketSetBy: refund.refundParts ? null : refund.bucketSetBy, // an allocation's marker goes with it
       });
     const charge = this.mustFind(this.store.financeTransactions, chargeId);
     const accounts = this.alive(this.store.financeAccounts);

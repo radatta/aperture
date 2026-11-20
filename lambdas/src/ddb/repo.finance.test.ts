@@ -101,8 +101,16 @@ describe('Repo finances', () => {
       await seed(
         txn('linked', '2026-09-04', {
           rawAmountCents: -100,
-          refundOfId: 'live',
+          refundOfId: 'live', // an older single link beside a marked allocation
           refundParts: [{ chargeId: 'live', cents: 100 }],
+          bucketSetBy: 'user',
+        }),
+      );
+      await seed(
+        txn('allocated', '2026-09-05', {
+          rawAmountCents: -100,
+          refundParts: [{ chargeId: 'live', cents: 100 }],
+          bucketSetBy: 'user',
         }),
       );
     };
@@ -113,6 +121,7 @@ describe('Repo finances', () => {
       sorted: [false, false],
       undone: [false, false],
       linked: [false, false],
+      allocated: [false, true], // a live allocation survives every read
     };
 
     it('through every read: range, all, one, several', async () => {
