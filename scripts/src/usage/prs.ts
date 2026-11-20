@@ -95,7 +95,8 @@ export function attribute(l: Loaded, hub: string, log: PhaseLogRow[] = []): Attr
       // a session that resumed a lane (after /clear or a restart) opens at the phase the log last saw it in
       const before = lane.filter((r) => r.ts < sp.lo - LOG_SLACK_MS).at(-1);
       if (before?.to && !inSpan.some((r) => r.ts <= sp.lo))
-        push(t, { ts: sp.lo, kind: 'lane-phase', phase: before.to, lane: sp.lane, src: 'log' });
+        // just before the first call, so an explicit marker on that call still wins
+        push(t, { ts: sp.lo - 1, kind: 'lane-phase', phase: before.to, lane: sp.lane, src: 'log' });
     }
   }
   const timelines = new Map([...markers].map(([t, ms]) => [t, timeline(ms)]));

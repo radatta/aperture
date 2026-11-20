@@ -89,7 +89,7 @@ The transcript store sits on the container's root disk, and COI pauses the conta
   `sessionId`, unverified on a real fork), then by a subagent's own file over its parent's, then by the earlier
   sighting.
 - **Markers:** each call's tool uses become enum-only markers for the phases: an explicit `pnpm board lane <phase>`
-  (`ready` read as `local`, as the CLI writes it), every agent spawn with its type (Plan and `code-reviewer` also as
+  (`ready` read as `local`, as the CLI writes it, and skipped from `dev` on, where the CLI refuses it), every agent spawn with its type (Plan and `code-reviewer` also as
   their own kinds), a source/test/docs/notes edit, a full `pnpm typecheck|lint|test` (no file argument, no
   `-C`/`--dir`: that is one package's) or `pnpm gate:fast` (its flags allowed, `--dry-run` and `--help` not: they run
   nothing), `devcheck:local`, `devcheck`, `bot push|deploy-dev`, `mailroom open-pr`, `git commit`. pnpm's own
@@ -238,14 +238,16 @@ QU     = main + agents;  meter % = k · QU
   The priors are `<usage dir>/priors.json`, gitignored like the rest of the usage dir, because a real fit's values are
   usage numbers and costs. Its shape is `estimate.ts` → `Priors` (`turns`, `main`, `ctx`, `rechecks`, `prices`,
   `band`, `k`); any subset overlays the tracked defaults, keys starting `_` are comments, and a key or value that
-  doesn't fit is named in the output and ignored. The tracked defaults (`DEFAULT_PRIORS`) are invented placeholders so
+  doesn't fit (a price for a type the defaults don't name, a non-positive price, band, smear or k) is named in the
+  output and ignored; the output also lists every number the file left on its placeholder. The tracked defaults (`DEFAULT_PRIORS`) are invented placeholders so
   a fresh checkout and CI run end to end; without the file, the estimate and the report say so. The numbers don't
   transfer between repos (the analysis's sister-project addendum); the structure does, so another repo's cache
   refits them.
 - **Prices:** Plan and each lens per PR (the median, over PRs that ran it, of what one PR spent on it); a recheck and
   a fan-out agent per run, times its count. Plan and the rules lens always run; `--lenses` names the rest
   (`rules correctness tests shell infra ui extension`; default `correctness,tests`, plus `ui` with `--ui`).
-- **The range** is the backtest's 10th–90th percentile errors on the point, once it has 12 PRs; before that ÷/× the
+- **The range** is the backtest's 10th–90th percentile errors on the point, once it has more than 12 PRs (at 12,
+  each fold refits on 11: all priors); before that ÷/× the
   prior `band`. The meter % multiplies the ends by k's 80% interval (`usage fit`), or the prior k when the meter
   can't fit one.
 - **The hub** is not in the estimate: the output adds its measured QU per merged PR as a separate line.
@@ -310,8 +312,8 @@ change to `<usage dir>/phase-log.jsonl`:
   sources_ counts those on an older one.
 - Two checkouts on different `PARSER`s sharing one cache reread everything on each other's scans: a branch that
   bumps it runs its real-data checks against its own `APERTURE_USAGE_DIR` until it merges.
-- gh lists at most 100 files per PR, so a bigger PR's ui flag is read from part of its list; the _Turn and context
-  model_ section counts those fit-set PRs.
+- gh lists at most 100 files per PR, so a bigger PR's ui flag and PR type are read from part of its list; the _Turn
+  and context model_ section counts those fit-set PRs.
 - The phase logger samples once a tick: a phase held for less than one pass (30 s) is missed; the transcript's
   explicit markers still carry it.
 - Meter intervals are few, and whole-percent readings are coarse, so k's interval is wide. Read the interval, not the

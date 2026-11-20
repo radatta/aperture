@@ -67,6 +67,8 @@ export function timeline(markers: Marker[]): Step[] {
   };
   for (const m of ms) {
     if (m.kind === 'lane-phase') {
+      // `board lane ready` from dev on was refused (lanes.ts writeLane): the lane never moved
+      if (m.alias && order(cur) >= order('dev')) continue;
       const p = m.phase ? EXPLICIT[m.phase] : null;
       if (p) set(m.ts, p, m.src === 'log' ? 'log' : 'marker');
       if (p === 'review') reviewed = true;

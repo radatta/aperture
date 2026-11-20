@@ -77,29 +77,41 @@ describe('ols', () => {
 
 describe('priors', () => {
   it('overlays a priors file key by key, ignoring what does not fit, never touching the defaults', () => {
-    const { priors, bad } = mergePriors({
+    const { priors, bad, placeholders } = mergePriors({
       _note: 'skipped',
-      turns: { a: 9, extra: 1 },
-      prices: { Plan: 5, 'review-new': 2, 'review-shell': -1 },
+      turns: { a: 9, extra: 1, smear: 0 },
+      prices: { Plan: 5, 'review-correctnes': 2, 'review-shell': -1 }, // a misspelt type is no new type
       band: 0.5,
       k: { k: 0.3 }, // above hi: the pair is kept at the default
       ctx: 'x',
       other: 1,
     });
     expect(priors.turns).toEqual({ ...DEFAULT_PRIORS.turns, a: 9 });
-    expect(priors.prices).toMatchObject({ Plan: 5, 'review-new': 2, 'review-shell': 1 });
+    expect(priors.prices).toMatchObject({ Plan: 5, 'review-shell': 1 });
+    expect(priors.prices).not.toHaveProperty('review-correctnes');
     expect(priors.band).toBe(DEFAULT_PRIORS.band);
     expect(priors.k).toEqual(DEFAULT_PRIORS.k);
     expect(bad).toEqual([
       'turns.extra',
+      'turns.smear',
+      'prices.review-correctnes',
       'prices.review-shell',
       'band',
       'ctx',
       'other',
       'k (needs lo ≤ k ≤ hi)',
     ]);
+    // what the file didn't set stays invented, and says so: k's pair was reset, so it is a placeholder again
+    expect(placeholders).toContain('turns.bLines');
+    expect(placeholders).not.toContain('turns.a');
+    expect(placeholders).not.toContain('prices.Plan');
+    expect(placeholders).toContain('prices.review-correctness');
+    expect(placeholders).toContain('k.k');
     expect(DEFAULT_PRIORS.turns.a).not.toBe(9);
     expect(mergePriors([1]).bad).toEqual(['not an object']);
+    expect(mergePriors([1]).placeholders).toContain('band');
+    const full = structuredClone(DEFAULT_PRIORS);
+    expect(mergePriors(full)).toMatchObject({ bad: [], placeholders: [] });
   });
 
   it('the fit and its fallbacks use the priors it is given', () => {

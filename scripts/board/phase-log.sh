@@ -13,7 +13,8 @@ LANE_RE='^[a-z0-9][a-z0-9-]{0,62}$' # lanes.ts BRANCH_RE: the file is <branch>.j
 say() { echo "$(date +%FT%T%z) $1" >>"$BOARD_DIR/$W.log" 2>/dev/null; }
 command -v jq >/dev/null && command -v flock >/dev/null || { say "jq or flock missing"; exit 0; }
 # One pass at a time: a manual --once, or the old sampler's last child during a restart, would read the same state.
-exec 9>"$STATE.lock" 2>/dev/null && flock -n 9 || exit 0
+{ exec 9>"$STATE.lock"; } 2>/dev/null || { say "cannot open $STATE.lock"; exit 0; }
+flock -n 9 || exit 0
 
 # The last pass's view: lane \t phase \t phaseSince
 declare -A was_p=() was_s=()

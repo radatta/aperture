@@ -69,6 +69,17 @@ describe('phase timeline', () => {
     expect(phaseAt(t, min(4.5))).toBe('build');
   });
 
+  it('takes ready as local up to review, and skips it from dev on, as the CLI refuses it there', () => {
+    const t = timeline([
+      mk(1, 'lane-phase', { phase: 'review' }),
+      mk(2, 'lane-phase', { phase: 'local', alias: true }),
+      mk(3, 'lane-phase', { phase: 'pr' }),
+      mk(4, 'lane-phase', { phase: 'local', alias: true }), // refused: the lane stayed at pr
+      mk(5, 'lane-phase', { phase: 'local' }), // the real name still goes back
+    ]);
+    expect([2, 4, 5].map((n) => phaseAt(t, min(n) + 1))).toEqual(['local', 'pr', 'local']);
+  });
+
   it('leaves calls before the first marker unattributed unless planning came first', () => {
     const t = timeline([mk(5, 'edit', { cls: 'src' })]);
     expect(phaseAt(t, min(1))).toBe('unattributed');

@@ -56,23 +56,37 @@ const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFin
 const isObj = (x: unknown): x is Record<string, unknown> =>
   typeof x === 'object' && x !== null && !Array.isArray(x);
 
-// A priors.json's numbers over the defaults, key by key; anything else is named in bad, never applied. A price or
-// the band must be positive, as must k and its interval.
-export function mergePriors(raw: unknown): { priors: Priors; bad: string[] } {
+// A priors.json's numbers over the defaults, key by key; anything else is named in bad, never applied. A price, the
+// band, the smearing factor and k with its interval must be positive; a price only for a type the defaults know (a
+// misspelt one would leave the real type on its placeholder). placeholders: every number the file didn't set.
+export function mergePriors(raw: unknown): {
+  priors: Priors;
+  bad: string[];
+  placeholders: string[];
+} {
   const priors = structuredClone(DEFAULT_PRIORS);
   const bad: string[] = [];
-  if (!isObj(raw)) return { priors, bad: ['not an object'] };
-  const positive = new Set(['prices', 'band', 'k']);
+  const set = new Set<string>();
+  const all = (Object.keys(DEFAULT_PRIORS) as (keyof Priors)[]).flatMap((k) =>
+    k === 'band' ? ['band'] : Object.keys(DEFAULT_PRIORS[k]).map((f) => `${k}.${f}`),
+  );
+  const done = () => ({ priors, bad, placeholders: all.filter((x) => !set.has(x)) });
+  if (!isObj(raw)) {
+    bad.push('not an object');
+    return done();
+  }
+  const positive = new Set(['prices', 'band', 'k', 'turns.smear']);
   for (const [key, v] of Object.entries(raw)) {
     if (key.startsWith('_')) continue; // a comment
     if (!Object.hasOwn(DEFAULT_PRIORS, key)) {
       bad.push(key);
       continue;
     }
-    const ok = (x: unknown) => isNum(x) && (!positive.has(key) || x > 0);
     if (key === 'band') {
-      if (ok(v) && (v as number) >= 1) priors.band = v as number;
-      else bad.push(key);
+      if (isNum(v) && v >= 1) {
+        priors.band = v;
+        set.add('band');
+      } else bad.push(key);
       continue;
     }
     if (!isObj(v)) {
@@ -80,15 +94,21 @@ export function mergePriors(raw: unknown): { priors: Priors; bad: string[] } {
       continue;
     }
     const into = priors[key as Exclude<keyof Priors, 'band'>] as Record<string, number>;
-    for (const [f, x] of Object.entries(v))
-      if ((key === 'prices' || Object.hasOwn(into, f)) && ok(x)) into[f] = x as number;
-      else bad.push(`${key}.${f}`);
+    for (const [f, x] of Object.entries(v)) {
+      const name = `${key}.${f}`;
+      const ok = isNum(x) && (!(positive.has(key) || positive.has(name)) || x > 0);
+      if (Object.hasOwn(into, f) && ok) {
+        into[f] = x as number;
+        set.add(name);
+      } else bad.push(name);
+    }
   }
   if (!(priors.k.lo <= priors.k.k && priors.k.k <= priors.k.hi)) {
     bad.push('k (needs lo ≤ k ≤ hi)');
     priors.k = { ...DEFAULT_PRIORS.k };
+    for (const f of ['k', 'lo', 'hi']) set.delete(`k.${f}`);
   }
-  return { priors, bad };
+  return done();
 }
 
 // --lenses names → agent types. Plan and the rules lens always run.

@@ -210,10 +210,14 @@ export function readPriors(usageDir: string): { priors: Priors; note: string } {
       note: `priors: ${path} isn't JSON, so placeholders; a [prior] number is invented, not a fit`,
     };
   }
-  const { priors, bad } = mergePriors(raw);
+  const { priors, bad, placeholders } = mergePriors(raw);
   return {
     priors,
-    note: `priors: ${path}${bad.length ? `; ignored, placeholders kept: ${bad.join(', ')}` : ''}`,
+    note: [
+      `priors: ${path}`,
+      ...(bad.length ? [`ignored: ${bad.join(', ')}`] : []),
+      ...(placeholders.length ? [`still invented placeholders: ${placeholders.join(', ')}`] : []),
+    ].join('; '),
   };
 }
 

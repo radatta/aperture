@@ -42,6 +42,7 @@ export interface Marker {
   toolUseId?: string;
   lane?: string;
   src?: 'log'; // a lane-phase from the phase logger (phaselog.ts), not the transcript
+  alias?: true; // written as an alias (`ready`): the CLI refuses it from dev on, so the timeline skips it there
 }
 
 export interface Parsed {
@@ -100,7 +101,11 @@ export function bashMarkers(cmd: string): Omit<Marker, 'ts'>[] {
   const raw = LANE.exec(cmd)?.[1];
   const phase = raw && (phaseAlias(raw) ?? raw);
   if (phase && (LANE_PHASES as readonly string[]).includes(phase))
-    out.push({ kind: 'lane-phase', phase: phase as LanePhase });
+    out.push({
+      kind: 'lane-phase',
+      phase: phase as LanePhase,
+      ...(phase !== raw ? { alias: true as const } : {}),
+    });
   if (LOCAL.test(cmd)) out.push({ kind: 'local' });
   else if (DEVCHECK.test(cmd)) out.push({ kind: 'devcheck' });
   if (PUSH.test(cmd)) out.push({ kind: 'dev' });

@@ -78,6 +78,7 @@ describe('usage cli … --help and refusals', () => {
     expect(lensTypes('shell,infra,shell', false)).toEqual(['review-shell', 'review-infra']);
     expect(lensTypes('', false)).toEqual([]);
     expect(lensTypes('rules,nope', false)).toBeNull();
+    expect(lensTypes('toString', false)).toBeNull(); // own names only, not Object's
   });
 
   it('estimates offline with no cache from the priors alone, and says so', async () => {
@@ -112,7 +113,10 @@ describe('usage cli … --help and refusals', () => {
     expect(text).toContain('÷/× 3.00 prior');
     expect(text).toMatch(/Plan 4\.0\*/);
     expect(text).toMatch(/k 0\.2000 \[prior\]/);
-    expect(text).toMatch(/priors: .*priors\.json; ignored, placeholders kept: turns\.nope$/m);
+    expect(text).toMatch(
+      /priors: .*priors\.json; ignored: turns\.nope; still invented placeholders: turns\.bLines, /m,
+    );
+    expect(text).not.toMatch(/placeholders: [^\n]*turns\.a\b/);
     lines.length = 0;
     writeFileSync(join(usage, 'priors.json'), '{not json');
     expect(await main(['estimate', '--lines', '1000'], out)).toBe(0);

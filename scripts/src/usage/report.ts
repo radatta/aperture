@@ -307,7 +307,7 @@ export function workLines(w: WorkModel): string[] {
     ...(b.dropped
       ? [`- Left out: ${b.dropped} PRs with no usable prediction (≤ 0 or not a number).`]
       : []),
-    `- The estimate's range: ×${f1(w.band.lo, 2)}–×${f1(w.band.hi, 2)} on the point, ${w.band.basis === 'fitted' ? "the backtest's 10th–90th percentile errors" : `the prior ÷/× ${f1(w.units.priors.band, 2)} (fewer than ${MIN_FIT} backtest PRs)`}.`,
+    `- The estimate's range: ×${f1(w.band.lo, 2)}–×${f1(w.band.hi, 2)} on the point, ${w.band.basis === 'fitted' ? "the backtest's 10th–90th percentile errors" : `the prior ÷/× ${f1(w.units.priors.band, 2)} (${MIN_FIT} or fewer backtest PRs)`}.`,
     '',
     '| PR | Branch | Lines | UI | Turns (pred) | QU | Predicted | Type median |',
     '|---|---|---|---|---|---|---|---|',

@@ -134,7 +134,7 @@ describe('markers', () => {
       { kind: 'lane-phase', phase: 'gate' },
     ]);
     expect(bashMarkers('pnpm --dir=/w board lane ready --step x')).toEqual([
-      { kind: 'lane-phase', phase: 'local' },
+      { kind: 'lane-phase', phase: 'local', alias: true },
     ]);
     expect(bashMarkers('pnpm -s board lane constructor')).toEqual([]);
     expect(bashMarkers('pnpm -s devcheck:local --tier full')).toEqual([{ kind: 'local' }]);
