@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { CalibrationPoint } from '@aperture/shared';
-import { aggregate, driftLabel, plannedVsAvailable, recentPoints } from './calibration';
+import {
+  aggregate,
+  driftLabel,
+  laneAggregates,
+  plannedVsAvailable,
+  recentPoints,
+} from './calibration';
 
 const pt = (estimateLockedMin: number, actualAccruedMin: number): CalibrationPoint => ({
   taskId: 't',
@@ -10,6 +16,8 @@ const pt = (estimateLockedMin: number, actualAccruedMin: number): CalibrationPoi
   estimateSource: 'planned',
   actualAccruedMin,
   categoryId: null,
+  area: 'personal',
+  backfilled: false,
   reflection: null,
   parts: 0,
 });
@@ -63,6 +71,8 @@ describe('recentPoints', () => {
     estimateSource: 'planned',
     actualAccruedMin: 30,
     categoryId: null,
+    area: 'personal',
+    backfilled: false,
     reflection: null,
     parts: 0,
   });
@@ -92,6 +102,8 @@ describe('calibration integrity on the page', () => {
     estimateSource: 'planned',
     actualAccruedMin: 40,
     categoryId: null,
+    area: 'personal',
+    backfilled: false,
     reflection: null,
     parts: 0,
     ...over,
@@ -117,5 +129,67 @@ describe('calibration integrity on the page', () => {
     expect(driftLabel(at({ estimateSource: 'retro' }))).toBeNull();
     expect(driftLabel(at({ estimateMin: null, parts: 2 }))).toBeNull();
     expect(driftLabel(at({ estimateMin: undefined as unknown as null }))).toBeNull();
+  });
+});
+
+describe('the Aperture lane and backfilled points', () => {
+  const p = (over: Partial<CalibrationPoint>): CalibrationPoint => ({ ...pt(30, 60), ...over });
+
+  it('a backfilled point never moves the gap; it is counted apart', () => {
+    const scored = aggregate([p({})]);
+    const withBackfill = aggregate([
+      p({}),
+      p({ backfilled: true, estimateLockedMin: 600, actualAccruedMin: 5 }),
+    ]);
+    expect(withBackfill).toMatchObject({
+      count: scored.count,
+      totalEstimateMin: scored.totalEstimateMin,
+      totalActualMin: scored.totalActualMin,
+      overPct: scored.overPct,
+      backfilledCount: 1,
+      backfilledActualMin: 5,
+    });
+  });
+
+  it('a backfilled rollup is neither scored nor counted twice', () => {
+    expect(aggregate([p({ backfilled: true, parts: 2 })])).toMatchObject({
+      count: 0,
+      backfilledCount: 0,
+    });
+  });
+
+  it('no Aperture point: no lanes, the page reads as one headline', () => {
+    expect(laneAggregates([p({}), p({ area: 'school' })])).toBeNull();
+    expect(laneAggregates([])).toBeNull();
+  });
+
+  it('splits Aperture from every other area, each lane its own aggregate', () => {
+    const lanes = laneAggregates([
+      p({ area: 'school' }), // 30 → 60
+      p({ area: 'personal', estimateLockedMin: 60, actualAccruedMin: 60 }),
+      p({ area: 'aperture', estimateLockedMin: 100, actualAccruedMin: 50 }),
+      p({ area: 'aperture', backfilled: true, actualAccruedMin: 300 }),
+    ])!;
+    expect(lanes.life).toMatchObject({ count: 2, totalEstimateMin: 90, totalActualMin: 120 });
+    expect(lanes.aperture).toMatchObject({ count: 1, overPct: -50, backfilledCount: 1 });
+  });
+
+  it('a lane of only backfilled tickets still shows (nothing scored yet)', () => {
+    const lanes = laneAggregates([p({ area: 'aperture', backfilled: true })])!;
+    expect(lanes.aperture).toMatchObject({ count: 0, ratio: null, backfilledCount: 1 });
+  });
+
+  it('a point from an older Lambda (no area, no mark) reads as Life and scored', () => {
+    const old = { ...pt(30, 60) } as Partial<CalibrationPoint>;
+    delete old.area;
+    delete old.backfilled;
+    const legacy = old as CalibrationPoint;
+    expect(laneAggregates([legacy])).toBeNull();
+    expect(aggregate([legacy]).count).toBe(1);
+  });
+
+  it('Recent leaves backfilled points out', () => {
+    const points = [p({ taskId: 'a' }), p({ taskId: 'b', backfilled: true })];
+    expect(recentPoints(points, () => 1).map((x) => x.taskId)).toEqual(['a']);
   });
 });

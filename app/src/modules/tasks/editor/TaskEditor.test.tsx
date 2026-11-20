@@ -843,6 +843,21 @@ describe('TaskEditor', () => {
     expect(screen.getByText(/calibration is measured against that/)).toBeTruthy();
   });
 
+  it('a backfilled ticket says so beside its delta; an unmarked done task does not', async () => {
+    const client = api();
+    const t = await client.createTask({ title: 'Old ticket', estimateMin: 30 });
+    const [r] = await client.backfillTasks([
+      { id: t.id, actualMin: 45, completedDay: todayKey(4) },
+    ]);
+    renderEditor(client, r!.task);
+    expect(await screen.findByText('Backfilled · not scored')).toBeTruthy();
+    expect(screen.getByRole('img', { name: /actual against/ })).toBeTruthy();
+    cleanup();
+    renderEditor(client, { ...r!.task, backfilled: false });
+    expect(await screen.findByRole('img', { name: /actual against/ })).toBeTruthy();
+    expect(screen.queryByText('Backfilled · not scored')).toBeNull();
+  });
+
   it('reseeds untouched fields when the task changes elsewhere (a split), keeping edits in progress', async () => {
     const client = api();
     const t = await client.createTask({ title: 'Old name', estimateMin: 60 });

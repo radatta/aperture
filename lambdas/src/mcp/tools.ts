@@ -2,6 +2,7 @@ import {
   AREAS,
   ATTACHMENT_MAX_BYTES,
   AUTO_PLACED_ERROR,
+  BACKFILL_MAX,
   TASK_NOTES_MAX,
   TASK_REFLECTION_MAX,
   UPLOAD_URL_TTL_MS,
@@ -25,6 +26,7 @@ import {
 import { failureStatus, shownMessage } from '../rpc/failure';
 import type {
   Attachment,
+  BackfillTaskInput,
   CalendarBusy,
   Category,
   CreateTaskInput,
@@ -340,7 +342,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'update_task',
     description:
-      'Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline; an open part takes its parent\'s place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent\'s place and errors — set the parent\'s, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), reflection (REPLACES the whole reflection; null or "" clears; usually on a done task — the look back written at completion), estimateMin and/or bufferMin (either alone keeps the other), status. Fields apply in order title→categoryId→parentId→place→due→notes→reflection→estimate→status. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. The one exception: a done task with no baseline takes one retro estimate (it becomes the baseline, marked retro; a second is refused). If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress and, except on an errand, needs an estimate and an actual of at least 1 minute; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog); the one exception is a recurring occurrence due after the day it recurs (its dueTime is only its deadline), planned like any untimed task.',
+      'Patch fields on a task: title, categoryId (null clears), parentId (attach it as a part of that task, or null to detach; a started task attaching freezes the parent\'s baseline; an open part takes its parent\'s place, a detached one keeps it), place (an errand list slug from list_places; null takes it off; open tasks only — on a finished task the place is history and errors; a part follows its parent\'s place and errors — set the parent\'s, which carries its open parts along), dueDay (null clears the day AND its time; ISO date; a new day keeps the current time), dueTime (HH:MM 24h local deadline time; null clears; needs a dueDay on the task or in the same call), notes (REPLACES the whole note; null or "" clears; editable at any status), reflection (REPLACES the whole reflection; null or "" clears; usually on a done task — the look back written at completion), estimateMin and/or bufferMin (either alone keeps the other), status, backfilled (true marks a done task as closed after the fact: still listed in calibration, never in the gap; false clears it; only on a done task that is a calibration point, never a parent — to close open tickets after the fact use backfill_tasks). Fields apply in order title→categoryId→parentId→place→due→notes→reflection→estimate→status→backfilled. A parent (a task with parts) takes no estimate and no in_progress/planned status of its own — those belong to its parts; on a part, dueDay/dueTime is when its block ends. On a task with a linked Google Calendar event, while auto-sync is on, title/due/estimate changes move or rename the event and clearing the due time DELETES it; cancelling DELETES it either way. Setting the same due time again never re-adds a removed block — sync_calendar_event does. estimateMin is the working estimate, editable until the task is done or cancelled (then it errors); the calibration baseline frozen when work started is separate and never moves. The one exception: a done task with no baseline takes one retro estimate (it becomes the baseline, marked retro; a second is refused). If only part of the work is finished, use split_task (not on a roll rep or a recurring occurrence). Setting status uses the transition rules (done is only reachable from in_progress and, except on an errand, needs an estimate and an actual of at least 1 minute; prefer complete_task). A timed task is never planned — it’s on Today on its day, by its time — so status planned on one is undone by the next app open (back to backlog); the one exception is a recurring occurrence due after the day it recurs (its dueTime is only its deadline), planned like any untimed task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -362,6 +364,11 @@ export const TOOLS: Tool[] = [
         estimateMin: { type: 'integer', minimum: 0 },
         bufferMin: { type: 'integer', minimum: 0 },
         status: { type: 'string', enum: TASK_STATUSES },
+        backfilled: {
+          type: 'boolean',
+          description:
+            'closed after the fact: kept out of the calibration gap (done tasks only); false clears',
+        },
       },
       required: ['id'],
       additionalProperties: false,
@@ -380,6 +387,7 @@ export const TOOLS: Tool[] = [
         'estimateMin',
         'bufferMin',
         'status',
+        'backfilled',
       ];
       if (!fields.some((f) => present(args, f))) {
         throw new RpcParamError('update_task needs at least one field to change');
@@ -389,6 +397,7 @@ export const TOOLS: Tool[] = [
       const reflection = present(args, 'reflection') ? nullableReflection(args) : undefined;
       const dueDay = present(args, 'dueDay') ? nullableDay(args, 'dueDay') : undefined;
       const dueTime = present(args, 'dueTime') ? nullableTime(args, 'dueTime') : undefined;
+      const backfilled = present(args, 'backfilled') ? reqBool(args, 'backfilled') : undefined;
       const applied: string[] = [];
       try {
         if (present(args, 'title')) {
@@ -453,6 +462,11 @@ export const TOOLS: Tool[] = [
         if (present(args, 'status')) {
           await ctx.dispatch('transitionTask', [id, enumArg(args, 'status', TASK_STATUSES)]);
           applied.push('status');
+        }
+        // Last: a status change to done in the same call is what makes a task markable.
+        if (backfilled !== undefined) {
+          await ctx.dispatch('setTaskBackfilled', [id, backfilled]);
+          applied.push('backfilled');
         }
       } catch (e) {
         if (e instanceof RpcParamError) throw e; // bad args → -32602, unchanged
@@ -533,6 +547,63 @@ export const TOOLS: Tool[] = [
       // An errand checked off with no actual has no setTaskActual for the reflection to ride.
       if (actualMin !== null || reflection === undefined) return { task: done, previousActualMin };
       return { task: await reflectAfterDone(ctx, id, reflection), previousActualMin };
+    },
+  },
+  {
+    name: 'backfill_tasks',
+    description:
+      'Close OPEN tickets after the fact with their real minutes — the backfill: each is marked done on completedDay (the app day it shipped, never after today) with actualMin, and marked backfilled: it stays a calibration point (listed, its minutes counted apart) but never moves the estimate-vs-actual gap, because its estimate was never a forecast. Only for work the user has confirmed, with minutes from the user — never guess. Each row: id, actualMin (required, ≥ 1), estimateMin (required when the task has none, then stored as after-the-fact; else a revision, as complete_task), completedDay (YYYY-MM-DD). All-or-nothing on validation: one bad row (unknown id, listed twice, a future day, no estimate, or a shape with side effects — a parent, a part, an errand, a Roll rep, a recurring occurrence, a task with a calendar event, a cancelled or already-done one) refuses the whole batch, naming the row, and writes nothing; those shapes go through complete_task and then update_task backfilled: true. A row already done and backfilled comes back `skipped`, unchanged, so rerunning a batch is safe — and an error after validation (a timeout, a throttle) may leave some rows written: send the same batch again. 1 to 100 rows. Returns [{ id, outcome: done | skipped, task }].',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tasks: {
+          type: 'array',
+          minItems: 1,
+          maxItems: BACKFILL_MAX,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string' },
+              actualMin: { type: 'integer', minimum: 1, description: 'real minutes it took' },
+              estimateMin: {
+                type: 'integer',
+                minimum: 1,
+                description: 'required when the task has no estimate',
+              },
+              completedDay: { type: 'string', description: 'YYYY-MM-DD, the day it shipped' },
+            },
+            required: ['id', 'actualMin', 'completedDay'],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ['tasks'],
+      additionalProperties: false,
+    },
+    run(args, ctx) {
+      const raw = args.tasks;
+      if (!Array.isArray(raw) || raw.length === 0)
+        throw new RpcParamError('"tasks" must be a non-empty array');
+      if (raw.length > BACKFILL_MAX)
+        throw new RpcParamError(`"tasks" takes at most ${BACKFILL_MAX} rows`);
+      const inputs: BackfillTaskInput[] = raw.map((t, i) => {
+        if (typeof t !== 'object' || t === null)
+          throw new RpcParamError(`tasks[${i}] must be an object`);
+        const row = t as Record<string, unknown>;
+        const extra = Object.keys(row).find(
+          (k) => !['id', 'actualMin', 'estimateMin', 'completedDay'].includes(k),
+        );
+        if (extra) throw new RpcParamError(`tasks[${i}]: unknown field "${extra}"`);
+        const input: BackfillTaskInput = {
+          id: reqStr(row, 'id'),
+          actualMin: reqInt(row, 'actualMin', 1),
+          completedDay: reqDay(row, 'completedDay'),
+        };
+        const est = optInt(row, 'estimateMin', 1);
+        if (est !== undefined) input.estimateMin = est;
+        return input;
+      });
+      return ctx.dispatch('backfillTasks', [inputs]);
     },
   },
   {
@@ -685,7 +756,7 @@ export const TOOLS: Tool[] = [
   {
     name: 'get_calibration',
     description:
-      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. estimateLockedMin is the headline (frozen at start); estimateMin is where the working estimate ended up; estimateSource says how the headline came to be: planned, revised (rescoped after start), retro (estimated after the fact), null (a parent, or older than the rule). Every part is a point; a done parent is one too (parts > 0, the parts not dropped): its frozen lock against what its parts took. Its parts are already points, so leave parents out when totalling, or the work counts twice. This is the signature metric — use it to advise better estimates.',
+      'Calibration points (frozen estimate vs actual) for completed tasks in a date range. from/to are ISO dates (YYYY-MM-DD), inclusive. estimateLockedMin is the headline (frozen at start); estimateMin is where the working estimate ended up; estimateSource says how the headline came to be: planned, revised (rescoped after start), retro (estimated after the fact), null (a parent, or older than the rule). Every part is a point; a done parent is one too (parts > 0, the parts not dropped): its frozen lock against what its parts took. Its parts are already points, so leave parents out when totalling, or the work counts twice. backfilled: true marks a ticket closed after the fact (backfill_tasks) — leave it out of every gap total too; its minutes are real, its estimate was no forecast. area is the life area of the task’s category, read now: aperture points are the dev lane (the user’s attention minutes on Claude-built work, estimated from a plan’s You column), kept apart from the rest of life when totalling. This is the signature metric — use it to advise better estimates.',
     inputSchema: {
       type: 'object',
       properties: { from: { type: 'string' }, to: { type: 'string' } },

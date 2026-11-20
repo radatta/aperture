@@ -1028,3 +1028,84 @@ describe('mcp tools — due times', () => {
     ).rejects.toThrow(/requires dueDay.*already applied: title/);
   });
 });
+
+describe('mcp tools — backfill_tasks and the backfilled mark', () => {
+  type Row = { id: string; outcome: string; task: Task };
+  const row = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    actualMin: 40,
+    completedDay: '2023-11-10',
+    ...over,
+  });
+
+  it('closes a batch done on its day, marked; a rerun is all skipped', async () => {
+    const { call, setup } = makeEnv();
+    const a = await setup.createTask({ title: 'a', estimateMin: 30 });
+    const b = await setup.createTask({ title: 'b' });
+    const batch = [row(a.id), row(b.id, { estimateMin: 20 })];
+    const out = (await call('backfill_tasks', { tasks: batch })) as Row[];
+    expect(out.map((r) => [r.outcome, r.task.status, r.task.backfilled])).toEqual([
+      ['done', 'done', true],
+      ['done', 'done', true],
+    ]);
+    const again = (await call('backfill_tasks', { tasks: batch })) as Row[];
+    expect(again.map((r) => r.outcome)).toEqual(['skipped', 'skipped']);
+    const points = await setup.getCalibration({ from: '2023-11-10', to: '2023-11-10' });
+    expect(points.map((p) => [p.taskId, p.backfilled])).toEqual([
+      [a.id, true],
+      [b.id, true],
+    ]);
+  });
+
+  it('refuses bad arguments as param errors before any dispatch', async () => {
+    const { call, setup, dispatched } = makeEnv();
+    const a = await setup.createTask({ title: 'a', estimateMin: 30 });
+    const bad: [Record<string, unknown>, RegExp][] = [
+      [{}, /non-empty array/],
+      [{ tasks: [] }, /non-empty array/],
+      [{ tasks: Array.from({ length: 101 }, () => row(a.id)) }, /at most 100/],
+      [{ tasks: ['x'] }, /tasks\[0\] must be an object/],
+      [{ tasks: [row(a.id, { actualMin: 0 })] }, /actualMin/],
+      [{ tasks: [row(a.id, { actualMin: '40' })] }, /actualMin/],
+      [{ tasks: [row(a.id, { estimateMin: 0 })] }, /estimateMin/],
+      [{ tasks: [row(a.id, { completedDay: 'Nov 10' })] }, /completedDay/],
+      [{ tasks: [{ actualMin: 40, completedDay: '2023-11-10' }] }, /"id" is required/],
+      [{ tasks: [row(a.id, { reflection: 'x' })] }, /unknown field "reflection"/],
+    ];
+    for (const [args, msg] of bad) await expect(call('backfill_tasks', args)).rejects.toThrow(msg);
+    expect(dispatched).toEqual([]);
+  });
+
+  it('a domain refusal names the row and lands nothing', async () => {
+    const { call, setup } = makeEnv();
+    const a = await setup.createTask({ title: 'a', estimateMin: 30 });
+    const b = await setup.createTask({ title: 'b', estimateMin: 30 });
+    await expect(
+      call('backfill_tasks', { tasks: [row(a.id), row(b.id, { completedDay: '2023-11-20' })] }),
+    ).rejects.toThrow(/Row 2 .*after today/);
+    expect((await setup.getTask(a.id))?.status).toBe('backlog');
+  });
+
+  it('update_task backfilled sets and clears the mark, last, after a status change', async () => {
+    const { call, setup } = makeEnv();
+    const t = await setup.createTask({ title: 't', estimateMin: 30 });
+    await setup.transitionTask(t.id, 'in_progress');
+    await setup.setTaskActual(t.id, 25);
+    const marked = (await call('update_task', {
+      id: t.id,
+      status: 'done',
+      backfilled: true,
+    })) as Task;
+    expect(marked).toMatchObject({ status: 'done', backfilled: true });
+    expect(((await call('update_task', { id: t.id, backfilled: false })) as Task).backfilled).toBe(
+      false,
+    );
+    await expect(call('update_task', { id: t.id, backfilled: 'yes' })).rejects.toThrow(
+      /true or false/,
+    );
+    const open = await setup.createTask({ title: 'open', estimateMin: 30 });
+    await expect(
+      call('update_task', { id: open.id, title: 'renamed', backfilled: true }),
+    ).rejects.toThrow(/done task.*already applied: title/);
+  });
+});

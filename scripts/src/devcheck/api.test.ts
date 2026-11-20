@@ -180,6 +180,7 @@ describe('createApiClient', () => {
     expect(Object.keys(api.writes).sort()).toEqual([
       'archiveHabit',
       'archiveRoll',
+      'backfillTasks',
       'captureRaw',
       'checkHabit',
       'clearCoachFloor',

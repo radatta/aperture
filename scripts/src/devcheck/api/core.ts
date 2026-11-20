@@ -29,6 +29,9 @@ export interface DevTask {
   dueTime?: string | null; // plan-write-refetch: a planned task given a time
   gcalEventId?: string | null; // recurring: a timed occurrence's event (none — the test user has no Google)
   gcalSyncError?: string | null;
+  backfilled?: boolean; // calibration-dev-lane: closed after the fact
+  completedAt?: number | null;
+  updatedAt?: number;
 }
 
 // The slice of a recurring series the check reads and writes (packages/shared/src/types.ts TaskSeries).
@@ -208,6 +211,10 @@ export interface DevCalibrationPoint {
   estimateMin: number | null;
   estimateSource: 'planned' | 'revised' | 'retro' | null;
   actualAccruedMin: number;
+  categoryId?: string | null;
+  area?: string; // the category's life area now (an older Lambda: none)
+  backfilled?: boolean;
+  parts?: number;
 }
 
 // The slice of a saved Flux set the check writes and reads (docs/areas/flux D47). Its id is minted here,

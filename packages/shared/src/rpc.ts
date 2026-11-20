@@ -26,6 +26,8 @@ export const API_METHODS = [
   'setTaskParent',
   'transitionTask',
   'setTaskActual',
+  'backfillTasks',
+  'setTaskBackfilled',
   'splitTask',
   'deleteTask',
   'listPlansForDay',

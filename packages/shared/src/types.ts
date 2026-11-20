@@ -101,6 +101,10 @@ export interface Task extends BaseEntity {
   // gcalPulled: the last change Google made to this task — or kept out of it — and one line saying what.
   // The task shows it until the next day rollover (isPullFresh) or your own edit.
   gcalPulled?: GcalPulled | null;
+  // A ticket closed after the fact with its real minutes (calibration.ts planBackfill / withBackfilled): still a
+  // calibration point, never in the gap — its estimate wasn't a forecast. Optional: rows from before read
+  // back undefined = scored (docs/areas/calibration/dev-lane.md).
+  backfilled?: boolean;
 }
 
 // Scheduling (the *when*), separate from the task (the *what*) → multi-day + ordering.
@@ -349,6 +353,8 @@ export interface CalibrationPoint {
   estimateSource: EstimateSource | null; // null: a parent, or a row older than the done gate
   actualAccruedMin: number;
   categoryId: string | null;
+  area: Area; // the category's life area now (areaOf), read live — the calibration lane (calibration.ts laneOf)
+  backfilled: boolean; // closed after the fact: listed, never in the gap (scoresGap)
   reflection: string | null; // the task's reflection, so a calibration read carries the why with the delta
   // > 0 = a done parent's rollup (parts.ts), over this many parts not dropped (the card's "2/2") — each
   // already a point of its own, so the headline skips it to count the work once.

@@ -8,7 +8,8 @@ import { fmtDuration } from '../../lib/format';
 import { useCalibration } from '../../data/hooks/useCalibration';
 import { useSettings } from '../../data/hooks/useSettings';
 import { useAllTasks } from '../../data/hooks/useTasks';
-import { aggregate, driftLabel, recentPoints, rollupLabel } from './calibration';
+import type { CalibrationAggregate } from './calibration';
+import { aggregate, driftLabel, laneAggregates, recentPoints, rollupLabel } from './calibration';
 
 // Estimate-vs-actual, read as evidence not judgment. The per-task deltas are drawn, not listed:
 // a column of "1h 18m · 1h est · +30%" makes you do the subtraction yourself, which is exactly the
@@ -27,7 +28,7 @@ export function CalibrationSection() {
   // A done parent is the rollup of its parts (parts.ts), so its label says how many there were.
   const label = (p: CalibrationPoint) => rollupLabel(byId.get(p.taskId)?.title ?? 'Task', p.parts);
 
-  const agg = aggregate(points);
+  const lanes = laneAggregates(points);
   const recent = recentPoints(points, (id) => byId.get(id)?.completedAt);
 
   // Never the "no finished tasks yet" copy for a read that failed (the Tasks page's error covers lists only).
@@ -49,43 +50,14 @@ export function CalibrationSection() {
 
   return (
     <div className="flex flex-col gap-5">
-      <Card>
-        {agg.count === 0 ? (
-          <div className="flex flex-col gap-1">
-            <Text tone="muted" size="sm">
-              No finished tasks with an estimate yet.
-            </Text>
-            <Text tone="muted" size="sm">
-              Scope a task, work it, mark it done — the gap between what you thought it would take
-              and what it took shows up here.
-            </Text>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <Text size="3xl" weight="semibold" tone={agg.overPct! > 0 ? 'gold' : 'teal'} tabular>
-                {agg.overPct! > 0 ? '+' : ''}
-                {agg.overPct}%
-              </Text>
-              <Text tone="muted">
-                {agg.overPct! > 0 ? 'over estimate on average' : 'vs estimate on average'}
-              </Text>
-            </div>
-            {/* the aggregate as one bar, so the headline number has a shape */}
-            <DeltaBar estimateMin={agg.totalEstimateMin} actualMin={agg.totalActualMin} />
-            <Text size="xs" tone="muted">
-              {fmtDuration(agg.totalActualMin)} spent against {fmtDuration(agg.totalEstimateMin)}{' '}
-              estimated · {agg.count} {agg.count === 1 ? 'task' : 'tasks'} · last 30 days
-              {agg.count < 5 ? ' · still sparse, read it lightly' : ''}
-            </Text>
-            {agg.retroCount > 0 && (
-              <Text size="xs" tone="muted">
-                {agg.retroCount} of {agg.count} estimated after the fact
-              </Text>
-            )}
-          </div>
-        )}
-      </Card>
+      {lanes ? (
+        <>
+          <GapCard agg={lanes.life} lane="Life" />
+          <GapCard agg={lanes.aperture} lane="Aperture" />
+        </>
+      ) : (
+        <GapCard agg={aggregate(points)} />
+      )}
 
       {recent.length > 0 && (
         <div className="flex flex-col gap-3">
@@ -118,5 +90,66 @@ export function CalibrationSection() {
         </div>
       )}
     </div>
+  );
+}
+
+// One lane's headline. With no lane named it's the whole page's, worded as it always was. The Aperture lane is
+// dev work, its minutes the user's attention (docs/areas/calibration/dev-lane.md); backfilled tickets are counted
+// under it, never in its number.
+function GapCard({ agg, lane }: { agg: CalibrationAggregate; lane?: string }) {
+  return (
+    <Card>
+      <div className="flex flex-col gap-3" data-lane={lane?.toLowerCase()}>
+        {lane && (
+          <Text size="xs" tone="muted" weight="medium" className="uppercase tracking-wider">
+            {lane}
+          </Text>
+        )}
+        {agg.count === 0 ? (
+          <div className="flex flex-col gap-1">
+            <Text tone="muted" size="sm">
+              {agg.backfilledCount > 0
+                ? 'Nothing scored yet.'
+                : 'No finished tasks with an estimate yet.'}
+            </Text>
+            {!lane && (
+              <Text tone="muted" size="sm">
+                Scope a task, work it, mark it done — the gap between what you thought it would take
+                and what it took shows up here.
+              </Text>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <Text size="3xl" weight="semibold" tone={agg.overPct! > 0 ? 'gold' : 'teal'} tabular>
+                {agg.overPct! > 0 ? '+' : ''}
+                {agg.overPct}%
+              </Text>
+              <Text tone="muted">
+                {agg.overPct! > 0 ? 'over estimate on average' : 'vs estimate on average'}
+              </Text>
+            </div>
+            {/* the aggregate as one bar, so the headline number has a shape */}
+            <DeltaBar estimateMin={agg.totalEstimateMin} actualMin={agg.totalActualMin} />
+            <Text size="xs" tone="muted">
+              {fmtDuration(agg.totalActualMin)} spent against {fmtDuration(agg.totalEstimateMin)}{' '}
+              estimated · {agg.count} {agg.count === 1 ? 'task' : 'tasks'} · last 30 days
+              {agg.count < 5 ? ' · still sparse, read it lightly' : ''}
+            </Text>
+            {agg.retroCount > 0 && (
+              <Text size="xs" tone="muted">
+                {agg.retroCount} of {agg.count} estimated after the fact
+              </Text>
+            )}
+          </>
+        )}
+        {agg.backfilledCount > 0 && (
+          <Text size="xs" tone="muted">
+            {agg.backfilledCount} backfilled · {fmtDuration(agg.backfilledActualMin)}, not scored
+          </Text>
+        )}
+      </div>
+    </Card>
   );
 }

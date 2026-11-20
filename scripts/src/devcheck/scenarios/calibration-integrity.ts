@@ -542,7 +542,7 @@ export const calibrationIntegrity: Scenario = {
       title: 'The Calibration page counts the retro points',
       async run(ctx) {
         await ctx.ui.goto('/tasks?lens=calibration');
-        const note = ctx.page.getByText(/^\d+ of \d+ estimated after the fact$/);
+        const note = ctx.page.getByText(/^\d+ of \d+ estimated after the fact$/).first(); // a lane each, when Aperture has points
         await note.waitFor({ timeout: 15_000 });
         await note.scrollIntoViewIfNeeded();
         await ctx.shot('footnote');

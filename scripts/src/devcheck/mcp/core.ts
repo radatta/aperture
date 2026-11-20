@@ -192,6 +192,7 @@ export interface DevDayView {
       actualMin: number;
       deltaMin: number | null;
       isCalibrationPoint: boolean;
+      backfilled?: boolean;
     }[];
     planned: { id: string; byTime: boolean; plannedMinutes: number | null }[];
     stillOpen: { id: string }[];

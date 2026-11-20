@@ -241,6 +241,19 @@ acting lane's pane: actions on live state, with no whole diff to show, no undo a
   the watcher (in the background, _Watchers_ below) before the next start; run a `--wait` start in the background too. `--over-pace
 "<reason>"` is the hub's own call only to start past a dead or missing watcher it is restarting; past a busy box it
   needs the maintainer's word.
+- **Dev tickets** ([dev-lane](../areas/calibration/dev-lane.md)). Each lane's kickoff file names its Aperture ticket
+  and its `You: <n> min` (the plan table's You for it). The two prod writes that make it a calibration point are the
+  hub's own, never a lane's, and go out beside questions the hub already puts to the maintainer, never a ping of their
+  own: with the kickoff, `update_task {id, estimateMin: n}`; with the merge line, `complete_task {id, actualMin}` with
+  the maintainer's minutes. Each is a prod MCP write outside the standing approvals (_Approval_), so each is its own
+  pane ask (_Asks_: `pane` the hub's, `go` words naming that write on `aperture`, e.g. `yes estimate <ticket> <n>`),
+  shown with the kickoff or the merge line, never an option on it; the hub shows the exact call and makes it only on
+  that go typed in its pane. A relay or a kickoff never carries it. No yes, or the maintainer is away: no write, the
+  lane starts or merges anyway. The ticket's lock freezes at its first start: a `pulse` on it, else the merge's
+  `complete_task`. So the estimate counts as `planned` whenever its yes lands before either (the number was fixed in
+  the kickoff file), and nobody pulses the ticket before it does. An estimate ask still open at merge is closed (`asks close`),
+  and the number rides in the `complete_task` (`estimateMin: n`) instead, stored as `retro`. The merge's `actualMin`
+  replaces any minutes pulses credited to the ticket.
 - **Lanes on battery** (F120). With the Mac on battery under 30% or in Low Power Mode, keep **at most 3 lanes**
   running: a throttled Mac stretches every gate (2026-11-17's low-power window: typecheck ×1.8, lint ×2), so a fourth
   lane costs everyone time. Read it from the `mac:` line of `pnpm lanes status` or `board.sh status` (it says

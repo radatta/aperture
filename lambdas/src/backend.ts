@@ -1,4 +1,7 @@
 import {
+  calibrationPoints,
+  planBackfill,
+  withBackfilled,
   normalizeCatalogImport,
   assertAttachmentAllowed,
   assertArea,
@@ -37,7 +40,6 @@ import {
   followUpPlanMinutes,
   assertCanBePart,
   becomeParent,
-  calibrationTasks,
   cancelParent,
   completeParent,
   freezeParentLock,
@@ -54,7 +56,6 @@ import {
   PARENT_NO_SPLIT_ERROR,
   PARENT_NO_START_ERROR,
   partsOf,
-  rollupParts,
   releaseParent,
   splitFollowUp,
   rescopedPlanMinutes,
@@ -175,6 +176,8 @@ import {
   SITTING_ENDED_ERROR,
 } from '@aperture/shared';
 import type {
+  BackfillResult,
+  BackfillTaskInput,
   CoachAttempt,
   Mock,
   MockInput,
@@ -2393,6 +2396,29 @@ export class BackendClient implements ApiClient {
     assertActualAllowed(t, actualMin);
     return this.repo.putTask({ ...t, actualAccruedMin: actualMin, ...note, updatedAt: this.now() });
   }
+  // One consistent read, the whole batch checked (planBackfill names a bad row before any write), then one
+  // batch put: sixty composed complete_task chains would each re-read the task list and outrun the MCP
+  // Lambda's timeout. A put that fails part-way leaves the rows it wrote done and backfilled, so a rerun
+  // skips them and finishes the rest.
+  async backfillTasks(inputs: BackfillTaskInput[]): Promise<BackfillResult[]> {
+    const now = this.now();
+    const start = (await this.ensureSettings()).dayStartHour;
+    const tasks = await this.repo.listTasks({ consistent: true });
+    const rows = planBackfill(tasks, inputs, dayKeyInZone(now, USER_TIME_ZONE, start), now);
+    const writes = rows.flatMap((r) => (r.next ? [r.next] : []));
+    if (writes.length) await this.repo.putTasks(writes);
+    return rows.map(({ id, next, task }) =>
+      next
+        ? { id, outcome: 'done' as const, task: next }
+        : { id, outcome: 'skipped' as const, task },
+    );
+  }
+  async setTaskBackfilled(id: string, backfilled: boolean): Promise<Task> {
+    const task = await this.mustTask(id);
+    const tasks = await this.repo.listTasks({ consistent: true });
+    const next = withBackfilled(task, tasks, backfilled, this.now());
+    return next === task ? task : this.repo.putTask(next);
+  }
   async splitTask(
     id: string,
     input: SplitTaskInput,
@@ -3681,29 +3707,18 @@ export class BackendClient implements ApiClient {
   }
 
   // --- Calibration ---
-  // Parity with the stub: every done+locked task (parts.ts calibrationTasks), by completion DAY
-  // (dayStartHour offset) in the user's zone: the Lambda's clock is UTC, so a local dayKey moved an evening
-  // finish onto tomorrow (calibration/integrity.md).
+  // Parity with the stub: both build the points in calibration.ts calibrationPoints — every done+locked task,
+  // by completion DAY (dayStartHour offset) in the user's zone (the Lambda's clock is UTC, so a local dayKey
+  // moved an evening finish onto tomorrow: calibration/integrity.md), each with its category's area now.
   // TODO(scale): swap the full task scan for `repo.doneTasksInWindow` over the GSI once the
   // day-range → epoch-window mapping (with the offset) is nailed down.
   async getCalibration(range: DateRange): Promise<CalibrationPoint[]> {
     const start = (await this.ensureSettings()).dayStartHour;
-    const tasks = await this.repo.listTasks();
-    return calibrationTasks(tasks)
-      .filter((t) => t.completedAt !== null)
-      .map((t) => ({
-        taskId: t.id,
-        day: dayKeyInZone(t.completedAt as number, USER_TIME_ZONE, start),
-        estimateLockedMin: t.estimateLockedMin as number,
-        estimateMin: t.estimateMin,
-        estimateSource: t.estimateSource ?? null,
-        actualAccruedMin: t.actualAccruedMin,
-        categoryId: t.categoryId,
-        reflection: t.reflection ?? null,
-        parts: rollupParts(tasks, t.id),
-      }))
-      .filter((p) => p.day >= range.from && p.day <= range.to)
-      .sort((a, b) => a.day.localeCompare(b.day));
+    const [tasks, categories] = await Promise.all([
+      this.repo.listTasks(),
+      this.repo.listCategories(),
+    ]);
+    return calibrationPoints(tasks, categories, start, range);
   }
 
   // Alive sittings with their live rows and head rows — a child whose head is gone (a delete that raced an
