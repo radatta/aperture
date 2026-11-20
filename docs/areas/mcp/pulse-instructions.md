@@ -4,10 +4,10 @@ The standing instructions that make a claude.ai project pulse its work into Aper
 first test is the recruiting project; the block is project-agnostic, so a later project pastes the same one. It goes
 after the project's own standing rules.
 
-Copy it on the Mac (one line; it copies only the lines between the two whole-line markers, then shows the first three — they should start with `## Time tracking (Aperture pulse)`; an empty copy means the file isn't on `origin/main` yet):
+Copy it on the Mac (one line; it copies only the lines between the two whole-line markers and prints `copied` once the clipboard holds the block's heading — nothing printed means the copy failed: the file isn't on `origin/main` yet, or the markers moved):
 
 ```
-cd <mac-repo> && git fetch origin && git show origin/main:docs/areas/mcp/pulse-instructions.md | awk '/^<!-- paste:start -->$/{f=1;next}/^<!-- paste:end -->$/{f=0}f' | pbcopy && pbpaste | head -n 3
+cd <mac-repo> && git fetch origin && git show origin/main:docs/areas/mcp/pulse-instructions.md | awk '/^<!-- paste:start -->$/{f=1;next}/^<!-- paste:end -->$/{f=0}f' | pbcopy && pbpaste | grep -q '^## Time tracking (Aperture pulse)$' && echo copied
 ```
 
 Keep the block short: standing instructions decay over a long thread, and the pulse is the one that must survive.

@@ -3583,6 +3583,16 @@ export function runApiContract(
         await api.stopSession(t2.id, 'discarded');
       });
 
+      it("a category's work flag, backfilled, reaches the open pulse session", async () => {
+        const cat = await api.upsertCategory({ label: 'Study', isWork: false, area: 'school' });
+        const t = await api.createTask({ title: 'Read', estimateMin: 30, categoryId: cat.id });
+        await api.pulseTask({ taskId: t.id });
+        await api.setCategoryWork(cat.id, true, true);
+        advance(2 * 60_000);
+        await api.pulseTask({ taskId: t.id });
+        expect((await pulseRows()).map((s) => s.wasWork)).toEqual([true]);
+      });
+
       it("a LeetCode sitting times its rep: a pulse counts nothing and done is the app's", async () => {
         const { sitting } = await startSitting(api);
         const r = await api.pulseTask({ taskId: sitting.repTaskId });

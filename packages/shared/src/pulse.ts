@@ -51,7 +51,7 @@ export interface PulseResult {
   sessionMin: number; // the session this pulse landed in (0 when not counted)
   taskActualMin: number;
   pulses: number; // in this session
-  closed?: { taskId: string; minutes: number }; // a session this pulse ended (a switch, or a block)
+  closed?: { taskId: string; minutes: number }; // a session this pulse settled (a switch, a lapse, a block or a done elsewhere)
   done?: boolean;
   needs?: PulseNeeds;
   message?: string;

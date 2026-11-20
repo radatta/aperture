@@ -49,19 +49,29 @@ const pulseRow = async (ctx: Ctx, taskId: string) =>
     (s) => s.source === 'pulse' && s.taskId === taskId,
   );
 
-// Session rows are read eventually consistent (listAllSessions): a read straight after a pulse can see the row
-// before it. Retry a few times until `ok` holds.
-const settledRow = async (
-  ctx: Ctx,
-  taskId: string,
-  ok: (row: NonNullable<Awaited<ReturnType<typeof pulseRow>>>) => boolean,
-) => {
+// Reads here are eventually consistent (list_tasks, getTask, listAllSessions): one straight after a write can see
+// the row before it. Retry a few times until `ok` holds; the step's own expect judges the last read.
+const until = async <T>(read: () => Promise<T>, ok: (v: T) => boolean): Promise<T> => {
   for (let i = 0; ; i++) {
-    const row = await pulseRow(ctx, taskId);
-    if ((row && ok(row)) || i === 4) return row;
+    const v = await read();
+    if (ok(v) || i === 4) return v;
     await sleep(1000);
   }
 };
+const settledRow = (
+  ctx: Ctx,
+  taskId: string,
+  ok: (row: NonNullable<Awaited<ReturnType<typeof pulseRow>>>) => boolean,
+) =>
+  until(
+    () => pulseRow(ctx, taskId),
+    (row) => !!row && ok(row),
+  );
+const settledTask = (
+  ctx: Ctx,
+  id: string,
+  ok: (t: Awaited<ReturnType<typeof taskOf>>) => boolean,
+) => until(() => taskOf(ctx, id), ok);
 
 // capMin 0: a staged timer ends crediting nothing; the cleanup deletes its task beneath it.
 const stopTimerOn = async (ctx: Ctx, taskId: string) => {
@@ -289,7 +299,7 @@ export const pulseTracking: Scenario = {
           'first pulse',
           shown(r),
         );
-        const a = await taskOf(ctx, made.a);
+        const a = await settledTask(ctx, made.a, (t) => t.status === 'in_progress');
         expect(a.estimateLockedMin === 30 && a.actualAccruedMin === 0, 'started task', a);
       },
     },
@@ -376,8 +386,12 @@ export const pulseTracking: Scenario = {
       async run(ctx) {
         const r = await ctx.mcp.writes.pulse(made.b);
         expect(r.opened && r.closed?.taskId === made.a && r.sessionMin === 0, 'switch', shown(r));
-        const a = await taskOf(ctx, made.a);
-        // A's session ended at this pulse: its last pulse, not its grace (WAIT_S plus the steps between).
+        const a = await settledTask(
+          ctx,
+          made.a,
+          (t) => Math.abs((t.actualAccruedMin ?? -1) - r.closed!.minutes) < 0.06,
+        );
+        // A's session settled at this pulse with the seconds since its last pulse, not its whole grace.
         expect(
           Math.abs((a.actualAccruedMin ?? -1) - r.closed!.minutes) < 0.06 &&
             r.closed!.minutes < GRACE,
@@ -428,7 +442,7 @@ export const pulseTracking: Scenario = {
           'done pulse',
           shown(r),
         );
-        const b = await taskOf(ctx, made.b);
+        const b = await settledTask(ctx, made.b, (t) => t.status === 'done');
         expect(
           b.status === 'done' && Math.abs((b.actualAccruedMin ?? 0) - r.taskActualMin) < 0.06,
           'B done',
@@ -510,7 +524,10 @@ export const pulseTracking: Scenario = {
         await sleep(3000);
         await ctx.api.writes.startSession(made.f, await appDay(ctx));
         try {
-          const f = await ctx.api.reads.getTask(made.f);
+          const f = await until(
+            () => ctx.api.reads.getTask(made.f),
+            (t) => (t?.actualAccruedMin ?? 0) > 0,
+          );
           const got = f?.actualAccruedMin ?? -1;
           expect(
             got > 0 && got < 0.5,
@@ -630,7 +647,7 @@ export const pulseTracking: Scenario = {
           'pulse after the window',
           shown(r),
         );
-        const t = await taskOf(ctx, g);
+        const t = await settledTask(ctx, g, (x) => x.actualAccruedMin === GRACE);
         expect(t.actualAccruedMin === GRACE, 'G actual after the lapse', t.actualAccruedMin);
       },
     },

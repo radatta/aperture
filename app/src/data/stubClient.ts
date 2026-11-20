@@ -2571,6 +2571,10 @@ class StubClient implements ApiClient {
         this.writes.put(this.store.sessions, { ...s, wasWork: isWork, updatedAt: this.now() });
         backfilled++;
       }
+      // The open pulse session too: its row is rewritten from the state on every pulse (lambdas/src/pulse.ts).
+      const open = this.store.pulseState?.open;
+      if (open?.categoryId === id && open.wasWork !== isWork)
+        this.setPulseOpen({ ...open, wasWork: isWork });
     }
     return { category, backfilled };
   }

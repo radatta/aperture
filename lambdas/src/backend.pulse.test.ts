@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { PULSE_GRACE_MIN, PULSE_STATE_ID } from '@aperture/shared';
 import type { OpenPulse, PulseState, Task } from '@aperture/shared';
 import { InMemoryDoc } from './ddb/DocClient';
@@ -173,5 +173,63 @@ describe('pulses on the table', () => {
     await backend.pulseTask({ taskId: t.id });
     now.t += 18 * MIN; // past the personal 15, inside recruiting's 20
     expect((await backend.pulseTask({ taskId: t.id })).opened).toBe(false);
+  });
+
+  it('reads running timers strongly consistent, and a blocked pulse skips the parts read', async () => {
+    const { doc, backend } = setup();
+    const parent = await backend.createTask({ title: 'Lab', estimateMin: 60 });
+    const part = await backend.createTask({ title: 'Prelab', estimateMin: 20 });
+    await backend.setTaskParent(part.id, parent.id);
+    await backend.startSession({
+      taskId: parent.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2023-11-14',
+    });
+    doc.queries.length = 0;
+    const r = await backend.pulseTask({ taskId: parent.id });
+    expect(r).toMatchObject({ counted: false, reason: 'timer' }); // the timer answers before the parent refusal
+    expect(doc.queries).toContainEqual(
+      expect.objectContaining({ prefix: sk.sessionRunningPrefix(), consistent: true }),
+    );
+    expect(doc.queries.some((q) => q.prefix.startsWith('task#'))).toBe(false);
+  });
+
+  it('a timer start whose pulse settle fails still lands, and says so in the log', async () => {
+    const { doc, backend } = setup();
+    const t = await backend.createTask({ title: 'Timed', estimateMin: 30 });
+    await backend.pulseTask({ taskId: t.id });
+    doc.interceptNextPutIf(pk(U), sk.pulseState(), () => {
+      throw new Error('throttled');
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const timer = await backend.startSession({
+        taskId: t.id,
+        categoryId: null,
+        kind: 'work',
+        day: '2023-11-14',
+      });
+      expect((await backend.listRunningSessions()).map((s) => s.id)).toEqual([timer.id]);
+      expect(
+        log.mock.calls.map((c) => String(c[0])).some((l) => l.includes('pulse_yield_deferred')),
+      ).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("a category's work flag, backfilled, reaches the open pulse session too", async () => {
+    const { backend, now } = setup();
+    const cat = await backend.upsertCategory({ label: 'Study', isWork: false, area: 'school' });
+    const t = await backend.createTask({ title: 'Read', estimateMin: 30, categoryId: cat.id });
+    await backend.pulseTask({ taskId: t.id });
+    await backend.setCategoryWork(cat.id, true, true);
+    now.t += 2 * MIN;
+    await backend.pulseTask({ taskId: t.id }); // rewrites the row from the state row
+    const rows = (await backend.listSessionsForDay('2023-11-14')).filter(
+      (s) => s.source === 'pulse',
+    );
+    expect(rows.map((s) => s.wasWork)).toEqual([true]);
   });
 });

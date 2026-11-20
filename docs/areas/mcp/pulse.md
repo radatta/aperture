@@ -24,8 +24,9 @@ needs?, message?}`. RPC `pulseTask(input)`.
 - **One open session per user.** A pulse for task B ends A's session now (with the time since A's last pulse, never
   more than the grace) and opens B's.
 - **`done: true`** finishes the task when its done gate allows: the session ends with its grace (the last reply is
-  read too) and the task goes done with what was tracked. A done with nothing live on the task (a new thread, or after
-  the window) adds nothing. Refused, it is an ordinary pulse — the session stays open — and `needs` says
+  read too) and the task goes done with what was tracked. A done with nothing live on the task opens nothing: after
+  the task's own window, its old session settles with its grace (which counts toward the gate); after a switch or in
+  a new thread, it adds nothing. Refused, it is an ordinary pulse — the session stays open — and `needs` says
   why: `estimate` (no estimate: Claude asks, sets one with `update_task`, pulses done again), `actual` (under a minute
   tracked: the user's own number goes through `complete_task`), `app` (a timer or a sitting times the task: finish it
   in Aperture, which stops it). `complete_task` is unchanged: it needs `actualMin`, and a typed actual still replaces
@@ -50,7 +51,8 @@ already …`), a parent opening a session (`pulse the part being worked on`), an
   finished meanwhile is not credited (the row keeps it, as a timer stopped on a finished task does).
 - **One state row, `pulsestate`**, holds the open session (`OpenPulse`); every pulse changes it with a conditional
   write (`repo.casUpdate`), so two pulses at once are serialised — the loser re-reads and plans on the winner. The
-  session row is a pure function of it, written unconditionally: two pulses at once (two tabs) can land their rows
+  session row is a pure function of it (so a category's work-flag backfill updates the open session's `wasWork` in
+  the state row too), written unconditionally: two pulses at once (two tabs) can land their rows
   out of order, which the session's next pulse rewrites; a stale row on a session's very last pulse stays (the
   drift-check follow-up).
 - **A task's minutes move by a conditional delta** (`repo.accrueTaskMinutes`): an app write landing meanwhile (a Done,
@@ -58,9 +60,11 @@ already …`), a parent opening a session (`pulse the part being worked on`), an
 - **Write order:** the task's start, the state row, each changed session row, each task's minutes, then a done. A
   crash between them only under-counts (every credit is ≥ 0), by at most one window plus the grace; the next pulse in
   the session rewrites its row from the state row.
-- **Cost:** a steady-state pulse is one MCP invocation, about 6 read units (the task, its category, the state row, the
-  running timers, settings, and the sittings for a Roll rep) and 3–10 write units (the state and session rows each
-  carry up to 20 notes, the task row). Usage-priced, no standing charge, no new resource
+- **Cost:** a steady-state pulse (extending a session on a plain task) is one MCP invocation, about 6 read units (the
+  task and the state row, each read twice, its category, the running timers, settings) and 3–10 write units (the state
+  and session rows each carry up to 20 notes, the task row). Two reads grow with history, not pulses: a pulse that
+  opens a session reads the task list (the parent check, consistent), and a pulse on a Roll rep reads the sitting
+  heads. Usage-priced, no standing charge, no new resource
   ([arch/INFRA.md](../../arch/INFRA.md) §11).
 
 ## Numbers
@@ -87,7 +91,9 @@ constant to move, no UI. A per-category override is a follow-up if the area prov
   best-effort: a failure is logged and the next pulse, blocked by the timer, settles it). A timer forgotten and left
   stale blocks pulse time on that one task until its keep/discard — an under-count, never a double count. The timer
   read is strongly consistent; the one race left — a pulse that read "no timer" opening its session just after a
-  timer start found nothing to settle — overlaps the timer by at most the grace, settled at the next pulse.
+  timer start found nothing to settle — overlaps the timer by at most the grace, settled at the next pulse. A sitting
+  Start that attaches a rep pulsed just before has the same bound: it doesn't settle the pulse session, so the two
+  overlap by at most the grace, until the next pulse (blocked by the sitting) settles it.
 - **LeetCode sittings time their reps.** A pulse on a task that any sitting (ended ones too) names as its rep counts
   nothing (`reason: 'sitting'`), and `done` answers `needs: 'app'`: the rep's time is its sittings', and it is
   finished with Done in Aperture, which sets its actual from them. Sittings and Rolls are unchanged; a rep with no

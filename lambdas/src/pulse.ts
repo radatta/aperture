@@ -60,8 +60,13 @@ export class PulseService {
     const open = (await repo.getPulseState({ consistent: true }))?.open ?? null;
     const extending = open?.taskId === task.id && now - open.lastPulseAt <= windowMs;
     // Only a pulse that would open a session asks whether the task is a parent: a blocked one opens nothing, and
-    // a part has no parts of its own. Eventually consistent, as setTaskActual's check is.
-    if (!blocked && !extending && !task.parentId && hasParts(await repo.listTasks(), task.id))
+    // a part has no parts of its own. Consistent: a part made a moment ago (one MCP round trip) must count.
+    if (
+      !blocked &&
+      !extending &&
+      !task.parentId &&
+      hasParts(await repo.listTasks({ consistent: true }), task.id)
+    )
       throw new Error(PULSE_PARENT_ERROR);
     // A pulse that counts starts an unstarted task (freezing its estimate lock); a blocked one changes nothing.
     if (!blocked && (task.status === 'backlog' || task.status === 'planned'))
@@ -123,6 +128,23 @@ export class PulseService {
       now,
     );
     if (row) await this.writeRows([row], now, taskId);
+  }
+
+  // A category's work flag backfilled into past sessions reaches the open one too: its row is rewritten from the
+  // state row on every pulse, so the backfill alone would be undone by the next one.
+  async setWasWork(categoryId: string, isWork: boolean): Promise<void> {
+    const { repo } = this.d;
+    const state = await repo.getPulseState({ consistent: true });
+    if (state?.open?.categoryId !== categoryId || state.open.wasWork === isWork) return;
+    await repo.casUpdate<PulseState>(
+      repo.pulseStateShape(),
+      PULSE_STATE_ID,
+      (fresh) =>
+        fresh.open?.categoryId === categoryId && fresh.open.wasWork !== isWork
+          ? { ...fresh, open: { ...fresh.open, wasWork: isWork } }
+          : null,
+      this.d.now(),
+    );
   }
 
   // Each changed session row, then its task's minutes. Returns `taskId`'s task as it ends up, when it moved.

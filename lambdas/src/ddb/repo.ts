@@ -826,8 +826,8 @@ export class Repo {
   }
   // A delta onto a task's tracked minutes, conditional on the row as read: a write landing meanwhile (a
   // Done or an edit from the app) is re-read and kept, never flattened. A task finished meanwhile keeps its
-  // actual (accruesTime); a gone one is null. Floors at 0 (a trim never takes back more than was credited,
-  // but a typed actual may have replaced it since).
+  // actual (accruesTime); a gone one is null. Pulse deltas are never negative; the floor at 0 only
+  // guards a caller that passes one.
   async accrueTaskMinutes(id: string, deltaMin: number, now: number): Promise<Task | null> {
     for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
       const t = await this.getTask(id, { consistent: true });

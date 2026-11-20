@@ -2921,6 +2921,7 @@ export class BackendClient implements ApiClient {
         await this.repo.putSession({ ...s, wasWork: isWork, updatedAt: this.now() });
         backfilled++;
       }
+      await this.pulses.setWasWork(id, isWork);
     }
     return { category, backfilled };
   }
