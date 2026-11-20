@@ -4,7 +4,8 @@
 # `claude -p --resume <sid> --fork-session` and runs the `handoff` skill in the fork, which reuses the
 # parent's prompt cache. Compaction waits for this hook.
 #
-# Always exits 0 and prints nothing — a failed handoff must never block or clutter compaction. Every run
+# Always exits 0 and prints nothing but a lane's block (lane_block below) — a failed handoff must never block or
+# clutter compaction. Every run
 # appends one line to localNotes/handoffs/precompact.log; a fork that wrote to stderr, or failed with output,
 # keeps it beside it (the keep rule: docs/ops/COMPACTION-HANDOFF.md → Failure).
 # Flags, permission model, measurements: docs/ops/COMPACTION-HANDOFF.md. Pairs with the PostCompact hook
@@ -25,6 +26,32 @@ skip() { log "skip reason=$1${2:+ $2}"; exit 0; }
 
 # The fork inherits this env var, so if the fork itself compacts it never forks again.
 [ -n "${APERTURE_HANDOFF_FORK:-}" ] && skip fork
+
+# A lane's five constant lines for the summary (docs/ops/COMPACTION-HANDOFF.md → Lane block): this hook's stdout
+# becomes compaction instructions. Only a checked branch, a phase word and the lane file's path come from outside —
+# never free text from the lane file. Anywhere but a lane worktree that isn't the hub's and has a lane file (so not an
+# agent's or a scratch worktree), it prints nothing.
+lane_block() {
+  local top main dir branch hub lf phase=unknown
+  top=$(pwd -P)
+  [[ "$top" =~ ^(/[A-Za-z0-9_./-]+)/\.claude/worktrees/([a-z0-9][a-z0-9-]{0,62})$ ]] || return 0
+  main=${BASH_REMATCH[1]} dir=${BASH_REMATCH[2]}
+  branch=$(git branch --show-current 2>/dev/null)
+  [[ "$branch" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || return 0
+  hub=$(jq -r '.name // empty' "${BASH_SOURCE[0]%/*}/../../scripts/board/hub.json" 2>/dev/null)
+  [ -n "$hub" ] && [ "$branch" != "$hub" ] && [ "$dir" != "$hub" ] || return 0
+  lf="$main/localNotes/board/lanes/$branch.json"
+  [[ "$lf" =~ ^[A-Za-z0-9_./-]+$ ]] && [ -f "$lf" ] || return 0
+  case "$(jq -r '.phase | strings' "$lf" 2>/dev/null)" in
+    plan) phase=plan ;; build) phase=build ;; gate) phase=gate ;; review) phase=review ;; local) phase=local ;;
+    dev) phase=dev ;; pr) phase=pr ;; merged) phase=merged ;; cleanup) phase=cleanup ;; parked) phase=parked ;;
+    blocked) phase=blocked ;;
+  esac
+  printf '%s\n' "This session is the feature lane on branch $branch." "Lane phase: $phase." "Lane status file: $lf" \
+    "Keep in the summary: the step in progress, open review findings, unanswered asks quoted word for word, any [hold] in force, each relayed approval with its exact scope, any pending claude-edit patch, and the next step." \
+    "After compaction, re-read docs/ops/FEATURE-WORKFLOW.md before acting."
+}
+lane_block
 
 SID=$(jq -r '.session_id // empty' <<<"$INPUT" 2>/dev/null)
 TRIGGER=$(jq -r '.trigger // empty' <<<"$INPUT" 2>/dev/null)

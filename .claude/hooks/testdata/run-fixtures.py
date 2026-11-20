@@ -15,6 +15,8 @@ Suites:
                                  post-compact-summary.sh, post-compact-context.sh; each case names its "hook")
   board-hub-nudge.sh check    <- hub-nudge-fixtures.jsonl  (the hub self-check's matcher: one synthetic turn per
                                  case on stdin, its prompt and reply through the environment)
+  board-heartbeat.sh idle     <- handoff-fixtures.jsonl  (the self-compact hand-off against a temp main repo and a
+                                 stub self-compact.sh: which copy runs, and that it never fails or delays Stop)
 
 WHY THIS EXISTS AS A FILE-DRIVEN RUNNER, and not as an inline shell loop:
 COI's monitor matches its reverse-shell patterns against every process's argv.
@@ -112,11 +114,14 @@ REGISTERED_POST = {
     ),
 }
 
-# Non-PreToolUse hooks: script -> (event, matcher or None). "" never matches a real matcher, so None means "no matcher".
+# Non-PreToolUse hooks: script -> its (event, matcher or None, args) triples. "" never matches a real matcher, so None
+# means "no matcher". A command's first word names the script, the rest are its args (`board-heartbeat.sh idle`).
 REGISTERED_EVENTS = {
-    "precompact-handoff.sh": ("PreCompact", None),
-    "post-compact-summary.sh": ("PostCompact", None),
-    "post-compact-context.sh": ("SessionStart", "compact"),
+    # the self-compact hand-off rides its Stop entry, and runs only on `idle` (handoff-fixtures.jsonl)
+    "board-heartbeat.sh": (("UserPromptSubmit", None, "working"), ("Stop", None, "idle")),
+    "precompact-handoff.sh": (("PreCompact", None, ""),),
+    "post-compact-summary.sh": (("PostCompact", None, ""),),
+    "post-compact-context.sh": (("SessionStart", "compact", ""),),
 }
 
 # (hook, fixtures, tool, needs_repo[, "board"]) — "board": each case gets a fresh temp board + fake cgroup
@@ -423,8 +428,8 @@ def check_registration() -> tuple[int, int]:
     for event, registered in (("PreToolUse", REGISTERED), ("PostToolUse", REGISTERED_POST)):
         for h in registered:
             homes.setdefault(h, set()).add(event)
-    for h, (event, _) in REGISTERED_EVENTS.items():
-        homes.setdefault(h, set()).add(event)
+    for h, pairs in REGISTERED_EVENTS.items():
+        homes.setdefault(h, set()).update(event for event, _, _ in pairs)
     for event, entries in settings["hooks"].items():
         for entry in entries:
             for h in entry["hooks"]:
@@ -440,14 +445,21 @@ def check_registration() -> tuple[int, int]:
         ok = os.access(HERE.parent / hook_name, os.X_OK)
         failures += not ok
         print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} is executable")
-    for hook_name, (event, matcher) in REGISTERED_EVENTS.items():
-        total += 1
-        ok = any(
-            entry.get("matcher") == matcher and any(pathlib.PurePath(h["command"]).name == hook_name for h in entry["hooks"])
-            for entry in settings["hooks"].get(event, [])
-        )
-        failures += not ok
-        print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} on {event}{f' ({matcher})' if matcher else ''}")
+    # Per script and event: exactly the expected (matcher, args) registrations, so a second, wrong one (`working` on
+    # Stop beside `idle`) fails too.
+    for hook_name, pairs in REGISTERED_EVENTS.items():
+        for event in dict.fromkeys(e for e, _, _ in pairs):
+            total += 1
+            want = {(m, a) for e, m, a in pairs if e == event}
+            got = {
+                (entry.get("matcher"), " ".join(h["command"].split()[1:]))
+                for entry in settings["hooks"].get(event, [])
+                for h in entry["hooks"]
+                if pathlib.PurePath(h["command"].split()[0]).name == hook_name
+            }
+            ok = got == want
+            failures += not ok
+            print(f"{'ok  ' if ok else 'FAIL'}  {hook_name} on {event}: {sorted(map(str, got)) if not ok else 'as expected'}")
     return failures, total
 
 
@@ -456,7 +468,12 @@ def check_registration() -> tuple[int, int]:
 # PATH replaced by stub-claude.sh, and asserts on exit code, stdout, the hook's log, the stub's recorded argv
 # and the files left in localNotes/handoffs/. The stub never reaches the network.
 SID = "4cee5162-0000-4000-8000-000000000000"
-SILENT = {"precompact-handoff.sh", "post-compact-summary.sh"}  # must never print: compaction reads their stdout
+# Must print nothing (compaction reads their stdout) unless a case sets "stdout_exact": a lane's block, which a case
+# with "worktree" (and "lane_file") sets up (lane_repo); {LANEFILE} in it expands to that lane file's path. A case
+# with "each_phase" runs once per lane phase in scripts/src/board/tower/lanes.ts (PHASES), {PHASE} expanding to it, so
+# the hook's phase list can't drift from the tower's.
+
+SILENT = {"precompact-handoff.sh", "post-compact-summary.sh"}
 
 
 def disallowed_unscoped(argv: list[str]) -> list[str]:
@@ -468,8 +485,30 @@ def disallowed_unscoped(argv: list[str]) -> list[str]:
     return [r for r in rules if "(" not in r]
 
 
+def lane_repo(root: str, case: dict) -> tuple[str, str]:
+    """A lane's layout: a repo at <tmp>/m/.claude/worktrees/<worktree> on "branch" (default: the worktree's name),
+    and "lane_file" (an object, or raw text) at <tmp>/m/localNotes/board/lanes/<branch>.json. Returns the repo and
+    that lane file's path, which the hook prints."""
+    base = pathlib.Path(os.path.realpath(tempfile.mkdtemp(dir=root))) / "m"
+    repo = base / ".claude" / "worktrees" / case["worktree"]
+    repo.mkdir(parents=True)
+    branch = case.get("branch") or case["worktree"]
+    subprocess.run(["git", "init", "-q", "-b", branch, str(repo)], check=True)
+    for key, value in IDENTITY.items():
+        subprocess.run(["git", "-C", str(repo), "config", f"user.{key}", value], check=True)
+    lane_file = base / "localNotes" / "board" / "lanes" / f"{branch}.json"
+    if "lane_file" in case:
+        lane_file.parent.mkdir(parents=True)
+        lf = case["lane_file"]
+        lane_file.write_text(lf if isinstance(lf, str) else json.dumps(lf), encoding="utf-8")
+    return str(repo), str(lane_file)
+
+
 def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
-    repo = make_repo(root, case.get("branch") or "fixture-branch")
+    if "worktree" in case:
+        repo, lane_file = lane_repo(root, case)
+    else:
+        repo, lane_file = make_repo(root, case.get("branch") or "fixture-branch"), ""
     git = ["git", "-C", repo, "-c", "user.name=fixture", "-c", "user.email=fixture@example.com"]
     if case.get("branch") == "":
         subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
@@ -531,7 +570,11 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
     problems = []
     if proc.returncode != 0:
         problems.append(f"exit {proc.returncode}: {proc.stderr.strip()[:120]}")
-    if (case.get("stdout_empty") or case["hook"] in SILENT) and proc.stdout.strip():
+    if "stdout_exact" in case:  # a lane's block: exactly these lines, nothing else
+        want = "".join(line.replace("{LANEFILE}", lane_file) + "\n" for line in case["stdout_exact"])
+        if proc.stdout != want:
+            problems.append(f"stdout {proc.stdout[:200]!r}, want {want[:200]!r}")
+    elif (case.get("stdout_empty") or case["hook"] in SILENT) and proc.stdout.strip():
         problems.append(f"stdout not empty: {proc.stdout.strip()[:80]}")
     if case.get("stderr_empty") and proc.stderr.strip():
         problems.append(f"stderr not empty: {proc.stderr.strip()[:80]}")
@@ -557,14 +600,30 @@ def compaction_case(hook: pathlib.Path, case: dict, root: str) -> list[str]:
     return problems
 
 
+def lane_phases() -> list[str]:
+    src = (REPO_ROOT / "scripts" / "src" / "board" / "tower" / "lanes.ts").read_text(encoding="utf-8")
+    body = src.split("export const PHASES = [", 1)[1].split("]", 1)[0]
+    return [w.strip().strip("'\"") for w in body.split(",") if w.strip()]
+
+
 def run_compaction_suite(root: str) -> tuple[int, int]:
     print("\n== compaction hooks ==")
     failures = total = 0
+    cases = []
     for line in (HERE / "compaction-fixtures.jsonl").read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
-        total += 1
         case = json.loads(line)
+        if case.get("each_phase"):
+            for ph in lane_phases():
+                cases.append(json.loads(line.replace("{PHASE}", ph)))
+        else:
+            cases.append(case)
+    if len(lane_phases()) != 11:  # the hook's case list names 11; a new phase needs it added there too
+        failures += 1
+        print(f"FAIL  lanes.ts PHASES has {len(lane_phases())} phases, the lane block's list 11")
+    for case in cases:
+        total += 1
         problems = compaction_case(HERE.parent / case["hook"], case, root)
         failures += bool(problems)
         print(f"{'FAIL' if problems else 'ok  '}  {case['hook']:<24} {case['why'][:64]}")
@@ -626,6 +685,154 @@ def run_hub_nudge_suite() -> tuple[int, int]:
     return failures, total
 
 
+# --- Self-compact hand-off (handoff-fixtures.jsonl) ---
+# board-heartbeat.sh against a temp "main" repo: this checkout's heartbeat and scripts/board/ committed, with a stub
+# self-compact.sh that records "<who> <argv>" to $STUB_MARK, then hangs or fails per $STUB_MODE. A fake cgroup and a
+# temp board (board_env). The hook's parent is a process named `claude` (a bash copy) whose pid names the flag. Keys:
+# "state" (idle | working), "flag" (write <board>/self-compact/<pid>.req), "mode" (STUB_MODE: hang | fail),
+# "stop_hook_active" (in the payload), "payload_raw" (the payload's text instead), "inherit_git" (GIT_DIR or
+# GIT_COMMON_DIR set in the hook's env to an unrelated repo), "main" (dirty: lib.sh edited; untracked / untracked-lib: the script / lib.sh
+# never committed; deleted: removed from the tree; hidden: removed under
+# skip-worktree; hidden-edit / hidden-lib: the script / lib.sh edited under skip-worktree, where `git diff` reads
+# clean; filtered: lib.sh edited behind a clean filter that strips the edit; replaced: lib.sh edited and HEAD replaced
+# (refs/replace/) by a commit holding the edit; other-dirty: board.sh edited, which the script never runs), "from_worktree" (run the hook from a lane
+# worktree whose own stub differs), "ran" (main's stub ran, as `stop <pid>`, stdin /dev/null, no git config env), "max_sec" (the hook's wall
+# time).
+STUB_SELF_COMPACT = (
+    "#!/bin/bash\nprintf '%s %s stdin=%s gitcfg=%s\\n' {who} \"$*\" \"$(readlink /proc/self/fd/0)\" \"${{GIT_CONFIG_GLOBAL-unset}}${{GIT_CONFIG_NOSYSTEM-unset}}\" >>\"$STUB_MARK\"\n"
+    'case "${{STUB_MODE:-}}" in hang) exec /bin/sleep 30 ;; fail) exit 1 ;; esac\n'
+)
+
+
+def handoff_case(case: dict, root: str) -> list[str]:
+    tmp = pathlib.Path(os.path.realpath(tempfile.mkdtemp(dir=root)))
+    main = tmp / "main"
+    shutil.copytree(REPO_ROOT / "scripts" / "board", main / "scripts" / "board")
+    (main / ".claude" / "hooks").mkdir(parents=True)
+    shutil.copy(HERE.parent / "board-heartbeat.sh", main / ".claude" / "hooks" / "board-heartbeat.sh")
+    script = main / "scripts" / "board" / "self-compact.sh"
+    script.write_text(STUB_SELF_COMPACT.format(who="main"), encoding="utf-8")
+    os.chmod(script, 0o755)
+    (main / ".gitignore").write_text(".claude/worktrees/\n", encoding="utf-8")
+    git = ["git", "-C", str(main), "-c", "user.name=fixture", "-c", "user.email=fixture@example.com"]
+    subprocess.run(["git", "init", "-q", "-b", "main", str(main)], check=True)
+    held = {"untracked": script, "untracked-lib": main / "scripts" / "board" / "lib.sh"}.get(case.get("main", ""))
+    if held:
+        held.rename(tmp / "held")
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "init"], check=True)
+    if held:
+        (tmp / "held").rename(held)
+    elif case.get("main") == "dirty":
+        with open(main / "scripts" / "board" / "lib.sh", "a", encoding="utf-8") as f:
+            f.write("# edited\n")
+    elif case.get("main") == "deleted":
+        script.unlink()
+    elif case.get("main") == "hidden":
+        subprocess.run([*git, "update-index", "--skip-worktree", "scripts/board/self-compact.sh"], check=True)
+        script.unlink()
+    elif case.get("main") == "hidden-edit":
+        subprocess.run([*git, "update-index", "--skip-worktree", "scripts/board/self-compact.sh"], check=True)
+        script.write_text(STUB_SELF_COMPACT.format(who="edited"), encoding="utf-8")
+    elif case.get("main") == "hidden-lib":
+        subprocess.run([*git, "update-index", "--skip-worktree", "scripts/board/lib.sh"], check=True)
+        with open(main / "scripts" / "board" / "lib.sh", "a", encoding="utf-8") as f:
+            f.write("# edited\n")
+    elif case.get("main") == "filtered":  # main's own clean filter maps the edit away, so git diff reads clean
+        subprocess.run([*git, "config", "filter.fx.clean", "sed /edited/d"], check=True)
+        (main / ".git" / "info").mkdir(exist_ok=True)
+        (main / ".git" / "info" / "attributes").write_text("scripts/board/lib.sh filter=fx\n", encoding="utf-8")
+        with open(main / "scripts" / "board" / "lib.sh", "a", encoding="utf-8") as f:
+            f.write("# edited\n")
+    elif case.get("main") == "replaced":
+        first = subprocess.run([*git, "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+        with open(main / "scripts" / "board" / "lib.sh", "a", encoding="utf-8") as f:
+            f.write("# edited\n")
+        subprocess.run([*git, "add", "scripts/board/lib.sh"], check=True)
+        tree = subprocess.run([*git, "write-tree"], check=True, capture_output=True, text=True).stdout.strip()
+        second = subprocess.run(
+            [*git, "commit-tree", tree, "-p", first, "-m", "edited"], check=True, capture_output=True, text=True
+        ).stdout.strip()  # plumbing: no commit hooks
+        subprocess.run([*git, "replace", first, second], check=True)
+    elif case.get("main") == "other-dirty":
+        with open(main / "scripts" / "board" / "board.sh", "a", encoding="utf-8") as f:
+            f.write("# edited\n")
+    hooks = main / ".claude" / "hooks"
+    cwd = main
+    if case.get("from_worktree"):
+        cwd = main / ".claude" / "worktrees" / "lane-x"
+        subprocess.run([*git, "worktree", "add", "-q", "-b", "lane-x", str(cwd)], check=True)
+        (cwd / "scripts" / "board" / "self-compact.sh").write_text(STUB_SELF_COMPACT.format(who="worktree"), encoding="utf-8")
+        hooks = cwd / ".claude" / "hooks"
+
+    env = board_env(case, str(tmp))
+    local_git = subprocess.run(["git", "rev-parse", "--local-env-vars"], capture_output=True, text=True).stdout.split()
+    for k in ("TMUX_PANE", "APERTURE_HANDOFF_FORK", "STUB_MODE", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", *local_git):
+        env.pop(k, None)
+    if case.get("inherit_git"):  # an inherited repo variable pointing elsewhere: main must still be this script's
+        other = tmp / "other"
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        env[case["inherit_git"]] = str(other / ".git")
+    mark = tmp / "mark"
+    env.update(STUB_MARK=str(mark), **({"STUB_MODE": case["mode"]} if "mode" in case else {}))
+    claude = tmp / "bin" / "claude"
+    claude.parent.mkdir()
+    shutil.copy("/bin/bash", claude)
+    os.chmod(claude, 0o755)
+    go, payload = tmp / "go", tmp / "payload.json"
+    body = {"session_id": SID, "cwd": str(cwd), "hook_event_name": "Stop", "stop_hook_active": case.get("stop_hook_active", False)}
+    payload.write_text(case.get("payload_raw") or json.dumps(body), encoding="utf-8")
+    # `; exit $?` keeps bash from exec'ing the hook in place of the `claude` process (its pid names the flag).
+    wrapper = 'while [ ! -e "$1" ]; do /bin/sleep 0.02; done; bash "$0" "$2" <"$3"; exit $?'
+    proc = subprocess.Popen(
+        [str(claude), "-c", wrapper, str(hooks / "board-heartbeat.sh"), str(go), case.get("state", "idle"), str(payload)],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if case.get("flag"):
+        flags = pathlib.Path(env["APERTURE_BOARD_DIR"]) / "self-compact"
+        flags.mkdir(parents=True)
+        (flags / f"{proc.pid}.req").write_text("1 1 1 2026-11-19T10:00:00Z\n", encoding="utf-8")
+    start = time.time()
+    go.touch()
+    try:
+        out, err = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return ["the hook did not return in 20 s"]
+    took = time.time() - start
+    problems = []
+    if proc.returncode != 0:
+        problems.append(f"exit {proc.returncode}")
+    if out or err:
+        problems.append(f"output {(out + err)[:120]!r}")
+    if took > case.get("max_sec", 5):
+        problems.append(f"took {took:.1f} s, max {case.get('max_sec', 5)}")
+    end = time.time() + (3 if case["ran"] else 1.5)  # a detached run that wrongly happens shows up within this
+    while time.time() < end and not (case["ran"] and mark.exists()):
+        time.sleep(0.05)
+    got = mark.read_text(encoding="utf-8") if mark.exists() else ""
+    want = f"main stop {proc.pid} stdin=/dev/null gitcfg=unsetunset\n" if case["ran"] else ""
+    if got != want:
+        problems.append(f"stub ran {got!r}, want {want!r}")
+    return problems
+
+
+def run_handoff_suite(root: str) -> tuple[int, int]:
+    print("\n== board-heartbeat.sh hand-off ==")
+    failures = total = 0
+    for line in (HERE / "handoff-fixtures.jsonl").read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        total += 1
+        case = json.loads(line)
+        problems = handoff_case(case, root)
+        failures += bool(problems)
+        print(f"{'FAIL' if problems else 'ok  '}  {case['why'][:88]}")
+        for problem in problems:
+            print(f"          {problem}")
+    return failures, total
+
+
 def main() -> int:
     failures, total = check_registration()
     with tempfile.TemporaryDirectory() as root:  # each repo-needing fixture gets a fresh repo under here
@@ -635,6 +842,9 @@ def main() -> int:
             failures += f
             total += t
         f, t = run_compaction_suite(root)
+        failures += f
+        total += t
+        f, t = run_handoff_suite(root)
         failures += f
         total += t
     f, t = run_hub_nudge_suite()

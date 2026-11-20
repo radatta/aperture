@@ -1,0 +1,21 @@
+{"why":"idle with this session's flag: main's committed self-compact.sh runs, as stop <pid>","state":"idle","flag":true,"ran":true}
+{"why":"idle with no flag: nothing runs","state":"idle","flag":false,"ran":false}
+{"why":"a prompt (working) with a flag: nothing runs","state":"working","flag":true,"ran":false}
+{"why":"a Stop that a stop hook continued (stop_hook_active): nothing runs; the request lapses (the next Stop skips as prompted)","state":"idle","flag":true,"stop_hook_active":true,"ran":false}
+{"why":"a payload the hook can't parse: nothing runs","state":"idle","flag":true,"payload_raw":"{not json","ran":false}
+{"why":"a payload without stop_hook_active: nothing runs (only a literal false lets it through)","state":"idle","flag":true,"payload_raw":"{\"hook_event_name\":\"Stop\"}","ran":false}
+{"why":"a script that hangs never delays Stop (detached)","state":"idle","flag":true,"mode":"hang","ran":true,"max_sec":3}
+{"why":"a script that fails never fails Stop","state":"idle","flag":true,"mode":"fail","ran":true}
+{"why":"main's lib.sh (sourced by the script) differs from HEAD: nothing runs","state":"idle","flag":true,"main":"dirty","ran":false}
+{"why":"self-compact.sh on main's disk but never committed: nothing runs","state":"idle","flag":true,"main":"untracked","ran":false}
+{"why":"lib.sh on main's disk but never committed: nothing runs","state":"idle","flag":true,"main":"untracked-lib","ran":false}
+{"why":"self-compact.sh committed but deleted from main's tree: nothing runs","state":"idle","flag":true,"main":"deleted","ran":false}
+{"why":"missing from main's tree with an empty diff (skip-worktree): nothing runs, an empty diff proves nothing","state":"idle","flag":true,"main":"hidden","ran":false}
+{"why":"the script edited under skip-worktree (git diff reads clean): nothing runs, checked by content","state":"idle","flag":true,"main":"hidden-edit","ran":false}
+{"why":"lib.sh edited under skip-worktree: nothing runs","state":"idle","flag":true,"main":"hidden-lib","ran":false}
+{"why":"lib.sh edited behind main's own clean filter (git diff reads clean): nothing runs, raw bytes compared","state":"idle","flag":true,"main":"filtered","ran":false}
+{"why":"lib.sh edited and main's HEAD replaced by a commit holding the edit (refs/replace/): nothing runs","state":"idle","flag":true,"main":"replaced","ran":false}
+{"why":"a board file the script never runs differs: it still runs","state":"idle","flag":true,"main":"other-dirty","ran":true}
+{"why":"run from a lane worktree whose own copy differs: main's committed copy runs, never the branch's","state":"idle","flag":true,"from_worktree":true,"ran":true}
+{"why":"an inherited GIT_DIR pointing at another repo: main is still found from the hook's own path","state":"idle","flag":true,"inherit_git":"GIT_DIR","ran":true}
+{"why":"an inherited GIT_COMMON_DIR pointing at another repo: main is still found from the hook's own path","state":"idle","flag":true,"inherit_git":"GIT_COMMON_DIR","ran":true}
