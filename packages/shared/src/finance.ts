@@ -692,10 +692,16 @@ export function allocationSumError(
 
 // The stored fields as they stand. Newer code never writes a split beside a bucket or a period mark, nor
 // refund parts beside a single link, a bucket, a period pin or a mark — so such a pair comes from an older
-// write (code from before splits, after a revert), and that newer write wins. `?.` because a row from an
-// older server has no key at all (a cached PWA against a reverted BFF).
+// write (code from before splits, after a revert), and that newer write wins. A split also needs the
+// `bucketSetBy` every newer split sets ('user' from the editor, 'rule' at sync): an older unsort, mark or
+// link nulls it, so its undo can't bring the split back. One judgment, two places: the server applies it
+// as it reads a row (normalizeFinanceTxn in toFinanceTxn), so server code reads plain fields; the client
+// and the shared derivations read through these, since a cached PWA can meet a reverted BFF's raw rows.
+// `?.` because a row from an older server has no key at all.
 export const liveSplits = (t: FinanceTransaction): FinanceSplitPart[] | null =>
-  t.splits?.length && t.bucket === null && !t.startsPeriod ? t.splits : null;
+  t.splits?.length && t.bucket === null && !t.startsPeriod && t.bucketSetBy != null
+    ? t.splits
+    : null;
 export const liveRefundParts = (t: FinanceTransaction): FinanceRefundPart[] | null =>
   t.refundParts?.length &&
   t.refundOfId === null &&
@@ -707,6 +713,13 @@ export const liveRefundParts = (t: FinanceTransaction): FinanceRefundPart[] | nu
 // A rule's split, unless an older write retargeted the rule's bucket away from the split's largest part.
 export const ruleSplitOf = (r: FinanceRule): FinanceRuleSplitPart[] | null =>
   r.split?.length && r.bucket === ruleSplitBucket(r.split) ? r.split : null;
+// A row with any stale field dropped (and missing keys read as none) — what the server's reads return.
+export const normalizeFinanceTxn = (t: FinanceTransaction): FinanceTransaction => ({
+  ...t,
+  splits: liveSplits(t),
+  refundParts: liveRefundParts(t),
+});
+export const normalizeFinanceRule = (r: FinanceRule): FinanceRule => ({ ...r, split: ruleSplitOf(r) });
 // A refund's parts with each charge id as it stands now: a part saved on a pending charge names the
 // posted row once Plaid posts it (its pendingTransactionId).
 export function resolveRefundPartIds(

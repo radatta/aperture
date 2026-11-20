@@ -1,4 +1,10 @@
-import { planFireAt, taskFireAt, userDueEpoch } from '@aperture/shared';
+import {
+  normalizeFinanceRule,
+  normalizeFinanceTxn,
+  planFireAt,
+  taskFireAt,
+  userDueEpoch,
+} from '@aperture/shared';
 import type {
   FinanceRule,
   FinanceSyncState,
@@ -116,18 +122,17 @@ export function financeTxnItem(userId: string, t: FinanceTransaction): Item {
 }
 export function toFinanceTxn(item: Item): FinanceTransaction {
   const t = toEntity<FinanceTransaction>(item);
-  return {
+  // A stale split or allocation an older write left beside its own decision reads as none, so everything
+  // past here reads plain fields; the next write of the row stores the null (finances §12).
+  return normalizeFinanceTxn({
     ...t,
     refundOfId: t.refundOfId ?? null,
     startsPeriod: t.startsPeriod ?? false,
-    splits: t.splits ?? null,
-    refundParts: t.refundParts ?? null,
-  };
+  });
 }
-// Rules from before split rules read as one-bucket rules.
+// Rules from before split rules read as one-bucket rules; a split an older retarget left stale reads as none.
 export function toFinanceRule(item: Item): FinanceRule {
-  const r = toEntity<FinanceRule>(item);
-  return { ...r, split: r.split ?? null };
+  return normalizeFinanceRule(toEntity<FinanceRule>(item));
 }
 export function toFinanceSyncState(item: Item): FinanceSyncState {
   const s = toEntity<FinanceSyncState>(item);

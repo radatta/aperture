@@ -49,12 +49,15 @@ export function RefundAllocation({
       <Text size="sm" weight="medium">
         Refund across {claims.length} {claims.length === 1 ? 'charge' : 'charges'}
       </Text>
-      <ul className="flex flex-col gap-1.5">
+      <ul className="flex flex-col divide-y divide-line">
         {claims.map(({ charge }, i) => (
-          <li key={charge.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <li key={charge.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5 py-1.5">
             {/* Its own line: beside the amount a phone cut the date, and two same-merchant charges read alike. */}
             <Text size="sm" className="w-full truncate">
               {charge.merchantName ?? charge.name} · {fmtMonthShortDay(charge.date)}
+            </Text>
+            <Text size="xs" tone="muted" className="w-full truncate">
+              {chargeWhere(charge, view, overview)}
             </Text>
             <span className="flex-1" />
             <Text size="sm" tabular>
@@ -78,9 +81,6 @@ export function RefundAllocation({
             >
               Unlink
             </Button>
-            <Text size="xs" tone="muted" className="w-full truncate">
-              {chargeWhere(charge, view, overview)}
-            </Text>
           </li>
         ))}
       </ul>
@@ -160,6 +160,8 @@ export function RefundPartsEditor({
   }, [refocus, rows.length]);
 
   const add = (chargeId: string) => {
+    setError(null);
+    save.reset();
     setRefocus(rows.length);
     setRows((rs) => {
       const charge = byId.get(chargeId);
@@ -249,6 +251,7 @@ export function RefundPartsEditor({
                   aria-label={`Remove ${name}`}
                   onClick={() => {
                     setError(null);
+                    save.reset();
                     setRows((rs) => rs.filter((_, j) => j !== i));
                     setRefocus(i);
                   }}

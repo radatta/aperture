@@ -218,7 +218,9 @@ export function TransactionList({
       periodOf(t, overview.period, view.links) === null &&
       matches(t),
   );
-  const shown = [...view.txns.filter(matches), ...followed];
+  // view.txns already lists a refund across charges while any charge is in a window: once, not twice.
+  const listed = new Set(view.txns.map((t) => t.id));
+  const shown = [...view.txns.filter(matches), ...followed.filter((t) => !listed.has(t.id))];
   const narrowed = needle !== '' || filter !== 'all';
   const sections = [
     {

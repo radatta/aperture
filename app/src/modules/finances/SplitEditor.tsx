@@ -82,7 +82,8 @@ export function SplitEditor({
 }) {
   const total = view.amount(txn);
   // Where a Next part lands: it waits only on a charge in this period; on last period's it counts now.
-  const nextWaits = periodOf(txn, overview.period) === 'current';
+  // The charge's own window, as periodOfPart decides it: a period pin on the row doesn't move a Next part.
+  const nextWaits = periodOf({ ...txn, periodOverride: null }, overview.period) === 'current';
   const save = useSetFinanceSplit();
   const [rows, setRows] = useState<DraftPart[]>(() => firstDraft(txn, total));
   const nextKey = useRef(rows.length);
@@ -116,7 +117,11 @@ export function SplitEditor({
       return next;
     });
   };
-  const addPart = () =>
+  // At the last allowed part Add part unmounts: focus goes to the new part either way.
+  const addPart = () => {
+    setError(null);
+    save.reset();
+    setRefocus(rows.length);
     setRows((rs) => {
       const sum = parsedSum(rs.map((r) => r.amount)) ?? total;
       const used = new Set(rs.map((r) => r.bucket));
@@ -127,6 +132,7 @@ export function SplitEditor({
         { key: nextKey.current++, bucket, amount: centsText(left), period: null, touched: true },
       ];
     });
+  };
 
   const sum = parsedSum(rows.map((r) => r.amount));
   const remainder =
@@ -223,6 +229,7 @@ export function SplitEditor({
                 aria-label={`Remove part ${i + 1}`}
                 onClick={() => {
                   setError(null);
+                  save.reset();
                   setRows((rs) => rs.filter((_, j) => j !== i));
                   setRefocus(i);
                 }}
@@ -233,8 +240,12 @@ export function SplitEditor({
           </li>
         ))}
       </ul>
-      {/* Muted while a refusal says the same amount: one red line, not two. */}
-      <Remainder tone={error ? 'muted' : remainder.tone}>{remainder.text}</Remainder>
+      {/* Muted while a refusal says the same amount (a sum mismatch): one red line, not two. */}
+      <Remainder
+        tone={error && /left to assign|more than the/.test(error) ? 'muted' : remainder.tone}
+      >
+        {remainder.text}
+      </Remainder>
       {rows.some((r) => r.period === 'next') && (
         <Text size="xs" tone="muted">
           {nextWaits

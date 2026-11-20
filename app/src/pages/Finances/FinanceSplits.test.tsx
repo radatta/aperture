@@ -190,6 +190,35 @@ describe('Splitting a charge across buckets', () => {
     );
   });
 
+  it('Edit split on a rule split opens on the parts as they count at the posted amount', async () => {
+    const api = createStubClient({ seed: false, storageKey: `fin-split-${Math.random()}` });
+    await api.upsertFinanceRule({
+      pattern: 'Sweetgreen',
+      bucket: 'i_pay',
+      split: [
+        { bucket: 'budget', percent: 40 },
+        { bucket: 'i_pay', percent: 60 },
+      ],
+    });
+    await api.exchangePlaidPublicToken({
+      publicToken: 'p',
+      institution: FIXTURE_INSTITUTION,
+      accounts: FIXTURE_LINK_ACCOUNTS,
+    });
+    for (const id of ['fx-ccpay-card-40', 'fx-ccpay-card-10'])
+      await api.setFinancePeriodStart(id, true);
+    await api.requestFinanceSync({ refresh: false }); // $22.00 pending posts at $26.00, split carried
+    renderApp({ api, path: '/finances/all' });
+    const { user, dialog } = await openDetail('fx-posted-1', /Charge: Sweetgreen/);
+    await user.click(within(dialog).getByRole('button', { name: 'Edit split' }));
+    expect((within(dialog).getByLabelText('Part 1 amount') as HTMLInputElement).value).toBe(
+      '10.40',
+    );
+    expect((within(dialog).getByLabelText('Part 2 amount') as HTMLInputElement).value).toBe(
+      '15.60',
+    );
+  });
+
   it('the brush leaves a split row alone', async () => {
     const api = await linked();
     await api.setFinanceSplit('fx-card-8', [
@@ -294,6 +323,23 @@ describe('A refund across charges', () => {
     );
   });
 
+  it('a refund across charges whose largest charge is older than both periods is listed once', async () => {
+    const api = await linked();
+    const rows = await api.listFinanceTransactions({ from: '2000-01-01', to: '2999-12-31' });
+    const old = rows.find((t) => t.id === 'fx-card-58')!; // before both periods
+    await api.setFinanceRefundParts('fx-reimburse', [
+      { chargeId: 'fx-card-58', cents: old.rawAmountCents },
+      { chargeId: 'fx-card-8', cents: 100 },
+    ]);
+    renderApp({ api, path: '/finances/all' });
+    const user = userEvent.setup();
+    await user.type(
+      await screen.findByRole('searchbox', { name: 'Search transactions' }),
+      'example payer',
+    );
+    expect((await screen.findByText(/^\d+ rows? · /)).textContent).toMatch(/^1 row · /);
+  });
+
   it('refuses more than what’s left of a charge, keeping the amounts', async () => {
     const api = await linked();
     await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
@@ -352,6 +398,32 @@ describe('Split rules', () => {
       { bucket: 'budget', percent: 70 },
       { bucket: 'parents_pay', percent: 30 },
     ]);
+  });
+
+  it('a split rule an older write retargeted shows as one-bucket, and Pause keeps it so', async () => {
+    const api = await linked();
+    const rule = await api.upsertFinanceRule({ pattern: 'store a', bucket: 'parents_pay' });
+    const stale = {
+      ...rule,
+      split: [
+        { bucket: 'budget' as const, percent: 70 },
+        { bucket: 'i_pay' as const, percent: 30 },
+      ],
+    };
+    vi.spyOn(api, 'listFinanceRules').mockResolvedValue([stale]);
+    const upsert = vi.spyOn(api, 'upsertFinanceRule');
+    renderApp({ api, path: '/finances/rules' });
+    const user = userEvent.setup();
+    const select = (await screen.findByLabelText('Bucket for store a')) as HTMLSelectElement;
+    expect(select.value).toBe('parents_pay');
+    expect(screen.queryByText('Budget 70% · I pay 30%')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'More actions for store a' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Pause' }));
+    await waitFor(() =>
+      expect(upsert).toHaveBeenLastCalledWith(
+        expect.objectContaining({ bucket: 'parents_pay', split: null, active: false }),
+      ),
+    );
   });
 
   it('Add part adds a third percent, and an edit clears a refusal', async () => {

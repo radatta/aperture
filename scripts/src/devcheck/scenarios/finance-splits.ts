@@ -216,7 +216,7 @@ export const financeSplits: Scenario = {
       id: 'refund-cap-multi',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A second refund linked to a charge the deposit’s part already covers counts $0: the charge nets to exactly $0',
+      what: 'Two refunds on one charge (the payback’s part, then the earlier-dated rebate linked to it) net it to exactly $0: the earlier refund counts first, the later counts what is left ($0)',
     },
     {
       id: 'split-rule-save',
@@ -721,7 +721,7 @@ export const financeSplits: Scenario = {
       entry: 'mcp',
       proves: ['refund-cap-multi'],
       title:
-        'The rebate linked (API) to coffee #2, which the payback’s part already covers: it counts $0, the coffee stays refunded $6.50',
+        'The rebate linked (API) to coffee #2, which the payback’s part covers: the earlier rebate counts $6.50, the payback’s coffee part $0, the coffee stays refunded $6.50',
       async run(ctx) {
         const { coffee } = await rows(ctx);
         const rebate =
@@ -732,7 +732,12 @@ export const financeSplits: Scenario = {
         const r =
           out.transactions.find((t) => t.id === rebate.id) ?? fail('the rebate is not on the MCP');
         if (r.linkedChargeId !== coffee.id) fail(`the rebate links ${r.linkedChargeId}`);
-        if (r.countedUsd !== 0) fail(`the rebate counts ${r.countedUsd}, not $0`);
+        // The cap counts a charge's refunds in date order: the rebate (dated first) takes all of it.
+        if (r.countedUsd !== -6.5) fail(`the rebate counts ${r.countedUsd}, not -6.5`);
+        const { payback } = await rows(ctx);
+        const dep = out.transactions.find((t) => t.id === payback.id);
+        const part = dep?.refundParts?.find((x) => x.chargeId === coffee.id);
+        if (part?.countedUsd !== 0) fail(`the payback's coffee part counts ${part?.countedUsd}, not 0`);
         const c = out.transactions.find((t) => t.id === coffee.id);
         if (c?.refundedUsd !== 6.5) fail(`the coffee reads refundedUsd ${c?.refundedUsd}, not 6.5`);
       },
@@ -847,7 +852,7 @@ export const financeSplits: Scenario = {
       id: 'rule-split-mcp',
       entry: 'mcp',
       proves: ['split-rule-mcp'],
-      title: 'MCP list_finance_rules: the 70/30 split; every other rule split: null',
+      title: 'MCP list_finance_rules: the 70/30 split; every rule carries a split field',
       async run(ctx) {
         const pattern = `devcheck-split-${ctx.nonce}`.toLowerCase();
         const rules = await ctx.mcp.reads.financeRules();
@@ -863,7 +868,7 @@ export const financeSplits: Scenario = {
         )
           fail(`the MCP split reads ${got}`);
         for (const x of rules)
-          if (x.pattern !== pattern && x.split !== null)
+          if ((x as { split?: unknown }).split === undefined)
             fail(`rule ${x.pattern} has no split field`);
       },
     },

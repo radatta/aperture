@@ -336,11 +336,16 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
      ignores `splits`, `refundParts` and a rule's `split`, so a split charge reads Unsorted, a refund across
      charges reads unlinked (a deposit as income, a card credit as an unsorted refund), and a split rule
      sorts into its largest part. Older writes keep the fields on the row they write (a pending row that
-     posts drops them), so the read side lets the newer write win on a re-deploy (`liveSplits`,
-     `liveRefundParts`, `ruleSplitOf`): a split beside a bucket or a mark, refund parts beside a single
-     link, a bucket, a pin or a mark, and a rule split whose bucket isn't its largest part are ignored. A
-     still-cached new PWA against a reverted BFF reads the missing keys as none. For a clean revert, remove
-     the splits, the multi-links and the split rules first.
+     posts drops them). On a re-deploy the server drops a stale field as it reads the row (`toFinanceTxn`,
+     `toFinanceRule` → `normalizeFinanceTxn`, `normalizeFinanceRule`): a split beside a bucket, a mark or an
+     empty `bucketSetBy` (so an older unsort, unmark or unlink doesn't bring it back); refund parts beside a
+     single link, a bucket, a pin or a mark; a rule split whose bucket isn't its largest part. The next write
+     of that row stores the cleared field; reading alone writes nothing. The client applies the same checks
+     (`liveSplits`, `liveRefundParts`, `ruleSplitOf`), so a still-cached new PWA against a reverted BFF reads
+     a stale or missing field as none. Undo cases not caught (§14): an older link then unlink, sort then
+     unsort, mark then unmark, or pin then unpin of a refund across charges, and an older retarget of a split
+     rule away and back to its largest part — each brings the old field back. For a clean revert, remove the
+     splits, the multi-links and the split rules first.
 
 ## 13. What each test surface proves
 
@@ -377,6 +382,9 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   Plaid's raw sign, so on a flipped account it splits card credits instead (they then read as broken
   splits, in Sort). A sync already running on old code during a deploy (up to 300 s) can drop a split
   saved on a row it is posting in that window.
+- **Accepted (revert undo cases):** after a revert and re-land, an older undo of a refund across charges
+  (link→unlink, sort→unsort, mark→unmark, pin→unpin) or a split rule retargeted away and back to its
+  largest part brings the old allocation or split back; the clean-revert step in §12 avoids it.
 
 - **Accepted:** a late BFF invoke after a deferred request can show a "try again" the data didn't need;
   `SYNC_DEFERRED` after a pass that did land data shows as a red banner; **Always** scans every

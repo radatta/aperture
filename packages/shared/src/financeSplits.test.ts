@@ -18,6 +18,8 @@ import {
   refundPartsError,
   refundPartsFrom,
   liveRefundParts,
+  normalizeFinanceRule,
+  normalizeFinanceTxn,
   resolveRefundClaims,
   resolveRefundLinks,
   resolveRefundPartIds,
@@ -85,7 +87,7 @@ function tx(
     paymentChannel: null,
     source: 'plaid',
     bucket: null,
-    bucketSetBy: null,
+    bucketSetBy: over.splits ? 'user' : null, // as every newer split write sets it (liveSplits)
     periodOverride: null,
     note: null,
     refundOfId: null,
@@ -589,6 +591,38 @@ describe('an older write wins over a stale stored field', () => {
     expect(
       splitOf(tx('a', 'card', '2026-09-20', 4000, { splits: parts, ...MARK }), 4000),
     ).toBeNull();
+  });
+
+  it('an older undo (unsort, unmark, unlink — each nulls bucketSetBy) never brings a split back', () => {
+    const parts = [part('budget', 2000), part('i_pay', 2000)];
+    const undone = tx('a', 'card', '2026-09-20', 4000, { splits: parts, bucketSetBy: null });
+    expect(splitOf(undone, 4000)).toBeNull();
+    expect(splitBroken(undone, 4000)).toBe(false);
+    for (const by of ['user', 'rule'] as const)
+      expect(splitOf({ ...undone, bucketSetBy: by }, 4000)).toEqual(parts);
+  });
+
+  it('normalizeFinanceTxn / normalizeFinanceRule drop exactly the stale fields, and twice is once', () => {
+    const parts = [part('budget', 2000), part('i_pay', 2000)];
+    const stale = tx('a', 'card', '2026-09-20', 4000, { splits: parts, bucket: 'budget' });
+    const once = normalizeFinanceTxn(stale);
+    expect(once).toEqual({ ...stale, splits: null });
+    expect(normalizeFinanceTxn(once)).toEqual(once);
+    const live = tx('b', 'card', '2026-09-20', 4000, { splits: parts });
+    expect(normalizeFinanceTxn(live)).toEqual(live);
+    const rule: FinanceRule = {
+      ...base,
+      id: 'r',
+      pattern: 'store a',
+      bucket: 'parents_pay',
+      active: true,
+      split: [
+        { bucket: 'budget', percent: 70 },
+        { bucket: 'i_pay', percent: 30 },
+      ],
+    };
+    expect(normalizeFinanceRule(rule).split).toBeNull();
+    expect(normalizeFinanceRule({ ...rule, bucket: 'budget' }).split).toEqual(rule.split);
   });
 
   it('refund parts beside a single link, a bucket or a period pin are ignored', () => {

@@ -623,7 +623,8 @@ function RefundSuggestions({
         <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
           {fmtMonthShortDay(c.date)}
         </Text>
-        <Text size="sm" className="min-w-0 flex-1 truncate">
+        {/* Wraps, not truncates: at 390 the date, amount and button leave the name ~70px. */}
+        <Text size="sm" className="min-w-0 flex-1 break-words">
           {opts.named ? (c.merchantName ?? c.name) : bucket}
         </Text>
         <Text size="sm" tabular>

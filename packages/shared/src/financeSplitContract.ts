@@ -298,4 +298,15 @@ export function financeSplitContract(h: FinanceSplitHarness) {
     const after = await api.setFinanceSplit('fx-card-6', null); // a stale device's Remove
     expect([after.bucket, after.splits]).toEqual(['budget', null]);
   });
+  it('finance splits: a Link on a split row (its account flipped to money in) clears the split', async () => {
+    await h.connect();
+    const api = h.api();
+    await api.setFinanceSplit('fx-card-8', [p('budget', 1500), p('i_pay', 1500)]);
+    const card = (await api.listFinanceTransactions(await h.finRange())).find(
+      (t) => t.id === 'fx-card-8',
+    )!.accountId;
+    await api.updateFinanceAccount(card, { signOverride: 'flip' }); // the charge now reads as money in
+    const linked = await api.linkFinanceRefund('fx-card-8', 'fx-safeway');
+    expect([linked.refundOfId, linked.splits]).toEqual(['fx-safeway', null]);
+  });
 }

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
@@ -6,6 +6,7 @@ import {
   financeRuleSplitError,
   normalizeRulePattern,
   ruleSplitBucket,
+  ruleSplitOf,
 } from '@aperture/shared';
 import type { FinanceBucket, FinanceRule, FinanceRuleSplitPart } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -47,6 +48,15 @@ export function RulesSection() {
   const [parts, setParts] = useState<PercentDraft[]>(firstSplit);
   const nextKey = useRef(2);
   const [splitError, setSplitError] = useState<string | null>(null);
+  // Add and Remove part unmount or move the focused button: focus goes to the new part's percent, or the
+  // part now in the removed one's place.
+  const partsBox = useRef<HTMLFieldSetElement>(null);
+  const [refocus, setRefocus] = useState<string | null>(null);
+  useEffect(() => {
+    if (refocus === null) return;
+    partsBox.current?.querySelector<HTMLElement>(`[aria-label="${refocus}"]`)?.focus();
+    setRefocus(null);
+  }, [refocus]);
   const splitting = bucket === SPLIT;
   const percentSum = parts.reduce((n, p) => n + (wholePercent(p.percent) ?? 0), 0);
   const patternRef = useRef<HTMLInputElement>(null);
@@ -99,7 +109,7 @@ export function RulesSection() {
             if (
               existing &&
               !split &&
-              !existing.split &&
+              !ruleSplitOf(existing) &&
               existing.bucket === target &&
               existing.active
             ) {
@@ -113,8 +123,9 @@ export function RulesSection() {
               {
                 onSuccess: () => {
                   setPattern('');
-                  const was = existing?.split
-                    ? ruleSplitText(existing.split)
+                  const wasSplit = existing && ruleSplitOf(existing);
+                  const was = wasSplit
+                    ? ruleSplitText(wasSplit)
                     : existing
                       ? FINANCE_BUCKET_LABELS[existing.bucket]
                       : '';
@@ -154,7 +165,7 @@ export function RulesSection() {
             className="w-44"
           />
           {splitting && (
-            <fieldset className="flex basis-full flex-col gap-2">
+            <fieldset ref={partsBox} className="flex basis-full flex-col gap-2">
               <legend className="sr-only">Split by percent</legend>
               {parts.map((p, i) => (
                 <div key={p.key} className="flex flex-wrap items-center gap-2">
@@ -200,7 +211,11 @@ export function RulesSection() {
                       size="sm"
                       variant="ghost"
                       aria-label={`Remove part ${i + 1}`}
-                      onClick={() => setParts((ps) => ps.filter((_, j) => j !== i))}
+                      onClick={() => {
+                        setSplitError(null);
+                        setParts((ps) => ps.filter((_, j) => j !== i));
+                        setRefocus(`Part ${Math.min(i, parts.length - 2) + 1} bucket`);
+                      }}
                     >
                       Remove
                     </Button>
@@ -209,7 +224,8 @@ export function RulesSection() {
               ))}
               <div className="flex flex-wrap items-center gap-3">
                 <div role="status">
-                  <Text size="sm" tone={percentSum > 100 ? 'danger' : 'muted'}>
+                  {/* Muted while the refusal says it: one red line, not two. */}
+                  <Text size="sm" tone={percentSum > 100 && !splitError ? 'danger' : 'muted'}>
                     {percentSum === 100
                       ? '100% assigned'
                       : percentSum < 100
@@ -221,13 +237,15 @@ export function RulesSection() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() =>
+                    onClick={() => {
+                      setSplitError(null);
+                      setRefocus(`Part ${parts.length + 1} percent`);
                       setParts((ps) => {
                         const used = new Set(ps.map((x) => x.bucket));
                         const b = FINANCE_BUCKETS.find((x) => !used.has(x)) ?? 'budget';
                         return [...ps, { key: nextKey.current++, bucket: b, percent: '' }];
-                      })
-                    }
+                      });
+                    }}
                   >
                     Add part
                   </Button>
@@ -272,22 +290,23 @@ export function RulesSection() {
 function RuleRow({ rule }: { rule: FinanceRule }) {
   const upsert = useUpsertFinanceRule();
   const del = useDeleteFinanceRule();
+  const split = ruleSplitOf(rule); // a split an older retarget left stale reads as none
   return (
     <li className="flex items-center gap-3 py-2">
       <span className="flex min-w-0 flex-1 flex-col">
         <Text size="sm" tone={rule.active ? 'ink' : 'muted'} className="truncate">
           “{rule.pattern}”{rule.active ? '' : ' · paused'}
         </Text>
-        {rule.split && (
+        {split && (
           <Text size="xs" tone="muted">
-            {ruleSplitText(rule.split)}
+            {ruleSplitText(split)}
           </Text>
         )}
       </span>
       {/* Picking one bucket turns a split rule back into a one-bucket rule. */}
       <select
         aria-label={`Bucket for ${rule.pattern}`}
-        value={rule.split ? SPLIT : rule.bucket}
+        value={split ? SPLIT : rule.bucket}
         onChange={(e) =>
           upsert.mutate({
             id: rule.id,
@@ -299,7 +318,7 @@ function RuleRow({ rule }: { rule: FinanceRule }) {
         }
         className="rounded-xl border border-line bg-surface px-2 py-1 text-ink outline-none focus:border-teal"
       >
-        {rule.split && (
+        {split && (
           <option value={SPLIT} disabled>
             Split
           </option>
@@ -321,7 +340,7 @@ function RuleRow({ rule }: { rule: FinanceRule }) {
                 pattern: rule.pattern,
                 bucket: rule.bucket,
                 active: !rule.active,
-                split: rule.split,
+                split,
               }),
           },
           { label: 'Delete', tone: 'danger', onSelect: () => del.mutate(rule.id) },

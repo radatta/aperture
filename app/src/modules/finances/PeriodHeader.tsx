@@ -109,9 +109,9 @@ export function PeriodHeader({
         ))}
       </dl>
       {/* Split parts set to the next period: in no total until you mark the payment that starts it. */}
-      {overview.upcoming.count > 0 && (
+      {(overview.upcoming?.count ?? 0) > 0 && (
         <Text size="sm" tone="muted">
-          {fmtMoney(overview.upcoming.totalCents)} waiting for next period
+          {fmtMoney(overview.upcoming!.totalCents)} waiting for next period
         </Text>
       )}
       {unsortedCount > 0 && (

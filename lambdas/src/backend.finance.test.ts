@@ -178,6 +178,81 @@ describe('finance backend', () => {
     expect(after!.deletedAt).toBe(5); // not revived
   });
 
+  it('a rule Pause keeps the split another device saved between its list and its write', async () => {
+    const pct = (b: 'budget' | 'i_pay', percent: number) => ({ bucket: b, percent });
+    const rule = await api.upsertFinanceRule({
+      pattern: 'Store A',
+      bucket: 'budget',
+      split: [pct('budget', 60), pct('i_pay', 40)],
+    });
+    // Another device's edit lands just before this Pause's write: the kept split is the fresh one.
+    doc.interceptNextPutIf(pk(U), sk.finRule(rule.id), () =>
+      doc.putNow(
+        entityItem(U, sk.finRule(rule.id), {
+          ...rule,
+          split: [pct('budget', 70), pct('i_pay', 30)],
+          updatedAt: rule.updatedAt + 1,
+        }),
+      ),
+    );
+    const paused = await api.upsertFinanceRule({
+      id: rule.id,
+      pattern: 'Store A',
+      bucket: 'budget',
+      active: false,
+    });
+    expect([paused.active, paused.split]).toEqual([false, [pct('budget', 70), pct('i_pay', 30)]]);
+  });
+
+  it('after a revert and re-land: a retargeted split rule pauses as one-bucket; Always sweeps a stale split', async () => {
+    await connect();
+    // An older write retargeted a 70/30 split rule to Covered and kept the split beside it.
+    const base = { userId: U, createdAt: 1, updatedAt: 1, deletedAt: null };
+    await doc.put(
+      entityItem(U, sk.finRule('old'), {
+        ...base,
+        id: 'old',
+        pattern: 'store a',
+        bucket: 'parents_pay',
+        active: true,
+        split: [
+          { bucket: 'budget', percent: 70 },
+          { bucket: 'i_pay', percent: 30 },
+        ],
+      }),
+    );
+    const listed = (await api.listFinanceRules()).find((r) => r.id === 'old')!;
+    expect([listed.bucket, listed.split]).toEqual(['parents_pay', null]);
+    const paused = await api.upsertFinanceRule({
+      id: 'old',
+      pattern: 'store a',
+      bucket: listed.bucket,
+      active: false,
+      split: listed.split,
+    });
+    expect([paused.bucket, paused.split, paused.active]).toEqual(['parents_pay', null, false]);
+    // An older sort then unsort left a split with no bucketSetBy: Always sweeps the row and stores the null.
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const row = (await repo.getFinanceTxn('fx-card-8'))!;
+    await doc.put(
+      financeTxnItem(U, {
+        ...row,
+        splits: [
+          { bucket: 'budget', cents: 1500, period: null },
+          { bucket: 'i_pay', cents: 1500, period: null },
+        ],
+        bucketSetBy: null,
+      }),
+    );
+    const swept = await api.setFinanceBucket({
+      ids: ['fx-refund-1'],
+      bucket: 'i_pay',
+      rule: { pattern: 'Amazon' },
+    });
+    expect(swept.map((t) => t.id)).toContain('fx-card-8');
+    expect((await doc.get(pk(U), sk.finTxn('fx-card-8')))!.splits).toBeNull();
+  });
+
   it('the link token is always for the caller, whatever the RPC args say', async () => {
     await api.createPlaidLinkToken({ mode: 'connect', userId: 'evil' } as unknown as Parameters<
       typeof api.createPlaidLinkToken

@@ -261,9 +261,9 @@ export class FinanceService {
     const current = await this.repo.getFinanceTxn(id);
     if (!current || current.deletedAt !== null) throw new Error(`Not found: ${id}`);
     if (parts === null)
-      // Only a row still split: a stale Remove never unsorts a row sorted since.
+      // Only a row still split: a stale Remove never unsorts a row sorted since (null: no write).
       return this.txnUpdate(id, (t) =>
-        t.splits === null ? t : { ...t, splits: null, bucket: null, bucketSetBy: null },
+        t.splits === null ? null : { ...t, splits: null, bucket: null, bucketSetBy: null },
       );
     const accounts = await this.repo.listFinanceAccounts();
     // Moves over the same window the overview reads, so pairing at the edge matches the page.
