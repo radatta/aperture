@@ -5,8 +5,9 @@
 #   send <pid> <tick> <prompt-at>   (detached) types `/compact` into the session's own empty box, then Enter
 # Off unless main's committed limits.json says `lanes.selfCompact: true` and $BOARD_DIR/self-compact/off is absent.
 # `stop` and `send` print nothing and always exit 0; every step logs one line to $BOARD_DIR/self-compact.log.
-# The only tmux target is this session's own pane ($TMUX_PANE, checked against the claude pid) and the only text
-# typed is the literal `/compact`. Nothing read from a file reaches an argv but validated numbers.
+# The only tmux target is $TMUX_PANE, checked against the claude pid, and the only text typed is the literal
+# `/compact`. `send` run by hand skips the lane and hub checks `stop` made: it gains nothing over a raw tmux call.
+# Nothing read from a file reaches an argv but validated numbers and a charset-checked cwd.
 set -u
 export LC_ALL=C GIT_OPTIONAL_LOCKS=0
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
@@ -33,9 +34,9 @@ main_root() {
 # Main's committed switch — never the working copy, the env or a branch's limits.json.
 switch_on() {
   [ ! -e "$SC/off" ] || return 1
-  [ "$(git -C "$MAIN" show HEAD:scripts/board/limits.json 2>/dev/null | jq -r '.lanes.selfCompact == true' 2>/dev/null)" = true ]
+  [ "$(git -C "$MAIN" cat-file blob HEAD:scripts/board/limits.json 2>/dev/null | jq -r '.lanes.selfCompact == true' 2>/dev/null)" = true ]
 }
-hub_name() { git -C "$MAIN" show HEAD:scripts/board/hub.json 2>/dev/null | jq -r '.name // empty' 2>/dev/null; }
+hub_name() { git -C "$MAIN" cat-file blob HEAD:scripts/board/hub.json 2>/dev/null | jq -r '.name // empty' 2>/dev/null; }
 # The record field $2 of session $1.
 rec() { jq -r --arg k "$2" '.[$k] // empty | tostring' "$BOARD_DIR/sessions/$1.json" 2>/dev/null; }
 # $TMUX_PANE is this session's own pane: its pane process is the claude pid or claude's parent (board.sh me_ident's rule).
@@ -62,20 +63,25 @@ lane_ok() {
   st=$(git -C "$top" status --porcelain 2>/dev/null) || { WHY=dirty; return 1; }
   [ -z "$st" ] || { WHY=dirty; return 1; }
 }
-# The input box, from a capture of the pane: busy | none | empty | compact | other. The box is the last `❯` line with
-# a `─` rule directly above and below it (measured on 2.1.329). Busy markers are read only in the footer below the
-# box and the few lines above it, so a conversation that quotes them doesn't read as busy.
+# The input box, from a capture of the pane: busy | none | empty | compact | other. The box is the `❯` line directly
+# above the bottom-most `─` rule (measured on 2.1.329); anything else there (a dialog, a multi-line draft) is none, so
+# an older box in the scrollback never stands in. Busy markers are read only in the footer below the box and the few
+# lines above it, so a conversation that quotes them doesn't read as busy. `box_state text` skips them: `request` runs
+# mid-turn, under "esc to interrupt".
 box_state() {
   local -a L
-  local i n b=-1 s
-  mapfile -t L < <(timeout 2 tmux capture-pane -p -t "$TMUX_PANE" 2>/dev/null) || { echo none; return; }
+  local i n b=-1 s cap
+  cap=$(timeout 2 tmux capture-pane -p -t "$TMUX_PANE" 2>/dev/null) || { echo none; return; }
+  mapfile -t L <<<"$cap"
   n=${#L[@]}
-  for ((i = n - 2; i >= 1; i--)); do
-    [[ "${L[i]}" == "$PROMPT"* && "${L[i+1]}" == "$RULE"* && "${L[i-1]}" == "$RULE"* ]] && { b=$i; break; }
+  for ((i = n - 1; i >= 1; i--)); do
+    [[ "${L[i]}" == "$RULE"* ]] || continue
+    [[ "${L[i-1]}" == "$PROMPT"* ]] && b=$((i - 1))
+    break
   done
   [ "$b" -ge 0 ] || { echo none; return; }
-  for ((i = (b > 5 ? b - 5 : 0); i < n; i++)); do
-    [ "$i" -ge $((b - 1)) ] && [ "$i" -le $((b + 1)) ] && continue
+  [ "${1:-}" = text ] || for ((i = (b > 5 ? b - 5 : 0); i < n; i++)); do
+    [ "$i" -eq "$b" ] || [ "$i" -eq $((b + 1)) ] && continue
     case "${L[i]}" in *"esc to interrupt"* | *"background agent"* | *"to manage"*) echo busy; return ;; esac
   done
   s=${L[b]#"$PROMPT"}; s=${s//"$NBSP"/}; s=${s//[[:space:]]/}
@@ -85,6 +91,9 @@ box_state() {
 send_guard() {
   switch_on && sb_alive "$1" "$2" && own_pane "$1" && [ "$(rec "$1" state)" = idle ] && [ "$(rec "$1" lastPromptAt)" = "$3" ]
 }
+
+# Flags, claims and sb_write leftovers older than 15 min.
+sweep() { find "$SC" -maxdepth 1 \( -name '*.req' -o -name '*.claim.*' -o -name '*.req.tmp.*' \) -mmin +15 -delete 2>/dev/null; }
 
 cmd_request() {
   local pid ps tick at box
@@ -99,26 +108,24 @@ cmd_request() {
   [[ "$at" =~ $STAMP_RE ]] || refuse no-record
   own_pane "$pid" || refuse pane
   lane_ok "$(pwd)" "$pid" || refuse "$WHY"
-  box=$(box_state)
+  box=$(box_state text)
   [ "$box" = empty ] || refuse "box-$box"
   mkdir -p "$SC" || refuse io
-  find "$SC" -maxdepth 1 \( -name '*.req' -o -name '*.claim.*' \) -mmin +15 -delete 2>/dev/null
+  sweep
   printf '1 %s %s %s\n' "$tick" "$(sb_epoch)" "$at" | sb_write "$SC/$pid.req" || refuse io
   log request "$pid"
   echo "self-compact: requested; end the turn now"
 }
 
 cmd_stop() {
-  local pid="${1:-}" input flag claim v tick epoch at age
-  input=$(cat)
+  local pid="${1:-}" flag claim v tick epoch at age cwd
   [[ "$pid" =~ ^[0-9]+$ ]] && [ "$(sb_comm "$pid")" = claude ] || exit 0
   [ -z "${APERTURE_HANDOFF_FORK:-}" ] || exit 0
   MAIN=$(main_root) || exit 0
   switch_on || exit 0
-  find "$SC" -maxdepth 1 \( -name '*.req' -o -name '*.claim.*' \) -mmin +15 -delete 2>/dev/null
+  sweep
   flag="$SC/$pid.req"
   [ -e "$flag" ] || exit 0
-  [ "$(jq -r '.stop_hook_active // false' <<<"$input" 2>/dev/null)" = true ] && { log skip "$pid" stop-hook-active; exit 0; }
   claim="$SC/$pid.claim.$$"
   mv "$flag" "$claim" 2>/dev/null || exit 0  # the rename is atomic: a second Stop finds nothing to claim
   read -r v tick epoch at <"$claim" 2>/dev/null
@@ -129,7 +136,9 @@ cmd_stop() {
   [ "$age" -ge 0 ] && [ "$age" -le 600 ] || { log skip "$pid" stale-flag; exit 0; }
   sb_alive "$pid" "$tick" && [ "$(rec "$pid" pidStart)" = "$tick" ] || { log skip "$pid" pid-changed; exit 0; }
   [ "$(rec "$pid" lastPromptAt)" = "$at" ] || { log skip "$pid" prompted; exit 0; }
-  lane_ok "$(rec "$pid" cwd)" "$pid" || { log skip "$pid" "$WHY"; exit 0; }
+  cwd=$(rec "$pid" cwd)
+  [[ "$cwd" =~ ^/[A-Za-z0-9_./-]+$ ]] || { log skip "$pid" bad-cwd; exit 0; }
+  lane_ok "$cwd" "$pid" || { log skip "$pid" "$WHY"; exit 0; }
   own_pane "$pid" || { log skip "$pid" pane; exit 0; }
   # A second detach: send must outlive this run's own timeout.
   setsid -f timeout -k 1 20 bash "$SB_SCRIPTS/self-compact.sh" send "$pid" "$tick" "$at" </dev/null >/dev/null 2>&1
@@ -145,6 +154,8 @@ cmd_send() {
   send_guard "$pid" "$tick" "$at" || { log skip "$pid" guard; exit 0; }
   box=$(box_state)
   [ "$box" = empty ] || { log skip "$pid" "box-$box"; exit 0; }
+  # Late (a loaded box): type nothing rather than risk the 20 s timeout landing between the text and Enter.
+  [ "$SECONDS" -le 8 ] || { log skip "$pid" late; exit 0; }
   timeout 2 tmux send-keys -t "$TMUX_PANE" -l /compact || { log skip "$pid" tmux; exit 0; }
   sleep 0.5
   send_guard "$pid" "$tick" "$at" || { log skip "$pid" guard; exit 0; }

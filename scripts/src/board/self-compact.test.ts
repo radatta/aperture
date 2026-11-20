@@ -1,7 +1,7 @@
 // self-compact.sh (docs/ops/COMPACTION-HANDOFF.md → Self-compact) against a temp "main" repo with a lane worktree, a
 // temp board, a recording tmux shim and a process named `claude`. The script reads no test-only env: the switch and
 // the hub come from the temp main's committed files, tmux and sleep from PATH, the board from APERTURE_BOARD_DIR.
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import {
   chmodSync,
@@ -12,6 +12,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from 'node:fs';
@@ -21,7 +22,6 @@ import { fileURLToPath } from 'node:url';
 
 const boardSrc = fileURLToPath(new URL('../../board/', import.meta.url));
 const children: ChildProcess[] = [];
-afterAll(() => children.forEach((c) => c.kill()));
 vi.setConfig({ testTimeout: 20_000 }); // several bash + git cold starts; slower under a busy gate
 
 const BRANCH = 'lane-x';
@@ -82,7 +82,6 @@ beforeEach(() => {
   const sb = join(main, 'scripts/board');
   mkdirSync(sb, { recursive: true });
   for (const f of ['self-compact.sh', 'lib.sh']) copyFileSync(join(boardSrc, f), join(sb, f));
-  chmodSync(join(sb, 'self-compact.sh'), 0o755);
   writeFileSync(join(sb, 'hub.json'), JSON.stringify({ v: 1, name: 'dispatch' }));
   writeFileSync(join(main, '.gitignore'), '.claude/worktrees/\n');
   git(tmp, 'init', '-q', '-b', 'main', main);
@@ -108,7 +107,8 @@ beforeEach(() => {
   );
   writeFileSync(
     join(shim, 'sleep'),
-    '#!/bin/bash\n[ -n "${SLOW_SLEEP:-}" ] && exec /bin/sleep "$SLOW_SLEEP"\nexit 0\n',
+    // sleep: instant unless SLOW_SLEEP; runs $SHIM/on-sleep-<arg> first, so a case can change state mid-send
+    '#!/bin/bash\n[ -x "$SHIM/on-sleep-$1" ] && "$SHIM/on-sleep-$1"\n[ -n "${SLOW_SLEEP:-}" ] && exec /bin/sleep "$SLOW_SLEEP"\nexit 0\n',
   );
   chmodSync(join(shim, 'tmux'), 0o755);
   chmodSync(join(shim, 'sleep'), 0o755);
@@ -122,6 +122,10 @@ beforeEach(() => {
   };
   delete env.APERTURE_HANDOFF_FORK;
   delete env.GIT_AUTHOR_NAME;
+});
+afterEach(() => {
+  children.splice(0).forEach((c) => c.kill());
+  rmSync(tmp, { recursive: true, force: true }); // a detached send still running fails harmlessly
 });
 
 function lane(minutesOld = 0) {
@@ -168,16 +172,16 @@ const flagDir = () => join(board, 'self-compact');
 
 // `request` as the lane runs it: the script's parent's parent is a process whose comm is `claude` (a bash copy), so
 // sb_claude_pid finds it. The wrapper waits for a line on stdin, so the test can write the record for its pid first.
+// `pane: 'parent'` is the usual live shape: the pane's process is the shell that started claude.
 async function request(
-  opts: { record?: object | null; pane?: 'own' | 'other'; cwd?: string; env?: object } = {},
+  opts: {
+    record?: object | null;
+    pane?: 'own' | 'parent' | 'other';
+    cwd?: string;
+    env?: object;
+  } = {},
 ): Promise<{ code: number; out: string; pid: number; tick: string }> {
-  const bin = join(tmp, 'claude-bin');
-  mkdirSync(bin, { recursive: true });
-  const claude = join(bin, 'claude');
-  if (!existsSync(claude)) {
-    copyFileSync('/bin/bash', claude);
-    chmodSync(claude, 0o755);
-  }
+  const claude = claudeBin('claude-bin', '/bin/bash');
   const script = join(opts.cwd ?? wt, 'scripts/board/self-compact.sh');
   const c = spawn(claude, ['-c', 'read -r _; bash "$0" request; exit $?', script], {
     cwd: opts.cwd ?? wt,
@@ -189,27 +193,48 @@ async function request(
   const pid = c.pid!;
   const tick = startOf(pid);
   if (opts.record !== null) record(pid, { state: 'working', ...opts.record });
-  writeFileSync(join(shim, 'pane_pid'), String(opts.pane === 'other' ? 1 : pid));
+  writeFileSync(join(shim, 'pane_pid'), String(panePid(opts.pane, pid)));
   c.stdin!.end('go\n');
-  const code = await new Promise<number>((r) => c.on('exit', (n) => r(n ?? -1)));
+  // close, not exit: stdout has drained by then
+  const code = await new Promise<number>((r) => c.on('close', (n) => r(n ?? -1)));
   return { code, out, pid, tick };
 }
 
-// A live `claude` process (a copy of sleep) for stop/send, with its board record, pane and a flag.
-function session(patch: object = {}) {
-  const bin = join(tmp, 'claude-sleep');
-  mkdirSync(bin, { recursive: true });
-  const claude = join(bin, 'claude');
+// A binary named `claude`: a symlink, since comm is the exec'd name.
+function claudeBin(dir: string, target: string) {
+  const claude = join(tmp, dir, 'claude');
   if (!existsSync(claude)) {
-    copyFileSync('/bin/sleep', claude);
-    chmodSync(claude, 0o755);
+    mkdirSync(join(tmp, dir), { recursive: true });
+    symlinkSync(target, claude);
   }
-  const c = spawn(claude, ['300'], { stdio: 'ignore' });
+  return claude;
+}
+// The claude processes here are children of this test's process, so its pid is their parent's.
+const panePid = (pane: 'own' | 'parent' | 'other' | undefined, pid: number) =>
+  pane === 'other' ? 1 : pane === 'parent' ? process.pid : pid;
+
+// A live `claude` process (sleep) for stop/send, with its board record and pane.
+function session(patch: object = {}, pane: 'own' | 'parent' = 'own') {
+  const c = spawn(claudeBin('claude-sleep', '/bin/sleep'), ['300'], { stdio: 'ignore' });
   children.push(c);
   const pid = c.pid!;
   record(pid, patch);
-  writeFileSync(join(shim, 'pane_pid'), String(pid));
+  writeFileSync(join(shim, 'pane_pid'), String(panePid(pane, pid)));
   return pid;
+}
+// Runs `cmd` in the sleep shim when send sleeps `arg` (2: before typing; 0.5: between the text and Enter).
+function onSleep(arg: string, cmd: string) {
+  const f = join(shim, `on-sleep-${arg}`);
+  writeFileSync(f, `#!/bin/bash\n${cmd}\n`);
+  chmodSync(f, 0o755);
+}
+// A commit on main with the switch off, left unreferenced: HEAD stays on the switch-on commit.
+function offCommit() {
+  const on = git(main, 'rev-parse', 'HEAD').trim();
+  commitMain(false);
+  const off = git(main, 'rev-parse', 'HEAD').trim();
+  git(main, 'update-ref', 'HEAD', on);
+  return off;
 }
 function flag(
   pid: number,
@@ -218,10 +243,10 @@ function flag(
   mkdirSync(flagDir(), { recursive: true });
   writeFileSync(join(flagDir(), `${pid}.req`), `1 ${tick} ${epoch} ${at}\n`);
 }
-function stop(pid: number, input: object = { hook_event_name: 'Stop', stop_hook_active: false }) {
+function stop(pid: number) {
   return spawnSync('bash', [join(main, 'scripts/board/self-compact.sh'), 'stop', String(pid)], {
     env,
-    input: JSON.stringify(input),
+    stdio: ['ignore', 'pipe', 'pipe'],
     encoding: 'utf8',
   });
 }
@@ -242,6 +267,19 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       const f = readFileSync(join(flagDir(), `${r.pid}.req`), 'utf8');
       expect(f).toMatch(new RegExp(`^1 ${r.tick} \\d+ ${AT}\\n$`));
       expect(log()).toMatch(new RegExp(`request pid=${r.pid} branch=${BRANCH}`));
+    });
+
+    it('succeeds mid-turn, under the working footer (request is a tool call in a running turn)', async () => {
+      screens(
+        screen('', { footer: ['  ⏵⏵ bypass permissions on · esc to interrupt · ↓ to manage'] }),
+      );
+      expect((await request()).code).toBe(0);
+    });
+
+    it("succeeds when the pane's process is claude's parent (the shell that started it)", async () => {
+      expect((await request({ pane: 'parent' })).out).toBe(
+        'self-compact: requested; end the turn now\n',
+      );
     });
 
     it.each([
@@ -270,17 +308,12 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       ['no lane file', () => rmSync(join(board, 'lanes', `${BRANCH}.json`)), 'lane-file-stale'],
       ['a dirty tree', () => writeFileSync(join(wt, 'new.txt'), 'x'), 'dirty'],
       ['text in the box', () => screens(screen('half a prompt')), 'box-other'],
-      [
-        'the busy footer',
-        () => screens(screen('', { footer: ['  esc to interrupt'] })),
-        'box-busy',
-      ],
-      [
-        'a background agent running',
-        () => screens(screen('', { above: ['✻ Waiting for 1 background agent to finish'] })),
-        'box-busy',
-      ],
       ['no box on screen (a dialog)', () => screens('❯ 1. Yes\n  2. No\n'), 'box-none'],
+      [
+        'a multi-line draft over an older empty box',
+        () => screens(`${EMPTY}\n\n${RULE}\n❯${NBSP}line one\n  line two\n${RULE}\n  footer`),
+        'box-none',
+      ],
     ])('refuses: %s', async (_name, arrange, reason) => {
       arrange();
       const r = await request();
@@ -326,15 +359,30 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(r.out).toBe('self-compact: refused (not-lane)\n');
     });
 
-    it('refuses the hub: by branch and by the record name', async () => {
-      const hubWt = join(main, '.claude/worktrees/dispatch');
-      git(main, 'worktree', 'add', '-q', '-b', 'dispatch', hubWt);
+    // The hub's name comes from the temp main's hub.json ('dispatch'); each clause alone.
+    it('refuses the hub: by branch, by worktree dir and by the record name', async () => {
+      const byBranch = join(main, '.claude/worktrees/lane-hub');
+      git(main, 'worktree', 'add', '-q', '-b', 'dispatch', byBranch);
+      const byDir = join(main, '.claude/worktrees/dispatch');
+      git(main, 'worktree', 'add', '-q', '-b', 'other', byDir);
       mkdirSync(join(board, 'lanes'), { recursive: true });
-      writeFileSync(join(board, 'lanes', 'dispatch.json'), '{}');
-      expect((await request({ cwd: hubWt })).out).toBe('self-compact: refused (hub)\n');
+      for (const b of ['dispatch', 'other']) writeFileSync(join(board, 'lanes', `${b}.json`), '{}');
+      expect((await request({ cwd: byBranch })).out).toBe('self-compact: refused (hub)\n');
+      expect((await request({ cwd: byDir })).out).toBe('self-compact: refused (hub)\n');
       expect((await request({ record: { name: 'dispatch' } })).out).toBe(
         'self-compact: refused (hub)\n',
       );
+    });
+
+    it('sweeps old flags, claims and write leftovers', async () => {
+      mkdirSync(flagDir(), { recursive: true });
+      const t = Date.now() / 1000 - 16 * 60;
+      for (const f of ['424242.req', '424242.claim.99', '424242.req.tmp.7']) {
+        writeFileSync(join(flagDir(), f), 'x');
+        utimesSync(join(flagDir(), f), t, t);
+      }
+      const r = await request();
+      expect(readdirSync(flagDir())).toEqual([`${r.pid}.req`]);
     });
 
     it('refuses with no claude ancestor', async () => {
@@ -363,8 +411,12 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
   describe('the box', () => {
     it('reads the 2.1.329 idle shape as empty, and ignores busy text quoted far above the box', async () => {
       const quoted = ['esc to interrupt', 'background agent', '1', '2', '3', '4', '5'];
-      screens(screen('', { above: quoted }));
-      expect((await request()).code).toBe(0);
+      const pid = session();
+      flag(pid);
+      screens(screen('', { above: quoted }), screen('/compact', { above: quoted }));
+      stop(pid);
+      await settle(finished);
+      expect(log()).toContain('sent pid=');
     });
 
     it('uses the last box: an earlier ❯ line in scrollback is ignored', async () => {
@@ -377,7 +429,7 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
 
   describe('stop → send', () => {
     it('types /compact into its own pane, then Enter once the box shows it', async () => {
-      const pid = session();
+      const pid = session({}, 'parent');
       flag(pid);
       const r = stop(pid);
       expect(r.status).toBe(0);
@@ -402,7 +454,6 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
               env,
             },
           );
-          c.stdin.end('{}');
           c.on('exit', () => res());
         });
       await Promise.all([run(), run(), run()]);
@@ -421,13 +472,13 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
         'bash',
         [join(main, 'scripts/board/self-compact.sh'), 'stop', String(pid)],
         {
-          env: { ...env, SLOW_SLEEP: '3' },
-          input: '{}',
+          env: { ...env, SLOW_SLEEP: '10' },
+          stdio: ['ignore', 'pipe', 'pipe'],
           encoding: 'utf8',
         },
       );
       expect(r.status).toBe(0);
-      expect(Date.now() - t).toBeLessThan(2500);
+      expect(Date.now() - t).toBeLessThan(5000);
       expect(sends()).toEqual([]);
     });
 
@@ -448,6 +499,16 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
         () => screens(screen('', { footer: ['esc to interrupt'] })),
         'box-busy',
       ],
+      [
+        'a background agent running',
+        () => screens(screen('', { above: ['✻ Waiting for 1 background agent to finish'] })),
+        'box-busy',
+      ],
+      [
+        'a subagent list (to manage)',
+        () => screens(screen('', { footer: ['  ↓ to manage'] })),
+        'box-busy',
+      ],
     ])('sends nothing when %s', async (_n, arrange, reason) => {
       const pid = session();
       flag(pid);
@@ -465,6 +526,66 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       await settle(finished);
       expect(sends()).toEqual([]);
       expect(log()).toContain('reason=guard');
+    });
+
+    // Each other clause of send's guard alone, changed in the 2 s before typing.
+    it.each([
+      ['the off-file appears', () => `mkdir -p ${flagDir()} && touch ${join(flagDir(), 'off')}`],
+      ['main commits the switch off', () => `git -C ${main} update-ref HEAD ${offCommit()}`],
+      ['the pane changes hands', () => `echo 1 >${join(shim, 'pane_pid')}`],
+      [
+        'a prompt arrives',
+        (pid: number) => {
+          const f = join(board, 'sessions', `${pid}.json`);
+          return `jq '.lastPromptAt = "2026-11-19T10:05:00Z"' ${f} >${f}.n && mv ${f}.n ${f}`;
+        },
+      ],
+    ])('types nothing when %s before typing', async (_n, cmd) => {
+      const pid = session();
+      flag(pid);
+      onSleep('2', cmd(pid));
+      stop(pid);
+      await settle(finished);
+      expect(sends()).toEqual([]);
+      expect(log()).toContain('reason=guard');
+    });
+
+    it('a send for an earlier process with the same pid (start tick) types nothing', async () => {
+      const pid = session();
+      spawnSync(
+        'bash',
+        [join(main, 'scripts/board/self-compact.sh'), 'send', String(pid), '1', AT],
+        {
+          env,
+          stdio: 'ignore',
+        },
+      );
+      await settle(finished);
+      expect(sends()).toEqual([]);
+      expect(log()).toContain('reason=guard');
+    });
+
+    it('no Enter when the guard fails between the text and Enter', async () => {
+      const pid = session();
+      flag(pid);
+      const f = join(board, 'sessions', `${pid}.json`);
+      onSleep('0.5', `jq '.state = "working"' ${f} >${f}.n && mv ${f}.n ${f}`);
+      stop(pid);
+      await settle(finished);
+      expect(sends()).toEqual([`send-keys|-t|${PANE}|-l|/compact|`]);
+      expect(log()).toContain('reason=guard');
+    });
+
+    it('types nothing when send runs late (a loaded box)', async () => {
+      const pid = session();
+      flag(pid);
+      spawnSync('bash', [join(main, 'scripts/board/self-compact.sh'), 'stop', String(pid)], {
+        env: { ...env, SLOW_SLEEP: '9' },
+        stdio: 'ignore',
+      });
+      await settle(finished, 14_000);
+      expect(sends()).toEqual([]);
+      expect(log()).toContain('reason=late');
     });
 
     it.each([
@@ -490,6 +611,11 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       ],
       ['a dirty tree', () => writeFileSync(join(wt, 'new.txt'), 'x'), 'dirty'],
       ['another pane', () => writeFileSync(join(shim, 'pane_pid'), '1'), 'pane'],
+      [
+        'a record cwd outside the charset',
+        (pid: number) => record(pid, { cwd: `${wt} x` }),
+        'bad-cwd',
+      ],
     ])('claims, then skips: %s', async (_n, arrange, reason) => {
       const pid = session();
       flag(pid);
@@ -504,12 +630,14 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(existsSync(join(flagDir(), `${pid}.req`))).toBe(false);
     });
 
-    it('stop_hook_active leaves the flag for a later Stop', async () => {
+    it('reads no stdin: an open, silent stdin never holds it', async () => {
       const pid = session();
-      flag(pid);
-      expect(stop(pid, { stop_hook_active: true }).status).toBe(0);
-      expect(existsSync(join(flagDir(), `${pid}.req`))).toBe(true);
-      expect(sends()).toEqual([]);
+      const c = spawn('bash', [join(main, 'scripts/board/self-compact.sh'), 'stop', String(pid)], {
+        env,
+      });
+      children.push(c);
+      const code = await new Promise<number>((r) => c.on('close', (n) => r(n ?? -1)));
+      expect(code).toBe(0);
     });
 
     it('switched off between request and Stop: nothing claimed or sent', async () => {
@@ -523,13 +651,14 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(log()).toBe('');
     });
 
-    it('sweeps flags older than 15 min', () => {
+    it('sweeps flags, claims and write leftovers older than 15 min', () => {
       const pid = session();
       mkdirSync(flagDir(), { recursive: true });
-      const old = join(flagDir(), '424242.req');
-      writeFileSync(old, '1 1 1 2026-11-19T10:00:00Z\n');
       const t = Date.now() / 1000 - 16 * 60;
-      utimesSync(old, t, t);
+      for (const f of ['424242.req', '424242.claim.99', '424242.req.tmp.7']) {
+        writeFileSync(join(flagDir(), f), '1 1 1 2026-11-19T10:00:00Z\n');
+        utimesSync(join(flagDir(), f), t, t);
+      }
       stop(pid);
       expect(readdirSync(flagDir())).toEqual([]);
     });
@@ -558,9 +687,8 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
     },
   );
 
-  it('the tracked limits.json ships the switch off and lanes at 300000', () => {
+  it('the tracked limits.json ships the switch off', () => {
     const l = JSON.parse(readFileSync(join(boardSrc, 'limits.json'), 'utf8'));
     expect(l.lanes.selfCompact).toBe(false);
-    expect(l.lanes.autoCompactWindow).toBe(300000);
   });
 });

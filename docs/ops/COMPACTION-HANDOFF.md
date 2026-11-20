@@ -106,12 +106,14 @@ since 2.1.314), so the compacted lane keeps where it stands:
 This session is the feature lane on branch <branch>.
 Lane phase: <phase>.
 Lane status file: <path>
-Keep in the summary: the step in progress, open review findings, unanswered asks quoted word for word, any pending claude-edit patch, and the next step.
+Keep in the summary: the step in progress, open review findings, unanswered asks quoted word for word, any [hold] in force, each relayed approval with its exact scope, any pending claude-edit patch, and the next step.
 After compaction, re-read docs/ops/FEATURE-WORKFLOW.md before acting.
 ```
 
-A lane is a toplevel at `<main>/.claude/worktrees/<branch>`, its branch `^[a-z0-9][a-z0-9-]{0,62}$`, neither named as the
-hub (`scripts/board/hub.json`); anywhere else, in the fork included, the hook prints nothing. Only three values come
+A lane is a toplevel at `<main>/.claude/worktrees/<name>`, `<name>` and its branch each `^[a-z0-9][a-z0-9-]{0,62}$`
+and neither named as the hub (`scripts/board/hub.json`), with a lane file at `<main>/localNotes/board/lanes/<branch>.json`
+(the default board's; so not an agent's or a scratch worktree); anywhere else, in the fork included, the hook prints
+nothing, and a fork it skips later (a held lock, no `claude`) still leaves the block printed. Only three values come
 from outside, each checked: the branch, the phase (one of the board's phase words, else `unknown`) and the lane file's
 path (`[A-Za-z0-9_./-]` only). No free text from the lane file reaches the summary. The block is inline in the hook,
 not a `scripts/board/` helper: a helper would run the branch's own copy, and its text feeds the summary.
@@ -123,28 +125,34 @@ turn rises with context (the 2026-11-19 work-units analysis). The lane's last to
 `bash scripts/board/self-compact.sh request`; the Stop hook then types `/compact` into the lane's own empty input box.
 It is the second constant exception to the pane rule (`docs/ops/HUB.md` → _Approval_), never a go.
 
-**Off unless** main's committed `scripts/board/limits.json` says `lanes.selfCompact: true` (read with `git show HEAD:`,
+**Off unless** main's committed `scripts/board/limits.json` says `lanes.selfCompact: true` (read with `git cat-file blob HEAD:`,
 never the working copy or a branch's), and `<board>/self-compact/off` is absent: any session can create that file to stop
 it at once. It ships `false`.
 
 - **`request`** refuses, with one line and exit 1, unless: not the handoff fork; the switch is on; a `claude` ancestor
   has a board record for that process with a `lastPromptAt`; `TMUX_PANE` is `%<n>` and is that session's own pane
-  (`board.sh` `me_ident`'s rule); the toplevel is `<main>/.claude/worktrees/<branch>` with a lane-shaped branch, a lane
+  (`board.sh` `me_ident`'s rule); the toplevel is `<main>/.claude/worktrees/<name>` with a lane-shaped branch, a lane
   file written in the last 10 min and a clean tree; not the hub (branch, worktree or record name); the box is on
-  screen, empty and not busy. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
+  screen and empty. It runs mid-turn, under the working footer, so it reads no busy markers: `send` does. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
 - **The hand-off** (`.claude/hooks/board-heartbeat.sh idle`, after the board write): only with a flag for this
-  session's pid, it runs **main's committed** `scripts/board/self-compact.sh stop <pid>`, only when that file and
-  the `lib.sh` it sources hash, on disk, to main's `HEAD` blobs (`git hash-object` against `HEAD:`, not `git diff`:
-  an empty diff proves nothing about a missing path, and a skip-worktree flag hides an edit), detached (`setsid -f`,
-  `timeout -k 1 10`, stdio on `/dev/null`, exit ignored), so it can never fail or delay Stop. With no flag a Stop costs
+  session's pid, and not on a Stop a stop hook continued (`stop_hook_active`: the flag waits), it runs **main's
+  committed** `scripts/board/self-compact.sh stop <pid>`, only when that file and the `lib.sh` it sources hash, on
+  disk, to main's `HEAD` blobs (`git hash-object --no-filters` against `HEAD:`, global and system git config off; not
+  `git diff`: an empty diff proves nothing about a missing path, and a skip-worktree flag hides an edit), detached
+  (`setsid -f`, `timeout -k 1 10`, stdio on `/dev/null`, exit ignored), so it can never fail or delay Stop. With no flag a Stop costs
   one `stat`. No `settings.json` change: it rides the registered Stop entry.
-- **`stop`** prints nothing, always exits 0: sweeps flags over 15 min old, leaves the flag while `stop_hook_active`,
-  claims it by `mv` (a second Stop finds nothing), then re-checks the same pid and tick, no prompt since the request
-  (`lastPromptAt` unchanged), a flag at most 10 min old, the lane boundary and the pane, and spawns `send` detached.
-- **`send`**: 2 s, then the guard (switch, process, pane, board `idle`, no prompt since), box empty, `send-keys -l
-/compact`; 0.5 s, the guard again, and `Enter` only if the box shows exactly `/compact` (else no further key).
-- **The box** (measured on 2.1.329, 2026-11-19, `tmux capture-pane`): the last `❯` line with a `─` rule directly above
-  and below it. Busy: `esc to interrupt` (a foreground turn), `background agent` or `to manage` (a background agent
+- **`stop`** prints nothing, reads no stdin, always exits 0: sweeps flags, claims and write leftovers over 15 min
+  old, claims the flag by `mv` (a second Stop finds nothing), then re-checks the same pid and tick, no prompt since
+  the request (`lastPromptAt` unchanged), a flag at most 10 min old, the record's `cwd` (`[A-Za-z0-9_./-]`), the lane
+  boundary and the pane, and spawns `send` detached.
+- **`send`**: 2 s, then the guard (switch, process, pane, board `idle`, no prompt since), box empty and not busy, and
+  not past 8 s since it started (else `late`: nothing typed rather than the 20 s timeout between text and Enter),
+  `send-keys -l /compact`; 0.5 s, the guard again, and `Enter` only if the box shows exactly `/compact` (else no
+  further key, so a guard failing in that 0.5 s leaves `/compact` unsent in the box for the user to see). Run by hand
+  it skips `stop`'s lane and hub checks: it gains nothing over a raw `tmux send-keys`.
+- **The box** (measured on 2.1.329, 2026-11-19, `tmux capture-pane`): the `❯` line directly above the bottom-most
+  `─` rule; anything else there (a dialog, a multi-line draft) reads as no box, so an older box in the scrollback
+  never stands in. Busy: `esc to interrupt` (a foreground turn), `background agent` or `to manage` (a background agent
   running: no `esc to interrupt` then), read only below the box and in the 5 lines above it, so a quoted marker in the
   conversation doesn't count.
 - **Log**: `<board>/self-compact.log`, one line per event — `request`, `refuse`, `claim`, `spawn`, `sent`, `skip` —
@@ -154,9 +162,14 @@ Measured upstream on 2.1.329 (a peer project's trials, 2026-11-19), unmeasured h
 and neither does UserPromptSubmit; a peer message does fire it and wakes the compacted session. So a compacted lane
 waits for its next message: `request` belongs only where the lane waits for the hub anyway.
 
+Unmeasured anywhere, run-only at the switch flip: whether UserPromptSubmit fires for a message queued mid-turn and for
+a turn a finished background task starts (if not, `lastPromptAt` misses it and the dirty-tree and busy checks are the
+only cover); the box with the slash menu open after typing.
+
 Accepted residuals: the heartbeat already runs the branch's own `scripts/board/lib.sh` and `board.sh` (the hand-off adds
 no branch code: main's script re-derives everything); any session can write the board dir, so a forged flag reaches
-main's `stop`, which re-checks it all; the busy markers are screen text.
+main's `stop`, which re-checks it all; the busy markers are screen text; "main's committed" means main's `HEAD`, not
+`origin/main`, so a `/workspace` left on another commit runs that commit's script and switch.
 
 **Turning it on**, one PR: re-measure the box and busy shapes on the installed version; `selfCompact: true`; add to
 `docs/ops/FEATURE-WORKFLOW.md` → _Lane status and checkpoints_: "Where the lane now waits for the hub — after an
