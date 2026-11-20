@@ -35,6 +35,7 @@ const toolSpec = (t: (typeof TOOLS)[number]) => ({
   name: t.name,
   description: t.description,
   inputSchema: t.inputSchema,
+  ...(t.annotations ? { annotations: t.annotations } : {}),
 });
 
 // Handle one parsed JSON-RPC message. Returns the response, or null for a notification (no reply body).

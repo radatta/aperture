@@ -40,6 +40,14 @@ import {
   AUTO_PLACED_ERROR,
   autoSyncOn,
   accruesTime,
+  decidePulse,
+  normalizePulseNote,
+  PULSE_PARENT_ERROR,
+  PULSE_STATE_ID,
+  pulseResultOf,
+  pulseSessionRow,
+  pulseWindowMs,
+  yieldPulse,
   completeSession,
   countsTowardCap,
   createUlid,
@@ -312,6 +320,11 @@ import type {
   SittingActivity,
   SittingHeadRow,
   LcStartGate,
+  OpenPulse,
+  PulseInput,
+  PulseResult,
+  PulseRowChange,
+  PulseState,
   SittingEvent,
   SittingEventsInput,
   SittingEventsResult,
@@ -430,6 +443,7 @@ export interface Store {
   sittingReads: SittingReads[]; // Claude's live pulls per sitting (id = the sitting's): internal, never exported
   sittingHeadRows: (SittingHeadRow & BaseEntity)[];
   lcStartGate: LcStartGate | null; // the Start gate: internal, never exported
+  pulseState: PulseState | null; // the open pulse session (pulse.ts): internal, never exported
   leetcodeProblems: LeetcodeProblem[];
   stories: Story[];
   coachDays: CoachDay[];
@@ -478,6 +492,7 @@ export function emptyStore(): Store {
     sittingReads: [],
     sittingHeadRows: [],
     lcStartGate: null,
+    pulseState: null,
     leetcodeProblems: [],
     stories: [],
     coachDays: [],
@@ -2181,6 +2196,18 @@ class StubClient implements ApiClient {
 
   // --- Sessions ------------------------------------------------------------
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
+    const session = this.startTimer(input);
+    // The timer is the clock from here: the task's open pulse session ends now (pulse.ts yieldPulse).
+    if (input.kind === 'work' && input.taskId) {
+      const y = yieldPulse(this.store.pulseState?.open ?? null, input.taskId, this.now());
+      if (y) {
+        this.setPulseOpen(null);
+        if (y.row) this.writePulseRows([y.row]);
+      }
+    }
+    return session;
+  }
+  private startTimer(input: StartSessionInput): PomodoroSession {
     const t = this.now();
     // Multiple timers can run at once (parallel focus), but a given task gets at most one live
     // work block — re-focusing an already-running task returns the existing timer, not a duplicate.
@@ -2253,6 +2280,64 @@ class StubClient implements ApiClient {
     if (decision === 'keep') this.accrueToTask(next);
     return next;
   }
+  // --- Pulses (pulse.ts): the Lambda's PulseService over the store ---------
+  async pulseTask(input: PulseInput): Promise<PulseResult> {
+    const note = normalizePulseNote(input.note);
+    const now = this.now();
+    let task = this.mustFind(this.store.tasks, input.taskId);
+    if (!accruesTime(task)) throw new Error(`Task is already ${task.status}`);
+    const category = task.categoryId ? this.find(this.store.categories, task.categoryId) : null;
+    const windowMs = pulseWindowMs(category);
+    const open = this.store.pulseState?.open ?? null;
+    const extending = open?.taskId === task.id && now - open.lastPulseAt <= windowMs;
+    if (!extending && !task.parentId && hasParts(this.alive(this.store.tasks), task.id))
+      throw new Error(PULSE_PARENT_ERROR);
+    const running = this.alive(this.store.sessions).some(
+      (s) => s.status === 'running' && s.kind === 'work' && s.taskId === task.id,
+    );
+    const sitting =
+      !!task.rollId && this.alive(this.store.sittings).some((x) => x.repTaskId === task.id);
+    const blocked = running ? 'timer' : sitting ? 'sitting' : null;
+    if (task.status === 'backlog' || task.status === 'planned')
+      task = await this.transitionTask(task.id, 'in_progress');
+    const done = input.done === true;
+    const { plan, needs } = decidePulse({
+      open,
+      task,
+      wasWork: category?.isWork ?? false,
+      windowMs,
+      day: dayKeyInZone(now, USER_TIME_ZONE, this.dayStartHour()),
+      now,
+      note,
+      blocked,
+      newId: this.ulid,
+      done,
+    });
+    if (plan.open !== null || open !== null) this.setPulseOpen(plan.open);
+    this.writePulseRows(plan.rows);
+    task = this.mustFind(this.store.tasks, task.id);
+    if (done && !needs) task = await this.transitionTask(task.id, 'done');
+    return pulseResultOf(task, plan, { blocked, done, needs });
+  }
+  private setPulseOpen(open: OpenPulse | null): void {
+    const base = this.store.pulseState ?? { ...this.base(), id: PULSE_STATE_ID, open: null };
+    this.store.pulseState = { ...base, open, updatedAt: this.now() };
+    this.persist();
+  }
+  private writePulseRows(rows: PulseRowChange[]): void {
+    const now = this.now();
+    for (const r of rows) {
+      this.writes.put(this.store.sessions, pulseSessionRow(r.session, USER_ID, now));
+      const task = this.find(this.store.tasks, r.session.taskId);
+      if (!task || !accruesTime(task) || r.deltaMin === 0) continue;
+      this.writes.put(this.store.tasks, {
+        ...task,
+        actualAccruedMin: Math.max(0, task.actualAccruedMin + r.deltaMin),
+        updatedAt: now,
+      });
+    }
+  }
+
   // Denormalized accrual: only work sessions bump the task's actual, once, at close.
   private accrueToTask(session: PomodoroSession): void {
     if (session.kind !== 'work' || !session.taskId) return;
@@ -3385,6 +3470,7 @@ class StubClient implements ApiClient {
         | 'sittingReads'
         | 'sittingEvents'
         | 'lcStartGate'
+        | 'pulseState'
       >,
       unknown
     >;

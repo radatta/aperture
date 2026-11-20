@@ -44,6 +44,7 @@ export const API_METHODS = [
   'findRunningSession',
   'listRunningSessions',
   'resolveStaleSession',
+  'pulseTask',
   'listHabits',
   'upsertHabit',
   'checkHabit',

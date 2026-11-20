@@ -125,6 +125,21 @@ describe('single-table keys', () => {
     expect(pushSk.health()).toBe('health');
   });
 
+  it('keys the pulse state as one row no other prefix reads, outside the poller range', () => {
+    expect(sk.pulseState()).toBe('pulsestate');
+    for (const prefix of [
+      sk.sessionPrefix(),
+      sk.pushSubPrefix(),
+      sk.pushQueuePrefix(),
+      sk.planAllPrefix(),
+      sk.placePrefix(),
+      sk.ptoken(),
+    ])
+      expect(sk.pulseState().startsWith(prefix)).toBe(false);
+    // The poller reads `pq#` … `ptest#\uffff` every minute (repo.listPushRows): the pulse row sorts past it.
+    expect(sk.pulseState() > `${sk.pushTestPrefix()}\uffff`).toBe(true);
+  });
+
   it('keys the remind GSI space on the raw fire time — a Number, like the done space', () => {
     expect(gsi1.remindPk('user-1')).toBe('u#user-1#remind');
     expect(gsi1.remindSk(1700)).toBe(1700);

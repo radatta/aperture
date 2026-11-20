@@ -10,6 +10,7 @@ import { addDays, dayKeyInZone, USER_TIME_ZONE } from './dates';
 import { fluxWeekStart } from './flux/history';
 import { REP_NO_SPLIT_ERROR } from './split';
 import { FUTURE_DAY_ERROR, TIMED_NO_PLAN_ERROR } from './machines';
+import { PULSE_GRACE_MIN, PULSE_PARENT_ERROR, PULSE_WINDOW_MIN } from './pulse';
 import {
   SERIES_OFFSET_ERROR,
   SERIES_TIME_ERROR,
@@ -3396,6 +3397,148 @@ export function runApiContract(
     });
 
     // --- Flux weekly note (D62) ----------------------------------------------
+    describe('pulses', () => {
+      const DAY = '2023-11-14'; // the suite's clock, 14:13 in the user's zone
+      const pulseRows = async () =>
+        (await api.listSessionsForDay(DAY)).filter((s) => s.source === 'pulse');
+      const actual = async (id: string) => (await api.getTask(id))!.actualAccruedMin;
+
+      it('a first pulse starts an unstarted task and credits the grace; pulses inside the window extend it', async () => {
+        const t = await api.createTask({ title: 'Prep', estimateMin: 30 });
+        const first = await api.pulseTask({ taskId: t.id, note: 'outline' });
+        expect(first).toMatchObject({
+          counted: true,
+          opened: true,
+          pulses: 1,
+          sessionMin: PULSE_GRACE_MIN,
+        });
+        expect(first.task.status).toBe('in_progress');
+        expect(await api.getTask(t.id)).toMatchObject({
+          estimateLockedMin: 30,
+          actualAccruedMin: PULSE_GRACE_MIN,
+        });
+        advance(10 * 60_000);
+        const second = await api.pulseTask({ taskId: t.id });
+        expect(second).toMatchObject({
+          opened: false,
+          pulses: 2,
+          sessionMin: 10 + PULSE_GRACE_MIN,
+          taskActualMin: 10 + PULSE_GRACE_MIN,
+        });
+        const rows = await pulseRows();
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          status: 'completed',
+          kind: 'work',
+          taskId: t.id,
+          activeMinutes: 10 + PULSE_GRACE_MIN,
+          pulses: 2,
+        });
+        expect(rows[0]!.pulseNotes).toEqual([{ at: LC_T0, text: 'outline' }]);
+        expect(await api.listRunningSessions()).toEqual([]); // never a timer the app would adopt
+      });
+
+      it('a gap past the window opens a new session; the old one keeps its last pulse plus the grace', async () => {
+        const t = await api.createTask({ title: 'Read', estimateMin: 30 });
+        await api.pulseTask({ taskId: t.id });
+        advance((PULSE_WINDOW_MIN.personal + 1) * 60_000);
+        const r = await api.pulseTask({ taskId: t.id });
+        expect(r).toMatchObject({ opened: true, pulses: 1 });
+        expect((await pulseRows()).map((s) => s.activeMinutes)).toEqual([
+          PULSE_GRACE_MIN,
+          PULSE_GRACE_MIN,
+        ]);
+        expect(await actual(t.id)).toBe(2 * PULSE_GRACE_MIN);
+      });
+
+      it('a pulse for another task ends the current session now; a third task is untouched', async () => {
+        const a = await api.createTask({ title: 'A', estimateMin: 30 });
+        const b = await api.createTask({ title: 'B', estimateMin: 30 });
+        const c = await api.createTask({ title: 'C', estimateMin: 30 });
+        await api.pulseTask({ taskId: a.id });
+        advance(60_000);
+        const r = await api.pulseTask({ taskId: b.id });
+        expect(r).toMatchObject({ opened: true, closed: { taskId: a.id, minutes: 1 } });
+        expect(await actual(a.id)).toBe(1);
+        expect(await actual(b.id)).toBe(PULSE_GRACE_MIN);
+        expect(await api.getTask(c.id)).toMatchObject({ status: 'backlog', actualAccruedMin: 0 });
+      });
+
+      it('done finishes the task with the tracked time; a done the gate refuses says why and keeps the session', async () => {
+        const t = await api.createTask({ title: 'Essay', estimateMin: 30 });
+        await api.pulseTask({ taskId: t.id });
+        advance(10 * 60_000);
+        const done = await api.pulseTask({ taskId: t.id, done: true });
+        expect(done).toMatchObject({ done: true, sessionMin: 10, taskActualMin: 10 });
+        expect(await api.getTask(t.id)).toMatchObject({
+          status: 'done',
+          actualAccruedMin: 10,
+          estimateSource: 'planned',
+        });
+
+        const u = await api.createTask({ title: 'Unscoped' });
+        await api.pulseTask({ taskId: u.id });
+        advance(5 * 60_000);
+        const refused = await api.pulseTask({ taskId: u.id, done: true });
+        expect(refused).toMatchObject({ done: false, needs: 'estimate', counted: true });
+        expect(refused.message).toMatch(/estimate/);
+        expect(await api.getTask(u.id)).toMatchObject({
+          status: 'in_progress',
+          actualAccruedMin: 5 + PULSE_GRACE_MIN,
+        });
+        await api.setTaskEstimate(u.id, 20, null);
+        advance(60_000);
+        const again = await api.pulseTask({ taskId: u.id, done: true });
+        expect(again).toMatchObject({ done: true, opened: false, taskActualMin: 6 });
+        expect(await api.getTask(u.id)).toMatchObject({ status: 'done', estimateSource: 'retro' });
+      });
+
+      it('refuses a finished, an unknown or a parent task, writing nothing', async () => {
+        const t = await api.createTask({ title: 'Finished', estimateMin: 10 });
+        await api.transitionTask(t.id, 'in_progress');
+        await api.setTaskActual(t.id, 12);
+        await api.transitionTask(t.id, 'done');
+        await expect(api.pulseTask({ taskId: t.id })).rejects.toThrow('Task is already done');
+        await expect(api.pulseTask({ taskId: 'nope' })).rejects.toThrow('Not found');
+        const parent = await api.createTask({ title: 'Lab 3' });
+        const part = await api.createTask({ title: 'Prelab', estimateMin: 20 });
+        await api.setTaskParent(part.id, parent.id);
+        await expect(api.pulseTask({ taskId: parent.id })).rejects.toThrow(PULSE_PARENT_ERROR);
+        expect(await pulseRows()).toEqual([]);
+        expect((await api.pulseTask({ taskId: part.id })).counted).toBe(true); // the part is pulsed instead
+      });
+
+      it('a running timer on the task times it: the pulse counts nothing; a timer started mid-session ends it now', async () => {
+        const t = await api.createTask({ title: 'Timed', estimateMin: 30 });
+        await api.pulseTask({ taskId: t.id });
+        advance(2 * 60_000);
+        const timer = await api.startSession({
+          taskId: t.id,
+          categoryId: null,
+          kind: 'work',
+          day: DAY,
+        });
+        expect(await actual(t.id)).toBe(2); // the pulse session gave back the grace it hadn't reached
+        advance(60_000);
+        const r = await api.pulseTask({ taskId: t.id });
+        expect(r).toMatchObject({ counted: false, reason: 'timer', opened: false, sessionMin: 0 });
+        expect(await actual(t.id)).toBe(2);
+        expect((await api.pulseTask({ taskId: t.id, done: true })).needs).toBe('app');
+        // Another task's timer is its own: a pulse elsewhere counts.
+        const other = await api.createTask({ title: 'Elsewhere', estimateMin: 30 });
+        expect((await api.pulseTask({ taskId: other.id })).counted).toBe(true);
+        await api.stopSession(timer.id, 'discarded');
+      });
+
+      it("a LeetCode sitting times its rep: a pulse counts nothing and done is the app's", async () => {
+        const { sitting } = await startSitting(api);
+        const r = await api.pulseTask({ taskId: sitting.repTaskId });
+        expect(r).toMatchObject({ counted: false, reason: 'sitting' });
+        expect((await api.pulseTask({ taskId: sitting.repTaskId, done: true })).needs).toBe('app');
+        expect(await pulseRows()).toEqual([]);
+      });
+    });
+
     describe('lc sittings', () => {
       it('start refuses without a linked roll, writing nothing', async () => {
         await expect(api.lcSittingStart(sittingStart())).rejects.toThrow(LC_ROLL_UNLINKED_ERROR);

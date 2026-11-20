@@ -88,6 +88,18 @@ describe('handleMcpMessage', () => {
     expect(tools.map((t) => t.name)).toContain('create_task');
   });
 
+  it("tools/list carries a tool's annotations when it sets them, and no key when it does not", async () => {
+    const res = await handleMcpMessage(req('tools/list'), makeCtx());
+    const tools = (res?.result as { tools: { name: string; annotations?: unknown }[] }).tools;
+    // A write must say destructiveHint: false outright — omitted, the spec reads it as destructive.
+    expect(tools.find((t) => t.name === 'pulse')?.annotations).toEqual({
+      readOnlyHint: false,
+      destructiveHint: false,
+      openWorldHint: false,
+    });
+    expect(tools.find((t) => t.name === 'create_task')).not.toHaveProperty('annotations');
+  });
+
   it('tools/call runs a tool and returns text content', async () => {
     const res = await handleMcpMessage(
       req('tools/call', { name: 'create_task', arguments: { title: 'from mcp' } }),

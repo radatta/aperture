@@ -566,6 +566,8 @@ export interface DevSession {
   startedAt: number;
   endedAt: number | null;
   activeMinutes: number;
+  source?: 'pulse'; // pulse-tracking: a session derived from MCP pulses (never running)
+  pulses?: number;
 }
 
 // The ledger's `via` for a Flux set — cleanup reads it to delete the right kind of row.

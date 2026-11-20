@@ -185,6 +185,15 @@ export interface PomodoroSession extends BaseEntity {
   status: SessionStatus;
   lastHeartbeatAt: number; // running sessions persist a heartbeat → no orphans
   blocks?: number; // the blocks this timer runs to, raised by Again; absent = 1
+  // A session derived from MCP pulses (pulse.ts): written completed from birth and rewritten as pulses extend
+  // it, so it is never a running timer. Absent on timers and on every row from before pulses.
+  source?: 'pulse';
+  pulses?: number; // how many pulses it took
+  pulseNotes?: PulseNote[]; // newest PULSE_NOTES_KEPT one-line notes; never shown in the app
+}
+export interface PulseNote {
+  at: number;
+  text: string;
 }
 
 // --- Day (per-day singleton) ----------------------------------------------

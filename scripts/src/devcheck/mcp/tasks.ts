@@ -19,6 +19,7 @@ import {
   type Core,
   type DevDayView,
   type DevLogPage,
+  type DevPulseResult,
   MCP_CREATE_VIA,
   McpRpcError,
   PARAM_ERROR,
@@ -104,6 +105,22 @@ export function tasksWrites(c: Core, reads: Reads) {
     // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
     // a parent) — omitted here, it is left out of the call, never sent as null; so is an omitted reflection
     // or estimate.
+    // pulse-tracking: a pulse on a task this run created. The server writes a pulse session (never ledgered:
+    // sessions have no delete, as timers) and the task's minutes; the ledger cleanup deletes the task.
+    async pulse(
+      taskId: string,
+      opts: { note?: string; done?: boolean } = {},
+    ): Promise<DevPulseResult> {
+      assertLedgerTask(taskId);
+      return data<DevPulseResult>('pulse', { taskId, ...opts });
+    },
+    // A pulse the server must refuse, args as given: a taskId, when a string, must be this run's task, or
+    // one no task can have (`unknown:` + the nonce — not an id shape, so no row has it). Returns the answer.
+    async pulseRefused(args: Record<string, unknown>): Promise<ToolResult> {
+      const id = args.taskId;
+      if (typeof id === 'string' && !id.startsWith('unknown:')) assertLedgerTask(id);
+      return tool('pulse', args);
+    },
     async completeTask(
       id: string,
       actualMin?: number,

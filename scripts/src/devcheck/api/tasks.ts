@@ -81,7 +81,8 @@ export function tasksWrites(c: Core, reads: Reads) {
     // The test user's own settings row — not ledgered; a step that changes it puts it back in its `finally`
     // (a 1-minute block for the capped-stop row, 25 again after), and a killed run's next run does (pipeline).
     updateSettings: (patch: Partial<DevSettings>) => call<DevSettings>('updateSettings', [patch]),
-    // Only for a stop the server must refuse (a bad cap): the app stops its timers through the UI.
+    // Only for a stop the server must refuse (a bad cap), or to end a timer a step staged crediting nothing
+    // (capMin 0: pulse-tracking): the app stops its timers through the UI.
     stopSession: (id: string, status: 'completed', opts: { capMin: number }) =>
       call<DevSession>('stopSession', [id, status, opts]),
     // A createTask the BFF must refuse (bff-shapes' wrong shapes), ledgered like a create: a 4xx resolves

@@ -128,6 +128,8 @@ describe('createMcpClient', () => {
       'logMock',
       'markPeeked',
       'markPeekedUnknown',
+      'pulse',
+      'pulseRefused',
       'setCauseTag',
       'setCauseTagUnknown',
       'setClaudeNotes',
@@ -242,6 +244,24 @@ describe('createMcpClient', () => {
       ]),
     ).rejects.toThrow(/never recorded/);
     expect(sentTools(has)).toEqual(['get_sitting']);
+  });
+
+  it('pulse goes only to a recorded task; a refusal call takes a recorded task or the unknown marker', async () => {
+    const fetch = server({
+      pulse: json({ task: { id: 'T1', title: 't', status: 'in_progress' }, counted: true }),
+    });
+    const c = client(fetch);
+    await c.writes.pulse('T1', { note: 'n' });
+    await expect(c.writes.pulse('T9')).rejects.toThrow(/LEDGER_GUARD|never recorded/);
+    await expect(c.writes.pulseRefused({ taskId: 'T9' })).rejects.toThrow(/never recorded/);
+    await c.writes.pulseRefused({ taskId: 'unknown:abc' });
+    await c.writes.pulseRefused({ note: 5 }); // no taskId: refused by the server before any read
+    expect(sentTools(fetch)).toEqual(['pulse', 'pulse', 'pulse']);
+    const bodies = fetch.mock.calls.map(
+      ([, init]) =>
+        (JSON.parse(init.body as string) as { params: { arguments: unknown } }).params.arguments,
+    );
+    expect(bodies[0]).toEqual({ taskId: 'T1', note: 'n' });
   });
 
   it('log_mock records a new mock from its answer, resolves a refusal, and an id must be recorded', async () => {

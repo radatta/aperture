@@ -121,6 +121,10 @@ export const sk = {
   sessionDayPrefix: (day: string) => `sess#${day}#`,
   sessionPrefix: () => `sess#`,
 
+  // The user's pulse state (pulse.ts): the one open pulse session, the single decision point that keeps
+  // pulses to one open session. Its sessions are ordinary day-bucket `sess#` rows, never running ones.
+  pulseState: () => `pulsestate`,
+
   hcheck: (date: string, habitId: string) => `hcheck#${date}#${habitId}`,
   hcheckPrefix: (date: string) => `hcheck#${date}#`,
   hcheckAllPrefix: () => `hcheck#`,

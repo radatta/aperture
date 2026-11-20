@@ -64,6 +64,7 @@ import type { CompetencyTag } from './stories';
 import type { CalendarBusy } from './calendar';
 import type { Condition, Euler, ExerciseKind } from './flux/types';
 import type { ParseTaskResult } from './quickParse';
+import type { PulseInput, PulseResult } from './pulse';
 import type {
   ReviewDraft,
   SittingEventsInput,
@@ -523,6 +524,9 @@ export interface ApiClient {
   listRunningSessions(): Promise<PomodoroSession[]>; // ALL concurrently-running timers
 
   resolveStaleSession(id: string, decision: 'keep' | 'discard'): Promise<PomodoroSession>;
+  // A Claude session's pulse (pulse.ts): the server turns pulses into a completed session and the task's
+  // actual. Starts an unstarted task; `done` finishes it when its gate allows (else `needs`).
+  pulseTask(input: PulseInput): Promise<PulseResult>;
 
   // Habits
   listHabits(): Promise<Habit[]>;
