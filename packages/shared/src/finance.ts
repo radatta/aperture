@@ -719,7 +719,10 @@ export const normalizeFinanceTxn = (t: FinanceTransaction): FinanceTransaction =
   splits: liveSplits(t),
   refundParts: liveRefundParts(t),
 });
-export const normalizeFinanceRule = (r: FinanceRule): FinanceRule => ({ ...r, split: ruleSplitOf(r) });
+export const normalizeFinanceRule = (r: FinanceRule): FinanceRule => ({
+  ...r,
+  split: ruleSplitOf(r),
+});
 // A refund's parts with each charge id as it stands now: a part saved on a pending charge names the
 // posted row once Plaid posts it (its pendingTransactionId).
 export function resolveRefundPartIds(
@@ -1203,6 +1206,8 @@ export function suggestRefundSets(input: {
 }
 
 // A rule's percent split: 2–4 parts, whole percents 1–99 that sum to 100, distinct known buckets.
+// The sum refusal on its own, so the Rules form can tell it from the others.
+export const ruleSplitSumError = (sum: number) => `The parts add up to ${sum}%, not 100%`;
 export function financeRuleSplitError(split: FinanceRuleSplitPart[]): string | null {
   if (split.length < 2) return 'A split needs at least two parts';
   if (split.length > FINANCE_RULE_SPLIT_MAX_PARTS)
@@ -1217,7 +1222,7 @@ export function financeRuleSplitError(split: FinanceRuleSplitPart[]): string | n
       return 'Each part needs a whole percent from 1 to 99';
   }
   const sum = split.reduce((n, p) => n + p.percent, 0);
-  return sum === 100 ? null : `The parts add up to ${sum}%, not 100%`;
+  return sum === 100 ? null : ruleSplitSumError(sum);
 }
 
 // The rule's bucket when it splits: its largest part (the first on a tie).

@@ -342,7 +342,9 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
      single link, a bucket, a pin or a mark; a rule split whose bucket isn't its largest part. The next write
      of that row stores the cleared field; reading alone writes nothing. The client applies the same checks
      (`liveSplits`, `liveRefundParts`, `ruleSplitOf`), so a still-cached new PWA against a reverted BFF reads
-     a stale or missing field as none. Undo cases not caught (§14): an older link then unlink, sort then
+     a stale or missing field as none. Its edits that need the new server are refused, loudly, with nothing stored, until its next launch:
+     a split or an allocation save is an unknown method, and adding a rule or changing a rule's bucket on the Rules
+     tab carries a `split` key the older server refuses (Pause, and Always from a row, still work). Undo cases not caught (§14): an older link then unlink, sort then
      unsort, mark then unmark, or pin then unpin of a refund across charges, and an older retarget of a split
      rule away and back to its largest part — each brings the old field back. For a clean revert, remove the
      splits, the multi-links and the split rules first.
@@ -380,8 +382,11 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   (the other refunds are read off the eventually consistent index); the cap still keeps the charge at or
   above $0, so the cost is an over-allocation stored, not a wrong total. A split rule decides money out by
   Plaid's raw sign, so on a flipped account it splits card credits instead (they then read as broken
-  splits, in Sort). A sync already running on old code during a deploy (up to 300 s) can drop a split
-  saved on a row it is posting in that window.
+  splits, in Sort). A sync already running on old code during a deploy (up to 300 s) writes its
+  pass-start copy of the new fields under the fresh row's own, on any row it writes in that window: it can
+  drop a split saved then, put an edited split's earlier parts back, or bring back an allocation unlinked
+  then (a Remove split or a sort in the window is caught by the read checks). Merging away from the
+  scheduled sync times keeps the window empty.
 - **Accepted (revert undo cases):** after a revert and re-land, an older undo of a refund across charges
   (link→unlink, sort→unsort, mark→unmark, pin→unpin) or a split rule retargeted away and back to its
   largest part brings the old allocation or split back; the clean-revert step in §12 avoids it.

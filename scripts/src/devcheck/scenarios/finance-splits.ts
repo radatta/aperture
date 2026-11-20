@@ -737,7 +737,8 @@ export const financeSplits: Scenario = {
         const { payback } = await rows(ctx);
         const dep = out.transactions.find((t) => t.id === payback.id);
         const part = dep?.refundParts?.find((x) => x.chargeId === coffee.id);
-        if (part?.countedUsd !== 0) fail(`the payback's coffee part counts ${part?.countedUsd}, not 0`);
+        if (part?.countedUsd !== 0)
+          fail(`the payback's coffee part counts ${part?.countedUsd}, not 0`);
         const c = out.transactions.find((t) => t.id === coffee.id);
         if (c?.refundedUsd !== 6.5) fail(`the coffee reads refundedUsd ${c?.refundedUsd}, not 6.5`);
       },

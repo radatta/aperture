@@ -7,6 +7,7 @@ import {
   normalizeRulePattern,
   ruleSplitBucket,
   ruleSplitOf,
+  ruleSplitSumError,
 } from '@aperture/shared';
 import type { FinanceBucket, FinanceRule, FinanceRuleSplitPart } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -59,6 +60,7 @@ export function RulesSection() {
   }, [refocus]);
   const splitting = bucket === SPLIT;
   const percentSum = parts.reduce((n, p) => n + (wholePercent(p.percent) ?? 0), 0);
+  const sumRefusal = ruleSplitSumError(percentSum); // muted beside it: one red line, not two
   const patternRef = useRef<HTMLInputElement>(null);
   // Adding a pattern that already has a rule updates it — say so, rather than silently re-sorting.
   const [note, setNote] = useState<string | null>(null);
@@ -174,6 +176,7 @@ export function RulesSection() {
                     value={p.bucket}
                     onChange={(e) => {
                       setSplitError(null); // a refusal was about the parts as they were
+                      upsert.reset();
                       setParts((ps) =>
                         ps.map((x, j) =>
                           j === i ? { ...x, bucket: e.target.value as FinanceBucket } : x,
@@ -196,6 +199,7 @@ export function RulesSection() {
                       value={p.percent}
                       onChange={(e) => {
                         setSplitError(null);
+                        upsert.reset();
                         setParts((ps) =>
                           ps.map((x, j) => (j === i ? { ...x, percent: e.target.value } : x)),
                         );
@@ -213,6 +217,7 @@ export function RulesSection() {
                       aria-label={`Remove part ${i + 1}`}
                       onClick={() => {
                         setSplitError(null);
+                        upsert.reset();
                         setParts((ps) => ps.filter((_, j) => j !== i));
                         setRefocus(`Part ${Math.min(i, parts.length - 2) + 1} bucket`);
                       }}
@@ -225,7 +230,10 @@ export function RulesSection() {
               <div className="flex flex-wrap items-center gap-3">
                 <div role="status">
                   {/* Muted while the refusal says it: one red line, not two. */}
-                  <Text size="sm" tone={percentSum > 100 && !splitError ? 'danger' : 'muted'}>
+                  <Text
+                    size="sm"
+                    tone={percentSum > 100 && splitError !== sumRefusal ? 'danger' : 'muted'}
+                  >
                     {percentSum === 100
                       ? '100% assigned'
                       : percentSum < 100
@@ -239,6 +247,7 @@ export function RulesSection() {
                     variant="ghost"
                     onClick={() => {
                       setSplitError(null);
+                      upsert.reset();
                       setRefocus(`Part ${parts.length + 1} percent`);
                       setParts((ps) => {
                         const used = new Set(ps.map((x) => x.bucket));
@@ -340,7 +349,7 @@ function RuleRow({ rule }: { rule: FinanceRule }) {
                 pattern: rule.pattern,
                 bucket: rule.bucket,
                 active: !rule.active,
-                split,
+                // No split: the server keeps the rule's split as it stands then, not this device's copy.
               }),
           },
           { label: 'Delete', tone: 'danger', onSelect: () => del.mutate(rule.id) },

@@ -294,9 +294,10 @@ export function financeSplitContract(h: FinanceSplitHarness) {
   it('finance splits: Remove split on a row no longer split changes nothing', async () => {
     await h.connect();
     const api = h.api();
-    await api.setFinanceBucket({ ids: ['fx-card-6'], bucket: 'budget' });
+    const [sorted] = await api.setFinanceBucket({ ids: ['fx-card-6'], bucket: 'budget' });
     const after = await api.setFinanceSplit('fx-card-6', null); // a stale device's Remove
     expect([after.bucket, after.splits]).toEqual(['budget', null]);
+    expect(after.updatedAt).toBe(sorted!.updatedAt); // nothing written
   });
   it('finance splits: a Link on a split row (its account flipped to money in) clears the split', async () => {
     await h.connect();

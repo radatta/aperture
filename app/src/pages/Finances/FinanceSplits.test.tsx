@@ -150,6 +150,43 @@ describe('Splitting a charge across buckets', () => {
     );
   });
 
+  it('the remainder is muted only beside the refusal that says the same thing', async () => {
+    const api = await linked();
+    renderApp({ api, path: '/finances/all' });
+    const { user, dialog } = await openDetail('fx-card-8', /Charge: Amazon/);
+    await user.click(within(dialog).getByRole('button', { name: /Split across buckets/ }));
+    const form = within(dialog).getByRole('form', { name: 'Split this charge' });
+    const statusTone = () => within(form).getByRole('status').firstElementChild!.className;
+    const amount = async (i: number, v: string) => {
+      await user.clear(within(form).getByLabelText(`Part ${i} amount`));
+      await user.type(within(form).getByLabelText(`Part ${i} amount`), v);
+    };
+    await amount(1, '18');
+    await amount(2, '20'); // $8.00 over
+    expect(statusTone()).toMatch(/text-danger/);
+    await user.click(within(form).getByRole('button', { name: 'Save split' }));
+    expect(within(form).getByRole('alert').textContent).toMatch(/more than the \$30\.00 charge/);
+    expect(statusTone()).toMatch(/text-ink-muted/); // one red line, not two
+    await amount(1, '0');
+    await amount(2, '40'); // a zero part, and still $10.00 over
+    await user.click(within(form).getByRole('button', { name: 'Save split' }));
+    expect(within(form).getByRole('alert').textContent).toMatch(/above \$0\.00/);
+    expect(statusTone()).toMatch(/text-danger/); // a different refusal: the "over" keeps its red
+  });
+
+  it('an overview from an older server (no upcoming key) still renders the page', async () => {
+    const api = await linked();
+    const real = api.getFinanceOverview.bind(api);
+    vi.spyOn(api, 'getFinanceOverview').mockImplementation(async (q) => {
+      const older: Partial<Awaited<ReturnType<typeof real>>> = await real(q);
+      delete older.upcoming;
+      return older as Awaited<ReturnType<typeof real>>;
+    });
+    renderApp({ api, path: '/finances/all' });
+    expect(await screen.findByRole('searchbox', { name: 'Search transactions' })).toBeTruthy();
+    expect(screen.queryByText(/waiting for next period/)).toBeNull();
+  });
+
   it('a busy Save ignores a second click', async () => {
     const api = await linked();
     let release!: () => void;
@@ -400,7 +437,7 @@ describe('Split rules', () => {
     ]);
   });
 
-  it('a split rule an older write retargeted shows as one-bucket, and Pause keeps it so', async () => {
+  it('a split rule an older write retargeted shows as one-bucket, and Pause sends no split', async () => {
     const api = await linked();
     const rule = await api.upsertFinanceRule({ pattern: 'store a', bucket: 'parents_pay' });
     const stale = {
@@ -419,10 +456,35 @@ describe('Split rules', () => {
     expect(screen.queryByText('Budget 70% · I pay 30%')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'More actions for store a' }));
     await user.click(await screen.findByRole('menuitem', { name: 'Pause' }));
+    // Pause sends no split: the server keeps the rule's split as it stands then, not this device's copy.
+    await waitFor(() => expect(upsert).toHaveBeenCalled());
+    const sent = upsert.mock.lastCall![0];
+    expect([sent.bucket, sent.active, 'split' in sent]).toEqual(['parents_pay', false, false]);
+  });
+
+  it('Rules: Add and Remove part move focus to a part and clear a refusal; the sum refusal mutes "% over"', async () => {
+    const api = await linked();
+    renderApp({ api, path: '/finances/rules' });
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('When the merchant contains'), 'store c');
+    await user.selectOptions(screen.getByLabelText('Sort into'), 'split');
+    await user.clear(screen.getByLabelText('Part 1 percent'));
+    await user.type(screen.getByLabelText('Part 1 percent'), '80');
+    await user.clear(screen.getByLabelText('Part 2 percent'));
+    await user.type(screen.getByLabelText('Part 2 percent'), '40');
+    const over = () => screen.getByText('20% over').className;
+    expect(over()).toMatch(/text-danger/);
+    await user.click(screen.getByRole('button', { name: 'Add rule' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/add up to 120%/);
+    expect(over()).toMatch(/text-ink-muted/);
+    await user.click(screen.getByRole('button', { name: 'Add part' }));
+    expect(screen.queryByRole('alert')).toBeNull();
     await waitFor(() =>
-      expect(upsert).toHaveBeenLastCalledWith(
-        expect.objectContaining({ bucket: 'parents_pay', split: null, active: false }),
-      ),
+      expect(document.activeElement).toBe(screen.getByLabelText('Part 3 percent')),
+    );
+    await user.click(screen.getByRole('button', { name: 'Remove part 2' }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByLabelText('Part 2 bucket')),
     );
   });
 

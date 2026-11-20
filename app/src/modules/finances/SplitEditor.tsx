@@ -5,6 +5,7 @@ import {
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
   FINANCE_SPLIT_MAX_PARTS,
+  allocationSumError,
   financeSplitError,
   liveSplits,
   periodOf,
@@ -147,6 +148,17 @@ export function SplitEditor({
               tone: 'danger' as const,
             };
 
+  // The refusal says what the remainder says (an amount that won't parse, or the sum): mute the remainder,
+  // so there's one red line, not two. Any other refusal leaves it in its own tone.
+  const partCents = rows.map((r) => parseDollars(r.amount) ?? 0);
+  const restated =
+    error !== null &&
+    (error === remainder.text ||
+      // a zero part refuses first, with its own message: that one isn't the remainder's
+      (sum !== null &&
+        partCents.every((c) => c > 0) &&
+        error === allocationSumError(partCents, total, { exact: true })));
+
   function submit() {
     if (busy) return;
     setError(null);
@@ -241,11 +253,7 @@ export function SplitEditor({
         ))}
       </ul>
       {/* Muted while a refusal says the same amount (a sum mismatch): one red line, not two. */}
-      <Remainder
-        tone={error && /left to assign|more than the/.test(error) ? 'muted' : remainder.tone}
-      >
-        {remainder.text}
-      </Remainder>
+      <Remainder tone={restated ? 'muted' : remainder.tone}>{remainder.text}</Remainder>
       {rows.some((r) => r.period === 'next') && (
         <Text size="xs" tone="muted">
           {nextWaits
