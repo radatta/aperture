@@ -313,6 +313,7 @@ export const INPUT_RULES: InputRule[] = [
       'scripts/src/board/phase-log.test.ts',
       'scripts/src/board/limits.test.ts',
       'scripts/src/board/merge-watch.test.ts',
+      'scripts/src/board/self-compact.test.ts',
       'scripts/src/board/tower/queue.test.ts',
       'scripts/src/board/tower/queued.test.ts',
       'scripts/src/board/watchers.test.ts',

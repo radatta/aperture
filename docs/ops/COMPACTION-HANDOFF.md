@@ -17,7 +17,7 @@ the handoff keeps the decisions, dead ends and open questions the summary drops.
 
 | File                                                                  | Role                                                                    |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `.claude/hooks/precompact-handoff.sh`                                 | forks, logs, never blocks                                               |
+| `.claude/hooks/precompact-handoff.sh`                                 | a lane's block (_Lane block_), then forks, logs, never blocks           |
 | `.claude/skills/handoff/SKILL.md`                                     | what the fork writes; compaction-only (no `session=` → it refuses)      |
 | `.claude/hooks/post-compact-summary.sh`                               | saves `compact_summary` — free, and the only audit trail of the summary |
 | `.claude/hooks/post-compact-context.sh`                               | finds the handoff by session id, else by branch                         |
@@ -87,7 +87,7 @@ finishes inside it), settings `timeout: 600` as the backstop, so the log line is
 for it. If Claude Code kills the hook anyway, the fork (its own process group under `timeout`) can
 outlive it and write its handoff after compaction, with no log line.
 
-**Failure** never blocks compaction: the hook exits 0 and prints nothing whatever happens. The log line
+**Failure** never blocks compaction: the hook exits 0 and prints nothing but a lane's block (_Lane block_) whatever happens. The log line
 carries `rc` (124 = timed out) and `subtype` (`error_max_turns` / `error_max_budget_usd` name a runaway
 stop); `localNotes/handoffs/.fork-<sid8>-<ts>.err` is kept when the fork wrote to stderr, or printed a
 result and either exited non-zero or marked it `is_error` — stderr first, then the result JSON; a silent
@@ -95,6 +95,94 @@ timeout leaves nothing (pruned once more than 7 whole days old). The post-compac
 session names it and is under 10 min old;
 otherwise it surfaces the newest handoff for the branch by path. Skips log `skip reason=` (`fork`,
 `bad-session-id`, `no-transcript`, `no-claude`, `locked`). Detached HEAD still gets one, named `detached`.
+
+## Lane block
+
+In a lane, `precompact-handoff.sh` prints five lines before it forks. A `PreCompact` hook's stdout on exit 0 becomes
+instructions for the summary, for `manual` and `auto` alike (Claude Code hooks docs; cut at 10,000 characters per hook
+since 2.1.314), so the compacted lane keeps where it stands:
+
+```
+This session is the feature lane on branch <branch>.
+Lane phase: <phase>.
+Lane status file: <path>
+Keep in the summary: the step in progress, open review findings, unanswered asks quoted word for word, any [hold] in force, each relayed approval with its exact scope, any pending claude-edit patch, and the next step.
+After compaction, re-read docs/ops/FEATURE-WORKFLOW.md before acting.
+```
+
+A lane is a toplevel at `<main>/.claude/worktrees/<name>`, `<name>` and its branch each `^[a-z0-9][a-z0-9-]{0,62}$`
+and neither named as the hub (`scripts/board/hub.json`), with a lane file at `<main>/localNotes/board/lanes/<branch>.json`
+(the default board's; so not an agent's or a scratch worktree); anywhere else, in the fork included, the hook prints
+nothing, and a fork it skips later (a held lock, no `claude`) still leaves the block printed. Only three values come
+from outside, each checked: the branch, the phase (one of the board's phase words, else `unknown`) and the lane file's
+path (`[A-Za-z0-9_./-]` only). No free text from the lane file reaches the summary. The block is inline in the hook,
+not a `scripts/board/` helper: a helper would run the branch's own copy, and its text feeds the summary.
+
+## Self-compact (lanes, off)
+
+A lane can compact itself at a point where it waits anyway, so the next stretch starts from a short context: cost per
+turn rises with context (the 2026-11-19 work-units analysis). The lane's last tool call is
+`bash scripts/board/self-compact.sh request`; the Stop hook then types `/compact` into the lane's own empty input box.
+It is the second constant exception to the pane rule (`docs/ops/HUB.md` → _Approval_), never a go.
+
+**Off unless** main's committed `scripts/board/limits.json` says `lanes.selfCompact: true` (read with `git cat-file blob HEAD:`,
+never the working copy or a branch's), and `<board>/self-compact/off` is absent: any session can create that file to stop
+it at once. It ships `false`.
+
+- **`request`** refuses, with one line and exit 1, unless: not the handoff fork; the switch is on; a `claude` ancestor
+  has a board record for that process with a `lastPromptAt`; `TMUX_PANE` is `%<n>` and is that session's own pane
+  (`board.sh` `me_ident`'s rule); the toplevel is `<main>/.claude/worktrees/<name>` with a lane-shaped branch, a lane
+  file written in the last 10 min and a clean tree; not the hub (branch, worktree or record name); the box is on
+  screen and empty. It runs mid-turn, under the working footer, so it reads no busy markers: `send` does. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
+- **The hand-off** (`.claude/hooks/board-heartbeat.sh idle`, after the board write): only with a flag for this
+  session's pid, and only when the payload's `stop_hook_active` is literally `false` (a Stop a stop hook continued, a
+  missing field or an unreadable payload skips; after a continued Stop the request lapses, since the next Stop follows a new
+  prompt and skips as `prompted`), it runs **main's
+  committed** `scripts/board/self-compact.sh stop <pid>`, only when that file and the `lib.sh` it sources hash, on
+  disk, to main's `HEAD` blobs (`git hash-object --no-filters` against `HEAD:`, with no replace refs and global and system git config off for those
+  two calls; not
+  `git diff`: an empty diff proves nothing about a missing path, and a skip-worktree flag hides an edit), detached
+  (`setsid -f`, `timeout -k 1 10`, stdio on `/dev/null`, exit ignored), so it can never fail or delay Stop. With no flag a Stop costs
+  one `stat`. No `settings.json` change: it rides the registered Stop entry.
+- **`stop`** prints nothing, reads no stdin, always exits 0: sweeps flags, claims and write leftovers over 15 min
+  old, claims the flag by `mv` (a second Stop finds nothing), then re-checks the same pid and tick, no prompt since
+  the request (`lastPromptAt` unchanged), a flag at most 10 min old, the record's `cwd` (`[A-Za-z0-9_./-]`), the lane
+  boundary and the pane, and spawns `send` detached.
+- **`send`**: 2 s, then the guard (switch, process, pane, board `idle`, no prompt since), box empty and not busy, and
+  not past 8 s since it started (else `late`: nothing typed rather than the 20 s timeout between text and Enter),
+  `send-keys -l /compact`; 0.5 s, the guard again, and `Enter` only if the box shows exactly `/compact` (else no
+  further key, so a guard failing in that 0.5 s leaves `/compact` unsent in the box for the user to see). Run by hand
+  it skips `stop`'s lane and hub checks: it gains nothing over a raw `tmux send-keys`.
+- **The box** (measured on 2.1.329, 2026-11-19, `tmux capture-pane`): the `❯` line directly above the bottom-most
+  `─` rule; anything else there (a dialog, a multi-line draft) reads as no box, so an older box in the scrollback
+  never stands in. Busy: `esc to interrupt` (a foreground turn), `background agent` or `to manage` (a background agent
+  running: no `esc to interrupt` then), read only below the box and in the 5 lines above it, so a quoted marker in the
+  conversation doesn't count.
+- **Log**: `<board>/self-compact.log`, one line per event — `request`, `refuse`, `claim`, `spawn`, `sent`, `skip` —
+  `<time> <event> pid=<n> branch=<b> reason=<word>`.
+
+Measured upstream on 2.1.329 (a peer project's trials, 2026-11-19), unmeasured here: Stop doesn't fire after `/compact`,
+and neither does UserPromptSubmit; a peer message does fire it and wakes the compacted session. So a compacted lane
+waits for its next message: `request` belongs only where the lane waits for the hub anyway.
+
+Unmeasured anywhere, run-only at the switch flip: a Stop another Stop hook blocks still runs the hand-off (the
+heartbeat can't see a peer hook's block on the same Stop; only `send`'s 2 s wait and busy check cover it, and no
+blocking Stop hook is registered today); that an ordinary Stop payload carries `stop_hook_active: false` (the hooks
+reference shows the field, not that a plain Stop sends it as `false`; without it nothing fires, and the log shows a `request` with no `claim`); whether UserPromptSubmit fires for a message queued mid-turn and for
+a turn a finished background task starts (if not, `lastPromptAt` misses it and the dirty-tree and busy checks are the
+only cover); the box with the slash menu open after typing.
+
+Accepted residuals: the heartbeat already runs the branch's own `scripts/board/lib.sh` and `board.sh` (the hand-off adds
+no branch code: main's script re-derives everything); any session can write the board dir, so a forged flag reaches
+main's `stop`, which re-checks it all; the busy markers are screen text; "main's committed" means main's `HEAD`, not
+`origin/main`, so a `/workspace` left on another commit runs that commit's script and switch.
+
+**Turning it on**, one PR: re-measure the box and busy shapes on the installed version; `selfCompact: true`; add to
+`docs/ops/FEATURE-WORKFLOW.md` → _Lane status and checkpoints_: "Where the lane now waits for the hub — after an
+`[ask-maintainer]` it holds for, and after `[pr-open]` — with the lane file just written, the tree clean and no
+background task or agent running, its last tool call may be `bash scripts/board/self-compact.sh request`; a refusal
+changes nothing." Then watch the first run: `request`, `claim`, `spawn`, `sent` once; the summary carries the block; a
+hub message wakes the lane.
 
 ## Log
 
@@ -145,7 +233,9 @@ write compaction would have paid anyway, and compaction reads it.
 ## Testing
 
 - `python3 .claude/hooks/testdata/run-fixtures.py` — the compaction suite runs the hook against a stub
-  `claude` (no network, no cost).
+  `claude` (no network, no cost), the lane block's stdout checked exactly; the hand-off suite runs the heartbeat
+  against a stub `self-compact.sh` (hangs, failures, main's copy dirty or missing).
+- `scripts/src/board/self-compact.test.ts` — `request`, `stop` and `send` against a temp main, board and tmux shim.
 - Live: a session must be **started from the directory whose `.claude/settings.json` has the hooks** —
   `${CLAUDE_PROJECT_DIR}` is the launch directory, so a session started at `/workspace` doesn't see a
   worktree's unmerged hooks. Run `/compact`, then check the log line (`rc=0`, `denials=0`, `file=`), the

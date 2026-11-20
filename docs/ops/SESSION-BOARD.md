@@ -401,7 +401,8 @@ over its cost.
 `lanes.maxActive` (5) is the lane cap `pnpm lanes start` enforces: a policy key, top-level like `concurrency`. What
 counts as active: `docs/ops/LANES.md` → _Start_. It was set when every lane ran the full suite 4–6 times; since
 `gate:fast` (2026-11-17) a lane runs affected tests locally and the full suite on GitHub, so re-measure it from a day
-of `cli.ts report` and `barriers` data before raising it. `lanes.autoCompactWindow` is the lanes' `claude --autocompact` window and the top-level `pace` block the
+of `cli.ts report` and `barriers` data before raising it. `lanes.autoCompactWindow` is the lanes' `claude --autocompact` window, `lanes.selfCompact` the self-compact switch (read
+from main's commit only: `docs/ops/COMPACTION-HANDOFF.md` → _Self-compact_), and the top-level `pace` block the
 `lanes start` pace gate's limits (`docs/ops/LANES.md` → _Start_ step 8, _The pace gate_). `budget` holds every number
 of the log-only budget (_Budget_; a missing or malformed block logs nothing and changes nothing, and `parseLimits`
 never reads it, since a throw there is a fail-open grant). `watchers` holds the hub's
