@@ -210,6 +210,7 @@ describe('createApiClient', () => {
       'lcSittingEvents',
       'lcSittingEventsToUnknown',
       'lcSittingStart',
+      'linkFinanceRefund',
       'linkLeetcodeRoll',
       'logCoachAttempts',
       'mintScopedToken',
@@ -219,6 +220,7 @@ describe('createApiClient', () => {
       'recordFinanceLink',
       'recordFinanceMark',
       'recordFinanceRule',
+      'recordFinanceRuleIntent',
       'recordFinanceSplit',
       'recordFluxSet',
       'recordPlaceTokenMint',
@@ -275,6 +277,33 @@ describe('createApiClient', () => {
       'upsertPlan',
       'upsertRoll',
     ]);
+  });
+
+  it('a refusal probe records its entry before the call and returns the refusal, or null if it took', async () => {
+    const ledger = memLedger();
+    const seen: number[] = [];
+    const fetch = vi.fn<FetchLike>(async () => {
+      seen.push(ledger.entries.length); // the entry is there when the request goes out
+      return reply(400, { error: 'A split needs at least two parts' });
+    });
+    const api = createApiClient({ fetch, token: () => 't', ledger, run: 'r1' });
+    const part = { bucket: 'budget', cents: 100, period: null };
+    expect(await api.writes.refuseFinanceSplit('tx1', [part])).toMatch(/at least two parts/);
+    expect(await api.writes.refuseFinanceBucket('tx1', 'budget')).not.toBeNull();
+    expect(await api.writes.refuseFinanceRefundParts('tx2', [])).not.toBeNull();
+    expect(seen.every((n) => n > 0)).toBe(true);
+    expect(ledger.entries.map((e) => e.id)).toEqual([
+      'finance-split:r1:tx1',
+      'finance-bucket:r1:tx1',
+      'finance-link:r1:tx2',
+    ]);
+    const took = createApiClient({
+      fetch: vi.fn<FetchLike>(async () => reply(200, {})),
+      token: () => 't',
+      ledger: memLedger(),
+      run: 'r1',
+    });
+    expect(await took.writes.refuseFinanceSplit('tx1', [part, part])).toBeNull();
   });
 
   it('records a Flux set as created before the call, and deletes only a recorded Flux set', async () => {

@@ -191,7 +191,7 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   overview's `buckets` totals). `merchant` is a case-insensitive substring, and
   a linked refund larger than what was left of its charge carries `countedUsd` (the part that counts), and a
   charge's `refundedUsd` never exceeds it. A split charge has `split: true`, `bucket: null` and `parts`
-  (`{bucket, amountUsd, period: current | previous | next | outside, pinned}`); `splitBroken: true` marks one
+  (`{bucket, amountUsd, period: current | previous | next | outside, pinned, refundedUsd?}`); `splitBroken: true` marks one
   whose amount changed, now unsorted; under `bucket` it matches any part and `totalUsd` counts only that
   bucket's parts. A refund across charges carries `refundParts` (`{chargeId, merchant, allocatedUsd,
 countedUsd, buckets, period}`) and `linkedChargeId` = its largest part; the overview adds `nextPeriod`

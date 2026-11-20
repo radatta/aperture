@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   allocateProportional,
   countedParts,
@@ -6,6 +6,9 @@ import {
   FINANCE_BUCKETS,
   FINANCE_SPLIT_MAX_PARTS,
   financeSplitError,
+  liveSplits,
+  periodOf,
+  splitOf,
   splitTotal,
 } from '@aperture/shared';
 import type {
@@ -39,11 +42,13 @@ interface DraftPart {
   touched: boolean; // typed into: with two parts, the untouched one follows the remainder
 }
 
-// The first draft: the stored parts (a broken split keeps them, to fix), else half and half — the row's
-// bucket (else Budget) and the next one, the odd cent to the first (allocateProportional).
+// The first draft: the parts as they count now (a rule split recomputed at the current amount), else the
+// stored ones (a broken split keeps them, to fix), else half and half — the row's bucket (else Budget)
+// and the next one, the odd cent to the first (allocateProportional).
 function firstDraft(txn: FinanceTransaction, total: number): DraftPart[] {
-  if (txn.splits?.length)
-    return txn.splits.map((p, i) => ({
+  const stored = splitOf(txn, total) ?? liveSplits(txn);
+  if (stored)
+    return stored.map((p, i) => ({
       key: i,
       bucket: p.bucket,
       amount: centsText(p.cents),
@@ -65,20 +70,36 @@ function firstDraft(txn: FinanceTransaction, total: number): DraftPart[] {
 export function SplitEditor({
   txn,
   view,
+  overview,
   onSaved,
   onCancel,
 }: {
   txn: FinanceTransaction;
   view: FinanceView;
+  overview: FinanceOverview;
   onSaved: () => void;
   onCancel: () => void;
 }) {
   const total = view.amount(txn);
+  // Where a Next part lands: it waits only on a charge in this period; on last period's it counts now.
+  const nextWaits = periodOf(txn, overview.period) === 'current';
   const save = useSetFinanceSplit();
   const [rows, setRows] = useState<DraftPart[]>(() => firstDraft(txn, total));
   const nextKey = useRef(rows.length);
   const [error, setError] = useState<string | null>(null);
   const busy = save.isPending;
+  // Remove part unmounts the focused button: focus goes to the part now in its place (or the last one).
+  const form = useRef<HTMLFormElement>(null);
+  const [refocus, setRefocus] = useState<number | null>(null);
+  useEffect(() => {
+    if (refocus === null) return;
+    form.current
+      ?.querySelector<HTMLElement>(
+        `[aria-label="Part ${Math.min(refocus, rows.length - 1) + 1} bucket"]`,
+      )
+      ?.focus();
+    setRefocus(null);
+  }, [refocus, rows.length]);
 
   // Any edit clears a refusal: it was about the parts as they were.
   const update = (i: number, patch: Partial<DraftPart>) => {
@@ -141,6 +162,7 @@ export function SplitEditor({
 
   return (
     <form
+      ref={form}
       className="flex flex-col gap-2 rounded-xl border border-line p-3"
       aria-label="Split this charge"
       onSubmit={(e) => {
@@ -172,28 +194,38 @@ export function SplitEditor({
               value={r.amount}
               onChange={(amount) => update(i, { amount, touched: true })}
             />
-            <select
-              aria-label={`Part ${i + 1} period`}
-              value={periodKey(r.period)}
-              onChange={(e) =>
-                update(i, {
-                  period: PERIOD_OPTIONS.find((o) => periodKey(o.value) === e.target.value)!.value,
-                })
-              }
-              className={selectClass}
-            >
-              {PERIOD_OPTIONS.map((o) => (
-                <option key={periodKey(o.value)} value={periodKey(o.value)}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+            <label className="flex items-center gap-1.5">
+              <Text size="xs" tone="muted">
+                Counts in
+              </Text>
+              <select
+                aria-label={`Part ${i + 1} period`}
+                value={periodKey(r.period)}
+                onChange={(e) =>
+                  update(i, {
+                    period: PERIOD_OPTIONS.find((o) => periodKey(o.value) === e.target.value)!
+                      .value,
+                  })
+                }
+                className={selectClass}
+              >
+                {PERIOD_OPTIONS.map((o) => (
+                  <option key={periodKey(o.value)} value={periodKey(o.value)}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
             {rows.length > 2 && (
               <Button
                 size="sm"
                 variant="ghost"
                 aria-label={`Remove part ${i + 1}`}
-                onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                onClick={() => {
+                  setError(null);
+                  setRows((rs) => rs.filter((_, j) => j !== i));
+                  setRefocus(i);
+                }}
               >
                 Remove
               </Button>
@@ -201,11 +233,13 @@ export function SplitEditor({
           </li>
         ))}
       </ul>
-      <Remainder tone={remainder.tone}>{remainder.text}</Remainder>
+      {/* Muted while a refusal says the same amount: one red line, not two. */}
+      <Remainder tone={error ? 'muted' : remainder.tone}>{remainder.text}</Remainder>
       {rows.some((r) => r.period === 'next') && (
         <Text size="xs" tone="muted">
-          A next-period part waits outside every total until you mark the card payment that starts
-          the next period.
+          {nextWaits
+            ? 'A next-period part waits outside every total until the next period starts.'
+            : 'This charge is from last period, so a next-period part counts in this one.'}
         </Text>
       )}
       {(error ?? save.error) && (
@@ -321,7 +355,7 @@ export function BrokenSplit({
   fixRef?: React.Ref<HTMLButtonElement>;
   onFix: () => void;
 }) {
-  const was = splitTotal(txn.splits ?? []);
+  const was = splitTotal(liveSplits(txn) ?? []);
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border border-line p-3">
       <Text size="sm" className="min-w-0 flex-1">

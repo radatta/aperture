@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FINANCE_REFUND_MAX_PARTS, fmtMonthShortDay, refundPartsError } from '@aperture/shared';
 import type { FinanceOverview, FinanceRefundPart, FinanceTransaction } from '@aperture/shared';
 import { Button } from '../../components/Button';
@@ -34,17 +34,29 @@ export function RefundAllocation({
   const counted = view.countedByClaim.get(refund.id);
   const size = -view.amount(refund);
   const total = view.counted.get(refund.id) ?? 0;
+  // Unlink one: its row unmounts with focus on it, so focus moves to the Unlink now in its place (or the
+  // one above it) once the claim is gone.
+  const box = useRef<HTMLDivElement>(null);
+  const [unlinked, setUnlinked] = useState<{ at: number; from: number } | null>(null);
+  useEffect(() => {
+    if (!unlinked || claims.length >= unlinked.from) return;
+    const buttons = box.current?.querySelectorAll<HTMLElement>('[data-unlink-one]');
+    buttons?.[Math.min(unlinked.at, buttons.length - 1)]?.focus();
+    setUnlinked(null);
+  }, [claims.length, unlinked]);
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
+    <div ref={box} className="flex flex-col gap-2 rounded-xl border border-line p-3">
       <Text size="sm" weight="medium">
         Refund across {claims.length} {claims.length === 1 ? 'charge' : 'charges'}
       </Text>
       <ul className="flex flex-col gap-1.5">
         {claims.map(({ charge }, i) => (
           <li key={charge.id} className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-            <Text size="sm" className="min-w-0 flex-1 truncate">
+            {/* Its own line: beside the amount a phone cut the date, and two same-merchant charges read alike. */}
+            <Text size="sm" className="w-full truncate">
               {charge.merchantName ?? charge.name} · {fmtMonthShortDay(charge.date)}
             </Text>
+            <span className="flex-1" />
             <Text size="sm" tabular>
               {fmtMoney(counted?.get(charge.id) ?? 0)}
             </Text>
@@ -53,8 +65,16 @@ export function RefundAllocation({
               variant="ghost"
               aria-disabled={busy || undefined}
               autoFocus={focus && i === 0}
+              data-unlink-one=""
               aria-label={`Unlink ${charge.merchantName ?? charge.name} on ${fmtMonthShortDay(charge.date)}`}
-              onClick={busy ? undefined : () => onUnlinkOne(charge.id)}
+              onClick={
+                busy
+                  ? undefined
+                  : () => {
+                      setUnlinked({ at: i, from: claims.length });
+                      onUnlinkOne(charge.id);
+                    }
+              }
             >
               Unlink
             </Button>
@@ -124,8 +144,23 @@ export function RefundPartsEditor({
   const [error, setError] = useState<string | null>(null);
   const busy = save.isPending;
   const sum = parsedSum(rows.map((r) => r.amount));
+  // Add and Remove unmount the focused button (an added charge leaves the adder's list): focus goes to the
+  // added row's amount, or the row now in the removed one's place — Cancel when none is left. It opens on
+  // its heading, not an amount field, so a phone's keyboard doesn't pop over the rows.
+  const box = useRef<HTMLDivElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [refocus, setRefocus] = useState<number | null>(null);
+  useEffect(() => heading.current?.focus(), []);
+  useEffect(() => {
+    if (refocus === null) return;
+    const fields = box.current?.querySelectorAll<HTMLElement>('input[inputmode="decimal"]');
+    const target = fields?.length ? fields[Math.min(refocus, fields.length - 1)] : null;
+    (target ?? box.current?.querySelector<HTMLElement>('[data-cancel]'))?.focus();
+    setRefocus(null);
+  }, [refocus, rows.length]);
 
-  const add = (chargeId: string) =>
+  const add = (chargeId: string) => {
+    setRefocus(rows.length);
     setRows((rs) => {
       const charge = byId.get(chargeId);
       if (!charge || rs.some((r) => r.chargeId === chargeId)) return rs;
@@ -133,21 +168,24 @@ export function RefundPartsEditor({
       const cents = Math.min(left(charge), Math.max(size - taken, 0)) || left(charge);
       return [...rs, { chargeId, amount: centsText(cents) }];
     });
+  };
 
   const remainder =
-    sum === null
-      ? { text: 'Enter an amount like 12.50 on every charge', tone: 'danger' as const }
-      : sum > size
-        ? {
-            text: `${fmtMoney(sum - size)} over the ${fmtMoney(size)} refund`,
-            tone: 'danger' as const,
-          }
-        : sum === size
-          ? { text: `All ${fmtMoney(size)} linked`, tone: 'muted' as const }
-          : {
-              text: `${fmtMoney(size - sum)} not linked — it stays money in`,
-              tone: 'muted' as const,
-            };
+    rows.length === 0
+      ? { text: 'Add a charge below to link this refund to', tone: 'muted' as const }
+      : sum === null
+        ? { text: 'Enter an amount like 12.50 on every charge', tone: 'danger' as const }
+        : sum > size
+          ? {
+              text: `${fmtMoney(sum - size)} over the ${fmtMoney(size)} refund`,
+              tone: 'danger' as const,
+            }
+          : sum === size
+            ? { text: `All ${fmtMoney(size)} linked`, tone: 'muted' as const }
+            : {
+                text: `${fmtMoney(size - sum)} not linked — it stays money in`,
+                tone: 'muted' as const,
+              };
 
   function submit() {
     if (busy) return;
@@ -171,7 +209,7 @@ export function RefundPartsEditor({
 
   // The adder sits outside the form: Enter in its search box must not press Save.
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-line p-3">
+    <div ref={box} className="flex flex-col gap-2 rounded-xl border border-line p-3">
       <form
         className="flex flex-col gap-2"
         aria-label="Link to several charges"
@@ -180,9 +218,11 @@ export function RefundPartsEditor({
           submit();
         }}
       >
-        <Text size="sm" weight="medium">
-          Link {fmtMoney(size)} across charges
-        </Text>
+        <h3 ref={heading} tabIndex={-1} className="outline-none">
+          <Text size="sm" weight="medium">
+            Link {fmtMoney(size)} across charges
+          </Text>
+        </h3>
         <ul className="flex flex-col gap-2">
           {rows.map((r, i) => {
             const c = byId.get(r.chargeId);
@@ -197,7 +237,6 @@ export function RefundPartsEditor({
                 <MoneyInput
                   label={`Amount for ${name}`}
                   value={r.amount}
-                  autoFocus={i === 0}
                   onChange={(amount) => {
                     setError(null); // a refusal was about the amounts as they were
                     save.reset();
@@ -208,7 +247,11 @@ export function RefundPartsEditor({
                   size="sm"
                   variant="ghost"
                   aria-label={`Remove ${name}`}
-                  onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                  onClick={() => {
+                    setError(null);
+                    setRows((rs) => rs.filter((_, j) => j !== i));
+                    setRefocus(i);
+                  }}
                 >
                   Remove
                 </Button>
@@ -233,7 +276,7 @@ export function RefundPartsEditor({
           <Button type="submit" size="sm" aria-disabled={busy || rows.length === 0 || undefined}>
             Save links
           </Button>
-          <Button size="sm" variant="ghost" onClick={onCancel}>
+          <Button size="sm" variant="ghost" data-cancel="" onClick={onCancel}>
             Cancel
           </Button>
         </div>

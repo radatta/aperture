@@ -78,7 +78,12 @@ export function financeWrites(c: Core) {
       if (!pendingIds(ledger.read()).includes(id))
         ledger.append({ run, op: 'created', id, via: FINANCE_SPLIT_VIA, title: `split on ${row}` });
     },
-    // A rule the browser created (the Rules tab): recorded from the server's list once it shows.
+    // A rule the browser is about to create (the Rules tab): the intent before the click, so a crash before
+    // recordFinanceRule reports it rather than losing it.
+    recordFinanceRuleIntent(pattern: string): void {
+      ledger.append({ run, op: 'intent', via: FINANCE_RULE_VIA, title: pattern });
+    },
+    // A rule the browser created: recorded from the server's list once it shows (resolves the intent).
     recordFinanceRule(rule: DevFinanceRule): void {
       if (!pendingIds(ledger.read()).includes(rule.id))
         ledger.append({
@@ -97,6 +102,12 @@ export function financeWrites(c: Core) {
     async refuseFinanceBucket(row: string, bucket: string): Promise<string | null> {
       writes.recordFinanceBucket(row);
       return refusal(call<unknown>('setFinanceBucket', [{ ids: [row], bucket }]));
+    },
+    // A single link made over the API (refund-cap: a second refund on a charge another one already
+    // covers), recorded first like the browser's.
+    async linkFinanceRefund(row: string, chargeId: string): Promise<void> {
+      writes.recordFinanceLink(row);
+      await call<unknown>('linkFinanceRefund', [row, chargeId]);
     },
     async refuseFinanceRefundParts(row: string, parts: RefundPart[]): Promise<string | null> {
       writes.recordFinanceLink(row);

@@ -214,14 +214,9 @@ export const financeSplits: Scenario = {
     },
     {
       id: 'refund-cap-multi',
-      entry: 'api',
+      entry: 'mcp',
       kind: 'edge',
-      what: 'Allocations from two refunds on one charge net it to exactly $0',
-      offDev: {
-        file: 'packages/shared/src/financeSplits.test.ts',
-        test: 'the cap sums every allocation from every refund, so a charge nets to exactly $0',
-        why: 'same path as refund-two-charges-api (proven on dev); the cap is a pure decision over the claims',
-      },
+      what: 'A second refund linked to a charge the deposit’s part already covers counts $0: the charge nets to exactly $0',
     },
     {
       id: 'split-rule-save',
@@ -278,7 +273,13 @@ export const financeSplits: Scenario = {
       title:
         'The fixture bank’s grocer, coffee, dinner and payback rows are on the All tab, untouched',
       async run(ctx) {
+        before = null; // module state: a second run in one process starts clean
         const r = await rows(ctx);
+        // Every row the steps use must be in this period or the last (the MCP and the All tab list those).
+        const { o } = await totals(ctx);
+        for (const [name, t] of Object.entries(r))
+          if (windowOf(o, t.date) === 'outside')
+            needsYou(`the fixture's ${name} row has aged past the two periods: re${FIXTURE_HELP}`);
         if (r.grocer.bucket || r.grocer.splits)
           needsYou(
             'the devcheck grocer charge is sorted or split (by hand?): set it back to Unsorted in the app',
@@ -378,6 +379,13 @@ export const financeSplits: Scenario = {
           if (px < 16) fail(`${sel} is ${px}px`);
         }
         await ctx.shot('split-editor');
+        // A third part, then removed: focus lands on the part now in its place, never the page.
+        await form.getByRole('button', { name: 'Add part' }).click();
+        await form.getByRole('button', { name: 'Remove part 3' }).click();
+        await wait(300);
+        const afterRemove = await focusedText(ctx);
+        if (afterRemove !== 'Part 2 bucket')
+          fail(`after Remove part, focus is on "${afterRemove}"`);
         ctx.api.writes.recordFinanceSplit(grocer.id); // before any Save: cleanup unsplits by id
         await form.getByLabel('Part 1 amount').fill('50');
         await form.getByLabel('Part 2 amount').fill('22.17');
@@ -406,7 +414,7 @@ export const financeSplits: Scenario = {
         const row = ctx.page.getByRole('button', { name: GROCER }).first();
         await row.waitFor({ timeout: 15_000 });
         const text = (await row.textContent()) ?? '';
-        if (!/Budget \$20\.00 · Covered \$22\.17/.test(text))
+        if (!/Budget \$20\.00 \(this period\) · Covered \$22\.17 \(this period\)/.test(text))
           fail(`after reload the row reads "${text}"`);
         await ctx.shot('split-row');
         const neighbour = await ctx.api.reads.getFinanceTransaction(coffee.id);
@@ -453,8 +461,10 @@ export const financeSplits: Scenario = {
           ])
         )
           fail(`the MCP parts read ${parts}`);
-        const c = out.transactions.find((t) => t.id === coffee.id);
-        if (c && ('parts' in c || 'split' in c)) fail('an unsplit row carries parts on the MCP');
+        const c =
+          out.transactions.find((t) => t.id === coffee.id) ??
+          fail('the coffee row is not on the MCP');
+        if ('parts' in c || 'split' in c) fail('an unsplit row carries parts on the MCP');
         const o = await ctx.mcp.reads.financeOverview();
         const api = await totals(ctx);
         if (Math.round(o.buckets.budget!.totalUsd * 100) !== api.bucket.budget)
@@ -482,18 +492,22 @@ export const financeSplits: Scenario = {
           'the Next period part',
         );
         await closeDetail(ctx);
-        const o = (await totals(ctx)).o;
-        if (windowOf(o, grocer.date) === 'current') {
-          await allTab(ctx, 'devcheck grocer');
-          const row = ctx.page.getByRole('button', { name: GROCER }).first();
-          await row.waitFor({ timeout: 15_000 });
-          if (!/Covered \$22\.17 \(next period\)/.test((await row.textContent()) ?? ''))
-            fail(`the row reads "${await row.textContent()}"`);
+        // The row labels a part by where it lands: on this period's charge a Next part waits (and the
+        // header says so); on last period's it already counts in this one.
+        const current = windowOf((await totals(ctx)).o, grocer.date) === 'current';
+        await allTab(ctx, 'devcheck grocer');
+        const row = ctx.page.getByRole('button', { name: GROCER }).first();
+        await row.waitFor({ timeout: 15_000 });
+        const want = current
+          ? /Covered \$22\.17 \(next period\)/
+          : /Covered \$22\.17 \(this period\)/;
+        if (!want.test((await row.textContent()) ?? ''))
+          fail(`the row reads "${await row.textContent()}"`);
+        if (current)
           await ctx.page
             .getByText(/waiting for next period/)
             .first()
             .waitFor({ timeout: 10_000 });
-        }
         await ctx.shot('split-next');
       },
     },
@@ -505,6 +519,7 @@ export const financeSplits: Scenario = {
         'Overview: a Next part waits in upcoming on a this-period charge, counts now on a last-period one',
       async run(ctx) {
         const { grocer } = await rows(ctx);
+        if (!before) fail('split-ui never read the totals before');
         const now = await totals(ctx);
         const covered = now.bucket.parents_pay - before!.bucket.parents_pay;
         const waiting = now.upcoming - before!.upcoming;
@@ -616,6 +631,14 @@ export const financeSplits: Scenario = {
         const grocerAmt = form.getByLabel(/Amount for .*devcheck grocer/i);
         const coffeeAmt = form.getByLabel(/Amount for .*devcheck coffee #2/i);
         await coffeeAmt.waitFor({ timeout: 10_000 });
+        const px = await fontSizeOf(ctx, 'input[aria-label^="Amount for"]');
+        if (px < 16) fail(`the linker's amount field is ${px}px`);
+        // Short of the refund: the rest says it stays money in.
+        await grocerAmt.fill('20');
+        await coffeeAmt.fill('6.50');
+        const status = (await form.getByRole('status').first().textContent()) ?? '';
+        if (!/\$3\.50 not linked — it stays money in/.test(status))
+          fail(`the remainder reads "${status}"`);
         await grocerAmt.fill('23');
         await coffeeAmt.fill('7');
         await form.getByRole('button', { name: 'Save links' }).click();
@@ -694,6 +717,27 @@ export const financeSplits: Scenario = {
       },
     },
     {
+      id: 'refund-cap',
+      entry: 'mcp',
+      proves: ['refund-cap-multi'],
+      title:
+        'The rebate linked (API) to coffee #2, which the payback’s part already covers: it counts $0, the coffee stays refunded $6.50',
+      async run(ctx) {
+        const { coffee } = await rows(ctx);
+        const rebate =
+          (await fixtureRows(ctx)).find(/devcheck rebate/i) ??
+          needsYou(`fixture row devcheck rebate is missing: re${FIXTURE_HELP}`);
+        await ctx.api.writes.linkFinanceRefund(rebate.id, coffee.id); // ledgered: cleanup unlinks it
+        const out = await ctx.mcp.reads.financeTransactions({ merchant: 'devcheck' });
+        const r =
+          out.transactions.find((t) => t.id === rebate.id) ?? fail('the rebate is not on the MCP');
+        if (r.linkedChargeId !== coffee.id) fail(`the rebate links ${r.linkedChargeId}`);
+        if (r.countedUsd !== 0) fail(`the rebate counts ${r.countedUsd}, not $0`);
+        const c = out.transactions.find((t) => t.id === coffee.id);
+        if (c?.refundedUsd !== 6.5) fail(`the coffee reads refundedUsd ${c?.refundedUsd}, not 6.5`);
+      },
+    },
+    {
       id: 'refund-unlink',
       entry: 'ui',
       proves: ['refund-unlink-one-all'],
@@ -707,6 +751,8 @@ export const financeSplits: Scenario = {
         if ((await focusedText(ctx)) === '<body>') fail('after Unlink one, focus fell to the page');
         await dialog.getByRole('button', { name: 'Unlink all' }).click();
         await until(ctx, payback.id, (t) => !t?.refundParts && !t?.refundOfId, 'Unlink all');
+        await wait(300);
+        if ((await focusedText(ctx)) === '<body>') fail('after Unlink all, focus fell to the page');
         await ctx.shot('refund-unlinked');
         await closeDetail(ctx);
       },
@@ -720,6 +766,7 @@ export const financeSplits: Scenario = {
       async run(ctx) {
         const { payback, dinner } = await rows(ctx);
         const dialog = await openRow(ctx, PAYBACK, /^Money in: /);
+        ctx.api.writes.recordFinanceLink(payback.id); // before the click: cleanup unlinks by id
         const start = dialog.getByRole('button', { name: 'Link as a refund' });
         if (await start.isVisible()) await start.click();
         await dialog
@@ -761,7 +808,16 @@ export const financeSplits: Scenario = {
         await field.waitFor({ timeout: 15_000 });
         await field.fill(pattern);
         await ctx.page.getByLabel('Sort into').selectOption({ label: 'Split by percent…' });
+        for (const sel of [
+          'input[aria-label="Part 1 percent"]',
+          'select[aria-label="Part 1 bucket"]',
+        ]) {
+          const px = await fontSizeOf(ctx, sel);
+          if (px < 16) fail(`the rule's ${sel} is ${px}px`);
+        }
         await ctx.page.getByLabel('Part 1 percent').fill('70');
+        // Before the first click: a 70/50 that wrongly lands, or a crash before it's recorded, is reported.
+        ctx.api.writes.recordFinanceRuleIntent(pattern);
         await ctx.page.getByRole('button', { name: 'Add rule' }).click();
         const alert = ctx.page.getByRole('alert');
         await alert.waitFor({ timeout: 10_000 });
@@ -779,7 +835,11 @@ export const financeSplits: Scenario = {
             (await ctx.api.reads.listFinanceRules()).find((r) => r.pattern === pattern) ?? null;
         }
         ctx.api.writes.recordFinanceRule(rule!); // cleanup deletes it by id
-        await ctx.page.getByText('Budget 70% · Covered 30%').first().waitFor({ timeout: 10_000 });
+        // This run's rule row, not a leftover's.
+        await ctx.page
+          .locator(`li:has-text("${pattern}")`)
+          .getByText('Budget 70% · Covered 30%')
+          .waitFor({ timeout: 10_000 });
         await ctx.shot('rule-split');
       },
     },
@@ -803,7 +863,7 @@ export const financeSplits: Scenario = {
         )
           fail(`the MCP split reads ${got}`);
         for (const x of rules)
-          if (x.pattern !== pattern && x.split === undefined)
+          if (x.pattern !== pattern && x.split !== null)
             fail(`rule ${x.pattern} has no split field`);
       },
     },

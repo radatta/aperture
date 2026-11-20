@@ -548,7 +548,7 @@ export function resolveRefundClaims(
   const claims: RefundClaims = new Map();
   for (const t of live) {
     const parts: { chargeId: string; cents: number | null }[] | null =
-      t.refundParts ?? (t.refundOfId ? [{ chargeId: t.refundOfId, cents: null }] : null);
+      liveRefundParts(t) ?? (t.refundOfId ? [{ chargeId: t.refundOfId, cents: null }] : null);
     if (!parts || amount(t) >= 0) continue;
     const found: RefundClaim[] = [];
     for (const p of parts) {
@@ -690,13 +690,44 @@ export function allocationSumError(
   return null;
 }
 
+// The stored fields as they stand. Newer code never writes a split beside a bucket or a period mark, nor
+// refund parts beside a single link, a bucket, a period pin or a mark — so such a pair comes from an older
+// write (code from before splits, after a revert), and that newer write wins. `?.` because a row from an
+// older server has no key at all (a cached PWA against a reverted BFF).
+export const liveSplits = (t: FinanceTransaction): FinanceSplitPart[] | null =>
+  t.splits?.length && t.bucket === null && !t.startsPeriod ? t.splits : null;
+export const liveRefundParts = (t: FinanceTransaction): FinanceRefundPart[] | null =>
+  t.refundParts?.length &&
+  t.refundOfId === null &&
+  t.bucket === null &&
+  t.periodOverride === null &&
+  !t.startsPeriod
+    ? t.refundParts
+    : null;
+// A rule's split, unless an older write retargeted the rule's bucket away from the split's largest part.
+export const ruleSplitOf = (r: FinanceRule): FinanceRuleSplitPart[] | null =>
+  r.split?.length && r.bucket === ruleSplitBucket(r.split) ? r.split : null;
+// A refund's parts with each charge id as it stands now: a part saved on a pending charge names the
+// posted row once Plaid posts it (its pendingTransactionId).
+export function resolveRefundPartIds(
+  parts: FinanceRefundPart[],
+  txns: FinanceTransaction[],
+): FinanceRefundPart[] {
+  const posted = new Map(
+    txns
+      .filter((t) => t.deletedAt === null && t.pendingTransactionId)
+      .map((t) => [t.pendingTransactionId!, t.id]),
+  );
+  return parts.map((p) => ({ chargeId: posted.get(p.chargeId) ?? p.chargeId, cents: p.cents }));
+}
+
 // The split that counts for this charge at `cents` (its normalised amount), or null: unsplit, or
 // broken — the parts no longer add up to the amount (it posted at a new amount, or its account
 // flipped). A broken split reads as unsorted and keeps its parts to prefill the editor. A rule-made
 // split (percent on every part) recomputes from the percents instead of breaking.
 export function splitOf(t: FinanceTransaction, cents: number): FinanceSplitPart[] | null {
-  const parts = t.splits;
-  if (!parts || parts.length === 0 || cents <= 0) return null;
+  const parts = liveSplits(t);
+  if (!parts || cents <= 0) return null;
   if (parts.every((p) => p.percent !== undefined)) {
     const shares = allocateProportional(
       cents,
@@ -708,7 +739,7 @@ export function splitOf(t: FinanceTransaction, cents: number): FinanceSplitPart[
 }
 
 export const splitBroken = (t: FinanceTransaction, cents: number): boolean =>
-  t.splits !== null && t.splits.length > 0 && splitOf(t, cents) === null;
+  liveSplits(t) !== null && splitOf(t, cents) === null;
 
 // What a stored split added up to — the "was $X" of a broken one.
 export const splitTotal = (parts: Pick<FinanceSplitPart, 'cents'>[]): number =>
@@ -1003,7 +1034,8 @@ export function refundPartsError(input: {
   accounts: FinanceAccount[];
   moves?: InternalMoves;
 }): string | null {
-  const { refund, parts, txns, accounts, moves } = input;
+  const { refund, txns, accounts, moves } = input;
+  const parts = resolveRefundPartIds(input.parts, txns);
   const byAccount = new Map(accounts.map((a) => [a.id, a]));
   const amount = (t: FinanceTransaction) => amountOf(t, byAccount.get(t.accountId));
   if (parts.length === 0) return 'Pick at least one charge';
@@ -1303,7 +1335,12 @@ export function deriveFinanceView(
     moves,
     allTxns,
     sortable,
-    txns: allTxns.filter((t) => periodOf(t, overview.period, links) !== null),
+    // A refund across charges is listed while any of its charges counts in a window.
+    txns: allTxns.filter(
+      (t) =>
+        periodOf(t, overview.period, links) !== null ||
+        (claims.get(t.id)?.some((c) => periodOf(c.charge, overview.period) !== null) ?? false),
+    ),
     amount,
     kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),
     links,
@@ -1348,16 +1385,38 @@ export function bucketsOf(
 }
 
 // A row's share of a list total under a filter: under a bucket chip a split charge counts only that
-// bucket's parts; every other row counts its whole amount (netCents' rule).
+// bucket's parts, and a linked refund only what it counts against that bucket — each claim's counted
+// cents, spread over a split charge's parts in proportion (as summarizePeriod spreads it). Every other
+// row counts its whole amount (netCents' rule).
 export function filterCents(
   t: FinanceTransaction,
-  view: Pick<FinanceView, 'amount'>,
+  view: Pick<FinanceView, 'amount' | 'claims' | 'countedByClaim'>,
   f: FinanceListFilter,
 ): number {
   const cents = view.amount(t);
   if (f === 'all' || f === 'unsorted') return cents;
+  const inBucket = (parts: { bucket: FinanceBucket; cents: number }[]) =>
+    parts.filter((p) => p.bucket === f).reduce((n, p) => n + p.cents, 0);
+  const claims = view.claims.get(t.id);
+  if (claims) {
+    const counted = view.countedByClaim.get(t.id);
+    let out = 0;
+    for (const { charge } of claims) {
+      const share = counted?.get(charge.id) ?? 0;
+      const split = splitOf(charge, view.amount(charge));
+      if (!split) out += charge.bucket === f ? share : 0;
+      else {
+        const spread = allocateProportional(
+          share,
+          split.map((p) => p.cents),
+        );
+        out += inBucket(split.map((p, i) => ({ bucket: p.bucket, cents: spread[i]! })));
+      }
+    }
+    return out === 0 ? 0 : -out; // never -0
+  }
   const split = splitOf(t, cents);
-  return split ? split.filter((p) => p.bucket === f).reduce((n, p) => n + p.cents, 0) : cents;
+  return split ? inBucket(split) : cents;
 }
 
 // A case-insensitive substring of the merchant or the bank's descriptor (`needle` already lowercased),
@@ -1625,7 +1684,8 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
         : applyRules(rules, { merchantName: p.merchant_name, name: p.name });
     // A split rule splits money out by its percents; money in (a card credit) takes its bucket.
     const cents = toCents(p.amount);
-    const ruleSplit = rule?.split && cents > 0 ? splitFromRule(rule.split, cents) : null;
+    const split = rule ? ruleSplitOf(rule) : null;
+    const ruleSplit = split && cents > 0 ? splitFromRule(split, cents) : null;
     write({
       id: p.transaction_id,
       userId,

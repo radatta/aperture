@@ -7,7 +7,9 @@ import {
   fmtMonthShortDay,
   isPeriodStart,
   REFUND_MATCH_WINDOW_DAYS,
+  liveRefundParts,
   refundSideError,
+  resolveRefundPartIds,
   searchRefundCharges,
   splitBroken,
   splitOf,
@@ -77,7 +79,10 @@ export function TransactionDetail({
   const isRefund = kind === 'refund';
   const isIncome = kind === 'income';
   const linkedTo = view.links.get(txn.id);
-  const linkedAny = txn.refundOfId !== null || txn.refundParts !== null;
+  // Stored parts with a posted charge's id in place of its pending one, as the server stores them.
+  const ownParts = liveRefundParts(txn);
+  const parts = ownParts && resolveRefundPartIds(ownParts, view.allTxns);
+  const linkedAny = txn.refundOfId != null || parts !== null;
   const dangling = linkedAny && !linkedTo; // its charge(s) aren't loaded / are gone
   const cents = view.amount(txn);
   const split = kind === 'expense' ? splitOf(txn, cents) : null;
@@ -109,7 +114,7 @@ export function TransactionDetail({
   };
   // Unlink one charge of an allocation: the rest stays; the last one unlinks the refund.
   const unlinkOne = (chargeId: string) => {
-    const rest = (txn.refundParts ?? []).filter((p) => p.chargeId !== chargeId);
+    const rest = (parts ?? []).filter((p) => p.chargeId !== chargeId);
     if (rest.length === 0) return setLink(null);
     setActed(true);
     setParts.mutate({ refundId: txn.id, parts: rest });
@@ -121,7 +126,7 @@ export function TransactionDetail({
   // A single link's allocation to start editing from: its charge, at what this refund counts there.
   const startAllocation = () =>
     setPartsDraft(
-      txn.refundParts ??
+      parts ??
         (linkedTo
           ? [{ chargeId: linkedTo.id, cents: Math.min(-cents, leftForRefund(txn, view)(linkedTo)) }]
           : []),
@@ -214,7 +219,7 @@ export function TransactionDetail({
             }}
             onCancel={() => setPartsDraft(null)}
           />
-        ) : txn.refundParts !== null && linkedTo ? (
+        ) : parts !== null && linkedTo ? (
           <RefundAllocation
             refund={txn}
             view={view}
@@ -348,6 +353,7 @@ export function TransactionDetail({
           <SplitEditor
             txn={txn}
             view={view}
+            overview={overview}
             onSaved={() => {
               setActed(true); // focus lands on the summary's Edit split
               splitEditor.onClose();
@@ -593,11 +599,13 @@ function RefundSuggestions({
     nothingRef.current?.();
   }, [nothingToFocus, canHandOff]);
 
+  const left = leftForRefund(refund, view);
   const row = (
     c: FinanceTransaction,
     opts: { named: boolean; primary: boolean; focus: boolean },
   ) => {
-    const refunded = view.refunded.get(c.id) ?? 0;
+    // What other refunds took: this refund's own claim on the charge isn't "already refunded".
+    const refunded = view.amount(c) - left(c);
     const bucket = c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted';
     // Under the merchant, on their own line: a phone truncates the line above, and the bucket and what's
     // already refunded were what got cut. A same-merchant row names no merchant, so its bucket stays up.
@@ -692,7 +700,11 @@ function RefundSuggestions({
           <ul aria-labelledby={`${labelId}-sets`} className="flex flex-col gap-1.5">
             {sets.map((set) => {
               const label = set.charges
-                .map((c, i) => `${c.merchantName ?? c.name} ${fmtMoney(set.cents[i]!)}`)
+                // Dated: two sets of the same merchants and amounts must read apart.
+                .map(
+                  (c, i) =>
+                    `${c.merchantName ?? c.name} · ${fmtMonthShortDay(c.date)} ${fmtMoney(set.cents[i]!)}`,
+                )
                 .join(' + ');
               return (
                 <li

@@ -13,11 +13,13 @@ import {
   financeListRange,
   financeSyncErrorMessage,
   isDayKey,
+  liveRefundParts,
   matchesFinanceFilter,
   matchesFinanceText,
   needsSorting,
   netCents,
   periodOf,
+  ruleSplitOf,
   splitBroken,
   splitOf,
   USER_TIME_ZONE,
@@ -295,7 +297,7 @@ export const FINANCE_TOOLS: Tool[] = [
           const cents = v.amount(t);
           const isCharge = v.kindOf(t) === 'expense';
           const split = isCharge ? splitOf(t, cents) : null;
-          const claims = t.refundParts ? v.claims.get(t.id) : undefined;
+          const claims = liveRefundParts(t) ? v.claims.get(t.id) : undefined;
           return {
             id: t.id,
             date: t.date,
@@ -369,8 +371,8 @@ export const FINANCE_TOOLS: Tool[] = [
         bucket: r.bucket,
         bucketLabel: FINANCE_BUCKET_LABELS[r.bucket],
         active: r.active,
-        split: r.split
-          ? r.split.map((p) => ({
+        split: ruleSplitOf(r)
+          ? ruleSplitOf(r)!.map((p) => ({
               bucket: p.bucket,
               bucketLabel: FINANCE_BUCKET_LABELS[p.bucket],
               percent: p.percent,

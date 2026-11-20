@@ -16,6 +16,7 @@ import {
   refundLinkError,
   refundPartsError,
   refundPartsFrom,
+  resolveRefundPartIds,
   splitSortError,
   USER_TIME_ZONE,
 } from '@aperture/shared';
@@ -245,6 +246,7 @@ export class FinanceService {
         ...t,
         refundOfId: chargeId,
         refundParts: null,
+        splits: null,
         bucket: null,
         bucketSetBy: null,
         periodOverride: null,
@@ -259,7 +261,10 @@ export class FinanceService {
     const current = await this.repo.getFinanceTxn(id);
     if (!current || current.deletedAt !== null) throw new Error(`Not found: ${id}`);
     if (parts === null)
-      return this.txnUpdate(id, (t) => ({ ...t, splits: null, bucket: null, bucketSetBy: null }));
+      // Only a row still split: a stale Remove never unsorts a row sorted since.
+      return this.txnUpdate(id, (t) =>
+        t.splits === null ? t : { ...t, splits: null, bucket: null, bucketSetBy: null },
+      );
     const accounts = await this.repo.listFinanceAccounts();
     // Moves over the same window the overview reads, so pairing at the edge matches the page.
     const recent = await this.repo.listFinanceTxnsInRange(
@@ -300,7 +305,8 @@ export class FinanceService {
       this.repo.getFinanceTxns(parts.map((p) => p.chargeId)),
     ]);
     const today = await this.today();
-    const charges = [...found.values()].filter((c) => c.deletedAt === null);
+    // Tombstoned too: a pending charge that posted still dates the range its posted row sits in.
+    const charges = [...found.values()];
     const lookback = addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS);
     const rows = await this.repo.listFinanceTxnsInRange(refundPartsFrom(today, charges));
     const moves = detectInternalMoves(
@@ -322,7 +328,7 @@ export class FinanceService {
       if (again) throw new Error(again);
       return {
         ...t,
-        refundParts: orderRefundParts(parts),
+        refundParts: orderRefundParts(resolveRefundPartIds(parts, rows)),
         refundOfId: null,
         bucket: null,
         bucketSetBy: null,
@@ -346,8 +352,14 @@ export class FinanceService {
       rules.find((r) => r.id === id),
     );
     const t = this.d.now();
+    // The kept split is decided against the rule as the CAS re-reads it, not the list read above.
     if (id)
-      return this.repo.casUpdate(this.repo.finRuleShape(id), id, (r) => ({ ...r, ...fields }), t);
+      return this.repo.casUpdate(
+        this.repo.finRuleShape(id),
+        id,
+        (r) => ({ ...r, ...financeRuleFields(input, r) }),
+        t,
+      );
     const rule: FinanceRule = {
       id: this.d.ulid(),
       userId: this.d.userId,

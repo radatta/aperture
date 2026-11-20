@@ -107,9 +107,13 @@ export function financeSplitContract(h: FinanceSplitHarness) {
     const posted = rows.find((t) => t.id === 'fx-posted-1')!;
     expect(posted.splits).toEqual([p('budget', 1100), p('i_pay', 1100)]); // kept, to prefill the editor
     expect(posted.rawAmountCents).toBe(2600);
-    // Broken: it can be sorted again (which replaces it), and it counts as unsorted meanwhile.
+    // Broken: it counts as unsorted meanwhile, and it can be sorted again (which replaces it).
+    const broken = await overview();
     const sorted = await api.setFinanceBucket({ ids: ['fx-posted-1'], bucket: 'budget' });
     expect([sorted[0]!.bucket, sorted[0]!.splits]).toEqual(['budget', null]);
+    const fixed = await overview();
+    expect(broken.unsortedCount - fixed.unsortedCount).toBe(1);
+    expect(broken.unsortedCents - fixed.unsortedCents).toBe(2600);
   });
 
   it('finance split rules: a new matching charge arrives split by percent', async () => {
@@ -231,5 +235,67 @@ export function financeSplitContract(h: FinanceSplitHarness) {
     await api.setFinanceRefundParts('fx-refund-1', [{ chargeId: 'fx-card-8', cents: 1000 }]);
     const single = await api.linkFinanceRefund('fx-refund-1', 'fx-card-8');
     expect([single.refundOfId, single.refundParts]).toEqual(['fx-card-8', null]);
+  });
+  it('finance refunds across charges: a part on a pending charge follows it when it posts', async () => {
+    await h.connect();
+    const api = h.api();
+    await api.setFinanceRefundParts('fx-reimburse', [
+      { chargeId: 'fx-card-8', cents: 3000 },
+      { chargeId: 'fx-pending-1', cents: 2200 },
+    ]);
+    h.advance(1000);
+    await api.requestFinanceSync({ refresh: false }); // fx-pending-1 posts as fx-posted-1
+    // Re-saving the parts as stored (the pending id) still takes, and stores the posted id.
+    const again = await api.setFinanceRefundParts('fx-reimburse', [
+      { chargeId: 'fx-card-8', cents: 3000 },
+      { chargeId: 'fx-pending-1', cents: 2200 },
+    ]);
+    expect(again.refundParts).toEqual([
+      { chargeId: 'fx-card-8', cents: 3000 },
+      { chargeId: 'fx-posted-1', cents: 2200 },
+    ]);
+    // Unlinking the other charge leaves the posted one.
+    const one = await api.setFinanceRefundParts('fx-reimburse', [
+      { chargeId: 'fx-posted-1', cents: 2200 },
+    ]);
+    expect(one.refundParts).toEqual([{ chargeId: 'fx-posted-1', cents: 2200 }]);
+  });
+
+  it('finance splits: a pin, a mark or Always clears or skips the new fields', async () => {
+    await h.connect();
+    const api = h.api();
+    const parts = [
+      { chargeId: 'fx-card-8', cents: 2000 },
+      { chargeId: 'fx-card-4', cents: 1000 },
+    ];
+    await api.setFinanceRefundParts('fx-refund-1', parts);
+    expect((await api.setFinancePeriodOverride('fx-refund-1', 'current')).refundParts).toBeNull();
+    await api.setFinanceRefundParts('fx-refund-1', parts);
+    const marked = await api.setFinancePeriodStart('fx-refund-1', true);
+    expect([marked.refundParts, marked.splits]).toEqual([null, null]);
+    // Always sorts every unsorted match but never a split row, and saves a one-bucket rule.
+    await api.setFinanceSplit('fx-card-8', [p('budget', 1500), p('i_pay', 1500)]);
+    await api.setFinancePeriodStart('fx-refund-1', false);
+    const swept = await api.setFinanceBucket({
+      ids: ['fx-refund-1'],
+      bucket: 'parents_pay',
+      rule: { pattern: 'Amazon' },
+    });
+    expect(swept.map((t) => t.id)).not.toContain('fx-card-8');
+    const rows = await api.listFinanceTransactions(await h.finRange());
+    expect(rows.find((t) => t.id === 'fx-card-8')!.splits).toEqual([
+      p('budget', 1500),
+      p('i_pay', 1500),
+    ]);
+    const rule = (await api.listFinanceRules()).find((r) => r.pattern === 'amazon')!;
+    expect(rule.split).toBeNull();
+  });
+
+  it('finance splits: Remove split on a row no longer split changes nothing', async () => {
+    await h.connect();
+    const api = h.api();
+    await api.setFinanceBucket({ ids: ['fx-card-6'], bucket: 'budget' });
+    const after = await api.setFinanceSplit('fx-card-6', null); // a stale device's Remove
+    expect([after.bucket, after.splits]).toEqual(['budget', null]);
   });
 }

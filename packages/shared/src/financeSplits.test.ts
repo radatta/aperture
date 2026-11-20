@@ -17,9 +17,12 @@ import {
   reconcileSyncPage,
   refundPartsError,
   refundPartsFrom,
+  liveRefundParts,
   resolveRefundClaims,
   resolveRefundLinks,
+  resolveRefundPartIds,
   ruleSplitBucket,
+  ruleSplitOf,
   splitBroken,
   splitOf,
   suggestRefundSets,
@@ -523,6 +526,40 @@ describe('filters and sorting on split rows', () => {
     expect(filterCents(split, v, 'all')).toBe(4000);
   });
 
+  it('under a bucket chip a linked refund counts only its share in that bucket', () => {
+    // $10.00 off a 2500/1500 split: 625 to Budget, 375 to Covered.
+    expect(filterCents(refund, v, 'budget')).toBe(-625);
+    expect(filterCents(refund, v, 'parents_pay')).toBe(-375);
+    expect(filterCents(refund, v, 'all')).toBe(-1000);
+    // A deposit across a Budget charge and an I-pay charge: each chip counts its own part only.
+    const a = tx('a', 'card', '2026-09-20', 3000, { bucket: 'budget' });
+    const b = tx('b', 'card', '2026-09-21', 2000, { bucket: 'i_pay' });
+    const dep = tx('d', 'chk', '2026-09-23', -4000, {
+      refundParts: [
+        { chargeId: 'a', cents: 2500 },
+        { chargeId: 'b', cents: 1500 },
+      ],
+    });
+    const w = deriveFinanceView(overview, [a, b, dep]);
+    expect(filterCents(dep, w, 'budget')).toBe(-2500);
+    expect(filterCents(dep, w, 'i_pay')).toBe(-1500);
+    expect(filterCents(dep, w, 'parents_pay')).toBe(0);
+  });
+
+  it('a refund across charges is listed while any of its charges is in a window', () => {
+    const old = tx('old', 'card', '2026-07-01', 5000, { bucket: 'budget' });
+    const cur = tx('cur', 'card', '2026-09-20', 1000, { bucket: 'budget' });
+    const dep = tx('d', 'chk', '2026-09-23', -6000, {
+      refundParts: [
+        { chargeId: 'old', cents: 5000 },
+        { chargeId: 'cur', cents: 1000 },
+      ],
+    });
+    const w = deriveFinanceView(overview, [old, cur, dep]);
+    expect(w.links.get('d')?.id).toBe('old'); // the primary, outside both windows
+    expect(w.txns.map((t) => t.id)).toContain('d');
+  });
+
   it('a broken split is unsorted and in the sort queue', () => {
     expect(isUnsorted(broken, v.links, 4100)).toBe(true);
     expect(needsSorting(broken, v.links, v.refunded, 4100)).toBe(true);
@@ -536,6 +573,115 @@ describe('filters and sorting on split rows', () => {
       { bucket: null, cents: 700, refundedCents: 0, window: 'current', pin: null },
     ]);
     expect(countedParts(split, 4000, 1000, period).map((p) => p.refundedCents)).toEqual([625, 375]);
+  });
+});
+
+describe('an older write wins over a stale stored field', () => {
+  // Code from before splits (after a revert) keeps the new fields when it writes a row; on a re-deploy
+  // the write it made must win.
+  it('a split beside a bucket or a period mark is ignored', () => {
+    const parts = [part('budget', 2000), part('i_pay', 2000)];
+    expect(splitOf(tx('a', 'card', '2026-09-20', 4000, { splits: parts }), 4000)).toEqual(parts);
+    const sorted = tx('a', 'card', '2026-09-20', 4000, { splits: parts, bucket: 'parents_pay' });
+    expect(splitOf(sorted, 4000)).toBeNull();
+    expect(splitBroken(sorted, 4000)).toBe(false);
+    expect(sum([sorted]).buckets.parents_pay.totalCents).toBe(4000);
+    expect(
+      splitOf(tx('a', 'card', '2026-09-20', 4000, { splits: parts, ...MARK }), 4000),
+    ).toBeNull();
+  });
+
+  it('refund parts beside a single link, a bucket or a period pin are ignored', () => {
+    const a = tx('a', 'card', '2026-09-20', 3000, { bucket: 'budget' });
+    const b = tx('b', 'card', '2026-09-21', 2000, { bucket: 'i_pay' });
+    const parts = [
+      { chargeId: 'a', cents: 1500 },
+      { chargeId: 'b', cents: 1500 },
+    ];
+    const claimsOf = (over: Partial<FinanceTransaction>) =>
+      resolveRefundClaims([
+        a,
+        b,
+        tx('d', 'chk', '2026-09-23', -3000, { refundParts: parts, ...over }),
+      ])
+        .get('d')
+        ?.map((c) => c.charge.id);
+    expect(claimsOf({})).toEqual(['a', 'b']);
+    expect(claimsOf({ refundOfId: 'b' })).toEqual(['b']);
+    expect(claimsOf({ bucket: 'budget' })).toBeUndefined();
+    expect(claimsOf({ periodOverride: 'current' })).toBeUndefined();
+  });
+
+  it('a rule split whose bucket an older write retargeted is ignored', () => {
+    const split = [
+      { bucket: 'budget' as const, percent: 70 },
+      { bucket: 'i_pay' as const, percent: 30 },
+    ];
+    const rule = (bucket: FinanceRule['bucket']): FinanceRule => ({
+      ...base,
+      id: 'rule',
+      pattern: 'store a',
+      bucket,
+      active: true,
+      split,
+    });
+    expect(ruleSplitOf(rule('budget'))).toEqual(split);
+    expect(ruleSplitOf(rule('parents_pay'))).toBeNull();
+  });
+
+  it('a row from an older server, with no keys at all, reads unsplit and unlinked', () => {
+    const bare = tx('a', 'card', '2026-09-20', 4000) as Partial<FinanceTransaction>;
+    delete bare.splits;
+    delete bare.refundParts;
+    expect(splitBroken(bare as FinanceTransaction, 4000)).toBe(false);
+    expect(liveRefundParts(bare as FinanceTransaction)).toBeNull();
+  });
+});
+
+describe('a refund part on a pending charge, once it posts', () => {
+  const pending = tx('p', 'card', '2026-09-20', 2000, { pending: true, deletedAt: 5 });
+  const posted = tx('q', 'card', '2026-09-21', 2000, {
+    pendingTransactionId: 'p',
+    bucket: 'budget',
+  });
+  const other = tx('o', 'card', '2026-09-20', 1000, { bucket: 'budget' });
+  const dep = tx('d', 'chk', '2026-09-23', -3000, {
+    refundParts: [
+      { chargeId: 'p', cents: 2000 },
+      { chargeId: 'o', cents: 1000 },
+    ],
+  });
+  const rows = [...payments, pending, posted, other, dep];
+
+  it('names the posted row, so re-saving the allocation is still accepted', () => {
+    expect(resolveRefundPartIds(dep.refundParts!, rows)).toEqual([
+      { chargeId: 'q', cents: 2000 },
+      { chargeId: 'o', cents: 1000 },
+    ]);
+    expect(
+      refundPartsError({ refund: dep, parts: dep.refundParts!, txns: rows, accounts }),
+    ).toBeNull();
+    // Unlinking the other charge leaves the posted one, under either id.
+    expect(
+      refundPartsError({
+        refund: dep,
+        parts: [{ chargeId: 'q', cents: 2000 }],
+        txns: rows,
+        accounts,
+      }),
+    ).toBeNull();
+    // The same charge twice, once by each id, is still one charge.
+    expect(
+      refundPartsError({
+        refund: dep,
+        parts: [
+          { chargeId: 'p', cents: 1000 },
+          { chargeId: 'q', cents: 1000 },
+        ],
+        txns: rows,
+        accounts,
+      }),
+    ).toBe('That charge is already in the list');
   });
 });
 

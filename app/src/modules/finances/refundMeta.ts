@@ -1,5 +1,12 @@
-import { FINANCE_BUCKET_LABELS, fmtMonthShortDay, splitOf, splitTotal } from '@aperture/shared';
-import type { FinanceTransaction, FinanceTxnKind } from '@aperture/shared';
+import {
+  countedParts,
+  FINANCE_BUCKET_LABELS,
+  fmtMonthShortDay,
+  liveSplits,
+  splitOf,
+  splitTotal,
+} from '@aperture/shared';
+import type { FinanceOverview, FinanceTransaction, FinanceTxnKind } from '@aperture/shared';
 import { fmtMoney } from './money';
 import type { FinanceView } from './useFinanceData';
 
@@ -33,15 +40,29 @@ export function refundMeta(
   if (kind === 'refund') return ' · refund';
   const refunded = view.refunded.get(txn.id);
   const refundedText = refunded ? ` · refunded ${fmtMoney(refunded)}` : '';
-  if (kind !== 'expense' || !txn.splits?.length) return refundedText;
-  const split = splitOf(txn, view.amount(txn));
-  if (!split)
-    return ` · split no longer adds up (was ${fmtMoney(splitTotal(txn.splits))})${refundedText}`;
-  const parts = split
-    .map(
-      (p) =>
-        `${FINANCE_BUCKET_LABELS[p.bucket]} ${fmtMoney(p.cents)}${p.period ? PIN[p.period] : ''}`,
-    )
+  const stored = liveSplits(txn);
+  if (kind !== 'expense' || !stored) return refundedText;
+  if (!splitOf(txn, view.amount(txn)))
+    return ` · split no longer adds up (was ${fmtMoney(splitTotal(stored))})${refundedText}`;
+  return refundedText; // the parts go on their own line (splitPartsText)
+}
+
+// A split charge's parts, each with where it lands when you chose its period: "Budget $20.00 · Covered
+// $20.00 (next period)". A Next part on last period's charge already counts in this one, so it says so.
+// Null for any other row.
+export function splitPartsText(
+  txn: FinanceTransaction,
+  view: FinanceView,
+  period: FinanceOverview['period'],
+): string | null {
+  const cents = view.amount(txn);
+  if (!splitOf(txn, cents)) return null;
+  return countedParts(txn, cents, 0, period)
+    .map((p) => {
+      const w = p.window === 'upcoming' ? 'next' : p.window;
+      const label = p.pin === null || w === null ? '' : PIN[w];
+      const name = p.bucket === null ? 'Unsorted' : FINANCE_BUCKET_LABELS[p.bucket];
+      return `${name} ${fmtMoney(p.cents)}${label}`;
+    })
     .join(' · ');
-  return ` · ${parts}${refundedText}`;
 }

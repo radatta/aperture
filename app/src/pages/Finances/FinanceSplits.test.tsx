@@ -130,6 +130,26 @@ describe('Splitting a charge across buckets', () => {
     );
   });
 
+  it('Add part adds a third; Remove part puts focus on the part now in its place', async () => {
+    const api = await linked();
+    renderApp({ api, path: '/finances/all' });
+    const { user, dialog } = await openDetail('fx-card-8', /Charge: Amazon/);
+    await user.click(within(dialog).getByRole('button', { name: /Split across buckets/ }));
+    const form = within(dialog).getByRole('form', { name: 'Split this charge' });
+    await user.clear(within(form).getByLabelText('Part 1 amount'));
+    await user.type(within(form).getByLabelText('Part 1 amount'), '10');
+    await user.clear(within(form).getByLabelText('Part 2 amount'));
+    await user.type(within(form).getByLabelText('Part 2 amount'), '10');
+    await user.click(within(form).getByRole('button', { name: 'Add part' }));
+    // The new part takes what's left.
+    expect((within(form).getByLabelText('Part 3 amount') as HTMLInputElement).value).toBe('10.00');
+    await user.click(within(form).getByRole('button', { name: 'Remove part 3' }));
+    expect(within(form).queryByLabelText('Part 3 amount')).toBeNull();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(form).getByLabelText('Part 2 bucket')),
+    );
+  });
+
   it('a busy Save ignores a second click', async () => {
     const api = await linked();
     let release!: () => void;
@@ -223,6 +243,57 @@ describe('A refund across charges', () => {
     ).toBeTruthy();
   });
 
+  it('the editor opens on its heading; Add and Remove keep focus on an amount, then Cancel', async () => {
+    const api = await linked();
+    await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
+    renderApp({ api, path: '/finances/all' });
+    const { user, dialog } = await openDetail('fx-reimburse', /Money in: Example Payer/);
+    await user.click(within(dialog).getByRole('button', { name: /across another charge/ }));
+    const form = within(dialog).getByRole('form', { name: 'Link to several charges' });
+    // Not an amount field: a phone's keyboard would pop over the rows.
+    await waitFor(() =>
+      expect(document.activeElement?.textContent).toBe('Link $800.50 across charges'),
+    );
+    await user.type(within(dialog).getByRole('searchbox'), 'amazon');
+    await user.click((await within(dialog).findAllByRole('button', { name: /^Add Amazon/ }))[0]!);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(form).getByLabelText(/Amount for Amazon/)),
+    );
+    await user.click(within(form).getByRole('button', { name: /^Remove Amazon/ }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(form).getByLabelText(/Amount for Example Landlord/),
+      ),
+    );
+    await user.click(within(form).getByRole('button', { name: /^Remove Example Landlord/ }));
+    await waitFor(() =>
+      expect(document.activeElement).toBe(within(form).getByRole('button', { name: 'Cancel' })),
+    );
+    expect(within(form).getByRole('status').textContent).toBe(
+      'Add a charge below to link this refund to',
+    );
+  });
+
+  it('Unlink one moves focus to the Unlink left; a partial allocation says what stays money in', async () => {
+    const api = await linked();
+    await api.setFinanceRefundParts('fx-reimburse', [
+      { chargeId: 'fx-card-8', cents: 3000 },
+      { chargeId: 'fx-card-6', cents: 1500 },
+    ]);
+    renderApp({ api, path: '/finances/all' });
+    const { user, dialog } = await openDetail('fx-reimburse', /Money in: Example Payer/);
+    expect(
+      within(dialog).getByText(
+        /\$755\.50 of it isn.t linked — it stays money in, outside the budget/,
+      ),
+    ).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: /^Unlink Amazon/ }));
+    expect(await within(dialog).findByText('Refund across 1 charge')).toBeTruthy();
+    await waitFor(() =>
+      expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^Unlink (?!Amazon)/),
+    );
+  });
+
   it('refuses more than what’s left of a charge, keeping the amounts', async () => {
     const api = await linked();
     await api.linkFinanceRefund('fx-reimburse', 'fx-rent');
@@ -248,7 +319,7 @@ describe('A refund across charges', () => {
     const set = within(dialog).getAllByRole('button', { name: /^Link to .* \+ / })[0]!;
     // One merchant across the set ranks first: three $5.00 charges at the same coffee shop.
     expect(set.getAttribute('aria-label')).toMatch(
-      /^Link to (Blue Bottle Coffee \$5\.00( \+ )?){3}$/,
+      /^Link to (Blue Bottle Coffee · \w{3} \d{1,2} \$5\.00( \+ )?){3}$/,
     );
     await user.click(set);
     expect(await within(dialog).findByText('Refund across 3 charges')).toBeTruthy();
@@ -281,5 +352,19 @@ describe('Split rules', () => {
       { bucket: 'budget', percent: 70 },
       { bucket: 'parents_pay', percent: 30 },
     ]);
+  });
+
+  it('Add part adds a third percent, and an edit clears a refusal', async () => {
+    const api = await linked();
+    renderApp({ api, path: '/finances/rules' });
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('When the merchant contains'), 'store b');
+    await user.selectOptions(screen.getByLabelText('Sort into'), 'split');
+    await user.click(screen.getByRole('button', { name: 'Add part' }));
+    expect((screen.getByLabelText('Part 3 bucket') as HTMLSelectElement).value).toBe('i_pay');
+    await user.click(screen.getByRole('button', { name: 'Add rule' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/whole percent/);
+    await user.type(screen.getByLabelText('Part 3 percent'), '1');
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

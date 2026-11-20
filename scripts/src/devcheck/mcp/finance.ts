@@ -9,6 +9,7 @@ export interface McpFinanceRow {
   linkedChargeId: string | null;
   refundOfId: string | null;
   refundedUsd?: number;
+  countedUsd?: number;
   split?: true;
   splitBroken?: true;
   parts?: { bucket: string; amountUsd: number; period: string; pinned: string | null }[];

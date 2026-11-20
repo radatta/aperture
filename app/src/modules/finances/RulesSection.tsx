@@ -161,13 +161,14 @@ export function RulesSection() {
                   <select
                     aria-label={`Part ${i + 1} bucket`}
                     value={p.bucket}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      setSplitError(null); // a refusal was about the parts as they were
                       setParts((ps) =>
                         ps.map((x, j) =>
                           j === i ? { ...x, bucket: e.target.value as FinanceBucket } : x,
                         ),
-                      )
-                    }
+                      );
+                    }}
                     className="rounded-xl border border-line bg-surface px-2 py-1 text-ink outline-none focus:border-teal"
                   >
                     {BUCKET_OPTIONS.map((o) => (
@@ -182,11 +183,12 @@ export function RulesSection() {
                       inputMode="numeric"
                       aria-label={`Part ${i + 1} percent`}
                       value={p.percent}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        setSplitError(null);
                         setParts((ps) =>
                           ps.map((x, j) => (j === i ? { ...x, percent: e.target.value } : x)),
-                        )
-                      }
+                        );
+                      }}
                       className="w-16 rounded-xl border border-line bg-surface px-2 py-1 text-right text-ink tabular-nums outline-none focus:border-teal"
                     />
                     <span aria-hidden className="text-ink-muted">

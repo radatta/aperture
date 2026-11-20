@@ -29,7 +29,7 @@ import { cx } from '../../lib/cx';
 import { BucketTag } from './BucketTag';
 import { BRUSH_HINT_ID, BrushPicker, ListSummary, SearchBox, ShowChips } from './LedgerControls';
 import { fmtSigned } from './money';
-import { refundMeta } from './refundMeta';
+import { refundMeta, splitPartsText } from './refundMeta';
 import { TransactionDetail } from './TransactionDetail';
 import { useLedgerKeys } from './useLedgerKeys';
 import type { FinanceView } from './useFinanceData';
@@ -292,6 +292,7 @@ export function TransactionList({
                   key={t.id}
                   txn={t}
                   view={view}
+                  period={overview.period}
                   kind={kindOf(t)}
                   brush={brush}
                   paintable={paintable.has(t.id)}
@@ -322,6 +323,7 @@ export function TransactionList({
 function TransactionRow({
   txn,
   view,
+  period,
   kind,
   brush,
   paintable,
@@ -331,6 +333,7 @@ function TransactionRow({
 }: {
   txn: FinanceTransaction;
   view: FinanceView;
+  period: FinanceOverview['period'];
   kind: FinanceTxnKind;
   brush: FinanceBucket | null;
   paintable: boolean;
@@ -343,6 +346,7 @@ function TransactionRow({
   const setBucket = useSetFinanceBucket(txn.id, { onError: onPaintError });
   const acct = view.accounts.get(txn.accountId);
   const cents = view.amount(txn);
+  const parts = kind === 'expense' ? splitPartsText(txn, view, period) : null;
   // Counts toward a bucket: a charge, a card credit, or a deposit linked as a refund.
   const expense = isSortableKind(kind) || view.links.has(txn.id);
   // Every bucket its money lands in: more than one, or a split charge, reads "Split".
@@ -398,6 +402,12 @@ function TransactionRow({
             {txn.periodOverride ? ` · moved to ${txn.periodOverride} period` : ''}
             {txn.note ? ` · ${txn.note}` : ''}
           </Text>
+          {/* Its own line, unclamped: a phone would otherwise cut a part (or its period) off. */}
+          {parts && (
+            <Text size="xs" tone="muted" className="break-words">
+              {parts}
+            </Text>
+          )}
         </span>
         <Text size="sm" tabular tone={counts && !inert ? 'ink' : 'muted'}>
           {fmtSigned(cents)}

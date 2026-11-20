@@ -23,6 +23,7 @@ import {
   financeRuleFields,
   financeSplitError,
   orderRefundParts,
+  resolveRefundPartIds,
   refundPartsError,
   refundPartsFrom,
   splitSortError,
@@ -3334,6 +3335,7 @@ class StubClient implements ApiClient {
     return this.writes.patch(this.store.financeTransactions, refundId, {
       refundOfId: chargeId,
       refundParts: null,
+      splits: null,
       bucket: null,
       bucketSetBy: null,
       periodOverride: null,
@@ -3344,6 +3346,7 @@ class StubClient implements ApiClient {
     parts: FinanceSplitPartInput[] | null,
   ): Promise<FinanceTransaction> {
     const txn = this.mustFind(this.store.financeTransactions, id);
+    if (parts === null && txn.splits === null) return txn; // a stale Remove never unsorts a sorted row
     if (parts === null)
       return this.writes.patch(this.store.financeTransactions, id, {
         splits: null,
@@ -3377,7 +3380,10 @@ class StubClient implements ApiClient {
     const today = this.finToday();
     const lookback = addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS);
     const alive = this.alive(this.store.financeTransactions);
-    const charges = parts.flatMap((p) => alive.filter((x) => x.id === p.chargeId));
+    // Tombstoned too: a pending charge that posted still dates the range its posted row sits in.
+    const charges = parts.flatMap((p) =>
+      this.store.financeTransactions.filter((x) => x.id === p.chargeId),
+    );
     const from = refundPartsFrom(today, charges);
     const error = refundPartsError({
       refund,
@@ -3391,7 +3397,7 @@ class StubClient implements ApiClient {
     });
     if (error) throw new Error(error);
     return this.writes.patch(this.store.financeTransactions, refundId, {
-      refundParts: orderRefundParts(parts),
+      refundParts: orderRefundParts(resolveRefundPartIds(parts, alive)),
       refundOfId: null,
       bucket: null,
       bucketSetBy: null,

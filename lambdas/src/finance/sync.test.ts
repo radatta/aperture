@@ -242,6 +242,28 @@ describe('runFinanceSync — the basics', () => {
     expect((await repo.getFinanceTxn('fx-pending-1'))!.deletedAt).not.toBeNull();
   });
 
+  it('a split saved on the pending row mid-sync carries onto its posted replacement', async () => {
+    await link();
+    await run();
+    const pending = (await repo.getFinanceTxn('fx-pending-1'))!;
+    const splits = [
+      { bucket: 'budget' as const, cents: 1100, period: null },
+      { bucket: 'i_pay' as const, cents: 1100, period: 'next' as const },
+    ];
+    doc.interceptNextPutIf(pk(U), sk.finTxn('fx-pending-1'), () =>
+      doc.putNow(
+        financeTxnItem(U, {
+          ...pending,
+          splits,
+          bucketSetBy: 'user',
+          updatedAt: pending.updatedAt + 3,
+        }),
+      ),
+    );
+    await run();
+    expect((await repo.getFinanceTxn('fx-posted-1'))!.splits).toEqual(splits);
+  });
+
   it('a held lock means no Plaid sync calls at all; an expired one is taken over', async () => {
     await link();
     patchState({ lockedUntil: T + 60_000 });

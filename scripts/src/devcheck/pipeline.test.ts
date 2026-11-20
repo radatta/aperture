@@ -589,6 +589,12 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       recordFinanceRule: () => {
         throw new Error('unused');
       },
+      recordFinanceRuleIntent: () => {
+        throw new Error('unused');
+      },
+      linkFinanceRefund: async () => {
+        throw new Error('unused');
+      },
       refuseFinanceSplit: async () => {
         throw new Error('unused');
       },

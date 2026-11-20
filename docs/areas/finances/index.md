@@ -332,10 +332,15 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   5. Revert the PR — remove the bank first, since the revert removes the code that calls `/item/remove`.
      The `fin#` rows (RETAIN table) and the SSM credentials stay. Reverting past Not spending: first set
      every Not-spending row back to Unsorted and delete or retarget Not-spending rules — older code throws on
-     the unknown bucket and the overview 500s. Reverting past splits throws nothing: older code ignores
-     `splits`, `refundParts` and a rule's `split`, so a split charge reads Unsorted, a refund across charges
-     reads as unlinked income, and a split rule sorts into its largest part. The fields stay stored and
-     count again on a re-deploy; remove the splits and multi-links first for a clean revert.
+     the unknown bucket and the overview 500s. Reverting past splits throws nothing server-side: older code
+     ignores `splits`, `refundParts` and a rule's `split`, so a split charge reads Unsorted, a refund across
+     charges reads unlinked (a deposit as income, a card credit as an unsorted refund), and a split rule
+     sorts into its largest part. Older writes keep the fields on the row they write (a pending row that
+     posts drops them), so the read side lets the newer write win on a re-deploy (`liveSplits`,
+     `liveRefundParts`, `ruleSplitOf`): a split beside a bucket or a mark, refund parts beside a single
+     link, a bucket, a pin or a mark, and a rule split whose bucket isn't its largest part are ignored. A
+     still-cached new PWA against a reverted BFF reads the missing keys as none. For a clean revert, remove
+     the splits, the multi-links and the split rules first.
 
 ## 13. What each test surface proves
 
@@ -366,6 +371,12 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
 ## 14. Known limits and deferred
 
 - **Deferred:** moving a whole unsplit charge to next period (today only a split's part can wait).
+- **Accepted (splits):** two allocations onto one charge saved seconds apart can both pass the "left" check
+  (the other refunds are read off the eventually consistent index); the cap still keeps the charge at or
+  above $0, so the cost is an over-allocation stored, not a wrong total. A split rule decides money out by
+  Plaid's raw sign, so on a flipped account it splits card credits instead (they then read as broken
+  splits, in Sort). A sync already running on old code during a deploy (up to 300 s) can drop a split
+  saved on a row it is posting in that window.
 
 - **Accepted:** a late BFF invoke after a deferred request can show a "try again" the data didn't need;
   `SYNC_DEFERRED` after a pass that did land data shows as a red banner; **Always** scans every

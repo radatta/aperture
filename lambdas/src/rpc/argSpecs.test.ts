@@ -150,6 +150,36 @@ describe('the RPC argument specs', () => {
     ]);
   });
 
+  it('splits and refund parts: the shapes the editors send, and the bounds', () => {
+    const part = { bucket: 'budget', cents: 1500, period: null };
+    passes('setFinanceSplit', ['t', [part, { ...part, period: 'next' }]]);
+    passes('setFinanceSplit', ['t', null]); // Remove split
+    passes('setFinanceRefundParts', ['r', [{ chargeId: 'c', cents: 100 }]]);
+    passes('upsertFinanceRule', [{ pattern: 'x', bucket: 'budget' }]); // an older client: no split
+    passes('upsertFinanceRule', [
+      {
+        pattern: 'x',
+        bucket: 'budget',
+        split: [
+          { bucket: 'budget', percent: 60 },
+          { bucket: 'i_pay', percent: 40 },
+        ],
+      },
+    ]);
+    passes('upsertFinanceRule', [{ pattern: 'x', bucket: 'budget', split: null }]);
+    refuses('setFinanceSplit', ['t', Array(9).fill(part)], /parts/);
+    refuses('setFinanceSplit', ['t', [{ ...part, period: 'later' }]], /period/);
+    refuses('setFinanceSplit', ['t', [{ ...part, cents: '15' }]], /cents/);
+    refuses('setFinanceSplit', ['t', [{ ...part, percent: 50 }]], /percent/);
+    refuses('setFinanceRefundParts', ['r', Array(9).fill({ chargeId: 'c', cents: 1 })], /parts/);
+    refuses('setFinanceRefundParts', ['r', null], /parts/);
+    refuses(
+      'upsertFinanceRule',
+      [{ pattern: 'x', bucket: 'budget', split: Array(5).fill({ bucket: 'budget', percent: 20 }) }],
+      /split/,
+    );
+  });
+
   it('refuses a null where the type is not nullable, even in an optional slot', () => {
     refuses('listAttachments', [null], /^taskId must be text$/);
     refuses('listIdeas', [null], /^status must be text$/);
