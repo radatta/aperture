@@ -26,7 +26,7 @@ Dev work, Aperture built by Claude Code under the maintainer's supervision, is c
 
 ## Dev estimates: the plan table's "You" minutes
 
-A dev ticket's estimate is the plan table's **You** minutes for that lane: what the lane will cost the maintainer in attention (decisions, Mac steps, phone checks, reading), never Claude's build time (decided 2026-11-16). Its actual is the maintainer's real attention minutes: their number at merge until pulse tracking supplies it.
+A dev ticket's estimate is the plan table's **You** minutes for that lane: what the lane will cost the maintainer in attention (decisions, Mac steps, phone checks, reading), never Claude's build time (decided 2026-11-16). Its actual is the maintainer's real attention minutes: their number at merge (replacing any minutes pulses credited), until Claude Code hook pulses can supply it ([pulse](../mcp/pulse.md) lists them as later work).
 
 - **The kickoff carries it.** The hub's kickoff file names the lane's Aperture ticket and its `You: <n> min`, and the plan row for the lane writes `you` as `<n> min` ([SESSION-BOARD](../../ops/SESSION-BOARD.md) → _Plan_).
-- **Both writes are the hub's**, never a lane's, each on the maintainer's yes typed in the hub's pane: the estimate with the kickoff (`planned`, as long as it lands before the merge, where the ticket leaves backlog and its lock freezes), the actual at merge ([HUB](../../ops/HUB.md) → _The hub's duties_ → _Dev tickets_).
+- **Both writes are the hub's**, never a lane's, each on the maintainer's yes typed in the hub's pane: the estimate with the kickoff (`planned`, as long as it lands before the ticket's first start, a `pulse` on it or the merge's `complete_task`, where its lock freezes), the actual at merge ([HUB](../../ops/HUB.md) → _The hub's duties_ → _Dev tickets_).
