@@ -3400,7 +3400,7 @@ class StubClient implements ApiClient {
       refundParts: orderRefundParts(resolveRefundPartIds(parts, alive)),
       refundOfId: null,
       bucket: null,
-      bucketSetBy: null,
+      bucketSetBy: 'user', // the marker the read check needs (liveRefundParts)
       periodOverride: null,
       splits: null,
     });

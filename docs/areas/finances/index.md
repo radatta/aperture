@@ -339,14 +339,14 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
      posts drops them). On a re-deploy the server drops a stale field as it reads the row (`toFinanceTxn`,
      `toFinanceRule` → `normalizeFinanceTxn`, `normalizeFinanceRule`): a split beside a bucket, a mark or an
      empty `bucketSetBy` (so an older unsort, unmark or unlink doesn't bring it back); refund parts beside a
-     single link, a bucket, a pin or a mark; a rule split whose bucket isn't its largest part. The next write
+     single link, a bucket, a pin, a mark or an empty `bucketSetBy` (every newer allocation stores `'user'`); a rule split whose bucket isn't its largest part. The next write
      of that row stores the cleared field; reading alone writes nothing. The client applies the same checks
      (`liveSplits`, `liveRefundParts`, `ruleSplitOf`), so a still-cached new PWA against a reverted BFF reads
      a stale or missing field as none. Its edits that need the new server are refused, loudly, with nothing stored, until its next launch:
      a split or an allocation save is an unknown method, and adding a rule or changing a rule's bucket on the Rules
-     tab carries a `split` key the older server refuses (Pause, and Always from a row, still work). Undo cases not caught (§14): an older link then unlink, sort then
-     unsort, mark then unmark, or pin then unpin of a refund across charges, and an older retarget of a split
-     rule away and back to its largest part — each brings the old field back. For a clean revert, remove the
+     tab carries a `split` key the older server refuses (Pause, and Always from a row, still work). Undo cases not caught (§14): an older pin then unpin of a refund across
+     charges (an older pin writes only the pin), and an older retarget of a split rule away and back to its
+     largest part — each brings the old field back. For a clean revert, remove the
      splits, the multi-links and the split rules first.
 
 ## 13. What each test surface proves
@@ -387,9 +387,10 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   drop a split saved then, put an edited split's earlier parts back, or bring back an allocation unlinked
   then (a Remove split or a sort in the window is caught by the read checks). Merging away from the
   scheduled sync times keeps the window empty.
-- **Accepted (revert undo cases):** after a revert and re-land, an older undo of a refund across charges
-  (link→unlink, sort→unsort, mark→unmark, pin→unpin) or a split rule retargeted away and back to its
-  largest part brings the old allocation or split back; the clean-revert step in §12 avoids it.
+- **Accepted (revert undo cases):** after a revert and re-land, an older pin then unpin of a refund across
+  charges (an older pin writes only the pin, so `bucketSetBy` survives it), or a split rule retargeted away
+  and back to its largest part, brings the old allocation or split back; the clean-revert step in §12
+  avoids it. An older link, sort or mark nulls `bucketSetBy`, so its undo can't.
 
 - **Accepted:** a late BFF invoke after a deferred request can show a "try again" the data didn't need;
   `SYNC_DEFERRED` after a pass that did land data shows as a red banner; **Always** scans every

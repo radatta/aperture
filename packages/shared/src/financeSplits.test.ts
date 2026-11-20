@@ -87,7 +87,8 @@ function tx(
     paymentChannel: null,
     source: 'plaid',
     bucket: null,
-    bucketSetBy: over.splits ? 'user' : null, // as every newer split write sets it (liveSplits)
+    // as every newer split or allocation write sets it (liveSplits, liveRefundParts)
+    bucketSetBy: over.splits || over.refundParts ? 'user' : null,
     periodOverride: null,
     note: null,
     refundOfId: null,
@@ -591,6 +592,31 @@ describe('an older write wins over a stale stored field', () => {
     expect(
       splitOf(tx('a', 'card', '2026-09-20', 4000, { splits: parts, ...MARK }), 4000),
     ).toBeNull();
+  });
+
+  it('an older undo never brings an allocation back, except pin then unpin (the known limit)', () => {
+    const live = tx('r', 'card', '2026-09-20', -3000, {
+      refundParts: [
+        { chargeId: 'a', cents: 1500 },
+        { chargeId: 'b', cents: 1500 },
+      ],
+    });
+    expect(liveRefundParts(live)).toEqual(live.refundParts);
+    // What each older write pair leaves (the code before splits): link then unlink, sort then unsort,
+    // mark then unmark each null bucketSetBy on the way, and the undo puts its own field back.
+    const undone = {
+      'link → unlink': { ...live, bucketSetBy: null, refundOfId: null },
+      'sort → unsort': { ...live, bucketSetBy: null, bucket: null },
+      'mark → unmark': { ...live, bucketSetBy: null, startsPeriod: false },
+    };
+    for (const [pair, row] of Object.entries(undone)) {
+      expect([pair, liveRefundParts(row)]).toEqual([pair, null]);
+      expect([pair, normalizeFinanceTxn(row).refundParts]).toEqual([pair, null]);
+    }
+    // An older pin writes only the pin, and its unpin only clears it: the allocation reads live again.
+    const pinned = { ...live, periodOverride: 'previous' as const };
+    expect(liveRefundParts(pinned)).toBeNull();
+    expect(liveRefundParts({ ...pinned, periodOverride: null })).toEqual(live.refundParts);
   });
 
   it('an older undo (unsort, unmark, unlink — each nulls bucketSetBy) never brings a split back', () => {

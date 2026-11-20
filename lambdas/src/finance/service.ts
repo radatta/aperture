@@ -331,7 +331,7 @@ export class FinanceService {
         refundParts: orderRefundParts(resolveRefundPartIds(parts, rows)),
         refundOfId: null,
         bucket: null,
-        bucketSetBy: null,
+        bucketSetBy: 'user', // the marker the read check needs (liveRefundParts)
         periodOverride: null,
         splits: null,
       };

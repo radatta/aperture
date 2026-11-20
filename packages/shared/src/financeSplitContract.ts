@@ -185,7 +185,8 @@ export function financeSplitContract(h: FinanceSplitHarness) {
       { chargeId: 'fx-card-8', cents: 3000 },
       { chargeId: 'fx-card-6', cents: 1500 },
     ]);
-    expect([linked.refundOfId, linked.bucket]).toEqual([null, null]);
+    // bucketSetBy 'user': the marker an older unlink, unsort or mark would null (liveRefundParts).
+    expect([linked.refundOfId, linked.bucket, linked.bucketSetBy]).toEqual([null, null, 'user']);
     const after = await overview();
     expect(delta(before, after)).toEqual({
       budget: -3000,

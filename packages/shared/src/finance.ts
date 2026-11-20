@@ -693,8 +693,9 @@ export function allocationSumError(
 // The stored fields as they stand. Newer code never writes a split beside a bucket or a period mark, nor
 // refund parts beside a single link, a bucket, a period pin or a mark — so such a pair comes from an older
 // write (code from before splits, after a revert), and that newer write wins. A split also needs the
-// `bucketSetBy` every newer split sets ('user' from the editor, 'rule' at sync): an older unsort, mark or
-// link nulls it, so its undo can't bring the split back. One judgment, two places: the server applies it
+// `bucketSetBy` every newer split sets ('user' from the editor, 'rule' at sync), and refund parts the
+// 'user' every newer allocation sets: an older unsort, mark or link nulls it, so its undo can't bring the
+// field back. (An older pin writes only the pin, so its unpin still can — finances §14.) One judgment, two places: the server applies it
 // as it reads a row (normalizeFinanceTxn in toFinanceTxn), so server code reads plain fields; the client
 // and the shared derivations read through these, since a cached PWA can meet a reverted BFF's raw rows.
 // `?.` because a row from an older server has no key at all.
@@ -707,7 +708,8 @@ export const liveRefundParts = (t: FinanceTransaction): FinanceRefundPart[] | nu
   t.refundOfId === null &&
   t.bucket === null &&
   t.periodOverride === null &&
-  !t.startsPeriod
+  !t.startsPeriod &&
+  t.bucketSetBy != null // set by every newer allocation; an older unlink, unsort or mark nulls it
     ? t.refundParts
     : null;
 // A rule's split, unless an older write retargeted the rule's bucket away from the split's largest part.
@@ -1714,7 +1716,11 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
       source: 'plaid',
       bucket: carry?.bucket ?? (ruleSplit ? null : (rule?.bucket ?? null)),
       bucketSetBy:
-        carry && (carry.bucket || carry.splits) ? carry.bucketSetBy : rule ? 'rule' : null,
+        carry && (carry.bucket || carry.splits || carry.refundParts)
+          ? carry.bucketSetBy
+          : rule
+            ? 'rule'
+            : null,
       periodOverride: carry?.periodOverride ?? null,
       note: carry?.note ?? null,
       refundOfId: carry?.refundOfId ?? null,
