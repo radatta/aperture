@@ -576,15 +576,20 @@ export const calibrationDevLane: Scenario = {
       async run(ctx) {
         await ctx.api.writes.setCategoryArea(categoryId, 'school');
         const points = await pointsWith(ctx, [id('scored')], (p) => p.area === 'school');
-        // lane-absent, when the window holds no other Aperture point: the page is one headline again.
+        // lane-absent, when the window holds no other Aperture point: the page is one headline again. The
+        // page's category read can lag the points poll above, so a reload or two before calling it.
         if (!points.some((p) => p.area === 'aperture')) {
           await ctx.ui.goto('/tasks?lens=calibration');
-          await ctx.page
-            .getByText(/ · last 30 days$/)
-            .first()
-            .waitFor({ timeout: 15_000 });
-          if (await ctx.page.locator('[data-lane]').count())
-            throw new Error('no Aperture point, yet the page shows lanes');
+          for (let i = 0; ; i++) {
+            // the count line, with or without the sparse note (CalibrationSection: under 5 scored points)
+            await ctx.page
+              .getByText(/ · last 30 days( · still sparse, read it lightly)?$/)
+              .first()
+              .waitFor({ timeout: 15_000 });
+            if (!(await ctx.page.locator('[data-lane]').count())) break;
+            if (i >= 3) throw new Error('no Aperture point, yet the page shows lanes');
+            await ctx.page.reload({ waitUntil: 'domcontentloaded' });
+          }
           ctx.log('lane-absent: checked on dev (no other Aperture point in the window)');
         } else ctx.log('lane-absent: another Aperture point in the window; left to the unit test');
         await ctx.api.writes.setCategoryArea(categoryId, 'aperture');
