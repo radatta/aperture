@@ -135,7 +135,8 @@ it at once. It ships `false`.
   file written in the last 10 min and a clean tree; not the hub (branch, worktree or record name); the box is on
   screen and empty. It runs mid-turn, under the working footer, so it reads no busy markers: `send` does. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
 - **The hand-off** (`.claude/hooks/board-heartbeat.sh idle`, after the board write): only with a flag for this
-  session's pid, and not on a Stop a stop hook continued (`stop_hook_active`: the request lapses, since the next Stop follows a new
+  session's pid, and only when the payload's `stop_hook_active` is literally `false` (a Stop a stop hook continued, a
+  missing field or an unreadable payload skips; after a continued Stop the request lapses, since the next Stop follows a new
   prompt and skips as `prompted`), it runs **main's
   committed** `scripts/board/self-compact.sh stop <pid>`, only when that file and the `lib.sh` it sources hash, on
   disk, to main's `HEAD` blobs (`git hash-object --no-filters` against `HEAD:`, with no replace refs and global and system git config off for those
@@ -166,7 +167,8 @@ waits for its next message: `request` belongs only where the lane waits for the 
 
 Unmeasured anywhere, run-only at the switch flip: a Stop another Stop hook blocks still runs the hand-off (the
 heartbeat can't see a peer hook's block on the same Stop; only `send`'s 2 s wait and busy check cover it, and no
-blocking Stop hook is registered today); whether UserPromptSubmit fires for a message queued mid-turn and for
+blocking Stop hook is registered today); that an ordinary Stop payload carries `stop_hook_active: false` (documented
+in the hooks reference; without it nothing fires, and the log shows a `request` with no `claim`); whether UserPromptSubmit fires for a message queued mid-turn and for
 a turn a finished background task starts (if not, `lastPromptAt` misses it and the dirty-tree and busy checks are the
 only cover); the box with the slash menu open after typing.
 
