@@ -7,10 +7,13 @@ import { cliGuard } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { doctor, formatDoctor } from './doctor.ts';
 import { parseMeter, type Manual, type MeterRow } from './meter.ts';
-import { mergedPRs } from './gh.ts';
-import { fitModel, reportModel } from './model.ts';
+import { cachedPRs, mergedPRs } from './gh.ts';
+import { estimateBasis, fitModel, reportModel } from './model.ts';
+import { DEFAULT_PRIORS, LENSES, mergePriors, predict, type Priors } from './estimate.ts';
+import { parsePhaseLog } from './phaselog.ts';
+import { attribute, overhead, prTable } from './prs.ts';
 import type { JobEvent } from './questions.ts';
-import { boardLine, fitLines, reportLines } from './report.ts';
+import { boardLine, estimateLines, fitLines, reportLines } from './report.ts';
 import { burnLines } from './burn.ts';
 import { stopAt } from '../board/away.ts';
 import { anonBytes, scan } from './scan.ts';
@@ -25,6 +28,10 @@ export const USAGE = `pnpm usage <command>   (-h / --help on any command: its us
   line [--no-scan]              one line: usage % · %/h · hours to 100
   burn [--at <HH:MM>] [--no-scan]
                                 usage now and where it lands at the reset (and at HH:MM), low–high (the hub's /burn)
+  estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--scan]
+                                a task's QU and meter %, low–high, from its diff lines, a browser/device check (--ui),
+                                its review lenses (rules correctness tests shell infra ui extension; Plan and rules always;
+                                default correctness,tests, plus ui with --ui) and fan-out agents; offline from the cache
   doctor                        is the meter logger installed and writing?`;
 
 export const FLAGS: Record<string, Spec> = {
@@ -33,6 +40,7 @@ export const FLAGS: Record<string, Spec> = {
   fit: { bare: ['no-scan'] },
   line: { bare: ['no-scan'] },
   burn: { flags: ['at'], bare: ['no-scan'] },
+  estimate: { flags: ['lines', 'lenses', 'fanout'], bare: ['ui', 'scan'] },
   doctor: {},
 };
 
@@ -180,6 +188,45 @@ export function readEvents(board: string): JobEvent[] {
 
 export const DEFAULT_SINCE = '2026-11-04';
 
+export const readPhaseLog = (usageDir: string) =>
+  parsePhaseLog(readOr(join(usageDir, 'phase-log.jsonl')) ?? '');
+
+// The usage dir's priors.json over the placeholder defaults (estimate.ts → DEFAULT_PRIORS), and a note saying which
+// it used: the placeholders aren't a fit, so their estimate is never shown as one.
+export function readPriors(usageDir: string): { priors: Priors; note: string } {
+  const path = join(usageDir, 'priors.json');
+  const text = readOr(path);
+  if (text === null)
+    return {
+      priors: DEFAULT_PRIORS,
+      note: `priors: placeholders (no ${path}); a [prior] number is invented, not a fit`,
+    };
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return {
+      priors: DEFAULT_PRIORS,
+      note: `priors: ${path} isn't JSON, so placeholders; a [prior] number is invented, not a fit`,
+    };
+  }
+  const { priors, bad } = mergePriors(raw);
+  return {
+    priors,
+    note: `priors: ${path}${bad.length ? `; ignored, placeholders kept: ${bad.join(', ')}` : ''}`,
+  };
+}
+
+// --lenses a,b → agent types; null on an unknown name.
+export function lensTypes(spec: string | undefined, ui: boolean): string[] | null {
+  const names =
+    spec === undefined
+      ? ['correctness', 'tests', ...(ui ? ['ui'] : [])]
+      : spec.split(',').filter(Boolean);
+  const types = names.map((n) => (Object.hasOwn(LENSES, n.trim()) ? LENSES[n.trim()] : undefined));
+  return types.every((t): t is string => !!t) ? [...new Set(types)] : null;
+}
+
 async function scanQuiet(e: ReturnType<typeof env>, out: (s: string) => void) {
   await scan({
     root: e.projects,
@@ -242,6 +289,8 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
         since,
         hub: hubName(),
         now,
+        phaseLog: readPhaseLog(e.usageDir),
+        priors: readPriors(e.usageDir),
       });
       const text = [...(note ? [`> ${note}`, ''] : []), ...reportLines(m, now)].join('\n');
       const day = new Date(now).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
@@ -282,6 +331,53 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
         now,
       });
       out(burnLines(m, at, now).join('\n'));
+      return 0;
+    }
+    case 'estimate': {
+      const lines = Number(flags.lines);
+      if (!flags.lines || !Number.isInteger(lines) || lines < 1) {
+        out('--lines takes a whole number of diff lines (source, tests and docs together)');
+        return 2;
+      }
+      const fanout = Number(flags.fanout ?? 0);
+      if (!Number.isInteger(fanout) || fanout < 0) {
+        out('--fanout takes a whole number of agents');
+        return 2;
+      }
+      const ui = !!flags.ui;
+      const lenses = lensTypes(flags.lenses, ui);
+      if (!lenses) {
+        out(`--lenses takes a comma list of ${Object.keys(LENSES).join(', ')}`);
+        return 2;
+      }
+      if (flags.scan) await scanQuiet(e, out);
+      const now = Date.now();
+      const cached = cachedPRs(e.cache);
+      const loaded = loadCache(e.cache);
+      const a = attribute(loaded, hubName(), readPhaseLog(e.usageDir));
+      const prs = cached?.prs ?? [];
+      const rows = prTable(a, prs, ptMidnight(DEFAULT_SINCE));
+      const pr = readPriors(e.usageDir);
+      const fit = fitModel({
+        rows: readMeter(e.usageDir).rows,
+        manual: readManual(e.usageDir),
+        calls: loaded.calls,
+        now,
+      });
+      const { units, band, k } = estimateBasis(rows, fit, pr.priors);
+      const inp = { lines, ui, lenses, fanout };
+      out(
+        estimateLines({
+          inp,
+          e: predict(units, inp, band, k),
+          units,
+          band,
+          k,
+          hubPerPR: rows.length ? overhead(a, rows, prs).perPR : null,
+          cache: loaded.calls.length ? { prs: prs.length, to: loaded.calls.at(-1)!.ts } : null,
+          priorsNote: pr.note,
+        }).join('\n'),
+      );
       return 0;
     }
     case 'doctor': {

@@ -61,11 +61,19 @@ export function normalizeModel(id: string): string {
     .replace(/\./g, '-');
 }
 
-export function priceCall(
+// A call's QU in three parts: re-reading the cached context, ingesting new tokens (input and cache writes), and
+// output. They sum to priceCall's qu.
+export interface Parts {
+  reread: number;
+  ingest: number;
+  output: number;
+}
+
+export function priceParts(
   model: string,
   t: Tokens,
   opts: { fast?: boolean; unsplit?: boolean } = {},
-): { qu: number; flags: PriceFlag[] } {
+): { qu: number; parts: Parts; flags: PriceFlag[] } {
   const flags: PriceFlag[] = [];
   let key = normalizeModel(model);
   if (key === 'haiku-5-5' && t.i + t.cw5 + t.cw1 + t.cr > HAIKU_LONG_OVER) key = 'haiku-5-5-long';
@@ -75,9 +83,19 @@ export function priceCall(
   const fast = opts.fast ? 2 : 1;
   if (opts.fast) flags.push('fast');
   if (opts.unsplit) flags.push('cw-unsplit');
-  const qu =
-    ((t.i * price.in + t.cw5 * price.cw5 + t.cw1 * price.cw1 + t.cr * price.cr + t.o * price.out) *
-      fast) /
-    1e6;
+  const parts = {
+    reread: (t.cr * price.cr * fast) / 1e6,
+    ingest: ((t.i * price.in + t.cw5 * price.cw5 + t.cw1 * price.cw1) * fast) / 1e6,
+    output: (t.o * price.out * fast) / 1e6,
+  };
+  return { qu: parts.reread + parts.ingest + parts.output, parts, flags };
+}
+
+export function priceCall(
+  model: string,
+  t: Tokens,
+  opts: { fast?: boolean; unsplit?: boolean } = {},
+): { qu: number; flags: PriceFlag[] } {
+  const { qu, flags } = priceParts(model, t, opts);
   return { qu, flags };
 }

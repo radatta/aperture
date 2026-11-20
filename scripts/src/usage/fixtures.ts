@@ -1,5 +1,6 @@
 // Synthetic builders for the usage tests. Every id, name, number and timestamp here is invented (the repo is
 // public: docs/ops/PUBLIC-CONTENT.md) — never paste a real transcript row or meter reading in.
+import type { PRRow } from './prs.ts';
 
 export const SID = '00000000-0000-4000-8000-000000000001';
 export const SID2 = '00000000-0000-4000-8000-000000000002';
@@ -92,4 +93,35 @@ export function meterRow(o: {
         : { seven_day: { used_percentage: o.pct ?? 10, resets_at: o.resetsAt ?? 1_800_000_000 } },
     lv: 1,
   });
+}
+
+// A merged PR's row (prs.ts PRRow), every field invented; overrides win.
+export function prRow(o: Partial<PRRow> = {}): PRRow {
+  return {
+    number: 1,
+    branch: 'lane-a',
+    type: 'feature',
+    mergedAt: Date.parse('2026-01-05T12:00:00Z'),
+    files: 10,
+    lines: 500,
+    qu: 10,
+    byPhase: {},
+    turns: 100,
+    subagents: 0,
+    workflowShare: 0,
+    rounds: 1,
+    roundStarts: [],
+    localRuns: 0,
+    devRuns: 0,
+    start: null,
+    sessions: [],
+    rechecks: 0,
+    filesCut: false,
+    ui: false,
+    runs: [{ agentType: 'review-tests', model: 'claude-sonnet-5-5', qu: 0.5 }],
+    mainQU: 8,
+    ctxSumM: 20,
+    lensRegime: true,
+    ...o,
+  };
 }

@@ -48,6 +48,11 @@ describe('parseLaneArgs', () => {
     expect(() => parseLaneArgs(['dev', '--needs', 'x', '--cmd', 'a\nb'])).toThrow(/one line/);
     expect(() => parseLaneArgs(['dev', '--link', 'https://a'])).toThrow(/go with --needs/);
   });
+  it("writes FEATURE-WORKFLOW's ready (phase 7) as local, and no other alias", () => {
+    expect(parseLaneArgs(['ready', '--step', 'review done']).phase).toBe('local');
+    expect(() => parseLaneArgs(['constructor'])).toThrow(/unknown phase/);
+    expect(() => parseLaneArgs(['build', 'ready'])).toThrow(/unknown phase/);
+  });
   it('refuses unknown phases, flags and missing values', () => {
     expect(() => parseLaneArgs(['shipping'])).toThrow(/unknown phase/);
     expect(() => parseLaneArgs(['build', '--force'])).toThrow(/unknown flag/);
@@ -175,6 +180,15 @@ describe('laneEta', () => {
 
 describe('writeLane', () => {
   const args = (a: string[]): LaneArgs => parseLaneArgs(a);
+  it('takes ready up to local, never back from dev or later (that ready is the queue READY)', () => {
+    const d = dir();
+    writeLane(d, args(['review']), env());
+    expect(writeLane(d, args(['ready']), env(T1))).toBe('lane tower-web: local');
+    writeLane(d, args(['pr']), env(T1));
+    expect(() => writeLane(d, args(['ready']), env(T1))).toThrow(/at pr.*hub's to set/);
+    expect(read(d)).toMatchObject({ phase: 'pr' });
+    expect(writeLane(d, args(['local']), env(T1))).toBe('lane tower-web: local'); // the real name still goes back
+  });
   it('writes tmp + rename, keeps phaseSince while the phase is unchanged and resets it on a change', () => {
     const d = dir();
     expect(writeLane(d, args(['review', '--step', 'round 1 of 3']), env())).toBe(

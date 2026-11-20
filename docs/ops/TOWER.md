@@ -470,7 +470,9 @@ pnpm board lane <phase> [--step <text>] [--pr <n>] [--slot dev|devb] [--session 
 pnpm board lane --clear          (Cleanup)
 ```
 
-- Phases: `plan` `build` `gate` `review` `local` `dev` `pr` `merged` `cleanup` `parked` `blocked`.
+- Phases: `plan` `build` `gate` `review` `local` `dev` `pr` `merged` `cleanup` `parked` `blocked`. `ready`
+  (FEATURE-WORKFLOW's phase 7, _Ready for dev_) is written as `local`, the phase it hands into; from `dev` on it is
+  refused, since that `ready` would be the queue's merge-ready, which is the hub's to set.
 - The branch and sha come from git, never from an argument. The branch must match `^[a-z0-9][a-z0-9-]{0,62}$`.
 - The session comes from the board's registry.
 - The file is written tmp + rename into the board dir (`boardDir()`: `APERTURE_BOARD_DIR`, else

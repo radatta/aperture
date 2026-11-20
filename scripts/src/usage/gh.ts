@@ -112,3 +112,13 @@ export async function mergedPRs(
     };
   }
 }
+
+// The cached PR list as it is, never refetched (`pnpm usage estimate` stays offline); null with no cache.
+export function cachedPRs(cache: string): { prs: PR[]; fetchedAt: number } | null {
+  try {
+    const c = JSON.parse(readFileSync(join(cache, 'prs.json'), 'utf8'));
+    return Array.isArray(c?.prs) ? { prs: c.prs as PR[], fetchedAt: Number(c.fetchedAt) } : null;
+  } catch {
+    return null;
+  }
+}

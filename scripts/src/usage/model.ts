@@ -33,6 +33,28 @@ import {
 import { concurrency, reviewRounds, type Concurrency, type JobEvent } from './questions.ts';
 import { maxOf, median, minOf, shrinkLog, spearman } from './stats.ts';
 import type { Loaded } from './store.ts';
+import {
+  backtest,
+  bandOf,
+  DEFAULT_PRIORS,
+  fitUnits,
+  regimeRows,
+  type Backtest,
+  type Priors,
+  type Range,
+  type Units,
+} from './estimate.ts';
+import type { PhaseLogRow } from './phaselog.ts';
+import type { PhaseSrc } from './phases.ts';
+import {
+  agentPrices,
+  ctxBands,
+  growth,
+  splitTotals,
+  type AgentPrice,
+  type Band,
+  type Split,
+} from './units.ts';
 
 // QU between two instants from time-sorted calls, by prefix sums.
 export function quIndex(calls: { ts: number; qu: number }[]) {
@@ -223,6 +245,110 @@ export interface ReportModel {
   unattributedShare: number | null; // of lane QU in PR windows
   rounds: ReturnType<typeof reviewRounds>;
   concurrency: Concurrency;
+  work: WorkModel;
+}
+
+// The work-units half (docs/ops/USAGE-METER.md → Work units): over lane calls since --since and the merged PRs.
+export interface WorkModel {
+  split: { main: Split; agents: Split };
+  bands: Band[];
+  growth: { turn: number; ctx: number; n: number }[];
+  prices: AgentPrice[]; // over the lens-regime PRs
+  units: Units;
+  backtest: Backtest;
+  band: Range;
+  priorsNote: string | null; // which priors: priors.json, or the placeholders
+  filesCut: number; // fit-set PRs whose file list gh cut at 100
+  sources: { src: PhaseSrc | 'none'; share: number }[]; // of lane QU in PR windows
+  noPhasePastPlan: string[]; // lens-regime PR branches whose tracks never wrote an explicit phase past plan
+  logRows: number;
+  oldParser: number;
+  shards: number;
+}
+
+const PAST_PLAN = new Set(['build', 'gate', 'review', 'local', 'dev', 'pr', 'merged', 'cleanup']);
+
+export function workModel(
+  a: ReturnType<typeof attribute>,
+  rows: PRRow[],
+  o: {
+    since: number;
+    log: PhaseLogRow[];
+    oldParser: number;
+    shards: number;
+    priors?: { priors: Priors; note: string };
+  },
+): WorkModel {
+  const P = o.priors?.priors ?? DEFAULT_PRIORS;
+  const lane = a.calls.filter((c) => c.role === 'lane' && c.ts >= o.since);
+  const tracks = new Map<string, typeof lane>();
+  for (const c of lane)
+    if (c.kind === 'main') tracks.set(c.track, [...(tracks.get(c.track) ?? []), c]);
+  const covered = rows.filter((r) => r.qu > 0);
+  // a PR window's lane calls, by what set their phase
+  const inPR = new Set(covered.flatMap((r) => r.sessions));
+  const bySrc = new Map<PhaseSrc | 'none', number>();
+  let total = 0;
+  for (const r of covered) {
+    const lo = r.start ?? -Infinity;
+    for (const c of a.calls)
+      if (
+        c.lane === r.branch &&
+        c.role === 'lane' &&
+        c.ts >= lo &&
+        c.ts <= r.mergedAt &&
+        inPR.has(c.track)
+      ) {
+        bySrc.set(c.phaseSrc, (bySrc.get(c.phaseSrc) ?? 0) + c.qu);
+        total += c.qu;
+      }
+  }
+  // over the lens regime only: the current workflow, where every lane writes its phases; older PRs predate that
+  const noPhasePastPlan = regimeRows(covered)
+    .filter(
+      (r) =>
+        !r.sessions.some((t) =>
+          (a.markers.get(t) ?? []).some(
+            (m) =>
+              m.kind === 'lane-phase' && m.phase && PAST_PLAN.has(m.phase) && m.ts <= r.mergedAt,
+          ),
+        ),
+    )
+    .map((r) => r.branch);
+  const bt = backtest(rows, P);
+  return {
+    split: splitTotals(lane),
+    bands: ctxBands(lane.filter((c) => c.kind === 'main')),
+    growth: growth([...tracks.values()]),
+    prices: agentPrices(regimeRows(rows)),
+    units: fitUnits(rows, P),
+    backtest: bt,
+    band: bandOf(bt, P),
+    priorsNote: o.priors?.note ?? null,
+    filesCut: regimeRows(rows).filter((r) => r.filesCut).length,
+    sources: (['marker', 'log', 'heuristic', 'none'] as const).map((src) => ({
+      src,
+      share: total ? (bySrc.get(src) ?? 0) / total : 0,
+    })),
+    noPhasePastPlan,
+    logRows: o.log.length,
+    oldParser: o.oldParser,
+    shards: o.shards,
+  };
+}
+
+// What an estimate stands on: the units fitted from the PR table, the band from its backtest, and k from the meter's
+// fit when it has one with an 80% interval, each falling back to the priors.
+export function estimateBasis(rows: PRRow[], fit: ReturnType<typeof fitModel>, P: Priors) {
+  const k80 = fit.all.unc?.k80;
+  return {
+    units: fitUnits(rows, P),
+    band: bandOf(rows.length ? backtest(rows, P) : null, P),
+    k:
+      fit.all.fit && fit.all.fit.k > 0 && k80
+        ? { k: fit.all.fit.k, lo: k80.lo, hi: k80.hi, basis: 'fitted' as const }
+        : { ...P.k, basis: 'prior' as const },
+  };
 }
 
 export function reportModel(o: {
@@ -235,9 +361,12 @@ export function reportModel(o: {
   since: number;
   hub: string;
   now: number;
+  phaseLog?: PhaseLogRow[];
+  priors?: { priors: Priors; note: string };
 }): ReportModel {
   const fit = fitModel({ rows: o.rows, manual: o.manual, calls: o.loaded.calls, now: o.now });
-  const a = attribute(o.loaded, o.hub);
+  const log = o.phaseLog ?? [];
+  const a = attribute(o.loaded, o.hub, log);
   const rows = prTable(a, o.prs, o.since);
   const covered = rows.filter((r) => r.qu > 0);
   const k = fit.all.fit?.k ?? null;
@@ -356,5 +485,12 @@ export function reportModel(o: {
       : null,
     rounds: reviewRounds(a, rows, o.reports),
     concurrency: concurrency(a, rows, o.events, o.since),
+    work: workModel(a, rows, {
+      since: o.since,
+      log,
+      oldParser: o.loaded.oldParser,
+      shards: o.loaded.sessions.length,
+      priors: o.priors,
+    }),
   };
 }

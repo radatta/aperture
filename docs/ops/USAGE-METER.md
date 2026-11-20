@@ -7,22 +7,23 @@ Code: `scripts/src/usage/`. Data: the gitignored `localNotes/usage/`, never a tr
 real numbers, costs and session ids stay out of tracked text; fixtures are synthetic.
 
 ```
-status line ─► statusline-log.sh ─► meter-<day>.jsonl ──┐
-                                                         ├─► k (fit) ─► % per PR type
-~/.claude/projects/**.jsonl ─► scan ─► cache/shards ─────┘     ▲
-                                  └─► phases ─► PR table ──────┘
+status line ─► statusline-log.sh ─► meter-<day>.jsonl ─► k (fit)
+~/.claude/projects/**.jsonl ─► scan ─► cache/shards ─► phases ─► PR table
+board/lanes/*.json ─► phase-log.sh ─► phase-log.jsonl ─► phases
+PR table ─► per PR type · work units ─► estimate + backtest · k turns QU into %
 ```
 
 ## Commands
 
-| Command                                              | Does                                                                                                                                                                                                                          |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm usage report [--since YYYY-MM-DD] [--refresh]` | Scans, then prints the full model and writes `localNotes/usage/report-<day>.md`. `--since` defaults to 2026-11-04; `--refresh` refetches merged PRs.                                                                          |
-| `pnpm usage fit`                                     | Only k, its interval, the holdout and the burn rate.                                                                                                                                                                          |
-| `pnpm usage line`                                    | One line: `usage <n>% · <r>%/h · ~<h> h to 100%`. Not wired into the status line or tower yet (a follow-up).                                                                                                                  |
-| `pnpm usage burn [--at <HH:MM>]`                     | The hub's `/burn`: usage now, and where it lands at the weekly reset and at HH:MM, low–high: k's 80% interval × the last hour's QU (+ λ), widened to hold the meter's tick rate (`burn.ts`). Scans first, unless `--no-scan`. |
-| `pnpm usage scan [--rate <MB/s>]`                    | Only the transcript scan (default 40, at most 60).                                                                                                                                                                            |
-| `pnpm usage doctor`                                  | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                                                                                           |
+| Command                                                                             | Does                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm usage report [--since YYYY-MM-DD] [--refresh]`                                | Scans, then prints the full model and writes `localNotes/usage/report-<day>.md`. `--since` defaults to 2026-11-04; `--refresh` refetches merged PRs.                                                                          |
+| `pnpm usage fit`                                                                    | Only k, its interval, the holdout and the burn rate.                                                                                                                                                                          |
+| `pnpm usage line`                                                                   | One line: `usage <n>% · <r>%/h · ~<h> h to 100%`. Not wired into the status line or tower yet (a follow-up).                                                                                                                  |
+| `pnpm usage burn [--at <HH:MM>]`                                                    | The hub's `/burn`: usage now, and where it lands at the weekly reset and at HH:MM, low–high: k's 80% interval × the last hour's QU (+ λ), widened to hold the meter's tick rate (`burn.ts`). Scans first, unless `--no-scan`. |
+| `pnpm usage estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--scan]` | A task's QU and meter %, low–high, from what is known before the work (_Estimate_). Offline: the cache and `cache/prs.json` as they are; `--scan` scans first.                                                                |
+| `pnpm usage scan [--rate <MB/s>]`                                                   | Only the transcript scan (default 40, at most 60).                                                                                                                                                                            |
+| `pnpm usage doctor`                                                                 | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                                                                                           |
 
 `--no-scan` on report, fit and line skips the scan. `-h` on any command prints its usage and runs nothing. `--since`
 is midnight Pacific on that day, in its own offset.
@@ -87,11 +88,17 @@ The transcript store sits on the container's root disk, and COI pauses the conta
   two files is counted once: owned by the file whose session wrote the row (a forked copy carries the original's
   `sessionId`, unverified on a real fork), then by a subagent's own file over its parent's, then by the earlier
   sighting.
-- **Markers:** each call's tool uses become enum-only markers for the phases: an explicit `pnpm board lane <phase>`,
-  a Plan or `code-reviewer` spawn, a source/test/docs/notes edit, a full `pnpm typecheck|lint|test` (no file
-  argument), `devcheck:local`, `devcheck`, `bot push|deploy-dev`, `mailroom open-pr`, `git commit`. A command counts
-  only at command position (line start, after `&&`/`;`/`|`, env assignments or `heavy.sh --`), so a grep or echo of
-  one doesn't; a quoted string that itself contains `; pnpm …` still can. Each marker keeps its tool-use id. The cache
+- **Markers:** each call's tool uses become enum-only markers for the phases: an explicit `pnpm board lane <phase>`
+  (`ready` read as `local`, as the CLI writes it), every agent spawn with its type (Plan and `code-reviewer` also as
+  their own kinds), a source/test/docs/notes edit, a full `pnpm typecheck|lint|test` (no file argument, no
+  `-C`/`--dir`: that is one package's) or `pnpm gate:fast` (its flags allowed, `--dry-run` and `--help` not: they run
+  nothing), `devcheck:local`, `devcheck`, `bot push|deploy-dev`, `mailroom open-pr`, `git commit`. pnpm's own
+  options before the script name (`-s`, `--silent`, `-w`, `-C <dir>`, `--dir`) are allowed: lanes run
+  `pnpm -s board lane …`, which the parser missed before 2026-11-19, so lanes that had written their phases looked
+  like they never left plan.
+  A command counts only at command position (line start, after `&&`/`;`/`|`, env assignments or `heavy.sh --`), so a
+  grep or echo of one doesn't; a quoted string that itself contains `; pnpm …` still can. Each marker keeps its
+  tool-use id. The cache
   keeps no command text or content; per transcript it keeps its relative path, its first row's cwd and the session
   name (pattern-checked).
 - **Cache** (`localNotes/usage/cache/`): one shard per transcript file, plus `index.json` with each file's size,
@@ -148,8 +155,11 @@ Lane status files hold only the current phase, so each **track** (one session's 
 from its own markers (`phases.ts`), in FEATURE-WORKFLOW.md's order: plan → build → gate → review → local → dev → pr →
 post.
 
-- An explicit `pnpm board lane <phase>` wins from the first one on. Before it, tool-use heuristics move the phase
-  forward.
+- An explicit phase wins from the first one on: a `pnpm board lane <phase>` in the transcript, or a phase-log row
+  (_Phase log_). Before it, tool-use heuristics move the phase forward. A phase-log row is the lane's, not a
+  session's: it joins every track of its lane whose main-session calls span its time, give or take 2 minutes. A
+  track with no row in its span (a lane resumed in a new session) opens at the lane's last logged phase before it,
+  unless that row was the lane file's removal.
 - A source edit while in gate goes back to build (a red gate's fix; a green one can't be told apart). After the first
   review, fixes stay in review.
 - A Plan run after the PR step starts the next cycle on the same track.
@@ -160,6 +170,9 @@ post.
   `cd`s.
 - The report gives how far the heuristics agree with explicit markers on tracks that have both. That agreement is
   the stated accuracy for older lanes, which only have heuristics.
+- _Phase sources_ in the report: the share of lane QU in PR windows whose phase a marker, the phase log, a heuristic
+  or nothing set, and the lens-regime PRs whose lane never wrote an explicit phase past plan, by name. That list is the check
+  that lanes write their phases: a name on it is a lane to ask why.
 
 ## PR table and types
 
@@ -170,7 +183,10 @@ For the last PR on a branch, the window runs 6 hours past the merge, which cover
 row lists:
 
 - files and lines changed;
-- review rounds: `review` markers, a new round after 10 quiet minutes;
+- review rounds: `review` markers and every review lens's spawn (`code-reviewer`, `review-*`), a new round after 10
+  quiet minutes, so each `review-fixes` recheck after a fix pass is a round of its own (it has no marker otherwise);
+- rechecks (`review-fixes` runs, by tool-use id, so a fork's copied spawn counts once), ui (any file under `app/` or `extension/`), each agent run's type, model and QU,
+  the main session's QU and its context summed over turns, and the lens regime (any `review-*` lens ran);
 - local and dev devcheck runs;
 - turns: main-session calls;
 - subagent runs;
@@ -190,6 +206,80 @@ percent via k, with k's spread added in. **With fewer than 9 PRs a type shows mi
 not a P80.** The
 hub's QU over the PR window is overhead: shown per merged PR and kept out of the type medians. So are ad hoc
 main-checkout sessions and lanes with no merged PR.
+
+## Work units
+
+The 11-19 work-units analysis (`localNotes/usage/work-units-analysis.md`) found the root unit is the **main-session
+turn, priced by the context it re-reads**: turn count explains most of a PR's QU, lane-hours far less. The report
+measures the units from the cache:
+
+- **Where the QU goes:** each call's QU split into re-read (cache reads), ingest (input and cache writes) and output,
+  main sessions apart from agents (`priceParts`, which sums to the call's QU).
+- **Context bands:** main-session turns by the context each read (under 100k, then each 100k to 500k, 500k+): share,
+  QU per turn and re-read per turn. A turn's cost rises with the context it carries.
+- **Turn and context model:** the fitted constants below, and the median context at a lane session's turns 1, 10,
+  50, 100 and 200 (turn 1 is the fixed load a session starts with).
+- **Agent prices:** each agent type × model, runs and QU per run (median, p25–p75) — lens prices differ several-fold
+  by model, so they are never one "subagents" lump.
+
+## Estimate
+
+```
+T      = exp(a + b·ln lines + c·ui) · smear                     turns, smear = mean exp(residual)
+main   = a + b·T + c·ctxSumM,   ctxSumM = T·(g0 + g1·T) / 1e6   the average context grows with the turns
+agents = Plan + rules + the other lenses + rechecks(lines, ui) · recheck price + fan-out · general-purpose price
+QU     = main + agents;  meter % = k · QU
+```
+
+- **The fit set** is the merged PRs in the **lens regime** (a `review-*` lens ran) with calls, turns and lines: it
+  defines itself from the data and grows as PRs merge. Every constant is refit on each run.
+- **Priors:** a constant falls back to its prior, tagged `[prior]` in the output: every regression under 12 fit-set
+  PRs; the ui coefficient alone (the rest fitted) under 3 PRs in either ui class; a recheck's or fan-out agent's price under 5 runs, Plan's or a lens's under 5 PRs.
+  The priors are `<usage dir>/priors.json`, gitignored like the rest of the usage dir, because a real fit's values are
+  usage numbers and costs. Its shape is `estimate.ts` → `Priors` (`turns`, `main`, `ctx`, `rechecks`, `prices`,
+  `band`, `k`); any subset overlays the tracked defaults, keys starting `_` are comments, and a key or value that
+  doesn't fit is named in the output and ignored. The tracked defaults (`DEFAULT_PRIORS`) are invented placeholders so
+  a fresh checkout and CI run end to end; without the file, the estimate and the report say so. The numbers don't
+  transfer between repos (the analysis's sister-project addendum); the structure does, so another repo's cache
+  refits them.
+- **Prices:** Plan and each lens per PR (the median, over PRs that ran it, of what one PR spent on it); a recheck and
+  a fan-out agent per run, times its count. Plan and the rules lens always run; `--lenses` names the rest
+  (`rules correctness tests shell infra ui extension`; default `correctness,tests`, plus `ui` with `--ui`).
+- **The range** is the backtest's 10th–90th percentile errors on the point, once it has 12 PRs; before that ÷/× the
+  prior `band`. The meter % multiplies the ends by k's 80% interval (`usage fit`), or the prior k when the meter
+  can't fit one.
+- **The hub** is not in the estimate: the output adds its measured QU per merged PR as a separate line.
+- **Backtest**, in every report: leave-one-out over the fit set, each PR predicted from a refit on the others
+  (regressions and prices), from its merged lines, paths, the lenses it ran and its general-purpose runs, beside the
+  PR-type median of the others (the forecast this replaces): rms and median error, PRs within ×1.5, totals, and the
+  newest 30 PRs. The merged diff and the lens set as run are known only afterwards, so a live estimate carries more
+  error than the backtest shows.
+
+## Phase log
+
+`scripts/board/phase-log.sh --once` is the zero-token phase logger: plain bash and `jq`, no Claude, no hub wake. The
+board sampler's loop runs it every tick, in the background (`docs/ops/SESSION-BOARD.md` → _Watchers_). Each pass
+compares the lane files (`board/lanes/*.json`) with its state (`board/phase-log.state`) and appends one row per
+change to `<usage dir>/phase-log.jsonl`:
+
+```
+{"v":1,"lane":"<branch>","from":"<phase>"|null,"to":"<phase>"|null,"ts":"<ISO>","pct":<weekly %>|null}
+```
+
+- `from: null` is a first sighting (a new lane, or the logger's first pass); `to: null` is the file gone
+  (`--clear`, `lanes end`). A same-phase rewrite (`board lane build --step …`) is no change; a phase that left and
+  came back between passes is, since `phaseSince` moved.
+- `ts` is the file's own `phaseSince`, so a 30 s pass loses no precision (a removed file: the pass's time).
+- `pct` is the account's weekly % at the pass, as `usage-watch.sh` reads it: the max over meter rows from the last
+  `watchers.usage.freshSec`; null with no fresh row. On a first sighting, or after the sampler was down, the pass
+  can come well after `ts`, so `pct` then trails it.
+- A torn lane file is skipped with its state kept; a removed file is one the pass didn't see. A failed append, or a
+  row that failed to build (a refused fork), leaves the state alone, so the next pass writes the same rows; a torn
+  last line in the log gets a newline first; a lost state file repeats rows, which the reader keeps once (by lane,
+  phase and time). One pass at a time (`flock` on `phase-log.state.lock`; a pass that finds it held does nothing),
+  and the sampler cuts a pass off at 25 s. It always exits 0 and prints nothing; trouble goes to
+  `board/phase-log.log`, the sampler's copy of its stderr too. `APERTURE_PHASE_LOG` and `APERTURE_PHASE_STATE`
+  override its two files.
 
 ## The two measure-first questions
 
@@ -216,6 +306,13 @@ main-checkout sessions and lanes with no merged PR.
 - Phase heuristics before explicit lane markers are approximate. The agreement figure says how approximate.
 - A transcript Claude Code deleted before its first scan is gone, so early PRs can show "no calls" and leave the type
   statistics. Once scanned, a shard outlives its transcript, and a `PARSER` bump rereads only the transcripts still
-  there: older shards keep the earlier parser's output.
+  there: older shards keep the earlier parser's output. Each shard records the parser that built it, and _Phase
+  sources_ counts those on an older one.
+- Two checkouts on different `PARSER`s sharing one cache reread everything on each other's scans: a branch that
+  bumps it runs its real-data checks against its own `APERTURE_USAGE_DIR` until it merges.
+- gh lists at most 100 files per PR, so a bigger PR's ui flag is read from part of its list; the _Turn and context
+  model_ section counts those fit-set PRs.
+- The phase logger samples once a tick: a phase held for less than one pass (30 s) is missed; the transcript's
+  explicit markers still carry it.
 - Meter intervals are few, and whole-percent readings are coarse, so k's interval is wide. Read the interval, not the
   point.

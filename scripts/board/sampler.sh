@@ -2,8 +2,8 @@
 # Background usage sampler: one tick every SAMPLER_INTERVAL s (30) → board/history/samples-<date>.jsonl,
 # plus board/status.line. One per container (flock, waited for up to 5 s: status/json probes hold it for
 # microseconds); started by `board.sh sampler start`, dies with the container. Bash, one awk and a few jq per tick
-# (sessions, slots, lane phases), plus the RTT probe's curl after it in the background; reads /proc/<pid>/{stat,cmdline}
-# only (shape rules: lib.sh).
+# (sessions, slots, lane phases), plus the RTT probe's curl and the phase logger (phase-log.sh) after it in the
+# background; reads /proc/<pid>/{stat,cmdline} only (shape rules: lib.sh).
 #   sampler.sh          run forever
 #   sampler.sh --once   one tick, no lock (tests, probe)
 #   sampler.sh --print  compute a tick to stdout; writes nothing (board.sh status/json)
@@ -128,6 +128,12 @@ while :; do
   if [ $((n % 10)) -eq 0 ] && ! { [ -n "${dl:-}" ] && kill -0 "$dl" 2>/dev/null; }; then
     APERTURE_DEVLOCK_CALLER=sampler bash "$SB_SCRIPTS/devlock.sh" refresh --max-age 240 >/dev/null 2>&1 8>&- &
     dl=$!
+  fi
+  # The phase logger every tick (phase-log.sh: lane phase changes → the usage dir's phase-log.jsonl), in the background,
+  # skipped while the last one still runs, cut off at 25 s so a stuck pass can't block the rest; same fd 8 rule.
+  if ! { [ -n "${pl:-}" ] && kill -0 "$pl" 2>/dev/null; }; then
+    timeout 25 bash "$SB_SCRIPTS/phase-log.sh" --once >/dev/null 2>>"$BOARD_DIR/phase-log.log" 8>&- &
+    pl=$!
   fi
   # The RTT probe after the tick, in the background (≤ 5 s; its own floor, above); same fd 8 rule.
   if [ -n "$probe_host" ] && ! { [ -n "${np:-}" ] && kill -0 "$np" 2>/dev/null; }; then

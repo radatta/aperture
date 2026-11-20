@@ -42,9 +42,12 @@ const HEURISTIC: Partial<Record<Marker['kind'], Phase>> = {
   pr: 'pr',
 };
 
+// Where a step came from: an explicit `pnpm board lane` in the transcript, the phase logger, or tool-use heuristics.
+export type PhaseSrc = 'marker' | 'log' | 'heuristic';
 export interface Step {
   ts: number;
   phase: Phase;
+  src: PhaseSrc;
 }
 
 // A session's phase timeline. With any explicit marker, heuristics count only before the first one (a lane that
@@ -57,15 +60,15 @@ export function timeline(markers: Marker[]): Step[] {
   const out: Step[] = [];
   let cur = 'unattributed' as Phase;
   let reviewed = false;
-  const set = (ts: number, p: Phase) => {
+  const set = (ts: number, p: Phase, src: PhaseSrc = 'heuristic') => {
     if (p === cur) return;
     cur = p;
-    out.push({ ts, phase: p });
+    out.push({ ts, phase: p, src });
   };
   for (const m of ms) {
     if (m.kind === 'lane-phase') {
       const p = m.phase ? EXPLICIT[m.phase] : null;
-      if (p) set(m.ts, p);
+      if (p) set(m.ts, p, m.src === 'log' ? 'log' : 'marker');
       if (p === 'review') reviewed = true;
       continue;
     }
@@ -87,11 +90,11 @@ export function timeline(markers: Marker[]): Step[] {
     if (order(p) > order(cur)) set(m.ts, p);
   }
   // calls before the first marker were the kickoff's reading: plan, when planning came first
-  if (out[0]?.phase === 'plan') out[0] = { ts: -Infinity, phase: 'plan' };
+  if (out[0]?.phase === 'plan') out[0] = { ...out[0], ts: -Infinity };
   return out;
 }
 
-export function phaseAt(steps: Step[], ts: number): Phase {
+export function stepAt(steps: Step[], ts: number): Step | null {
   let lo = 0;
   let hi = steps.length;
   while (lo < hi) {
@@ -99,13 +102,21 @@ export function phaseAt(steps: Step[], ts: number): Phase {
     if (steps[mid]!.ts <= ts) lo = mid + 1;
     else hi = mid;
   }
-  return lo ? steps[lo - 1]!.phase : 'unattributed';
+  return lo ? steps[lo - 1]! : null;
 }
+export const phaseAt = (steps: Step[], ts: number): Phase =>
+  stepAt(steps, ts)?.phase ?? 'unattributed';
 
-// Clusters of markers of one kind, a new cluster after `gapMin` quiet minutes: review rounds, devcheck runs.
-export function clusters(markers: Marker[], kinds: Marker['kind'][], gapMin = 10): number[] {
+// Clusters of markers, a new cluster after `gapMin` quiet minutes: review rounds, devcheck runs. `which` is the kinds
+// to count, or a predicate.
+export function clusters(
+  markers: Marker[],
+  which: Marker['kind'][] | ((m: Marker) => boolean),
+  gapMin = 10,
+): number[] {
+  const pick = typeof which === 'function' ? which : (m: Marker) => which.includes(m.kind);
   const ts = markers
-    .filter((m) => kinds.includes(m.kind))
+    .filter(pick)
     .map((m) => m.ts)
     .sort((a, b) => a - b);
   // a gap is measured from the previous marker, not the cluster's start, so a long round stays one round

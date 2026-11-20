@@ -4,8 +4,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commands, usageFor, usageKeys } from '../bot/help.ts';
-import { FLAGS, USAGE, main, newestRowTs, parseArgs, ptMidnight, statuslineScript } from './cli.ts';
-import { mergedPRs, PR_LIMIT } from './gh.ts';
+import {
+  FLAGS,
+  USAGE,
+  lensTypes,
+  main,
+  newestRowTs,
+  parseArgs,
+  ptMidnight,
+  statuslineScript,
+} from './cli.ts';
+import { cachedPRs, mergedPRs, PR_LIMIT } from './gh.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
 import { fitModel, hoursTo100, scheduledResets } from './model.ts';
 import { boardLine } from './report.ts';
@@ -54,7 +63,60 @@ describe('usage cli … --help and refusals', () => {
     expect(await main(['nope'], out)).toBe(2);
     expect(await main(['scan', '--rate', '200'], out)).toBe(2);
     expect(await main(['report', '--since', 'last-tuesday', '--no-scan'], out)).toBe(2);
+    expect(await main(['estimate'], out)).toBe(2);
+    expect(await main(['estimate', '--lines', '1.5'], out)).toBe(2);
+    expect(await main(['estimate', '--lines', '300', '--lenses', 'correctness,vibes'], out)).toBe(
+      2,
+    );
+    expect(await main(['estimate', '--lines', '300', '--fanout', '-1'], out)).toBe(2);
     expect(existsSync(join(usage, 'cache'))).toBe(false);
+  });
+
+  it('maps --lenses names to agent types, defaulting to correctness and tests (and ui with --ui)', () => {
+    expect(lensTypes(undefined, false)).toEqual(['review-correctness', 'review-tests']);
+    expect(lensTypes(undefined, true)).toEqual(['review-correctness', 'review-tests', 'review-ui']);
+    expect(lensTypes('shell,infra,shell', false)).toEqual(['review-shell', 'review-infra']);
+    expect(lensTypes('', false)).toEqual([]);
+    expect(lensTypes('rules,nope', false)).toBeNull();
+  });
+
+  it('estimates offline with no cache from the priors alone, and says so', async () => {
+    expect(await main(['estimate', '--lines', '1000', '--ui', '--fanout', '2'], out)).toBe(0);
+    const text = lines.join('\n');
+    expect(text).toMatch(
+      /^estimate: 1000 lines, ui; lenses: Plan, code-reviewer, review-correctness, review-tests, review-ui; fan-out 2/,
+    );
+    expect(text).toContain('no usage cache: every constant is a prior');
+    expect(text).toContain('÷/× 2.00 prior');
+    expect(text).toMatch(/turns ~\d+ \[prior\]/);
+    expect(text).toMatch(
+      /priors: placeholders \(no .*priors\.json\); a \[prior\] number is invented/,
+    );
+    expect(existsSync(join(usage, 'cache'))).toBe(false); // offline: no scan, nothing written
+  });
+
+  it("takes the usage dir's priors.json over the placeholders, naming what it ignored", async () => {
+    // invented values, chosen to differ from the placeholders
+    writeFileSync(
+      join(usage, 'priors.json'),
+      JSON.stringify({
+        _source: 'a comment',
+        band: 3,
+        prices: { Plan: 4 },
+        turns: { a: 2, nope: 1 },
+        k: { k: 0.2, lo: 0.1, hi: 0.3 },
+      }),
+    );
+    expect(await main(['estimate', '--lines', '1000', '--lenses', ''], out)).toBe(0);
+    const text = lines.join('\n');
+    expect(text).toContain('÷/× 3.00 prior');
+    expect(text).toMatch(/Plan 4\.0\*/);
+    expect(text).toMatch(/k 0\.2000 \[prior\]/);
+    expect(text).toMatch(/priors: .*priors\.json; ignored, placeholders kept: turns\.nope$/m);
+    lines.length = 0;
+    writeFileSync(join(usage, 'priors.json'), '{not json');
+    expect(await main(['estimate', '--lines', '1000'], out)).toBe(0);
+    expect(lines.join('\n')).toMatch(/priors\.json isn't JSON, so placeholders/);
   });
 
   it('parses flags with values, = and bare', () => {
@@ -124,6 +186,18 @@ describe('since and merged PRs', () => {
     expect(calls).toHaveLength(1); // cached
     const b = await mergedPRs(cache, { since: '2025-12-01', now: 60_000, gh }); // another day refetches
     expect(b.note).toContain('the gh limit');
+  });
+
+  it('reads the PR cache offline, and nothing from a missing, torn or foreign one', () => {
+    const cache = join(usage, 'cache');
+    expect(cachedPRs(cache)).toBeNull();
+    mkdirSync(cache, { recursive: true });
+    writeFileSync(join(cache, 'prs.json'), '{"prs":[');
+    expect(cachedPRs(cache)).toBeNull();
+    writeFileSync(join(cache, 'prs.json'), '{}');
+    expect(cachedPRs(cache)).toBeNull();
+    writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: 5, prs: [] }));
+    expect(cachedPRs(cache)).toEqual({ prs: [], fetchedAt: 5 });
   });
 
   it('falls back to the cache with a note when gh fails, and fails loud with none', async () => {
@@ -316,6 +390,30 @@ describe('usage report end to end', () => {
         assistantRow({ id: 'm3', ts: ts(9) }),
       ].join('\n') + '\n',
     );
+    // each lane ran a review lens, so both are in the lens regime; lane-z never wrote a phase past plan
+    const lens = (proj: string, id: string, type: string, m: number, cwd?: string) => {
+      mkdirSync(join(projects, proj, SID, 'subagents'), { recursive: true });
+      writeFileSync(
+        join(projects, proj, SID, 'subagents', `agent-${id}.jsonl`),
+        assistantRow({ id: `${id}-1`, ts: ts(m), cwd }) + '\n',
+      );
+      writeFileSync(
+        join(projects, proj, SID, 'subagents', `agent-${id}.meta.json`),
+        JSON.stringify({ agentType: type }),
+      );
+    };
+    lens(P, 'c1', 'review-correctness', 6);
+    const Z = '-workspace--claude-worktrees-lane-z';
+    const WZ = '/workspace/.claude/worktrees/lane-z';
+    mkdirSync(join(projects, Z), { recursive: true });
+    writeFileSync(
+      join(projects, Z, `${SID}.jsonl`),
+      [
+        assistantRow({ id: 'z1', ts: ts(20), cwd: WZ, tools: [bash('pnpm -s board lane plan')] }),
+        assistantRow({ id: 'z2', ts: ts(25), cwd: WZ, tools: [agent('review-tests')] }),
+      ].join('\n') + '\n',
+    );
+    lens(Z, 't1', 'review-tests', 26, WZ);
     mkdirSync(join(usage, 'cache'), { recursive: true });
     writeFileSync(
       join(usage, 'cache', 'prs.json'),
@@ -333,6 +431,16 @@ describe('usage report end to end', () => {
             deletions: 1,
             files: ['app/a.ts'],
           },
+          {
+            number: 4,
+            title: 'z',
+            branch: 'lane-z',
+            mergedAt: Date.parse(ts(30)),
+            changedFiles: 1,
+            additions: 2,
+            deletions: 0,
+            files: ['scripts/z.ts'],
+          },
         ],
       }),
     );
@@ -340,6 +448,22 @@ describe('usage report end to end', () => {
     const text = lines.join('\n');
     expect(text).toContain('| 3 | lane-a | small-fix | 3 | 6 | 1 |');
     expect(text).toContain('Not enough data');
+    for (const h of [
+      '## Where the QU goes',
+      '## Turn and context model',
+      '## Agent prices',
+      '## Backtest',
+      '## Phase sources',
+    ])
+      expect(text).toContain(h);
+    // lane-a's review marker rides on its transcript; lane-z only ever wrote plan
+    expect(text).toContain('never wrote an explicit phase past plan: 1 (lane-z)');
+    expect(text).toMatch(
+      /a `pnpm board lane` marker (\d+)% · the phase log 0% · heuristics \d+% · nothing \d+%/,
+    );
+    expect(Number(/marker (\d+)%/.exec(text)![1])).toBeGreaterThan(0);
+    expect(text).toContain('Phase-log rows read: 0.');
+    expect(text).toMatch(/- priors: placeholders/);
     const day = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
     expect(readFileSync(join(usage, `report-${day}.md`), 'utf8')).toContain('## PR table');
     lines.length = 0;

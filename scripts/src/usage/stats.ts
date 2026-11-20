@@ -143,3 +143,39 @@ export function slope(x: number[], y: number[]): number {
   }
   return sxx ? sxy / sxx : NaN;
 }
+
+// Ordinary least squares, y on the columns of X (put a 1 column in for an intercept), by the normal equations and
+// Gauss-Jordan with partial pivoting. null when X'X is singular or there are no more rows than columns.
+export function ols(
+  X: number[][],
+  y: number[],
+): { coef: number[]; r2: number; resid: number[] } | null {
+  const p = X[0]?.length ?? 0;
+  if (!p || X.length <= p || X.length !== y.length) return null;
+  const A = Array.from({ length: p }, (_, i) => {
+    const row = Array.from({ length: p + 1 }, () => 0);
+    for (let n = 0; n < X.length; n++) {
+      for (let j = 0; j < p; j++) row[j]! += X[n]![i]! * X[n]![j]!;
+      row[p]! += X[n]![i]! * y[n]!;
+    }
+    return row;
+  });
+  for (let c = 0; c < p; c++) {
+    let piv = c;
+    for (let r = c + 1; r < p; r++) if (Math.abs(A[r]![c]!) > Math.abs(A[piv]![c]!)) piv = r;
+    if (Math.abs(A[piv]![c]!) < 1e-12) return null;
+    [A[c], A[piv]] = [A[piv]!, A[c]!];
+    for (let r = 0; r < p; r++) {
+      if (r === c) continue;
+      const f = A[r]![c]! / A[c]![c]!;
+      for (let j = c; j <= p; j++) A[r]![j]! -= f * A[c]![j]!;
+    }
+  }
+  const coef = A.map((row, i) => row[p]! / row[i]!);
+  const fitted = X.map((row) => row.reduce((s, x, j) => s + x * coef[j]!, 0));
+  const resid = y.map((v, i) => v - fitted[i]!);
+  const my = mean(y);
+  const ssTot = y.reduce((s, v) => s + (v - my) ** 2, 0);
+  const ssRes = resid.reduce((s, r) => s + r * r, 0);
+  return { coef, r2: ssTot ? 1 - ssRes / ssTot : NaN, resid };
+}
