@@ -17,17 +17,17 @@ const BOOKS_CHARGE = /devcheck books/i; // a card charge the search can link the
 const GROCER = /devcheck grocer/i; // a long merchant, for the row's truncation
 const DINNER = /devcheck dinner/i; // a checking debit…
 const PAYBACK = /devcheck payback/i; // …and the deposit that reverses it: money in with one suggestion
-const FIXTURE_HELP =
+export const FIXTURE_HELP =
   'link the Plaid Sandbox fixture as the devcheck test user (docs/ops/DEV-CHECK.md → One-time setup 3)';
 
-const allTab = async (ctx: Ctx, search: string) => {
+export const allTab = async (ctx: Ctx, search: string) => {
   await ctx.ui.goto('/finances/all');
   const box = ctx.page.getByRole('searchbox', { name: 'Search transactions' });
   await box.waitFor({ timeout: 15_000 });
   await box.fill(search);
 };
-// Opens a row's detail from the All tab, searched down to it.
-async function openRow(ctx: Ctx, name: RegExp, title: RegExp) {
+// Opens a row's detail from the All tab, searched down to it. These helpers are shared with finance-splits.
+export async function openRow(ctx: Ctx, name: RegExp, title: RegExp) {
   await allTab(ctx, name.source.replace(/\\/g, ''));
   const row = ctx.page.getByRole('button', { name }).first();
   await row.waitFor({ timeout: 15_000 });
@@ -38,7 +38,7 @@ async function openRow(ctx: Ctx, name: RegExp, title: RegExp) {
 }
 // Escape clears a search box that has text before it closes the detail (LedgerControls' SearchBox), so a
 // second press may be needed.
-const closeDetail = async (ctx: Ctx) => {
+export const closeDetail = async (ctx: Ctx) => {
   const dialog = ctx.page.getByRole('dialog');
   for (let i = 0; i < 2 && (await dialog.isVisible()); i++) {
     await ctx.page.keyboard.press('Escape');
@@ -46,11 +46,11 @@ const closeDetail = async (ctx: Ctx) => {
   }
   await dialog.waitFor({ state: 'hidden', timeout: 10_000 });
 };
-const focusedText = (ctx: Ctx) =>
+export const focusedText = (ctx: Ctx) =>
   ctx.page.evaluate<string>(
     '(document.activeElement && document.activeElement !== document.body) ? (document.activeElement.getAttribute("aria-label") || document.activeElement.textContent || document.activeElement.tagName) : "<body>"',
   );
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+export const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Linked / marked on screen before the server answers, so the next button mounts busy — it must take
 // focus anyway.
 const afterActionFocus = async (ctx: Ctx, expected: 'Unlink' | 'Unmark') => {
@@ -59,13 +59,13 @@ const afterActionFocus = async (ctx: Ctx, expected: 'Unlink' | 'Unmark') => {
   if (focused !== expected) throw new Error(`before ${expected}, focus is on "${focused}"`);
 };
 // The computed font-size of the one element a CSS selector names, in px.
-const fontSizeOf = (ctx: Ctx, selector: string) =>
+export const fontSizeOf = (ctx: Ctx, selector: string) =>
   ctx.page.evaluate<number>(
     `parseFloat(getComputedStyle(document.querySelector(${JSON.stringify(selector)})).fontSize)`,
   );
 
 // The fixture's rows on the server, by bank text; `find` is undefined for one that's missing.
-async function fixtureRows(ctx: Ctx) {
+export async function fixtureRows(ctx: Ctx) {
   const rows = await ctx.api.reads.listFinanceTransactions({
     from: '2000-01-01',
     to: '2100-01-01',

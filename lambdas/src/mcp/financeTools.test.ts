@@ -381,9 +381,10 @@ describe('splits and refunds across charges', () => {
     }[];
   }
   const rows = async (args: Record<string, unknown> = {}) =>
-    (await call<TxnsOut>('list_finance_transactions', { limit: 300, ...args })) as TxnsOut & {
-      transactions: SplitRow[];
-    };
+    (await call<unknown>('list_finance_transactions', { limit: 300, ...args })) as Omit<
+      TxnsOut,
+      'transactions'
+    > & { transactions: SplitRow[] };
 
   it('a split charge lists its parts with periods; the overview totals include them', async () => {
     const before = await call<OverviewOut & { nextPeriod: { count: number } }>(

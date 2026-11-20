@@ -7,6 +7,7 @@ import { makeCore, type McpDeps } from './mcp/core';
 import { tasksReads, tasksWrites } from './mcp/tasks';
 import { leetcodeReads, leetcodeWrites } from './mcp/leetcode';
 import { toolsReads } from './mcp/tools';
+import { financeReads } from './mcp/finance';
 
 export function createMcpClient(deps: McpDeps) {
   const c = makeCore(deps);
@@ -14,6 +15,7 @@ export function createMcpClient(deps: McpDeps) {
     ...tasksReads(c),
     ...leetcodeReads(c),
     ...toolsReads(c),
+    ...financeReads(c),
   };
   const writes = {
     ...tasksWrites(c, reads),
@@ -24,6 +26,7 @@ export function createMcpClient(deps: McpDeps) {
 
 export type Reads = ReturnType<typeof tasksReads> &
   ReturnType<typeof leetcodeReads> &
-  ReturnType<typeof toolsReads>;
+  ReturnType<typeof toolsReads> &
+  ReturnType<typeof financeReads>;
 
 export type McpClient = ReturnType<typeof createMcpClient>;

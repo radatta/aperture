@@ -130,6 +130,27 @@ describe('Splitting a charge across buckets', () => {
     );
   });
 
+  it('a busy Save ignores a second click', async () => {
+    const api = await linked();
+    let release!: () => void;
+    const real = api.setFinanceSplit.bind(api);
+    const spy = vi.spyOn(api, 'setFinanceSplit').mockImplementation(async (id, parts) => {
+      await new Promise<void>((r) => (release = r));
+      return real(id, parts);
+    });
+    renderApp({ api, path: '/finances/all' });
+    const { user, dialog } = await openDetail('fx-card-8', /Charge: Amazon/);
+    await user.click(within(dialog).getByRole('button', { name: /Split across buckets/ }));
+    const save = within(dialog).getByRole('button', { name: 'Save split' });
+    await user.click(save);
+    await waitFor(() => expect(save.getAttribute('aria-disabled')).toBe('true'));
+    await user.click(save);
+    expect(spy).toHaveBeenCalledTimes(1);
+    release();
+    expect(await within(dialog).findByRole('button', { name: 'Edit split' })).toBeTruthy();
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
   it('a split posted at a new amount asks again in Sort, saying why', async () => {
     const api = await linked();
     await api.setFinanceSplit('fx-pending-1', [

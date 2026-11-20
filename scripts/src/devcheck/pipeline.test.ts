@@ -3,6 +3,7 @@ import {
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
   FINANCE_MARK_VIA,
+  FINANCE_SPLIT_VIA,
   FINANCE_RULE_VIA,
   FLUX_SET_VIA,
   LOG_VIA,
@@ -112,6 +113,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     unset: [] as string[],
     unlinked: [] as string[],
     unmarked: [] as string[],
+    unsplit: [] as string[],
     rulesDeleted: [] as string[],
   };
   const pushDevices = new Set<string>();
@@ -391,6 +393,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       listFinanceTransactions: async () => [...finance.rows.values()],
       getFinanceTransaction: async (id) => finance.rows.get(id) ?? null,
       listFinanceRules: async () => [...finance.rules.values()],
+      getFinanceOverview: async () => {
+        throw new Error('unused');
+      },
       getCatalogStatus: async () => {
         throw new Error('unused');
       },
@@ -578,6 +583,26 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       recordFinanceMark: () => {
         throw new Error('unused');
       },
+      recordFinanceSplit: () => {
+        throw new Error('unused');
+      },
+      recordFinanceRule: () => {
+        throw new Error('unused');
+      },
+      refuseFinanceSplit: async () => {
+        throw new Error('unused');
+      },
+      refuseFinanceBucket: async () => {
+        throw new Error('unused');
+      },
+      refuseFinanceRefundParts: async () => {
+        throw new Error('unused');
+      },
+      unsetFinanceSplit: async (id) => {
+        finance.unsplit.push(id);
+        const row = finance.rows.get(id.split(':')[2]!);
+        if (row) Object.assign(row, { splits: null, bucket: null });
+      },
       unsetFinanceBucket: async (id) => {
         finance.unset.push(id);
         const row = finance.rows.get(id.split(':')[2]!);
@@ -586,7 +611,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
       unlinkFinanceRefund: async (id) => {
         finance.unlinked.push(id);
         const row = finance.rows.get(id.split(':')[2]!);
-        if (row) row.refundOfId = null;
+        if (row) Object.assign(row, { refundOfId: null, refundParts: null });
       },
       unmarkFinancePeriodStart: async (id) => {
         finance.unmarked.push(id);
@@ -2668,6 +2693,62 @@ describe('runPipeline', () => {
       ['finance-bucket:run1:tx4', 'gone'], // the mark wiped it
       ['finance-mark:run1:tx4', 'deleted'],
       ['R1', 'deleted'],
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('a split is unsplit and an allocation unlinked by id; a split the server never kept reads gone', async () => {
+    const w = world();
+    const row = (id: string, over: Partial<DevFinanceTransaction>): DevFinanceTransaction => ({
+      id,
+      accountId: 'acct',
+      date: '2026-11-01',
+      name: `DEVCHECK ${id}`,
+      merchantName: null,
+      rawAmountCents: 100,
+      bucket: null,
+      refundOfId: null,
+      startsPeriod: false,
+      ...over,
+    });
+    w.finance.rows.set('tx5', row('tx5', {}));
+    w.finance.rows.set('tx6', row('tx6', { rawAmountCents: -100 }));
+    const ledger = memLedger();
+    const sc = scenario(async () => {
+      w.finance.rows.get('tx5')!.splits = [
+        { bucket: 'budget', cents: 50, period: null },
+        { bucket: 'i_pay', cents: 50, period: 'next' },
+      ];
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-split:run1:tx5',
+        via: FINANCE_SPLIT_VIA,
+      });
+      w.finance.rows.get('tx6')!.refundParts = [{ chargeId: 'tx5', cents: 100 }];
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-link:run1:tx6',
+        via: FINANCE_LINK_VIA,
+      });
+      // A refusal probe's entry on an id the server doesn't have.
+      ledger.append({
+        run: 'run1',
+        op: 'created',
+        id: 'finance-split:run1:none',
+        via: FINANCE_SPLIT_VIA,
+      });
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.finance.unsplit).toEqual(['finance-split:run1:tx5']);
+    expect(w.finance.unlinked).toEqual(['finance-link:run1:tx6']);
+    expect(w.finance.rows.get('tx5')!.splits).toBeNull();
+    expect(w.finance.rows.get('tx6')!.refundParts).toBeNull();
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['finance-split:run1:tx5', 'deleted'],
+      ['finance-link:run1:tx6', 'deleted'],
+      ['finance-split:run1:none', 'gone'],
     ]);
     expect(r.status).toBe('PASS');
   });

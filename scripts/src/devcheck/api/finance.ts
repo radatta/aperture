@@ -3,6 +3,7 @@
 import { pendingIds } from '../ledger';
 import {
   type Core,
+  type DevFinanceOverview,
   type DevFinanceRule,
   type DevFinanceTransaction,
   FINANCE_ANY_RANGE,
@@ -10,11 +11,23 @@ import {
   FINANCE_LINK_VIA,
   FINANCE_MARK_VIA,
   FINANCE_RULE_VIA,
+  FINANCE_SPLIT_VIA,
   financeBucketId,
   financeLinkId,
   financeMarkId,
   financeRowOf,
+  financeSplitId,
 } from './core';
+
+type SplitPart = { bucket: string; cents: number; period: string | null };
+type RefundPart = { chargeId: string; cents: number };
+// A write the server should refuse: its message, or null if it took (a regression — the caller fails the step;
+// the ledger entry recorded first lets cleanup undo it).
+const refusal = async (p: Promise<unknown>): Promise<string | null> =>
+  p.then(
+    () => null,
+    (e: unknown) => (e instanceof Error ? e.message : String(e)),
+  );
 
 export function financeReads(c: Core) {
   const { call } = c;
@@ -27,6 +40,8 @@ export function financeReads(c: Core) {
         (t) => t.id === id,
       ) ?? null,
     listFinanceRules: () => call<DevFinanceRule[]>('listFinanceRules', []),
+    getFinanceOverview: (today: string) =>
+      call<DevFinanceOverview>('getFinanceOverview', [{ today }]),
   };
   return reads;
 }
@@ -58,6 +73,35 @@ export function financeWrites(c: Core) {
       if (!pendingIds(ledger.read()).includes(id))
         ledger.append({ run, op: 'created', id, via: FINANCE_MARK_VIA, title: `mark on ${row}` });
     },
+    recordFinanceSplit(row: string): void {
+      const id = financeSplitId(run, row);
+      if (!pendingIds(ledger.read()).includes(id))
+        ledger.append({ run, op: 'created', id, via: FINANCE_SPLIT_VIA, title: `split on ${row}` });
+    },
+    // A rule the browser created (the Rules tab): recorded from the server's list once it shows.
+    recordFinanceRule(rule: DevFinanceRule): void {
+      if (!pendingIds(ledger.read()).includes(rule.id))
+        ledger.append({
+          run,
+          op: 'created',
+          id: rule.id,
+          via: FINANCE_RULE_VIA,
+          title: rule.pattern,
+        });
+    },
+    // Refusal probes: recorded before the call, so one that wrongly lands is still cleared by id.
+    async refuseFinanceSplit(row: string, parts: SplitPart[] | null): Promise<string | null> {
+      writes.recordFinanceSplit(row);
+      return refusal(call<unknown>('setFinanceSplit', [row, parts]));
+    },
+    async refuseFinanceBucket(row: string, bucket: string): Promise<string | null> {
+      writes.recordFinanceBucket(row);
+      return refusal(call<unknown>('setFinanceBucket', [{ ids: [row], bucket }]));
+    },
+    async refuseFinanceRefundParts(row: string, parts: RefundPart[]): Promise<string | null> {
+      writes.recordFinanceLink(row);
+      return refusal(call<unknown>('setFinanceRefundParts', [row, parts]));
+    },
     // Cleanup's halves: clear what a recorded entry set — never a row the ledger doesn't name.
     async unsetFinanceBucket(id: string): Promise<void> {
       assertLedger(id, 'financeBucket');
@@ -67,12 +111,20 @@ export function financeWrites(c: Core) {
       assertLedger(id, 'financeLink');
       await call<unknown>('linkFinanceRefund', [financeRowOf(id), null]);
     },
+    async unsetFinanceSplit(id: string): Promise<void> {
+      assertLedger(id, 'financeSplit');
+      await call<unknown>('setFinanceSplit', [financeRowOf(id), null]);
+    },
     async unmarkFinancePeriodStart(id: string): Promise<void> {
       assertLedger(id, 'financeMark');
       await call<unknown>('setFinancePeriodStart', [financeRowOf(id), false]);
     },
     // A rule, recorded from the create response like a place; deleted only when recorded.
-    async upsertFinanceRule(input: { pattern: string; bucket: string }): Promise<DevFinanceRule> {
+    async upsertFinanceRule(input: {
+      pattern: string;
+      bucket: string;
+      split?: { bucket: string; percent: number }[] | null;
+    }): Promise<DevFinanceRule> {
       ledger.append({ run, op: 'intent', via: FINANCE_RULE_VIA, title: input.pattern });
       const rule = await call<DevFinanceRule>('upsertFinanceRule', [input]);
       ledger.append({
