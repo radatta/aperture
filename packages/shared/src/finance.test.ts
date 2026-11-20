@@ -26,6 +26,7 @@ import {
   reconcileSyncPage,
   referencedTxnIds,
   refundLinkError,
+  resolveRefundClaims,
   resolveRefundLinks,
   searchRefundCharges,
   sortableTransactions,
@@ -107,6 +108,8 @@ function tx(
     note: null,
     refundOfId: null,
     startsPeriod: false,
+    splits: null,
+    refundParts: null,
     ...over,
   };
 }
@@ -116,7 +119,7 @@ function rule(
   bucket: FinanceRule['bucket'],
   over: Partial<FinanceRule> = {},
 ): FinanceRule {
-  return { ...base, id: `r-${pattern}`, pattern, bucket, active: true, ...over };
+  return { ...base, id: `r-${pattern}`, pattern, bucket, active: true, split: null, ...over };
 }
 
 const PAY = { pfcPrimary: 'LOAN_PAYMENTS' };
@@ -460,8 +463,8 @@ describe('not_spending', () => {
     const refund = tx('r', 'card', '2026-09-22', -2000, { refundOfId: 'c' });
     const links = resolveRefundLinks([charge, refund], (t) => t.rawAmountCents);
     expect(bucketOf(refund, links)).toBe('not_spending');
-    expect(isUnsorted(refund, links)).toBe(false);
-    expect(isUnsorted(charge, links)).toBe(false);
+    expect(isUnsorted(refund, links, refund.rawAmountCents)).toBe(false);
+    expect(isUnsorted(charge, links, charge.rawAmountCents)).toBe(false);
     expect(sum([...mixed, charge, refund])).toEqual(sum(mixed));
   });
 
@@ -864,8 +867,8 @@ describe('refund links', () => {
     const refund = tx('r', 'card', '2026-09-22', -3000, { refundOfId: 'c', bucket: 'i_pay' });
     const links = resolveRefundLinks([charge, refund]);
     expect(bucketOf(refund, links)).toBeNull();
-    expect(isUnsorted(refund, links)).toBe(false);
-    expect(isUnsorted(charge, links)).toBe(true);
+    expect(isUnsorted(refund, links, refund.rawAmountCents)).toBe(false);
+    expect(isUnsorted(charge, links, charge.rawAmountCents)).toBe(true);
   });
 
   it('a linked refund nets in its charge’s bucket and period, and never counts', () => {
@@ -940,13 +943,12 @@ describe('refund links', () => {
       tx('used-up', 'card', '2026-09-19', 3000, amazon),
       tx('earlier-refund', 'card', '2026-09-20', -3000, { ...amazon, refundOfId: 'used-up' }),
     ];
-    const links = resolveRefundLinks(txns);
     const ids = suggestRefundMatches({
       refund,
       txns,
       accounts: [chk, card, card2],
       moves: new Map(),
-      links,
+      claims: resolveRefundClaims(txns),
     }).map((t) => t.id);
     expect(ids).toEqual([
       'slack',
@@ -1054,7 +1056,7 @@ describe('refund links', () => {
       tx('dormant', 'card', '2026-09-20', 2500, MARK), // a mark on what now reads as a charge
       tx('real', 'card', '2026-09-19', 2500),
     ];
-    const args = { refund, txns, accounts: [chk, card], moves: new Map(), links: new Map() };
+    const args = { refund, txns, accounts: [chk, card], moves: new Map(), claims: new Map() };
     expect(suggestRefundMatches({ ...args, anyMerchant: true }).map((t) => t.id)).toEqual(['real']);
     expect(chargeSideError(txns[1]!, chk)).toMatch(/not a payment/);
     expect(chargeSideError(txns[2]!, card)).toMatch(/not a payment/);
@@ -1072,7 +1074,7 @@ describe('refund links', () => {
     const over = tx('r', 'chk', '2026-09-24', -200050, { refundOfId: 'c' });
     let txns = [charge, over];
     let got = capRefunds(
-      resolveRefundLinks(txns),
+      resolveRefundClaims(txns),
       new Map(txns.map((t) => [t.id, t])),
       (t) => t.rawAmountCents,
     );
@@ -1084,7 +1086,7 @@ describe('refund links', () => {
     txns = [tx('c2', 'card', '2026-09-20', 3000), first, second];
     const run = (rows: FinanceTransaction[]) =>
       capRefunds(
-        resolveRefundLinks(rows),
+        resolveRefundClaims(rows),
         new Map(rows.map((t) => [t.id, t])),
         (t) => t.rawAmountCents,
       );
@@ -1147,7 +1149,7 @@ describe('refund links', () => {
       txns,
       accounts: [chk],
       moves: new Map(),
-      links: new Map(),
+      claims: new Map(),
       anyMerchant: true,
     }).map((t) => t.id);
     expect(ids).toEqual(['exact', 'rent']);
@@ -1163,7 +1165,7 @@ describe('refund links', () => {
       ],
       accounts: [chk],
       moves: new Map(),
-      links: new Map(),
+      claims: new Map(),
     }).map((t) => t.id);
     expect(tieIds).toEqual(['under', 'over']);
   });
@@ -1180,7 +1182,7 @@ describe('refund links', () => {
       txns,
       accounts: [chk, card],
       moves: new Map(),
-      links: new Map(),
+      claims: new Map(),
     }).map((t) => t.id);
     expect(ids).toEqual(['on-chk', 'on-card']);
   });
@@ -1200,7 +1202,7 @@ describe('refund links', () => {
       txns: [refund, charge],
       accounts: [card],
       moves: new Map(),
-      links: new Map(),
+      claims: new Map(),
     };
     expect(suggestRefundMatches(args)).toEqual([]);
     expect(suggestRefundMatches({ ...args, anyMerchant: true }).map((t) => t.id)).toEqual(['c']);
@@ -1221,7 +1223,7 @@ describe('refund links', () => {
         txns,
         accounts: [chk, card],
         moves: new Map(),
-        links: new Map(),
+        claims: new Map(),
         query,
       }).map((t) => t.id);
     expect(ids('AMAZON')).toEqual(['m']);
@@ -1257,7 +1259,7 @@ describe('refund links', () => {
       txns,
       accounts,
       moves: new Map(),
-      links: resolveRefundLinks(txns),
+      claims: resolveRefundClaims(txns),
       query: '',
     });
     expect(found.map((t) => t.id).sort()).toEqual(['old', 'other', 'slack', 'small']);
@@ -1282,7 +1284,7 @@ describe('refund links', () => {
       tx('c', 'card', '2026-09-10', 500),
       tx('b', 'card', '2026-09-10', 500),
     ];
-    const args = { refund, txns, accounts: [card], moves: new Map(), links: new Map() };
+    const args = { refund, txns, accounts: [card], moves: new Map(), claims: new Map() };
     expect(searchRefundCharges({ ...args, query: '' }).map((t) => t.id)).toEqual(['c', 'b', 'a']);
     expect(searchRefundCharges({ ...args, query: '   ' }).map((t) => t.id)).toEqual([
       'c',

@@ -36,6 +36,31 @@ export function financeBucketError(v: unknown, opts: { nullable: boolean }): str
 
 export type FinanceSource = 'plaid'; // 'csv' reserved
 export type FinancePeriodOverride = 'current' | 'previous';
+// A split part's own period: this, last, or the period after the charge's own (it waits, in no
+// total, until that period starts — the day after you mark the card payment). null = the charge's.
+export type FinancePartPeriod = 'current' | 'previous' | 'next';
+export const FINANCE_PART_PERIODS: FinancePartPeriod[] = ['current', 'previous', 'next'];
+
+// One part of a charge split across buckets. The parts sum exactly to the charge. A rule-made split
+// carries `percent` on every part (the key is omitted otherwise), so a new amount recomputes it.
+export interface FinanceSplitPart {
+  bucket: FinanceBucket;
+  cents: number; // integer > 0
+  period: FinancePartPeriod | null;
+  percent?: number;
+}
+// One charge a refund (money in) is allocated to, and how much of the refund goes to it.
+export interface FinanceRefundPart {
+  chargeId: string;
+  cents: number; // integer > 0
+}
+export interface FinanceRuleSplitPart {
+  bucket: FinanceBucket;
+  percent: number; // integer 1–99; a rule's parts sum to 100
+}
+export const FINANCE_SPLIT_MAX_PARTS = 8;
+export const FINANCE_REFUND_MAX_PARTS = 8;
+export const FINANCE_RULE_SPLIT_MAX_PARTS = 4;
 export type FinanceSignOverride = 'auto' | 'flip';
 export type PlaidEnvironment = 'sandbox' | 'production' | 'stub';
 export type FinanceItemStatus = 'ok' | 'login_required' | 'pending_disconnect' | 'error';
@@ -112,13 +137,21 @@ export interface FinanceTransaction extends BaseEntity {
   // User-owned: this card payment ends a billing period (the next starts the day after). Trusted only
   // while periodStartError passes — a flipped or moved row stops anchoring the period.
   startsPeriod: boolean;
+  // User-owned: a charge split across buckets (bucket stays null). Counts only while the parts sum to
+  // the charge's amount (splitOf); a new amount breaks it back into the sort queue. null = unsplit.
+  splits: FinanceSplitPart[] | null;
+  // User-owned: money in allocated across several charges. Exclusive with refundOfId (one link stays
+  // refundOfId, read exactly as before). null = no allocation.
+  refundParts: FinanceRefundPart[] | null;
 }
 
-// "Always put <pattern> in <bucket>". pattern is lowercased and matched as a substring.
+// "Always put <pattern> in <bucket>". pattern is lowercased and matched as a substring. With `split`,
+// new matching charges arrive split by percent instead; `bucket` is then the largest part.
 export interface FinanceRule extends BaseEntity {
   pattern: string;
   bucket: FinanceBucket;
   active: boolean;
+  split: FinanceRuleSplitPart[] | null;
 }
 
 // --- DTOs ------------------------------------------------------------------
@@ -154,6 +187,8 @@ export interface FinanceOverview {
   spentCents: number; // the budget bucket's total
   leftCents: number; // budgetCents - spentCents (negative = over)
   buckets: Record<FinanceSpendBucket, FinanceBucketTotal>; // not_spending is in no total
+  // Split parts set to the next period that hasn't started yet: in no total until it does. count = charges.
+  upcoming: FinanceBucketTotal;
   unsortedCount: number; // current AND previous window — both are sortable
   unsortedCents: number;
   accounts: FinanceAccount[];
@@ -195,7 +230,10 @@ export interface UpsertFinanceRuleInput {
   pattern: string;
   bucket: FinanceBucket;
   active?: boolean;
+  split?: FinanceRuleSplitPart[] | null; // omitted or null = a one-bucket rule; else bucket = its largest part
 }
+// A user's split part over the wire: never `percent` (an edit overrides a rule's split).
+export type FinanceSplitPartInput = Omit<FinanceSplitPart, 'percent'>;
 export type FinanceAccountPatch = Partial<Pick<FinanceAccount, 'signOverride' | 'hidden'>>;
 export interface RequestFinanceSyncResult {
   accepted: boolean;
@@ -480,83 +518,213 @@ export const linkableTransactions = (
 ) => onShownAccounts(txns, accounts, moves, (k) => isSortableKind(k) || k === 'income');
 
 // --- Refund links -----------------------------------------------------------
-// refund id → the alive charge it reverses. A link whose charge went pending→posted resolves through
-// the posted row's pendingTransactionId. Only rows in `txns` resolve: a charge outside the loaded
-// window, tombstoned, or filtered out (a hidden account) leaves the refund unlinked in effect. Signs
-// are re-checked with `amount`, so flipping an account can't leave a stale link on a charge.
+// A refund reaches its charges two ways: one link (refundOfId — the whole refund, as it always was)
+// or an allocation across charges (refundParts — each part a set amount). Both resolve to claims:
+// refund id → [{charge, cents}], cents null for the whole refund. A claim whose charge went
+// pending→posted resolves through the posted row's pendingTransactionId. Only rows in `txns` resolve:
+// a charge outside the loaded window, tombstoned, or filtered out (a hidden account) drops that claim,
+// and a refund with no claim left reads as unlinked. Signs are re-checked with `amount`, so flipping
+// an account can't leave a stale link on a charge.
+export interface RefundClaim {
+  charge: FinanceTransaction;
+  cents: number | null; // null = the whole refund (a single link)
+}
+export type RefundClaims = Map<string, RefundClaim[]>;
+// refund id → its primary charge (the single link, or the first stored part — the largest): where the
+// refund is listed, and the period and bucket a single link takes.
 export type RefundLinks = Map<string, FinanceTransaction>;
 
-export function resolveRefundLinks(
+export function resolveRefundClaims(
   txns: FinanceTransaction[],
   amount: (t: FinanceTransaction) => number = (t) => t.rawAmountCents,
-): RefundLinks {
+): RefundClaims {
   const live = txns.filter((t) => t.deletedAt === null);
   const byId = new Map(live.map((t) => [t.id, t]));
   const byPending = new Map(
     live.filter((t) => t.pendingTransactionId).map((t) => [t.pendingTransactionId!, t]),
   );
-  const links: RefundLinks = new Map();
+  const claims: RefundClaims = new Map();
   for (const t of live) {
-    if (!t.refundOfId) continue;
-    const charge = byId.get(t.refundOfId) ?? byPending.get(t.refundOfId);
-    if (charge && charge.id !== t.id && amount(t) < 0 && amount(charge) > 0)
-      links.set(t.id, charge);
+    const parts: { chargeId: string; cents: number | null }[] | null =
+      t.refundParts ?? (t.refundOfId ? [{ chargeId: t.refundOfId, cents: null }] : null);
+    if (!parts || amount(t) >= 0) continue;
+    const found: RefundClaim[] = [];
+    for (const p of parts) {
+      const charge = byId.get(p.chargeId) ?? byPending.get(p.chargeId);
+      if (!charge || charge.id === t.id || amount(charge) <= 0) continue;
+      if (found.some((c) => c.charge.id === charge.id)) continue;
+      found.push({ charge, cents: p.cents });
+    }
+    if (found.length > 0) claims.set(t.id, found);
   }
-  return links;
+  return claims;
 }
 
-// A linked refund takes its charge's bucket — explicitly, so an unsorted charge yields null.
+export const linksOf = (claims: RefundClaims): RefundLinks =>
+  new Map([...claims].map(([id, cs]) => [id, cs[0]!.charge]));
+
+export function resolveRefundLinks(
+  txns: FinanceTransaction[],
+  amount: (t: FinanceTransaction) => number = (t) => t.rawAmountCents,
+): RefundLinks {
+  return linksOf(resolveRefundClaims(txns, amount));
+}
+
+// The claims with one refund's left out — what's left of each charge for that refund to take.
+export const claimsWithout = (claims: RefundClaims, refundId: string): RefundClaims =>
+  new Map([...claims].filter(([id]) => id !== refundId));
+
+// A linked refund takes its charge's bucket — explicitly, so an unsorted charge yields null. A split
+// charge (and so a refund on it) has no single bucket: null here; bucketsOf lists its parts'.
 export function bucketOf(t: FinanceTransaction, links: RefundLinks): FinanceBucket | null {
   const charge = links.get(t.id);
   return charge ? charge.bucket : t.bucket;
 }
 
-// Needs a decision from you: no bucket, and not riding on a charge.
-export function isUnsorted(t: FinanceTransaction, links: RefundLinks): boolean {
-  return !links.has(t.id) && t.bucket === null;
+// Needs a decision from you: no bucket, not riding on a charge, and not split (at this amount).
+export function isUnsorted(t: FinanceTransaction, links: RefundLinks, cents: number): boolean {
+  return !links.has(t.id) && t.bucket === null && splitOf(t, cents) === null;
 }
 
-// A charge's linked refunds count in date order (then id), each only up to what's left of the
-// charge, so charge + refunds net to exactly $0, never below. byCharge: charge id → cents refunded
-// (≤ the charge); byRefund: refund id → the cents it counts (positive, ≤ its own size; 0 once the
-// charge is used up). The overshoot stays money in, outside every total.
+// Each claim counts in date order of its refund (then id), only up to what's left of the charge, so
+// charge + refunds net to exactly $0, never below; and a refund's parts together never count more than
+// the refund itself (a stale allocation after its amount changed). byCharge: charge id → cents refunded
+// (≤ the charge); byRefund: refund id → the cents it counts in all (positive, ≤ its own size); byClaim:
+// refund id → charge id → the cents that claim counts. The overshoot stays money in, outside every total.
 export function capRefunds(
-  links: RefundLinks,
+  claims: RefundClaims,
   txnsById: Map<string, FinanceTransaction>,
   amount: (t: FinanceTransaction) => number,
-): { byCharge: Map<string, number>; byRefund: Map<string, number> } {
+): {
+  byCharge: Map<string, number>;
+  byRefund: Map<string, number>;
+  byClaim: Map<string, Map<string, number>>;
+} {
   const perCharge = new Map<
     string,
-    { charge: FinanceTransaction; refunds: FinanceTransaction[] }
+    { charge: FinanceTransaction; asks: { refund: FinanceTransaction; cents: number }[] }
   >();
-  for (const [refundId, charge] of links) {
+  for (const [refundId, cs] of claims) {
     const refund = txnsById.get(refundId);
     if (!refund) continue;
-    const entry = perCharge.get(charge.id) ?? { charge, refunds: [] };
-    entry.refunds.push(refund);
-    perCharge.set(charge.id, entry);
+    let size = Math.max(-amount(refund), 0);
+    for (const c of cs) {
+      const cents = Math.min(c.cents ?? size, size);
+      size -= cents;
+      const entry = perCharge.get(c.charge.id) ?? { charge: c.charge, asks: [] };
+      entry.asks.push({ refund, cents });
+      perCharge.set(c.charge.id, entry);
+    }
   }
   const byCharge = new Map<string, number>();
   const byRefund = new Map<string, number>();
-  for (const { charge, refunds } of perCharge.values()) {
-    refunds.sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  const byClaim = new Map<string, Map<string, number>>();
+  for (const { charge, asks } of perCharge.values()) {
+    asks.sort(
+      (a, b) =>
+        a.refund.date.localeCompare(b.refund.date) || a.refund.id.localeCompare(b.refund.id),
+    );
     let left = Math.max(amount(charge), 0);
-    for (const r of refunds) {
-      const counted = Math.min(-amount(r), left);
-      byRefund.set(r.id, counted);
+    for (const { refund, cents } of asks) {
+      const counted = Math.min(cents, left);
+      byRefund.set(refund.id, (byRefund.get(refund.id) ?? 0) + counted);
+      const mine = byClaim.get(refund.id) ?? new Map<string, number>();
+      mine.set(charge.id, counted);
+      byClaim.set(refund.id, mine);
       left -= counted;
     }
     byCharge.set(charge.id, Math.max(amount(charge), 0) - left);
   }
-  return { byCharge, byRefund };
+  return { byCharge, byRefund, byClaim };
 }
 
 // charge id → cents refunded (positive), capped at the charge.
 export const refundedCentsByCharge = (
-  links: RefundLinks,
+  claims: RefundClaims,
   txnsById: Map<string, FinanceTransaction>,
   amount: (t: FinanceTransaction) => number,
-): Map<string, number> => capRefunds(links, txnsById, amount).byCharge;
+): Map<string, number> => capRefunds(claims, txnsById, amount).byCharge;
+
+// --- Allocation: an amount split across targets ------------------------------
+// `total` cents shared in proportion to `weights`: each share floored, then the leftover cents go one
+// each to the largest remainders, ties to the earlier part — so the shares sum to `total` exactly, and
+// no share exceeds its weight while total ≤ the weights' sum. The one rounding rule for a half/half
+// default (the odd cent goes to the first part), a rule's percents, and a refund across a split's parts.
+export function allocateProportional(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((n, w) => n + Math.max(w, 0), 0);
+  if (sum <= 0 || total <= 0) return weights.map(() => 0);
+  const shares = weights.map((w) => Math.floor((total * Math.max(w, 0)) / sum));
+  const rest = weights.map((w, i) => total * Math.max(w, 0) - shares[i]! * sum);
+  let left = total - shares.reduce((n, c) => n + c, 0);
+  const order = rest.map((r, i) => ({ r, i })).sort((a, b) => b.r - a.r || a.i - b.i);
+  for (const { i } of order) {
+    if (left <= 0) break;
+    shares[i]! += 1;
+    left -= 1;
+  }
+  return shares;
+}
+
+// Cents as "$12.34" for refusal text (the page's own formatter is app money.ts).
+export const usdText = (cents: number): string =>
+  `$${(Math.abs(cents) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+// Why these part amounts don't fit `total`, or null. exact: a split, whose parts must add up to the
+// charge; otherwise a refund's allocation, which may leave some of the refund over (it stays money in).
+export function allocationSumError(
+  cents: number[],
+  total: number,
+  opts: { exact: boolean },
+): string | null {
+  if (cents.some((c) => !Number.isInteger(c) || c <= 0))
+    return 'Each part needs an amount above $0.00';
+  const sum = cents.reduce((n, c) => n + c, 0);
+  if (opts.exact && sum < total)
+    return `${usdText(total - sum)} is left to assign — the parts must add up to ${usdText(total)}`;
+  if (sum > total)
+    return opts.exact
+      ? `The parts add up to ${usdText(sum)}, ${usdText(sum - total)} more than the ${usdText(total)} charge`
+      : `The charges take ${usdText(sum)}, ${usdText(sum - total)} more than the ${usdText(total)} refund`;
+  return null;
+}
+
+// The split that counts for this charge at `cents` (its normalised amount), or null: unsplit, or
+// broken — the parts no longer add up to the amount (it posted at a new amount, or its account
+// flipped). A broken split reads as unsorted and keeps its parts to prefill the editor. A rule-made
+// split (percent on every part) recomputes from the percents instead of breaking.
+export function splitOf(t: FinanceTransaction, cents: number): FinanceSplitPart[] | null {
+  const parts = t.splits;
+  if (!parts || parts.length === 0 || cents <= 0) return null;
+  if (parts.every((p) => p.percent !== undefined)) {
+    const shares = allocateProportional(
+      cents,
+      parts.map((p) => p.percent!),
+    );
+    return parts.map((p, i) => ({ ...p, cents: shares[i]! }));
+  }
+  return parts.reduce((n, p) => n + p.cents, 0) === cents ? parts : null;
+}
+
+export const splitBroken = (t: FinanceTransaction, cents: number): boolean =>
+  t.splits !== null && t.splits.length > 0 && splitOf(t, cents) === null;
+
+// What a stored split added up to — the "was $X" of a broken one.
+export const splitTotal = (parts: Pick<FinanceSplitPart, 'cents'>[]): number =>
+  parts.reduce((n, p) => n + p.cents, 0);
+
+// Rule percents → stored parts for a charge of `cents` (> 0).
+export function splitFromRule(split: FinanceRuleSplitPart[], cents: number): FinanceSplitPart[] {
+  const shares = allocateProportional(
+    cents,
+    split.map((p) => p.percent),
+  );
+  return split.map((p, i) => ({
+    bucket: p.bucket,
+    cents: shares[i]!,
+    period: null,
+    percent: p.percent,
+  }));
+}
 
 // Charges this refund could reverse, best first: an alive expense at the same merchant, dated at most
 // REFUND_DATE_SLACK_DAYS after the refund and REFUND_MATCH_WINDOW_DAYS before it, with enough left
@@ -570,13 +738,17 @@ export function suggestRefundMatches(input: {
   txns: FinanceTransaction[];
   accounts: FinanceAccount[];
   moves: InternalMoves;
-  links: RefundLinks;
+  claims: RefundClaims;
   anyMerchant?: boolean;
 }): FinanceTransaction[] {
-  const { refund, txns, accounts, moves, links, anyMerchant = false } = input;
+  const { refund, txns, accounts, moves, claims, anyMerchant = false } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
-  const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
+  const refunded = refundedCentsByCharge(
+    claimsWithout(claims, refund.id),
+    new Map(txns.map((t) => [t.id, t])),
+    amount,
+  );
   const size = -amount(refund);
   const key = merchantKey(refund);
   const scored = txns
@@ -620,13 +792,17 @@ export function searchRefundCharges(input: {
   txns: FinanceTransaction[];
   accounts: FinanceAccount[];
   moves: InternalMoves;
-  links: RefundLinks;
+  claims: RefundClaims;
   query: string;
 }): FinanceTransaction[] {
-  const { refund, txns, accounts, moves, links, query } = input;
+  const { refund, txns, accounts, moves, claims, query } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
-  const refunded = refundedCentsByCharge(links, new Map(txns.map((t) => [t.id, t])), amount);
+  const refunded = refundedCentsByCharge(
+    claimsWithout(claims, refund.id),
+    new Map(txns.map((t) => [t.id, t])),
+    amount,
+  );
   const needle = query.trim().toLowerCase();
   // "+$30.00" pasted from a row's signed amount still matches.
   const amountNeedle = needle.replace(/[+\-$,]/g, '');
@@ -710,17 +886,255 @@ export function refundLinkError(input: {
   return null;
 }
 
-// What the sort queue asks you about: unsorted, not riding on a charge, and not a charge its linked
-// refunds already cancel out in full (it nets to $0 whichever bucket it lands in).
+// What the sort queue asks you about: unsorted, not riding on a charge, not split, and not a charge its
+// linked refunds already cancel out in full (it nets to $0 whichever bucket it lands in).
 export function needsSorting(
   t: FinanceTransaction,
   links: RefundLinks,
   refunded: Map<string, number>,
   cents: number,
 ): boolean {
-  if (!isUnsorted(t, links)) return false;
+  if (!isUnsorted(t, links, cents)) return false;
   return !(cents > 0 && (refunded.get(t.id) ?? 0) >= cents);
 }
+
+// --- Split parts: where each counts --------------------------------------------
+// 'upcoming' = a next-period part whose period hasn't started: in no total yet.
+export type FinancePartWindow = 'current' | 'previous' | 'upcoming';
+
+// Which window a split part counts in. The part's own pin wins; with none (null) it follows the row,
+// override and all. "next" is relative to the charge's own date window, never the row's override: a
+// charge dated in the current window waits (upcoming), one dated in the previous window has already
+// reached its next period, which is the current one — so the part lands by itself when you mark the
+// payment that starts the new period. A charge outside both windows counts nowhere, pin or not.
+export function periodOfPart(
+  t: FinanceTransaction,
+  part: Pick<FinanceSplitPart, 'period'>,
+  period: FinancePeriod,
+): FinancePartWindow | null {
+  const own = periodOf({ ...t, periodOverride: null }, period);
+  if (own === null) return null;
+  if (part.period === null) return periodOf(t, period);
+  if (part.period === 'next') return own === 'current' ? 'upcoming' : 'current';
+  return part.period;
+}
+
+export interface CountedPart {
+  bucket: FinanceBucket | null; // null = unsorted (an unsplit row with no bucket, or a broken split)
+  cents: number;
+  refundedCents: number; // this part's share of the charge's refunds (≤ cents)
+  window: FinancePartWindow | null;
+  pin: FinancePartPeriod | null; // the part's own period choice (null = with the charge)
+}
+
+// A row's money by part: a valid split gives one entry per part, anything else one entry for the row.
+// The charge's (capped) refunded total is spread once across the parts in proportion to them
+// (allocateProportional), so no part goes below $0; each share counts where its part does. A linked
+// refund's money is inside its charge's entries — callers skip linked refunds.
+export function countedParts(
+  t: FinanceTransaction,
+  cents: number,
+  refunded: number,
+  period: FinancePeriod,
+): CountedPart[] {
+  const split = splitOf(t, cents);
+  if (!split)
+    return [
+      { bucket: t.bucket, cents, refundedCents: refunded, window: periodOf(t, period), pin: null },
+    ];
+  const shares = allocateProportional(
+    Math.min(refunded, cents),
+    split.map((p) => p.cents),
+  );
+  return split.map((p, i) => ({
+    bucket: p.bucket,
+    cents: p.cents,
+    refundedCents: shares[i]!,
+    window: periodOfPart(t, p, period),
+    pin: p.period,
+  }));
+}
+
+// Why these parts can't split this charge, or null. Both ApiClient impls run it, on the fresh row.
+export function financeSplitError(input: {
+  txn: FinanceTransaction;
+  account: FinanceAccount | undefined;
+  moves?: InternalMoves;
+  parts: FinanceSplitPartInput[];
+}): string | null {
+  const { txn, account, moves, parts } = input;
+  if (txn.deletedAt !== null) return 'That transaction is gone';
+  if (!shownAccount(account)) return 'Only a charge on an account that’s shown can be split';
+  const cents = amountOf(txn, account);
+  if (!moneyAccount(account) || cents <= 0 || isMoveOrMark(txn, moves))
+    return 'Only a charge can be split — not a refund, payment or transfer';
+  if (parts.length < 2) return 'A split needs at least two parts';
+  if (parts.length > FINANCE_SPLIT_MAX_PARTS)
+    return `A split has at most ${FINANCE_SPLIT_MAX_PARTS} parts`;
+  const seen = new Set<string>();
+  for (const p of parts) {
+    const bucketError = financeBucketError(p.bucket, { nullable: false });
+    if (bucketError) return bucketError;
+    if (p.period !== null && !FINANCE_PART_PERIODS.includes(p.period))
+      return `Unknown period: ${String(p.period)}`;
+    const key = `${p.bucket}|${p.period ?? ''}`;
+    if (seen.has(key))
+      return `Two parts go to ${FINANCE_BUCKET_LABELS[p.bucket]} in the same period — merge them`;
+    seen.add(key);
+  }
+  return allocationSumError(
+    parts.map((p) => p.cents),
+    cents,
+    { exact: true },
+  );
+}
+
+// Why this allocation of a refund across charges can't be saved, or null. Both ApiClient impls run it
+// over the same rows: `txns` = every alive row from refundPartsFrom(…) on, so each charge's other
+// refunds are in view. Each part must be a link refundLinkError accepts, at most what's left of its
+// charge after every OTHER refund (re-saving your own allocation is fine), and together at most the
+// refund — what's over stays money in.
+export function refundPartsError(input: {
+  refund: FinanceTransaction;
+  parts: FinanceRefundPart[];
+  txns: FinanceTransaction[];
+  accounts: FinanceAccount[];
+  moves?: InternalMoves;
+}): string | null {
+  const { refund, parts, txns, accounts, moves } = input;
+  const byAccount = new Map(accounts.map((a) => [a.id, a]));
+  const amount = (t: FinanceTransaction) => amountOf(t, byAccount.get(t.accountId));
+  if (parts.length === 0) return 'Pick at least one charge';
+  if (parts.length > FINANCE_REFUND_MAX_PARTS)
+    return `A refund goes to at most ${FINANCE_REFUND_MAX_PARTS} charges`;
+  if (new Set(parts.map((p) => p.chargeId)).size !== parts.length)
+    return 'That charge is already in the list';
+  const byId = new Map(txns.filter((t) => t.deletedAt === null).map((t) => [t.id, t]));
+  const linkable = linkableTransactions(txns, accounts, moves ?? new Map());
+  const others = claimsWithout(resolveRefundClaims(linkable, amount), refund.id);
+  const refunded = refundedCentsByCharge(others, new Map(linkable.map((t) => [t.id, t])), amount);
+  for (const p of parts) {
+    const charge = byId.get(p.chargeId);
+    if (!charge) return 'That charge is gone';
+    const error = refundLinkError({
+      refund,
+      refundAccount: byAccount.get(refund.accountId),
+      charge,
+      chargeAccount: byAccount.get(charge.accountId),
+      moves,
+    });
+    if (error) return error;
+    if (!Number.isInteger(p.cents) || p.cents <= 0) return 'Each part needs an amount above $0.00';
+    const left = amount(charge) - (refunded.get(charge.id) ?? 0);
+    if (p.cents > left)
+      return `Only ${usdText(Math.max(left, 0))} is left to refund on ${charge.merchantName ?? charge.name}`;
+  }
+  return allocationSumError(
+    parts.map((p) => p.cents),
+    -amount(refund),
+    { exact: false },
+  );
+}
+
+// The first day both impls load rows from for refundPartsError: the overview's window, or earlier when a
+// charge is older — a refund is dated at most REFUND_DATE_SLACK_DAYS before its charge.
+export function refundPartsFrom(today: string, charges: FinanceTransaction[]): string {
+  const from = addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+  const oldest = charges.reduce((d, c) => (c.date < d ? c.date : d), from);
+  return oldest < from ? addDays(oldest, -REFUND_DATE_SLACK_DAYS) : from;
+}
+
+export const REFUND_SET_POOL = 12;
+export const REFUND_SET_SHOWN = 3;
+
+// Sets of 2–3 charges one refund could cover together — what suggestRefundMatches can't offer when no
+// single charge fits. Same rules per charge (alive, refundLinkError-clean, within the match window, with
+// something left), but only charges whose remaining is below the refund, the REFUND_SET_POOL nearest in
+// date (so a paycheck's search stays at most 286 sets). A set fits when its remaining sum equals the
+// refund, or the refund overshoots it by at most REFUND_OVER_RATIO of it. Ranked: one merchant across
+// the set → closest sum (exact first) → fewer charges → nearer newest date → ids. At most REFUND_SET_SHOWN.
+export function suggestRefundSets(input: {
+  refund: FinanceTransaction;
+  txns: FinanceTransaction[];
+  accounts: FinanceAccount[];
+  moves: InternalMoves;
+  claims: RefundClaims;
+}): { charges: FinanceTransaction[]; cents: number[] }[] {
+  const { refund, txns, accounts, moves, claims } = input;
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
+  const refunded = refundedCentsByCharge(
+    claimsWithout(claims, refund.id),
+    new Map(txns.map((t) => [t.id, t])),
+    amount,
+  );
+  const size = -amount(refund);
+  if (size <= 0) return [];
+  const pool = txns
+    .filter(
+      (c) =>
+        c.id !== refund.id &&
+        chargeSideError(c, byId.get(c.accountId), moves) === null &&
+        c.date <= addDays(refund.date, REFUND_DATE_SLACK_DAYS) &&
+        daysBetween(c.date, refund.date) <= REFUND_MATCH_WINDOW_DAYS,
+    )
+    .map((c) => ({ c, left: amount(c) - (refunded.get(c.id) ?? 0) }))
+    .filter((x) => x.left > 0 && x.left < size)
+    .sort(
+      (a, b) =>
+        Math.abs(daysBetween(a.c.date, refund.date)) -
+          Math.abs(daysBetween(b.c.date, refund.date)) || a.c.id.localeCompare(b.c.id),
+    )
+    .slice(0, REFUND_SET_POOL);
+  const sets: { xs: typeof pool; sum: number }[] = [];
+  const consider = (xs: typeof pool) => {
+    const sum = xs.reduce((n, x) => n + x.left, 0);
+    if (sum <= size && size - sum <= sum * REFUND_OVER_RATIO) sets.push({ xs, sum });
+  };
+  for (let i = 0; i < pool.length; i++)
+    for (let j = i + 1; j < pool.length; j++) {
+      consider([pool[i]!, pool[j]!]);
+      for (let k = j + 1; k < pool.length; k++) consider([pool[i]!, pool[j]!, pool[k]!]);
+    }
+  const rank = (s: { xs: typeof pool; sum: number }) => [
+    new Set(s.xs.map((x) => merchantKey(x.c))).size === 1 ? 0 : 1,
+    size - s.sum,
+    s.xs.length,
+    Math.min(...s.xs.map((x) => Math.abs(daysBetween(x.c.date, refund.date)))),
+  ];
+  const ids = (s: { xs: typeof pool }) => s.xs.map((x) => x.c.id).join('|');
+  return sets
+    .sort((a, b) => {
+      const ra = rank(a);
+      const rb = rank(b);
+      for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i]! - rb[i]!;
+      return ids(a).localeCompare(ids(b));
+    })
+    .slice(0, REFUND_SET_SHOWN)
+    .map((s) => ({ charges: s.xs.map((x) => x.c), cents: s.xs.map((x) => x.left) }));
+}
+
+// A rule's percent split: 2–4 parts, whole percents 1–99 that sum to 100, distinct known buckets.
+export function financeRuleSplitError(split: FinanceRuleSplitPart[]): string | null {
+  if (split.length < 2) return 'A split needs at least two parts';
+  if (split.length > FINANCE_RULE_SPLIT_MAX_PARTS)
+    return `A rule splits into at most ${FINANCE_RULE_SPLIT_MAX_PARTS} parts`;
+  const seen = new Set<FinanceBucket>();
+  for (const p of split) {
+    const bucketError = financeBucketError(p.bucket, { nullable: false });
+    if (bucketError) return bucketError;
+    if (seen.has(p.bucket)) return `${FINANCE_BUCKET_LABELS[p.bucket]} is in the split twice`;
+    seen.add(p.bucket);
+    if (!Number.isInteger(p.percent) || p.percent < 1 || p.percent > 99)
+      return 'Each part needs a whole percent from 1 to 99';
+  }
+  const sum = split.reduce((n, p) => n + p.percent, 0);
+  return sum === 100 ? null : `The parts add up to ${sum}%, not 100%`;
+}
+
+// The rule's bucket when it splits: its largest part (the first on a tie).
+export const ruleSplitBucket = (split: FinanceRuleSplitPart[]): FinanceBucket =>
+  split.reduce((best, p) => (p.percent > best.percent ? p : best), split[0]!).bucket;
 
 export function summarizePeriod(input: {
   period: FinancePeriod;
@@ -729,7 +1143,13 @@ export function summarizePeriod(input: {
   budgetCents: number;
 }): Pick<
   FinanceOverview,
-  'budgetCents' | 'spentCents' | 'leftCents' | 'buckets' | 'unsortedCount' | 'unsortedCents'
+  | 'budgetCents'
+  | 'spentCents'
+  | 'leftCents'
+  | 'buckets'
+  | 'upcoming'
+  | 'unsortedCount'
+  | 'unsortedCents'
 > {
   const { period, txns, accounts, budgetCents } = input;
   const byId = new Map(accounts.map((a) => [a.id, a]));
@@ -739,32 +1159,44 @@ export function summarizePeriod(input: {
     budget: { totalCents: 0, count: 0 },
     i_pay: { totalCents: 0, count: 0 },
   };
+  const upcoming: FinanceBucketTotal = { totalCents: 0, count: 0 };
   let unsortedCount = 0;
   let unsortedCents = 0;
   const amount = (t: FinanceTransaction) => amountOf(t, byId.get(t.accountId));
   const linkable = linkableTransactions(txns, accounts, moves);
   // Built over the linkable set, so a refund whose charge is on a hidden account counts as unlinked.
-  const links = resolveRefundLinks(linkable, amount);
-  const capped = capRefunds(links, new Map(linkable.map((t) => [t.id, t])), amount);
-  const refunded = capped.byCharge;
+  const claims = resolveRefundClaims(linkable, amount);
+  const links = linksOf(claims);
+  const refunded = capRefunds(claims, new Map(linkable.map((t) => [t.id, t])), amount).byCharge;
   for (const t of linkable) {
-    // A deposit counts only as a linked refund; otherwise it's income, outside the budget.
-    if (classifyTransaction(t, byId.get(t.accountId), moves) === 'income' && !links.has(t.id))
-      continue;
-    const which = periodOf(t, period, links);
-    if (which === null) continue;
-    const linked = links.has(t.id); // rides on its charge: nets its money, never adds to a count
-    // A linked refund counts only up to what's left of its charge, so no bucket goes below $0.
-    const cents = linked ? -(capped.byRefund.get(t.id) ?? 0) : amount(t);
-    const bucket = bucketOf(t, links);
-    if (bucket !== null && !isSpendBucket(bucket)) continue; // not spending: no total, never to sort
-    if (bucket === null) {
+    // A linked refund nets inside its charge's parts (countedParts), never on its own row. An unlinked
+    // deposit is income, outside the budget.
+    if (links.has(t.id)) continue;
+    if (classifyTransaction(t, byId.get(t.accountId), moves) === 'income') continue;
+    const cents = amount(t);
+    const parts = countedParts(t, cents, refunded.get(t.id) ?? 0, period);
+    const only = parts[0]!;
+    if (parts.length === 1 && only.bucket === null) {
+      if (only.window === null) continue;
       if (needsSorting(t, links, refunded, cents)) unsortedCount += 1;
-      unsortedCents += cents;
-    } else if (which === 'current') {
-      buckets[bucket].totalCents += cents;
-      if (!linked) buckets[bucket].count += 1;
+      unsortedCents += only.cents - only.refundedCents;
+      continue;
     }
+    const counted = new Set<FinanceSpendBucket>();
+    let waiting = false;
+    for (const p of parts) {
+      // not spending: no total, never to sort
+      if (p.bucket === null || !isSpendBucket(p.bucket) || p.window === null) continue;
+      if (p.window === 'current') {
+        buckets[p.bucket].totalCents += p.cents - p.refundedCents;
+        counted.add(p.bucket);
+      } else if (p.window === 'upcoming') {
+        upcoming.totalCents += p.cents - p.refundedCents;
+        waiting = true;
+      }
+    }
+    for (const b of counted) buckets[b].count += 1; // a charge counts once per bucket it lands in
+    if (waiting) upcoming.count += 1;
   }
   const spentCents = buckets.budget.totalCents;
   return {
@@ -772,6 +1204,7 @@ export function summarizePeriod(input: {
     spentCents,
     leftCents: budgetCents - spentCents,
     buckets,
+    upcoming,
     unsortedCount,
     unsortedCents,
   };
@@ -797,9 +1230,11 @@ export interface FinanceView {
   sortable: FinanceTransaction[]; // allTxns on shown accounts, charges + refunds only
   amount: (t: FinanceTransaction) => number; // normalised: positive = money out
   kindOf: (t: FinanceTransaction) => FinanceTxnKind;
-  links: RefundLinks; // refund id → the charge it reverses
+  links: RefundLinks; // refund id → its primary charge (where it's listed)
+  claims: RefundClaims; // refund id → every charge it's linked or allocated to
   refunded: Map<string, number>; // charge id → cents refunded so far (capped at the charge)
   counted: Map<string, number>; // linked refund id → the cents it counts (≤ its size; capRefunds)
+  countedByClaim: Map<string, Map<string, number>>; // refund id → charge id → the cents that claim counts
 }
 
 // The overview plus the transactions of financeListRange, with the derived bits every tab (and the MCP
@@ -817,8 +1252,9 @@ export function deriveFinanceView(
   const amount = (t: FinanceTransaction) => amountOf(t, accounts.get(t.accountId));
   const sortable = sortableTransactions(allTxns, overview.accounts, moves);
   const linkable = linkableTransactions(allTxns, overview.accounts, moves);
-  const links = resolveRefundLinks(linkable, amount);
-  const capped = capRefunds(links, new Map(allTxns.map((t) => [t.id, t])), amount);
+  const claims = resolveRefundClaims(linkable, amount);
+  const links = linksOf(claims);
+  const capped = capRefunds(claims, new Map(allTxns.map((t) => [t.id, t])), amount);
   return {
     accounts,
     moves,
@@ -828,8 +1264,10 @@ export function deriveFinanceView(
     amount,
     kindOf: (t) => classifyTransaction(t, accounts.get(t.accountId), moves),
     links,
+    claims,
     refunded: capped.byCharge,
     counted: capped.byRefund,
+    countedByClaim: capped.byClaim,
   };
 }
 
@@ -840,12 +1278,43 @@ export type FinanceListFilter = 'all' | 'unsorted' | FinanceBucket;
 // deposits linked as refunds (which take their charge's bucket).
 export function matchesFinanceFilter(
   t: FinanceTransaction,
-  view: Pick<FinanceView, 'kindOf' | 'links'>,
+  view: Pick<FinanceView, 'kindOf' | 'links' | 'claims' | 'amount'>,
   f: FinanceListFilter,
 ): boolean {
   if (f === 'all') return true;
   if (!isSortableKind(view.kindOf(t)) && !view.links.has(t.id)) return false;
-  return f === 'unsorted' ? isUnsorted(t, view.links) : bucketOf(t, view.links) === f;
+  return f === 'unsorted'
+    ? isUnsorted(t, view.links, view.amount(t))
+    : bucketsOf(t, view).includes(f);
+}
+
+// Every bucket a row's money lands in: a split charge's parts', a refund's charges' (a refund across
+// charges, or on a split charge, lands in several), else its one bucket. Unsorted contributes nothing.
+export function bucketsOf(
+  t: FinanceTransaction,
+  view: Pick<FinanceView, 'claims' | 'amount'>,
+): FinanceBucket[] {
+  const own = (x: FinanceTransaction): FinanceBucket[] => {
+    const split = splitOf(x, view.amount(x));
+    if (split) return [...new Set(split.map((p) => p.bucket))];
+    return x.bucket === null ? [] : [x.bucket];
+  };
+  const claims = view.claims.get(t.id);
+  if (!claims) return own(t);
+  return [...new Set(claims.flatMap((c) => own(c.charge)))];
+}
+
+// A row's share of a list total under a filter: under a bucket chip a split charge counts only that
+// bucket's parts; every other row counts its whole amount (netCents' rule).
+export function filterCents(
+  t: FinanceTransaction,
+  view: Pick<FinanceView, 'amount'>,
+  f: FinanceListFilter,
+): number {
+  const cents = view.amount(t);
+  if (f === 'all' || f === 'unsorted') return cents;
+  const split = splitOf(t, cents);
+  return split ? split.filter((p) => p.bucket === f).reduce((n, p) => n + p.cents, 0) : cents;
 }
 
 // A case-insensitive substring of the merchant or the bank's descriptor (`needle` already lowercased),
@@ -1082,7 +1551,7 @@ export interface ReconcileInput {
 
 // One /transactions/sync page → the rows to write, applied added → modified → removed.
 //  - A replayed `added` (a restart after a failed batch) is treated as `modified` — idempotent.
-//  - A new posted row inherits bucket/override/note/refund link/period mark from its pending row
+//  - A new posted row inherits bucket/split/override/note/refund link or allocation/period mark from its pending row
 //    (pending_transaction_id), even when that pending row was already tombstoned; otherwise the rules
 //    decide — except for a carried refund link, which must not pick up its charge's merchant rule.
 //  - `modified` overwrites Plaid-owned fields only.
@@ -1104,9 +1573,16 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
     }
     const carry = p.pending_transaction_id ? existing.get(p.pending_transaction_id) : undefined;
     const rule =
-      carry?.bucket || carry?.refundOfId || carry?.startsPeriod
+      carry?.bucket ||
+      carry?.refundOfId ||
+      carry?.refundParts ||
+      carry?.splits ||
+      carry?.startsPeriod
         ? null
         : applyRules(rules, { merchantName: p.merchant_name, name: p.name });
+    // A split rule splits money out by its percents; money in (a card credit) takes its bucket.
+    const cents = toCents(p.amount);
+    const ruleSplit = rule?.split && cents > 0 ? splitFromRule(rule.split, cents) : null;
     write({
       id: p.transaction_id,
       userId,
@@ -1115,12 +1591,16 @@ export function reconcileSyncPage(input: ReconcileInput): FinanceTransaction[] {
       deletedAt: null,
       ...plaidOwnedFields(p, itemId),
       source: 'plaid',
-      bucket: carry?.bucket ?? rule?.bucket ?? null,
-      bucketSetBy: carry?.bucket ? carry.bucketSetBy : rule ? 'rule' : null,
+      bucket: carry?.bucket ?? (ruleSplit ? null : (rule?.bucket ?? null)),
+      bucketSetBy:
+        carry && (carry.bucket || carry.splits) ? carry.bucketSetBy : rule ? 'rule' : null,
       periodOverride: carry?.periodOverride ?? null,
       note: carry?.note ?? null,
       refundOfId: carry?.refundOfId ?? null,
       startsPeriod: carry?.startsPeriod ?? false,
+      // Carried as stored: at a new amount a hand-made split breaks (splitOf) and the row asks again.
+      splits: carry?.splits ?? ruleSplit,
+      refundParts: carry?.refundParts ?? null,
     });
   }
 
