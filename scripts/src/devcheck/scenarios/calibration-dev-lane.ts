@@ -164,7 +164,7 @@ export const calibrationDevLane: Scenario = {
       id: 'empty-max',
       entry: 'mcp',
       kind: 'edge',
-      what: 'An empty batch and 101 rows are refused; a 60-row batch lands in one call (its time logged)',
+      what: `An empty batch and ${MAX + 1} rows are refused; a ${BATCH}-row batch lands in one call (its time logged)`,
     },
     {
       id: 'repeat',
