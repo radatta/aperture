@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { PULSE_GRACE_MIN, PULSE_NOTE_MAX } from '@aperture/shared';
+import { PULSE_NOTE_MAX } from '@aperture/shared';
 import type { ApiMethod, PulseResult } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
 import { BackendClient } from '../backend';
 import { handleRpc } from '../handler';
+import { ShapeError } from '../rpc/shape';
 import { TOOLS } from './tools';
 import { RpcParamError } from './types';
 import type { ToolContext } from './types';
@@ -45,7 +46,7 @@ describe('pulse', () => {
     clock += 5 * 60_000;
     expect(await pulse({ taskId: ` ${t.id} ` })).toMatchObject({
       opened: false,
-      sessionMin: 5 + PULSE_GRACE_MIN,
+      sessionMin: 5,
     });
   });
 
@@ -78,12 +79,14 @@ describe('pulse', () => {
     expect(doc.snapshot()).toEqual(before);
   });
 
-  it('the RPC edge refuses a malformed pulse body by shape', async () => {
+  it('the RPC edge refuses a malformed pulse body by shape, before anything is read or written', async () => {
     const t = await setup.createTask({ title: 'X', estimateMin: 30 });
-    for (const bad of [[{ taskId: t.id, done: 1 }], [{ taskId: t.id, extra: true }], ['id']])
+    const before = doc.snapshot();
+    for (const bad of [[{ taskId: t.id, done: 1 }], [{ taskId: t.id, extra: true }], [t.id]])
       await expect(
         handleRpc(doc, { userId: U, method: 'pulseTask', args: bad, now }),
-      ).rejects.toThrow();
+      ).rejects.toBeInstanceOf(ShapeError);
+    expect(doc.snapshot()).toEqual(before);
   });
 
   it("advertises itself as a write that isn't destructive", () => {

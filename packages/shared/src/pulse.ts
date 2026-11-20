@@ -4,9 +4,10 @@
 //
 // A pulse session is a PomodoroSession row with source 'pulse', written COMPLETED from birth and rewritten
 // as pulses extend it, so the app's timer (which adopts running rows) never sees it. Its minutes are always
-// (end − start), and its end is the last pulse plus a grace, credited up front: a session closes by itself
-// once the window passes, with no close step and no schedule. One open session per user, held in one state
-// row (`OpenPulse`) both impls change under a conditional write. Pure: the stub and the Lambda share it.
+// (end − start). While it runs it is credited to its last pulse; the next pulse (any task) or a timer start
+// settles it with its tail — the grace, or less if that came sooner — so time is credited only once it has
+// passed and never taken back, with no close step and no schedule. One open session per user, held in one
+// state row (`OpenPulse`) both impls change under a conditional write. Pure: the stub and the Lambda share it.
 
 import { areaOf, type Area } from './areas';
 import { isCalibrated, needsEstimate } from './machines';
@@ -21,8 +22,8 @@ export const PULSE_WINDOW_MIN: Record<Area, number> = {
   aperture: 15,
   personal: 15,
 };
-// Reading the last reply: every session ends this long after its last pulse (less when the next pulse
-// for another task comes sooner, or on done).
+// Reading the last reply: every session ends this long after its last pulse — less when the next pulse
+// for another task, or a timer start, comes sooner. A done keeps it.
 export const PULSE_GRACE_MIN = 3;
 export const PULSE_NOTE_MAX = 140;
 export const PULSE_NOTES_KEPT = 20;
@@ -56,8 +57,8 @@ export interface PulseResult {
   message?: string;
 }
 
-// The open session: everything its row is derived from. `endedAt` is lastPulseAt + grace while it runs
-// (in the future, credited up front), trimmed earlier by a switch or a done.
+// The open session: everything its row is derived from. `endedAt` is how far it is credited: its last pulse
+// while it runs, the last pulse plus its tail once settled (settlePulse), or plus the grace on a done.
 export interface OpenPulse {
   sessionId: string;
   taskId: string;
@@ -113,10 +114,12 @@ export function pulseSessionRow(o: OpenPulse, userId: string, now: number): Pomo
   };
 }
 
-// Ends the session no later than `at` (never before its last pulse): a switch, a block, a done or a timer
-// started on its task. Already ended by then → unchanged.
-export function trimPulse(o: OpenPulse, at: number): OpenPulse {
-  const end = Math.max(o.lastPulseAt, Math.min(o.endedAt, at));
+// Ends a session at `now`: its tail is the time since its last pulse, at most the grace (a gap past the
+// window gets the whole grace; a switch or a timer start sooner gets only what passed). Never earlier than
+// what it was already credited. Unchanged when already settled.
+export function settlePulse(o: OpenPulse, now: number): OpenPulse {
+  const tail = Math.min(PULSE_GRACE_MIN * MIN, Math.max(0, now - o.lastPulseAt));
+  const end = Math.max(o.endedAt, o.lastPulseAt + tail);
   return end === o.endedAt ? o : { ...o, endedAt: end };
 }
 
@@ -129,21 +132,22 @@ export interface PulsePlanInput {
   now: number;
   note: string | null; // normalized
   blocked: PulseBlock | null;
-  finish: boolean; // a done that passed its gate: the session ends now
+  finish: boolean; // a done that passed its gate: the session ends with its grace, and the state clears
   newId: () => string;
 }
-// A session row to write and what it changes on its task's actual (minutes; negative on a trim).
+// A session row to write and the minutes it adds to its task's actual — never negative: time is only ever
+// credited once it has passed (or, on a done, as the grace), so nothing is ever taken back.
 export interface PulseRowChange {
   session: OpenPulse;
   deltaMin: number;
 }
 export interface PulsePlan {
   open: OpenPulse | null; // the state row's next value
-  rows: PulseRowChange[]; // in write order: a closed or trimmed old session first
+  rows: PulseRowChange[]; // in write order: a settled old session first
   counted: boolean;
   opened: boolean;
   current: OpenPulse | null; // the session this pulse landed in
-  closed?: { taskId: string; minutes: number };
+  closed?: { taskId: string; minutes: number }; // a session this pulse settled
 }
 
 const withNote = (notes: PulseNote[], note: string | null, at: number): PulseNote[] =>
@@ -152,63 +156,62 @@ const delta = (before: OpenPulse, after: OpenPulse): number =>
   pulseMinutes(after) - pulseMinutes(before);
 
 // The decision for one pulse. A pulse is the server's own clock reading; a client's time is never asked for.
+// A running session is credited up to its last pulse; its tail (the grace, or less) is credited when the
+// next pulse — for any task — or a timer start settles it.
 //  - same task, inside its window: extend (credit the gap since the last pulse);
-//  - same task, past its window: the old session stands with its grace, a new one opens;
-//  - another task: the old session is trimmed to now (it never gets more than its grace), a new one opens;
-//  - blocked (a timer or a sitting times this task): any open session is trimmed and closed, nothing opens;
-//  - finish: the session this pulse lands in ends now, and the state clears.
+//  - same task, past its window: settle the old session (its whole grace), open a new one;
+//  - another task: settle the old session (the time since its last pulse, at most the grace), open a new one;
+//  - blocked (a timer or a sitting times this task): settle any open session, open nothing;
+//  - finish: the session this pulse lands in ends with its grace, and the state clears.
 export function planPulse(p: PulsePlanInput): PulsePlan {
   const { open, now } = p;
   const grace = PULSE_GRACE_MIN * MIN;
   const rows: PulseRowChange[] = [];
   let closed: PulsePlan['closed'];
-  const close = (o: OpenPulse) => {
-    const trimmed = trimPulse(o, now);
-    if (trimmed !== o) rows.push({ session: trimmed, deltaMin: delta(o, trimmed) });
-    closed = { taskId: o.taskId, minutes: pulseMinutes(trimmed) };
+  const settle = (o: OpenPulse) => {
+    const done = settlePulse(o, now);
+    if (done !== o) rows.push({ session: done, deltaMin: delta(o, done) });
+    closed = { taskId: o.taskId, minutes: pulseMinutes(done) };
   };
-  const live = open !== null && now - open.lastPulseAt <= p.windowMs;
   const same = open !== null && open.taskId === p.task.id;
+  const live = same && now - open.lastPulseAt <= p.windowMs;
 
   if (p.blocked) {
-    if (open && now < open.endedAt) close(open);
+    if (open) settle(open);
     return { open: null, rows, counted: false, opened: false, current: null, closed };
   }
 
-  let current: OpenPulse | null;
+  let current: OpenPulse | null = null;
   let opened = false;
-  if (open && same && live) {
+  if (open && live) {
     const last = Math.max(open.lastPulseAt, now); // two Lambdas' clocks may differ by a few ms
     current = {
       ...open,
       lastPulseAt: last,
-      endedAt: Math.max(open.endedAt, last + grace),
+      endedAt: Math.max(open.endedAt, p.finish ? last + grace : last),
       pulses: open.pulses + 1,
       notes: withNote(open.notes, p.note, now),
     };
-    if (p.finish) current = { ...current, endedAt: last };
     rows.push({ session: current, deltaMin: delta(open, current) });
-  } else if (p.finish) {
-    // Done with no live session on the task: nothing to time, so no empty row; another task's session ends.
-    if (open && !same && now < open.endedAt) close(open);
-    current = null;
   } else {
-    if (open && !same && now < open.endedAt) close(open);
-    const start: OpenPulse = {
-      sessionId: p.newId(),
-      taskId: p.task.id,
-      categoryId: p.task.categoryId,
-      wasWork: p.wasWork,
-      day: p.day,
-      startedAt: now,
-      lastPulseAt: now,
-      endedAt: now + grace,
-      pulses: 1,
-      notes: withNote([], p.note, now),
-    };
-    current = start;
-    opened = true;
-    rows.push({ session: start, deltaMin: pulseMinutes(start) });
+    if (open) settle(open);
+    // A done with no live session on the task: nothing to time, so no empty row.
+    if (!p.finish) {
+      current = {
+        sessionId: p.newId(),
+        taskId: p.task.id,
+        categoryId: p.task.categoryId,
+        wasWork: p.wasWork,
+        day: p.day,
+        startedAt: now,
+        lastPulseAt: now,
+        endedAt: now,
+        pulses: 1,
+        notes: withNote([], p.note, now),
+      };
+      opened = true;
+      rows.push({ session: current, deltaMin: 0 });
+    }
   }
   return { open: p.finish ? null : current, rows, counted: true, opened, current, closed };
 }
@@ -283,14 +286,14 @@ export function pulseResultOf(
   };
 }
 
-// A work timer started on a task ends that task's open pulse session now: the timer is the clock from here.
-// Null when nothing changes.
+// A work timer started on a task settles that task's open pulse session now: the timer is the clock from
+// here. Null when the open session (if any) is another task's.
 export function yieldPulse(
   open: OpenPulse | null,
   taskId: string,
   now: number,
 ): { row: PulseRowChange | null } | null {
   if (!open || open.taskId !== taskId) return null;
-  const trimmed = trimPulse(open, now);
-  return { row: trimmed === open ? null : { session: trimmed, deltaMin: delta(open, trimmed) } };
+  const done = settlePulse(open, now);
+  return { row: done === open ? null : { session: done, deltaMin: delta(open, done) } };
 }

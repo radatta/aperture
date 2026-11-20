@@ -2,9 +2,11 @@
 // server times them — a session from the first pulse, extended by the next, ended by a switch, a done, a timer
 // started on its task, or a LeetCode sitting that times it. Every task, roll and sitting is ledgered from a response
 // and cleaned by id. Pulse sessions are session rows, which have no delete (as timers): each run leaves its few
-// completed ones in the test user's history, on tasks the cleanup deletes, and the user's one pulse state row points
-// at the last of them until the next run's first pulse ends it. Notes are synthetic text, and no step prints one.
-// The window lapse (15+ min of silence) is a wall-clock wait dev won't spend: off dev, on an injected clock.
+// completed ones in the test user's history, on tasks the cleanup deletes; the user's one pulse state row is left
+// holding the slow step's session when that step ran (the next run's first pulse settles it), and empty otherwise
+// (the scenario's blocked pulses clear it). Notes are synthetic text, and no step prints one. The window lapse is a
+// real 15.5-min wait, so it is a slow step (deferred unless --feature names this scenario or the branch touches the
+// pulse code: slowPaths).
 // Order 375, after the coach scenarios: it links its own LeetCode roll for one step and unlinks it before the next.
 import type { DevSittingStart } from '../api';
 import { McpRpcError, PARAM_ERROR, type DevPulseResult } from '../mcp';
@@ -13,6 +15,7 @@ import { devUlid } from './flux-history';
 
 // The server's constant (packages/shared/src/pulse.ts PULSE_GRACE_MIN — scripts can't import shared).
 const GRACE = 3;
+const WINDOW_MIN = 15; // PULSE_WINDOW_MIN.personal — the run's tasks have no category
 const WAIT_S = 20;
 
 const fail = (msg: string): never => {
@@ -46,14 +49,40 @@ const pulseRow = async (ctx: Ctx, taskId: string) =>
     (s) => s.source === 'pulse' && s.taskId === taskId,
   );
 
+// Session rows are read eventually consistent (listAllSessions): a read straight after a pulse can see the row
+// before it. Retry a few times until `ok` holds.
+const settledRow = async (
+  ctx: Ctx,
+  taskId: string,
+  ok: (row: NonNullable<Awaited<ReturnType<typeof pulseRow>>>) => boolean,
+) => {
+  for (let i = 0; ; i++) {
+    const row = await pulseRow(ctx, taskId);
+    if ((row && ok(row)) || i === 4) return row;
+    await sleep(1000);
+  }
+};
+
+// capMin 0: a staged timer ends crediting nothing; the cleanup deletes its task beneath it.
+const stopTimerOn = async (ctx: Ctx, taskId: string) => {
+  const timer = (await ctx.api.reads.listRunningSessions()).find((s) => s.taskId === taskId);
+  if (timer) await ctx.api.writes.stopSession(timer.id, 'completed', { capMin: 0 });
+};
+
 // What this run made, shared across steps (a scenario's steps run in order, one run at a time).
 const made = { a: '', b: '', c: '', d: '', e: '', f: '', firstMin: 0 };
+const slowPaths = [
+  'packages/shared/src/pulse.ts',
+  'lambdas/src/pulse.ts',
+  'scripts/src/devcheck/scenarios/pulse-tracking.ts',
+];
 
 export const pulseTracking: Scenario = {
   id: 'pulse-tracking',
   title: 'Pulse tracking: Claude names the task each reply was for; the server times it',
   order: 375,
   tiers: ['full'],
+  slowPaths,
   rows: [
     {
       id: 'tools-listed',
@@ -65,7 +94,7 @@ export const pulseTracking: Scenario = {
       id: 'start',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'A pulse on a backlog task starts it (baseline frozen) and opens a session worth the grace',
+      what: 'A pulse on a backlog task starts it (baseline frozen) and opens a session at zero',
     },
     {
       id: 'extend',
@@ -121,9 +150,9 @@ export const pulseTracking: Scenario = {
       kind: 'edge',
       what: "Another user's task id reads as Not found",
       offDev: {
-        file: 'lambdas/src/mcp/pulseTools.test.ts',
-        test: 'an unknown task is an execution error the model reads, and nothing is written',
-        why: "same path as unknown (proven on dev): a task is read in the caller's own partition, so another user's id is an id this user has no row for",
+        file: 'lambdas/src/backend.pulse.test.ts',
+        test: "another user's task id is Not found, and nothing is written",
+        why: "same path as unknown (proven on dev): a task is read in the caller's own partition, so another user's id is one this user has no row for; the named test pulses a real second user's task",
       },
     },
     {
@@ -133,10 +162,22 @@ export const pulseTracking: Scenario = {
       what: 'A pulse on a task already finished by complete_task is refused; its actual stays',
     },
     {
+      id: 'cancelled-task',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A pulse on a cancelled task is refused',
+    },
+    {
+      id: 'parent',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A pulse on a parent is refused, naming the part to pulse; the part takes it',
+    },
+    {
       id: 'done',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'done: true on an estimated task marks it done with the tracked time, a calibration point',
+      what: 'done: true on an estimated task marks it done with the tracked time plus the grace, a calibration point',
     },
     {
       id: 'done-no-estimate',
@@ -148,7 +189,7 @@ export const pulseTracking: Scenario = {
       id: 'timer-yield',
       entry: 'api',
       kind: 'edge',
-      what: 'A work timer started on the task mid-session ends the pulse session now (the grace given back)',
+      what: 'A work timer started on the task mid-session settles the pulse session now (only the seconds that passed)',
     },
     {
       id: 'timer-same',
@@ -172,12 +213,7 @@ export const pulseTracking: Scenario = {
       id: 'window-lapse',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A gap past the window opens a new session; the old one keeps its last pulse plus the grace',
-      offDev: {
-        file: 'lambdas/src/backend.pulse.test.ts',
-        test: 'a gap past the window opens a new session; the old row keeps its last pulse plus the grace',
-        why: 'a 15–25 min wall-clock silence per run; the injected clock runs the same BackendClient path',
-      },
+      what: 'After the window passes with no pulse, the next one opens a new session; the old one gets its whole grace',
     },
     {
       id: 'area-windows',
@@ -248,13 +284,13 @@ export const pulseTracking: Scenario = {
           r.counted &&
             r.opened &&
             r.pulses === 1 &&
-            r.sessionMin === GRACE &&
+            r.sessionMin === 0 &&
             r.task.status === 'in_progress',
           'first pulse',
           shown(r),
         );
         const a = await taskOf(ctx, made.a);
-        expect(a.estimateLockedMin === 30 && a.actualAccruedMin === GRACE, 'started task', a);
+        expect(a.estimateLockedMin === 30 && a.actualAccruedMin === 0, 'started task', a);
       },
     },
     {
@@ -265,8 +301,8 @@ export const pulseTracking: Scenario = {
       async run(ctx) {
         await sleep(WAIT_S * 1000);
         const r = await ctx.mcp.writes.pulse(made.a);
-        const lo = GRACE + (WAIT_S - 2) / 60;
-        const hi = GRACE + (WAIT_S + 15) / 60;
+        const lo = (WAIT_S - 2) / 60;
+        const hi = (WAIT_S + 15) / 60;
         expect(
           !r.opened && r.pulses === 2 && r.sessionMin >= lo - 0.05 && r.sessionMin <= hi + 0.05,
           'extend',
@@ -291,7 +327,7 @@ export const pulseTracking: Scenario = {
       entry: 'api',
       proves: ['survives-reload'],
       async run(ctx) {
-        const row = await pulseRow(ctx, made.a);
+        const row = await settledRow(ctx, made.a, (x) => x.pulses === 4);
         expect(
           !!row && row.status === 'completed' && row.pulses === 4 && row.endedAt !== null,
           'pulse row',
@@ -313,8 +349,10 @@ export const pulseTracking: Scenario = {
           note: `devcheck line one\nline two ${'x'.repeat(400)}`,
         });
         expect(r.counted && !r.opened, 'long-note pulse', shown(r));
+        type Noted = { pulseNotes?: { text: string }[] };
         const notes = (
-          (await pulseRow(ctx, made.a)) as { pulseNotes?: { text: string }[] } | undefined
+          (await settledRow(ctx, made.a, (x) => (x as Noted).pulseNotes?.length === 2)) as
+            Noted | undefined
         )?.pulseNotes;
         const last = notes?.at(-1)?.text ?? '';
         // Lengths and shape only: a note's text is never printed.
@@ -337,11 +375,7 @@ export const pulseTracking: Scenario = {
       proves: ['switch', 'neighbour'],
       async run(ctx) {
         const r = await ctx.mcp.writes.pulse(made.b);
-        expect(
-          r.opened && r.closed?.taskId === made.a && r.sessionMin === GRACE,
-          'switch',
-          shown(r),
-        );
+        expect(r.opened && r.closed?.taskId === made.a && r.sessionMin === 0, 'switch', shown(r));
         const a = await taskOf(ctx, made.a);
         // A's session ended at this pulse: its last pulse, not its grace (WAIT_S plus the steps between).
         expect(
@@ -383,28 +417,14 @@ export const pulseTracking: Scenario = {
       },
     },
     {
-      id: 'done-task',
-      title: 'A task finished by complete_task refuses a pulse and keeps its actual',
-      entry: 'mcp',
-      proves: ['done-task'],
-      async run(ctx) {
-        made.d = (await ctx.mcp.writes.createTask({ title: title(ctx, 'D'), estimateMin: 10 })).id;
-        await ctx.mcp.writes.completeTask(made.d, 12);
-        const r = await ctx.mcp.writes.pulseRefused({ taskId: made.d });
-        expect(r.isError && /already done/.test(r.text), 'pulse on a done task', r);
-        const d = await taskOf(ctx, made.d);
-        expect(d.actualAccruedMin === 12, 'D actual', d);
-      },
-    },
-    {
       id: 'done',
-      title: 'done: true marks B done with its tracked time, a calibration point',
+      title: 'done: true marks B done with its tracked time plus the grace, a calibration point',
       entry: 'mcp',
       proves: ['done'],
       async run(ctx) {
         const r = await ctx.mcp.writes.pulse(made.b, { done: true });
         expect(
-          r.done === true && r.task.status === 'done' && r.taskActualMin > 0,
+          r.done === true && r.task.status === 'done' && r.taskActualMin >= GRACE,
           'done pulse',
           shown(r),
         );
@@ -448,8 +468,40 @@ export const pulseTracking: Scenario = {
       },
     },
     {
+      id: 'done-task',
+      title: 'A finished, a cancelled or a parent task refuses a pulse; the part takes it',
+      entry: 'mcp',
+      proves: ['done-task', 'cancelled-task', 'parent'],
+      async run(ctx) {
+        const mk = (what: string, more: { estimateMin?: number; parentId?: string } = {}) =>
+          ctx.mcp.writes.createTask({ title: title(ctx, what), ...more });
+        made.d = (await mk('D', { estimateMin: 10 })).id;
+        await ctx.mcp.writes.completeTask(made.d, 12);
+        const r = await ctx.mcp.writes.pulseRefused({ taskId: made.d });
+        expect(r.isError && /already done/.test(r.text), 'pulse on a done task', r);
+        const d = await taskOf(ctx, made.d);
+        expect(d.actualAccruedMin === 12, 'D actual', d);
+
+        const dropped = (await mk('dropped', { estimateMin: 10 })).id;
+        await ctx.api.writes.finishTask(dropped, 'cancelled');
+        const c = await ctx.mcp.writes.pulseRefused({ taskId: dropped });
+        expect(c.isError && /already cancelled/.test(c.text), 'pulse on a cancelled task', c);
+
+        const parent = (await mk('parent')).id;
+        const part = (await mk('part', { estimateMin: 20, parentId: parent })).id;
+        const p = await ctx.mcp.writes.pulseRefused({ taskId: parent });
+        expect(p.isError && /pulse the part/.test(p.text), 'pulse on a parent', p);
+        const q = await ctx.mcp.writes.pulse(part);
+        expect(
+          q.counted && q.opened && q.task.status === 'in_progress',
+          'pulse on the part',
+          shown(q),
+        );
+      },
+    },
+    {
       id: 'timer-yield',
-      title: 'A timer started on F mid-session ends its pulse session now',
+      title: 'A timer started on F mid-session settles its pulse session now',
       entry: 'api',
       proves: ['timer-yield'],
       async run(ctx) {
@@ -457,9 +509,18 @@ export const pulseTracking: Scenario = {
         await ctx.mcp.writes.pulse(made.f);
         await sleep(3000);
         await ctx.api.writes.startSession(made.f, await appDay(ctx));
-        const f = await ctx.api.reads.getTask(made.f);
-        const got = f?.actualAccruedMin ?? -1;
-        expect(got > 0 && got < 0.5, 'F after the timer started (the grace given back)', got);
+        try {
+          const f = await ctx.api.reads.getTask(made.f);
+          const got = f?.actualAccruedMin ?? -1;
+          expect(
+            got > 0 && got < 0.5,
+            'F after the timer started (only the seconds that passed)',
+            got,
+          );
+        } catch (err) {
+          await stopTimerOn(ctx, made.f); // timer-same's finally won't run once this step fails
+          throw err;
+        }
       },
     },
     {
@@ -484,11 +545,7 @@ export const pulseTracking: Scenario = {
             before,
           );
         } finally {
-          // capMin 0: the staged timer ends crediting nothing; the cleanup deletes F beneath it.
-          const timer = (await ctx.api.reads.listRunningSessions()).find(
-            (s) => s.taskId === made.f,
-          );
-          if (timer) await ctx.api.writes.stopSession(timer.id, 'completed', { capMin: 0 });
+          await stopTimerOn(ctx, made.f);
         }
       },
     },
@@ -513,6 +570,11 @@ export const pulseTracking: Scenario = {
             tzOffsetMinutes: 480,
           };
           const { sitting } = await ctx.api.writes.lcSittingStart(start);
+          // A resume is another sitting's (one left open before this run): not this run's to pulse or end.
+          if (sitting.id !== start.clientSittingId)
+            fail(
+              `the Start resumed an open sitting ${sitting.id}: one was left open before this step`,
+            );
           rep = sitting.repTaskId;
           const r = await ctx.mcp.writes.pulse(rep);
           expect(!r.counted && r.reason === 'sitting' && !r.opened, 'pulse on a rep', shown(r));
@@ -538,8 +600,38 @@ export const pulseTracking: Scenario = {
           [made.d],
         ]) {
           const got = await ctx.api.writes.rpcRaw('pulseTask', JSON.stringify({ args }), 'jwt');
-          expect(got.status === 400, `pulseTask ${JSON.stringify(args)}`, got);
+          // The shape check's own refusal, not the domain's: D's "already done" is a 400 too.
+          const error = (got.body as { error?: unknown } | null)?.error;
+          expect(
+            got.status === 400 &&
+              typeof error === 'string' &&
+              /must be true or false|Unknown pulse field|must be an object/.test(error) &&
+              !/already done|Not found/.test(error),
+            `pulseTask ${JSON.stringify(args)}`,
+            got,
+          );
         }
+      },
+    },
+    {
+      id: 'window-lapse',
+      title: `${WINDOW_MIN} min of silence: the next pulse settles the old session with its grace and opens anew`,
+      entry: 'mcp',
+      proves: ['window-lapse'],
+      cost: 'slow',
+      async run(ctx) {
+        const g = (await ctx.mcp.writes.createTask({ title: title(ctx, 'G'), estimateMin: 30 })).id;
+        await ctx.mcp.writes.pulse(g);
+        await sleep((WINDOW_MIN * 60 + 30) * 1000);
+        const r = await ctx.mcp.writes.pulse(g);
+        // One pulse, then silence: the old session is exactly its grace.
+        expect(
+          r.opened && r.pulses === 1 && r.closed?.taskId === g && r.closed.minutes === GRACE,
+          'pulse after the window',
+          shown(r),
+        );
+        const t = await taskOf(ctx, g);
+        expect(t.actualAccruedMin === GRACE, 'G actual after the lapse', t.actualAccruedMin);
       },
     },
     noConsoleErrors,

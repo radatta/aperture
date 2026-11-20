@@ -100,7 +100,8 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 **pomodoroSessions**
 
-- `id · taskId? · categoryId · label? · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt · blocks?`
+- `id · taskId? · categoryId · label? · wasWork · kind · startedAt · endedAt? · day · activeMinutes · status · lastHeartbeatAt · blocks? · source? · pulses? · pulseNotes?`
+- `source: 'pulse'`: a session derived from MCP pulses — written `completed` straight into its day bucket and rewritten as pulses extend it, never running and never heartbeat; `pulses` and the newest 20 one-line `pulseNotes` ride on it ([mcp/pulse](../areas/mcp/pulse.md)).
 - `label`: a taskless timer's focus name — how concurrent timers are told apart. `blocks`: the blocks the timer runs to, raised by Again; absent = 1.
 - `kind`: `work | break` — **only `work` accrues** to `task.actualAccruedMin` + time-budget.
 - `wasWork`: **snapshot** of the category's `isWork` at write time → immutable balance history.
@@ -152,7 +153,7 @@ Logical entities below are **storage-agnostic**; the physical DynamoDB shape is 
 
 1. The calibration baseline (`estimateLockedMin`) freezes on first exit from planning; calibration uses the frozen value; the working estimate stays editable until done/cancelled; bigger-than-thought ⇒ split (split.ts). No calibrated task reaches done without an estimate and an actual of at least 1 minute (machines.ts).
 2. Categories: id-referenced, live labels, snapshotted `isWork`, reassign-on-delete, opt-in backfill on flip.
-3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard.
+3. Sessions: heartbeat-persisted, `work|break`, pauses excluded, category follows task, orphan ⇒ keep/discard. A pulse session (`source: 'pulse'`) is the exception: written completed, its minutes from the pulses ([mcp/pulse](../areas/mcp/pulse.md)).
 4. Never hard-delete — `deletedAt` tombstones everywhere. Both tables have TTL on `expiresAt`, and `toEntity` strips it:
    - **Dev expires tombstones:** `liveWrites` stamps `expiresAt` when `STAGE` is `dev` (`lambdas/src/ddb/writes.ts`; due at deletion, flux a week later, finance and a removed push device never; AWS deletes some time after a row is due).
    - **Prod's one exception (2026-11, lc-redesign):** a LeetCode sitting's raw bulk — snapshot and submit-detail events, replay chunks — is stamped at write to expire 14 days past the sitting's 24 h ingest window (`sittingRawExpiresAt`). What a sitting keeps forever (head, live row with the final code and facts, every run and submit) is never stamped; prod tombstones aren't stamped either — a deleted raw row just keeps the `expiresAt` it had. [recruiting](../areas/recruiting/index.md) → _Storage_.
@@ -171,6 +172,7 @@ SK (type-prefixed range keys):
   plan#<day>#<order>#<ulid>     day's planned tasks, sorted (begins_with plan#<day>)
   sess#<day>#<ulid>             sessions for a day / week range
   sess#running#<ulid>           running timers (direct get for the heartbeat; moved to the day bucket on stop)
+  pulsestate                    the user's one open pulse session (conditional update; derived state, never exported)
   lc#<day>#<ulid>               legacy LeetCode attempts — no writer since PR D (2026-11); read by the coach (coach-fixes)
   lcsit#<id>                    LeetCode sitting head (id = the Start's clientSittingId; put-if-absent)
   lcs#<id>#live                 a sitting's live row: newest code, snapshot version, replay facts

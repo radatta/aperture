@@ -21,10 +21,11 @@ needs?, message?}`. RPC `pulseTask(input)`.
 - **Pulses inside the window extend the session**, crediting exactly the gap since the last pulse.
 - **A gap past the window ends the session** at its last pulse plus the grace; the next pulse opens a new one on the
   same task. A break ends a session, never the task.
-- **One open session per user.** A pulse for task B ends A's session now (it never gets more than its grace) and
-  opens B's.
-- **`done: true`** finishes the task when its done gate allows: the session ends at this pulse (no grace) and the
-  task goes done with what was tracked. Refused, it is an ordinary pulse — the session stays open — and `needs` says
+- **One open session per user.** A pulse for task B ends A's session now (with the time since A's last pulse, never
+  more than the grace) and opens B's.
+- **`done: true`** finishes the task when its done gate allows: the session ends with its grace (the last reply is
+  read too) and the task goes done with what was tracked. A done with nothing live on the task (a new thread, or after
+  the window) adds nothing. Refused, it is an ordinary pulse — the session stays open — and `needs` says
   why: `estimate` (no estimate: Claude asks, sets one with `update_task`, pulses done again), `actual` (under a minute
   tracked: the user's own number goes through `complete_task`), `app` (a timer or a sitting times the task: finish it
   in Aperture, which stops it). `complete_task` is unchanged: it needs `actualMin`, and a typed actual still replaces
@@ -40,18 +41,27 @@ already …`), a parent opening a session (`pulse the part being worked on`), an
   bucket (`sess#<day>#<id>`) and rewritten in place as pulses extend it. It never touches `sess#running#`, so the app's
   timer (which adopts running rows and prompts on stale ones) never sees it; the export, the `wasWork` snapshot and
   `listSessionsForDay` read it like any session. Its minutes are always `endedAt − startedAt`.
-- **The grace is credited up front.** While a session is open its `endedAt` is the last pulse plus the grace (in the
-  future), so the task's `actualAccruedMin` already holds it, and a session ends by itself once the window passes.
-  There is no close step, no cron and no write on read. A switch, a done or a timer start trims `endedAt` back (to
-  now, never before the last pulse) and takes the difference off the task.
+- **Time is credited once it has passed, and never taken back.** While a session runs it is credited to its last
+  pulse (`endedAt` = the last pulse), so the task's `actualAccruedMin` holds exactly that. The session's tail — the
+  time since its last pulse, at most the grace — is credited when the next pulse (for any task) or a timer start on
+  its task settles it; a gap past the window settles it with the whole grace. A done credits the grace at once. There
+  is no close step, no cron and no write on read; the cost is that a session's last few minutes stay uncredited until
+  the next pulse. Every delta is ≥ 0, so a typed actual or an app Done is never eroded: a tail settled onto a task
+  finished meanwhile is not credited (the row keeps it, as a timer stopped on a finished task does).
 - **One state row, `pulsestate`**, holds the open session (`OpenPulse`); every pulse changes it with a conditional
   write (`repo.casUpdate`), so two pulses at once are serialised — the loser re-reads and plans on the winner. The
-  session row is a pure function of it.
+  session row is a pure function of it, written unconditionally: two pulses at once (two tabs) can land their rows
+  out of order, which the session's next pulse rewrites; a stale row on a session's very last pulse stays (the
+  drift-check follow-up).
 - **A task's minutes move by a conditional delta** (`repo.accrueTaskMinutes`): an app write landing meanwhile (a Done,
   an edit) is re-read and kept, never flattened; a task finished meanwhile keeps its actual.
 - **Write order:** the task's start, the state row, each changed session row, each task's minutes, then a done. A
-  crash between them under-counts by at most one window and never double-counts: the next pulse rewrites the session
-  row from the state row.
+  crash between them only under-counts (every credit is ≥ 0), by at most one window plus the grace; the next pulse in
+  the session rewrites its row from the state row.
+- **Cost:** a steady-state pulse is one MCP invocation, about 6 read units (the task, its category, the state row, the
+  running timers, settings, and the sittings for a Roll rep) and 3–10 write units (the state and session rows each
+  carry up to 20 notes, the task row). Usage-priced, no standing charge, no new resource
+  ([arch/INFRA.md](../../arch/INFRA.md) §11).
 
 ## Numbers
 
@@ -73,14 +83,18 @@ constant to move, no UI. A per-category override is a follow-up if the area prov
 - **A running work timer on the task times it.** A pulse on that task counts nothing (`counted: false, reason:
 'timer'`), at any heartbeat age: a timer on a locked phone credits the whole gap on its next beat, so a freshness test
   would double-count. A timer on another task is its own clock; the pulse counts.
-- **A timer started on a task with an open pulse session ends that session now** (`startSession`, both impls). A
-  timer forgotten and left stale blocks pulse time on that one task until its keep/discard — an under-count, never a
-  double count.
-- **LeetCode sittings time their reps.** A pulse on a task that is a sitting's rep counts nothing (`reason:
-'sitting'`), and `done` answers `needs: 'app'`: the rep is finished with Done in Aperture. Sittings and Rolls are
-  unchanged; a rep with no sitting is a plain task, and a done through `pulse` runs the same transition (Roll
+- **A timer started on a task with an open pulse session settles that session now** (`startSession`, both impls,
+  best-effort: a failure is logged and the next pulse, blocked by the timer, settles it). A timer forgotten and left
+  stale blocks pulse time on that one task until its keep/discard — an under-count, never a double count. The timer
+  read is strongly consistent; the one race left — a pulse that read "no timer" opening its session just after a
+  timer start found nothing to settle — overlaps the timer by at most the grace, settled at the next pulse.
+- **LeetCode sittings time their reps.** A pulse on a task that any sitting (ended ones too) names as its rep counts
+  nothing (`reason: 'sitting'`), and `done` answers `needs: 'app'`: the rep's time is its sittings', and it is
+  finished with Done in Aperture, which sets its actual from them. Sittings and Rolls are unchanged; a rep with no
+  sitting is a plain task, and a done through `pulse` runs the same transition (Roll
   momentum, sitting ends) as the app's.
-- A blocked pulse also ends any open pulse session: the work moved to the timed task.
+- A blocked pulse also settles any open pulse session (the work moved to the timed task), and changes nothing on its
+  own task — it doesn't start a backlog one.
 
 ## Privacy of notes
 
@@ -92,8 +106,8 @@ ask for no code, quotes or personal details. The dev check sends synthetic notes
 
 ## Approval
 
-On claude.ai the pasted instructions are the user's standing approval for `pulse`; the tool's description says so,
-and says to ask first anywhere else. In Claude Code, `pulse` is an ordinary write under CLAUDE.md's every-write rule
+On claude.ai, project instructions the user pasted in to ask for pulses are their standing approval for `pulse`; the
+tool's description says so, and that anywhere else (Claude Code included) every call is asked first. In Claude Code, `pulse` is an ordinary write under CLAUDE.md's every-write rule
 (no standing approval). claude.ai prompts each custom-connector tool by default ("Ask each time"), and per its
 connector docs a destructive tool always prompts; `pulse` sets the MCP annotations `destructiveHint: false`,
 `readOnlyHint: false`, `openWorldHint: false` (omitted, the spec reads a write as destructive). Whether that plus
@@ -105,8 +119,9 @@ fixed when it connects_).
 ## Proof
 
 Contract: `packages/shared/src/contractTests.ts` → _pulses_ (stub and Lambda). Pure: `packages/shared/src/pulse.test.ts`.
-The table and the races: `lambdas/src/backend.pulse.test.ts`. The tool: `lambdas/src/mcp/pulseTools.test.ts`. Dev:
-`scripts/src/devcheck/scenarios/pulse-tracking.ts`, as the dev test user through dev's `/mcp`.
+The table, the races and ownership: `lambdas/src/backend.pulse.test.ts`. The tool: `lambdas/src/mcp/pulseTools.test.ts`. Dev:
+`scripts/src/devcheck/scenarios/pulse-tracking.ts`, as the dev test user through dev's `/mcp` (its window-lapse step is
+a real 15.5-min wait, slow tier).
 
 ## Deferred
 

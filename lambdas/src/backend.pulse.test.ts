@@ -33,15 +33,57 @@ describe('pulses on the table', () => {
     await backend.pulseTask({ taskId: t.id });
     now.t += 16 * MIN; // past the personal window of 15
     const r = await backend.pulseTask({ taskId: t.id });
-    expect(r).toMatchObject({ opened: true, pulses: 1, sessionMin: PULSE_GRACE_MIN });
+    expect(r).toMatchObject({ opened: true, pulses: 1, sessionMin: 0 });
     const rows = (await backend.listSessionsForDay('2023-11-14')).sort(
       (a, b) => a.startedAt - b.startedAt,
     );
     expect(rows.map((s) => [s.activeMinutes, s.endedAt])).toEqual([
       [4 + PULSE_GRACE_MIN, T0 + (4 + PULSE_GRACE_MIN) * MIN],
-      [PULSE_GRACE_MIN, T0 + (20 + PULSE_GRACE_MIN) * MIN],
+      [0, T0 + 20 * MIN],
     ]);
-    expect((await backend.getTask(t.id))!.actualAccruedMin).toBe(4 + 2 * PULSE_GRACE_MIN);
+    expect((await backend.getTask(t.id))!.actualAccruedMin).toBe(4 + PULSE_GRACE_MIN);
+  });
+
+  it("another user's task id is Not found, and nothing is written", async () => {
+    const { doc, backend } = setup();
+    const t = await backend.createTask({ title: 'Mine', estimateMin: 30 });
+    const other = new BackendClient(new Repo(doc, liveWrites(doc, 'prod'), 'u2'), {
+      userId: 'u2',
+      now: () => T0,
+    });
+    const before = doc.snapshot();
+    await expect(other.pulseTask({ taskId: t.id })).rejects.toThrow('Not found');
+    expect(doc.snapshot()).toEqual(before);
+  });
+
+  it('two first pulses at once: the one that loses the create re-reads and plans on the winner', async () => {
+    const { doc, backend } = setup();
+    const a = await backend.createTask({ title: 'A', estimateMin: 30 });
+    const b = await backend.createTask({ title: 'B', estimateMin: 30 });
+    const rival: PulseState = {
+      id: PULSE_STATE_ID,
+      userId: U,
+      createdAt: T0,
+      updatedAt: T0,
+      deletedAt: null,
+      open: {
+        sessionId: 'rival',
+        taskId: b.id,
+        categoryId: null,
+        wasWork: false,
+        day: '2023-11-14',
+        startedAt: T0,
+        lastPulseAt: T0,
+        endedAt: T0,
+        pulses: 1,
+        notes: [],
+      },
+    };
+    doc.interceptNextPutIf(pk(U), sk.pulseState(), () =>
+      doc.putNow({ ...rival, PK: pk(U), SK: sk.pulseState() } as unknown as Item),
+    );
+    const r = await backend.pulseTask({ taskId: a.id });
+    expect(r).toMatchObject({ opened: true, closed: { taskId: b.id } });
   });
 
   it('writes the state row and a day-bucket session, never a running timer row', async () => {
@@ -52,7 +94,7 @@ describe('pulses on the table', () => {
     expect(rows).toContain(sk.pulseState());
     expect(rows.filter((k) => k.startsWith(sk.sessionDayPrefix('2023-11-14')))).toHaveLength(1);
     expect(rows.some((k) => k.startsWith(sk.sessionRunningPrefix()))).toBe(false);
-    expect(r.sessionMin).toBe(PULSE_GRACE_MIN);
+    expect(r.sessionMin).toBe(0); // nothing credited before it has passed
   });
 
   it('a rival pulse landing first is re-read: this pulse plans on it (a switch), not on what it read', async () => {
@@ -67,7 +109,7 @@ describe('pulses on the table', () => {
       taskId: b.id,
       startedAt: T0,
       lastPulseAt: T0,
-      endedAt: T0 + PULSE_GRACE_MIN * MIN,
+      endedAt: T0,
     };
     // Just before this pulse's conditional write, a rival's pulse for B lands.
     doc.interceptNextPutIf(pk(U), sk.pulseState(), () =>

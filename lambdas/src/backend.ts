@@ -2613,8 +2613,19 @@ export class BackendClient implements ApiClient {
   // --- Sessions (sessions.ts) ---
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
     const session = await this.sessions.startSession(input);
-    // The timer is the clock from here: the task's open pulse session ends now (pulse.ts yieldPulse).
-    if (input.kind === 'work' && input.taskId) await this.pulses.yieldTo(input.taskId);
+    // The timer is the clock from here: the task's open pulse session is settled now (pulse.ts yieldPulse).
+    // Best-effort: the timer already landed, so a lost race here is logged, never a failed start — the next
+    // pulse on the task is blocked by the timer and settles the session itself.
+    if (input.kind === 'work' && input.taskId)
+      await this.pulses.yieldTo(input.taskId).catch((err: unknown) => {
+        console.log(
+          JSON.stringify({
+            event: 'pulse_yield_deferred',
+            taskId: input.taskId,
+            error: String(err),
+          }),
+        );
+      });
     return session;
   }
   async heartbeatSession(id: string): Promise<PomodoroSession> {

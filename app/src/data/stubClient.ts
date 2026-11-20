@@ -2197,7 +2197,7 @@ class StubClient implements ApiClient {
   // --- Sessions ------------------------------------------------------------
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
     const session = this.startTimer(input);
-    // The timer is the clock from here: the task's open pulse session ends now (pulse.ts yieldPulse).
+    // The timer is the clock from here: the task's open pulse session is settled now (pulse.ts yieldPulse).
     if (input.kind === 'work' && input.taskId) {
       const y = yieldPulse(this.store.pulseState?.open ?? null, input.taskId, this.now());
       if (y) {
@@ -2288,17 +2288,17 @@ class StubClient implements ApiClient {
     if (!accruesTime(task)) throw new Error(`Task is already ${task.status}`);
     const category = task.categoryId ? this.find(this.store.categories, task.categoryId) : null;
     const windowMs = pulseWindowMs(category);
-    const open = this.store.pulseState?.open ?? null;
-    const extending = open?.taskId === task.id && now - open.lastPulseAt <= windowMs;
-    if (!extending && !task.parentId && hasParts(this.alive(this.store.tasks), task.id))
-      throw new Error(PULSE_PARENT_ERROR);
     const running = this.alive(this.store.sessions).some(
       (s) => s.status === 'running' && s.kind === 'work' && s.taskId === task.id,
     );
     const sitting =
       !!task.rollId && this.alive(this.store.sittings).some((x) => x.repTaskId === task.id);
     const blocked = running ? 'timer' : sitting ? 'sitting' : null;
-    if (task.status === 'backlog' || task.status === 'planned')
+    const open = this.store.pulseState?.open ?? null;
+    const extending = open?.taskId === task.id && now - open.lastPulseAt <= windowMs;
+    if (!blocked && !extending && !task.parentId && hasParts(this.alive(this.store.tasks), task.id))
+      throw new Error(PULSE_PARENT_ERROR);
+    if (!blocked && (task.status === 'backlog' || task.status === 'planned'))
       task = await this.transitionTask(task.id, 'in_progress');
     const done = input.done === true;
     const { plan, needs } = decidePulse({

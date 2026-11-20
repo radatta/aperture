@@ -68,7 +68,9 @@ export function tasksWrites(c: Core, reads: Reads) {
       title: string;
       estimateMin?: number;
       place?: string | null;
+      parentId?: string; // a part of a task this run created (pulse-tracking's parent refusal)
     }): Promise<DevTask> {
+      if (input.parentId) assertLedgerTask(input.parentId);
       ledger.append({ run, op: 'intent', via: MCP_CREATE_VIA, title: input.title });
       const task = await data<DevTask>('create_task', input);
       ledger.append({ run, op: 'created', id: task.id, via: MCP_CREATE_VIA, title: input.title });
@@ -102,9 +104,6 @@ export function tasksWrites(c: Core, reads: Reads) {
       assertLedgerTask(id);
       return data<DevTask>('update_task', { id, ...patch });
     },
-    // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
-    // a parent) — omitted here, it is left out of the call, never sent as null; so is an omitted reflection
-    // or estimate.
     // pulse-tracking: a pulse on a task this run created. The server writes a pulse session (never ledgered:
     // sessions have no delete, as timers) and the task's minutes; the ledger cleanup deletes the task.
     async pulse(
@@ -121,6 +120,9 @@ export function tasksWrites(c: Core, reads: Reads) {
       if (typeof id === 'string' && !id.startsWith('unknown:')) assertLedgerTask(id);
       return tool('pulse', args);
     },
+    // Mark one of this run's tasks done. actualMin is optional only where the server allows it (an errand,
+    // a parent) — omitted here, it is left out of the call, never sent as null; so is an omitted reflection
+    // or estimate.
     async completeTask(
       id: string,
       actualMin?: number,

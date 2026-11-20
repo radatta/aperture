@@ -782,9 +782,9 @@ export class Repo {
       (await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)),
     );
   }
-  async listRunningSessions(): Promise<PomodoroSession[]> {
+  async listRunningSessions(opts?: { consistent?: boolean }): Promise<PomodoroSession[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.sessionRunningPrefix())).map((i) =>
+      (await this.doc.query(this.p(), sk.sessionRunningPrefix(), opts)).map((i) =>
         toEntity<PomodoroSession>(i),
       ),
     );
