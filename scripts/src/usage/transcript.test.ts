@@ -126,6 +126,45 @@ describe('markers', () => {
     expect(bashMarkers('pnpm test src/a.test.ts')).toEqual([]); // one file is not the gate
   });
 
+  it("reads pnpm's own options before the script, gate:fast, and ready as local", () => {
+    expect(bashMarkers('pnpm -s board lane review --step "round 1" | tail -1')).toEqual([
+      { kind: 'lane-phase', phase: 'review' },
+    ]);
+    expect(bashMarkers('pnpm -C /w --silent board lane gate')).toEqual([
+      { kind: 'lane-phase', phase: 'gate' },
+    ]);
+    expect(bashMarkers('pnpm --dir=/w board lane ready --step x')).toEqual([
+      { kind: 'lane-phase', phase: 'local', alias: true },
+    ]);
+    expect(bashMarkers('pnpm -s board lane constructor')).toEqual([]);
+    expect(bashMarkers('pnpm -s devcheck:local --tier full')).toEqual([{ kind: 'local' }]);
+    expect(bashMarkers('pnpm -s devcheck --tier full')).toEqual([{ kind: 'devcheck' }]);
+    expect(bashMarkers('pnpm -s bot push')).toEqual([{ kind: 'dev' }]);
+    expect(bashMarkers('pnpm -s mailroom open-pr --title x')).toEqual([{ kind: 'pr' }]);
+    expect(bashMarkers('set -o pipefail; pnpm -s gate:fast 2>&1 | tail')).toEqual([
+      { kind: 'gate' },
+    ]);
+    expect(bashMarkers('heavy.sh -- pnpm gate:fast --full')).toEqual([{ kind: 'gate' }]);
+    expect(bashMarkers('pnpm gate:fast --base origin/main --wait 30 2>&1')).toEqual([
+      { kind: 'gate' },
+    ]);
+    expect(bashMarkers('pnpm gate:fast --base=origin/main')).toEqual([{ kind: 'gate' }]);
+    expect(bashMarkers('pnpm -s gate:fast --dry-run')).toEqual([]); // runs nothing
+    expect(bashMarkers('pnpm gate:fast --help')).toEqual([]);
+    expect(bashMarkers('pnpm -w lint && pnpm --workspace-root typecheck')).toEqual([
+      { kind: 'gate' },
+    ]);
+    // one package's run, not the full one
+    expect(bashMarkers('pnpm -C app test')).toEqual([]);
+    expect(bashMarkers('pnpm --dir app lint')).toEqual([]);
+    expect(bashMarkers('pnpm -C /w gate:fast')).toEqual([{ kind: 'gate' }]);
+    expect(bashMarkers('pnpm --dir /w board lane build')).toEqual([
+      { kind: 'lane-phase', phase: 'build' },
+    ]);
+    expect(bashMarkers('pnpm -s test src/a.test.ts')).toEqual([]);
+    expect(bashMarkers('grep -n "pnpm -s board lane review" x')).toEqual([]);
+  });
+
   it('ignores commands only mentioned inside another command', () => {
     expect(bashMarkers('grep -n "pnpm board lane review" docs/x.md')).toEqual([]);
     expect(bashMarkers("echo 'then pnpm bot push'")).toEqual([]);

@@ -1,7 +1,9 @@
 // Calls → lane → phase → merged PR, the PR table and its type. docs/ops/USAGE-METER.md → PR table.
 import type { PR } from './gh.ts';
 import { laneOf, type Kind, type Role } from './lanes.ts';
-import { clusters, phaseAt, timeline, type Phase, type Step } from './phases.ts';
+import { clusters, stepAt, timeline, type Phase, type PhaseSrc, type Step } from './phases.ts';
+import type { PhaseLogRow } from './phaselog.ts';
+import type { Parts } from './prices.ts';
 import type { Loaded, SessionRec } from './store.ts';
 import type { Marker } from './transcript.ts';
 
@@ -11,10 +13,15 @@ export interface Attributed {
   lane: string | null;
   role: Role;
   phase: Phase;
+  phaseSrc: PhaseSrc | 'none'; // what set the phase: none = unattributed
   kind: Kind;
   file: string;
   session: string; // project/sid of the main session
   track: string; // session|lane: one lane's work within one session, the unit a phase timeline covers
+  model: string;
+  agentType?: string; // a subagent's type (from its meta.json); workflow agents and main sessions have none
+  ctx: number; // the context this call read: input + cache writes + cache reads
+  parts: Parts;
 }
 export interface Attribution {
   calls: Attributed[];
@@ -25,9 +32,14 @@ export interface Attribution {
 
 const key = (s: SessionRec) => `${s.project}/${s.sid}`;
 
+// A phase-log row joins a lane track whose main-session calls span its time, give or take this.
+export const LOG_SLACK_MS = 2 * 60_000;
+
 // Each call's lane is its own row's (rowLane), else its session's; the hub stays the hub wherever it cd's to. Phase
-// timelines are per track (session × lane), since an older session could work on several lanes in turn.
-export function attribute(l: Loaded, hub: string): Attribution {
+// timelines are per track (session × lane), since an older session could work on several lanes in turn. The phase
+// logger's rows (phaselog.ts) are a lane's, not a session's: each joins every track of its lane whose main calls
+// span its time, as an explicit marker, and a track that starts with none opens at the lane's last logged phase.
+export function attribute(l: Loaded, hub: string, log: PhaseLogRow[] = []): Attribution {
   const mains = new Map<string, SessionRec>();
   for (const s of l.sessions) if (s.kind === 'main') mains.set(key(s), s);
   const who = new Map<string, { lane: string | null; role: Role }>();
@@ -49,37 +61,68 @@ export function attribute(l: Loaded, hub: string): Attribution {
     return lane ? { lane, role: 'lane' as Role } : w;
   };
   const markers = new Map<string, Marker[]>();
+  const push = (t: string, m: Marker) => {
+    const list = markers.get(t) ?? [];
+    list.push(m);
+    markers.set(t, list);
+  };
   for (const s of mains.values())
-    for (const m of l.markers.get(s.rel) ?? []) {
-      const t = `${key(s)}|${resolve(s, m.lane).lane ?? ''}`;
-      const list = markers.get(t) ?? [];
-      list.push(m);
-      markers.set(t, list);
-    }
-  const timelines = new Map([...markers].map(([t, ms]) => [t, timeline(ms)]));
+    for (const m of l.markers.get(s.rel) ?? [])
+      push(`${key(s)}|${resolve(s, m.lane).lane ?? ''}`, m);
   const byFile = new Map(l.sessions.map((s) => [s.rel, s]));
+  const pre = l.calls.map((c) => {
+    const s = byFile.get(c.file)!;
+    const k = key(s);
+    const w = resolve(s, c.lane);
+    return { c, s, k, w, track: `${k}|${w.lane ?? ''}` };
+  });
+  if (log.length) {
+    const span = new Map<string, { lane: string; lo: number; hi: number }>();
+    for (const p of pre) {
+      if (p.w.role !== 'lane' || !p.w.lane || p.s.kind !== 'main') continue;
+      const sp = span.get(p.track) ?? { lane: p.w.lane, lo: p.c.ts, hi: p.c.ts };
+      sp.lo = Math.min(sp.lo, p.c.ts);
+      sp.hi = Math.max(sp.hi, p.c.ts);
+      span.set(p.track, sp);
+    }
+    for (const [t, sp] of span) {
+      const lane = log.filter((r) => r.lane === sp.lane);
+      const inSpan = lane.filter(
+        (r) => r.ts >= sp.lo - LOG_SLACK_MS && r.ts <= sp.hi + LOG_SLACK_MS,
+      );
+      for (const r of inSpan)
+        if (r.to) push(t, { ts: r.ts, kind: 'lane-phase', phase: r.to, lane: r.lane, src: 'log' });
+      // a session that resumed a lane (after /clear or a restart) opens at the phase the log last saw it in
+      const before = lane.filter((r) => r.ts < sp.lo - LOG_SLACK_MS).at(-1);
+      if (before?.to && !inSpan.some((r) => r.ts <= sp.lo))
+        // just before the first call, so an explicit marker on that call still wins
+        push(t, { ts: sp.lo - 1, kind: 'lane-phase', phase: before.to, lane: sp.lane, src: 'log' });
+    }
+  }
+  const timelines = new Map([...markers].map(([t, ms]) => [t, timeline(ms)]));
   const firstCall = new Map<string, number>();
   for (const c of l.calls) if (!firstCall.has(c.file)) firstCall.set(c.file, c.ts);
   const orphanFiles = new Set<string>();
-  const calls = l.calls.map((c): Attributed => {
-    const s = byFile.get(c.file)!;
-    const k = key(s);
+  const calls = pre.map(({ c, s, k, w, track }): Attributed => {
     if (!mains.has(k)) orphanFiles.add(c.file);
-    const w = resolve(s, c.lane);
-    const track = `${k}|${w.lane ?? ''}`;
     const steps = timelines.get(track);
     const at = s.kind === 'main' ? c.ts : (firstCall.get(c.file) ?? c.ts);
-    const phase: Phase = w.role === 'lane' && steps ? phaseAt(steps, at) : 'unattributed';
+    const step = w.role === 'lane' && steps ? stepAt(steps, at) : null;
     return {
       ts: c.ts,
       qu: c.qu,
       lane: w.lane,
       role: w.role,
-      phase,
+      phase: step?.phase ?? 'unattributed',
+      phaseSrc: step?.src ?? 'none',
       kind: s.kind,
       file: c.file,
       session: k,
       track,
+      model: c.model,
+      ...(s.agentType ? { agentType: s.agentType } : {}),
+      ctx: c.i + c.cw5 + c.cw1 + c.cr,
+      parts: c.parts,
     };
   });
   return { calls, timelines, markers, orphans: orphanFiles.size };
@@ -104,6 +147,21 @@ export function prType(pr: Pick<PR, 'files' | 'changedFiles'>, workflowShare = 0
 
 export const POST_MS = 6 * 3_600_000;
 
+// The paths whose change needs a browser or device check: the analysis's strongest predictor after diff size.
+export const UI_PATHS = /^(app|extension)\//;
+// A review round's start: the old review marker, or any review lens's spawn (code-reviewer, review-*, the fix
+// recheck review-fixes included — it carries no review marker of its own).
+export const isReviewLens = (t: string | undefined) =>
+  t === 'code-reviewer' || !!t?.startsWith('review-');
+const reviewStart = (m: Marker) =>
+  m.kind === 'review' || (m.kind === 'spawn' && isReviewLens(m.agentType));
+
+export interface AgentRun {
+  agentType: string; // 'workflow' for a workflow agent, 'general-purpose' when meta.json named none
+  model: string; // the run's model by most QU
+  qu: number;
+}
+
 export interface PRRow {
   number: number;
   branch: string;
@@ -118,6 +176,13 @@ export interface PRRow {
   workflowShare: number;
   rounds: number;
   roundStarts: number[];
+  rechecks: number; // review-fixes runs
+  filesCut: boolean; // more files changed than gh listed, so ui was read from part of the list
+  ui: boolean;
+  runs: AgentRun[];
+  mainQU: number;
+  ctxSumM: number; // the main session's context summed over its turns, in millions of tokens
+  lensRegime: boolean; // the current review workflow: at least one review-* lens ran
   localRuns: number;
   devRuns: number;
   start: number | null;
@@ -160,7 +225,8 @@ export function prTable(a: Attribution, prs: PR[], since: number): PRRow[] {
       const ms = sessions
         .flatMap((s) => a.markers.get(s) ?? [])
         .filter((m) => m.ts > lo && m.ts <= pr.mergedAt);
-      const roundStarts = clusters(ms, ['review'], 10);
+      const roundStarts = clusters(ms, reviewStart, 10);
+      const runs = agentRuns(calls);
       const workflowShare = qu ? wf / qu : 0;
       rows.push({
         number: pr.number,
@@ -176,6 +242,18 @@ export function prTable(a: Attribution, prs: PR[], since: number): PRRow[] {
         workflowShare,
         rounds: roundStarts.length,
         roundStarts,
+        // by tool-use id: a fork copies its parent's rows, spawns and all
+        rechecks: new Set(
+          ms
+            .filter((m) => m.kind === 'spawn' && m.agentType === 'review-fixes')
+            .map((m, i) => m.toolUseId ?? `#${i}`),
+        ).size,
+        ui: pr.files.some((f) => UI_PATHS.test(f)),
+        filesCut: pr.changedFiles > pr.files.length, // gh lists 100 files at most
+        runs,
+        mainQU: calls.filter((c) => c.kind === 'main').reduce((x, c) => x + c.qu, 0),
+        ctxSumM: calls.filter((c) => c.kind === 'main').reduce((x, c) => x + c.ctx, 0) / 1e6,
+        lensRegime: runs.some((r) => r.agentType.startsWith('review-')),
         localRuns: clusters(ms, ['local'], 5).length,
         devRuns: clusters(ms, ['devcheck'], 5).length,
         start: calls[0]?.ts ?? null,
@@ -184,6 +262,27 @@ export function prTable(a: Attribution, prs: PR[], since: number): PRRow[] {
     });
   }
   return rows.sort((x, y) => x.mergedAt - y.mergedAt);
+}
+
+// One run per subagent or workflow-agent file among a PR's calls, with its type and its model by most QU.
+export function agentRuns(calls: Attributed[]): AgentRun[] {
+  const byFile = new Map<string, { agentType: string; qu: number; models: Map<string, number> }>();
+  for (const c of calls) {
+    if (c.kind === 'main') continue;
+    const r = byFile.get(c.file) ?? {
+      agentType: c.kind === 'workflow' ? 'workflow' : (c.agentType ?? 'general-purpose'),
+      qu: 0,
+      models: new Map<string, number>(),
+    };
+    r.qu += c.qu;
+    r.models.set(c.model, (r.models.get(c.model) ?? 0) + c.qu);
+    byFile.set(c.file, r);
+  }
+  return [...byFile.values()].map((r) => ({
+    agentType: r.agentType,
+    model: [...r.models].sort((x, y) => y[1] - x[1])[0]![0],
+    qu: r.qu,
+  }));
 }
 
 export interface Overhead {

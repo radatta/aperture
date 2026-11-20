@@ -73,7 +73,7 @@ snapshot to `history/probe-<date>.json`):
 `scripts/board/sampler.sh` runs once per container (a `flock` singleton, a detached background process,
 stderr → `board/sampler.log`), started by the SessionStart hook and dying with the container. Every 30 s it
 reads `/proc/<pid>/{stat,cmdline}` and the cgroup files — bash, one `awk` and a few `jq` (sessions, slots, lane phases), and the RTT probe's `curl`
-after it in the background (_Perf fields_) — and appends one line to
+and the phase logger after it in the background (_Perf fields_; `phase-log.sh`: _Watchers_) — and appends one line to
 `history/samples-<date>.jsonl` (~3 MB/day):
 
 ```
@@ -889,6 +889,10 @@ content never printed. Markers a week old are deleted at start. A torn line, a b
 dropped; a title or time loses its control bytes. Every other `events-*.jsonl` reader keeps to its own `kind` (`job`,
 `lease`, `devlock`, `budget`), so a `merged` row passes them by.
 
+**The phase logger** (`phase-log.sh --once`, tests `phase-log.test.ts`) is no hub watcher: it never exits to wake
+anyone. The sampler's loop runs it every tick in the background, skipped while the last pass runs, under `timeout 25`
+with its stderr to `phase-log.log`. What it writes and its failure rules: `docs/ops/USAGE-METER.md` → _Phase log_.
+
 ## Script-shape rules (COI monitor)
 
 The monitor reads every process's argv (`docs/ops/COI-SANDBOX.md`, `localNotes/code-on-incus/APERTURE-ANALYSIS.md`).
@@ -907,6 +911,9 @@ carry the same list.
 - **Perf fields, after merge** (_History_ → _Perf fields_): the hub runs `scripts/board/board.sh sampler restart` from
   the main checkout and restarts `pace-watch.sh`; the user re-runs the Mac stats install line (`docs/ops/TOWER.md` →
   _Mac stats_ → _Install_) so the agent writes `vm.cpuPct`, `top` and `sim`.
+
+- **Phase logger, after merge** (_Watchers_ → the phase logger): the hub runs `scripts/board/board.sh sampler restart`
+  from the main checkout; until then the running sampler keeps its old loop and nothing is logged.
 
 ## Known limitations
 

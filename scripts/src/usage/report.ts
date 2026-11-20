@@ -1,5 +1,13 @@
 // The report's text: the same lines go to the terminal and to <usage dir>/report-<day>.md.
-import type { FitModel, ReportModel } from './model.ts';
+import {
+  MIN_FIT,
+  type Coef,
+  type Estimate,
+  type EstimateIn,
+  type Range,
+  type Units,
+} from './estimate.ts';
+import type { FitModel, ReportModel, WorkModel } from './model.ts';
 
 export const f1 = (x: number | null | undefined, d = 1) =>
   x === null || x === undefined || !Number.isFinite(x) ? '–' : x.toFixed(d);
@@ -119,6 +127,8 @@ export function reportLines(m: ReportModel, now: number): string[] {
       out.push(`| ${p.phase} | ${f1(p.median * 100, 0)}% | ${f1(p.mean * 100, 0)}% |`);
   out.push('');
 
+  out.push(...workLines(m.work));
+
   out.push('## Cost drivers', '', "Spearman rank correlation with a PR's QU:", '');
   for (const d of m.drivers) out.push(`- ${d.what}: ρ = ${f1(d.rho, 2)}`);
   out.push('', 'Most expensive PRs:', '');
@@ -208,4 +218,137 @@ export function reportLines(m: ReportModel, now: number): string[] {
     );
   }
   return out;
+}
+
+const kTok = (t: number) => (Number.isFinite(t) ? `${Math.round(t / 1000)}k` : '–');
+const tag = (c: { basis: string; n: number; r2?: number }) =>
+  c.basis === 'prior'
+    ? `[prior; ${c.n} PRs]`
+    : `[fitted; n = ${c.n}${c.r2 !== undefined ? `, R² ${f1(c.r2, 2)}` : ''}]`;
+const sh = (x: number, of: number) => (of ? `${f1((x / of) * 100, 0)}%` : '–');
+
+export function unitLines(u: Units): string[] {
+  const t = u.turns.v;
+  const mn = u.main.v;
+  const c = u.ctx.v;
+  const r = u.rechecks.v;
+  return [
+    `- Turns: ln T = ${f1(t.a, 2)} + ${f1(t.bLines, 2)}·ln lines + ${f1(t.cUi, 2)}·ui, × ${f1(t.smear, 2)} smearing ${tag(u.turns)}.`,
+    `- Main QU = ${f1(mn.a, 2)} + ${f1(mn.bT, 4)}·T + ${f1(mn.cCtx, 3)}·(context summed over turns, M tokens) ${tag(u.main)}.`,
+    `- Average context = ${kTok(c.g0)} + ${f1(c.g1 / 1000, 3)}k·T tokens ${tag(u.ctx)}.`,
+    `- Rechecks = ${f1(r.a, 2)} + ${f1(r.bLines, 2)}·ln lines + ${f1(r.cUi, 2)}·ui, at least 0 ${tag(u.rechecks)}.`,
+  ];
+}
+
+export function workLines(w: WorkModel): string[] {
+  const out: string[] = [
+    '## Where the QU goes',
+    '',
+    'Lane calls since --since. Re-read = cache reads (the context carried into each call), ingest = input and cache writes, output = output tokens.',
+    '',
+    '| | QU | Re-read | Ingest | Output |',
+    '|---|---|---|---|---|',
+  ];
+  for (const [name, x] of [
+    ['Main sessions', w.split.main],
+    ['Agents', w.split.agents],
+  ] as const)
+    out.push(
+      `| ${name} | ${qu(x.qu)} | ${sh(x.reread, x.qu)} | ${sh(x.ingest, x.qu)} | ${sh(x.output, x.qu)} |`,
+    );
+  out.push(
+    '',
+    'Main-session turns by the context they read:',
+    '',
+    '| Context | Turns | Share | QU per turn | Re-read per turn |',
+    '|---|---|---|---|---|',
+  );
+  for (const b of w.bands)
+    out.push(
+      `| ${kTok(b.lo)}–${b.hi === Infinity ? '' : kTok(b.hi)} | ${b.turns} | ${f1(b.share * 100, 0)}% | ${f1(b.quPerTurn, 3)} | ${f1(b.rereadPerTurn, 3)} |`,
+    );
+  out.push(
+    '',
+    '## Turn and context model',
+    '',
+    `Fitted over the ${w.units.regime} merged PRs in the lens regime (a review-* lens ran); a [prior] constant is the fallback while data is thin (docs/ops/USAGE-METER.md → Estimate).`,
+    '',
+    ...(w.priorsNote ? [`- ${w.priorsNote}.`] : []),
+    ...(w.filesCut
+      ? [`- ui read from gh's first 100 files on ${w.filesCut} fit-set PRs that changed more.`]
+      : []),
+    ...unitLines(w.units),
+    `- Context at a lane session's turn: ${w.growth.map((g) => `${g.turn}: ${kTok(g.ctx)} (n ${g.n})`).join(' · ') || '–'}.`,
+    '',
+    '## Agent prices',
+    '',
+    'Per run, over the lens-regime PRs; the estimate prices a lens or Plan per PR, a recheck or fan-out agent per run.',
+    '',
+    '| Agent | Model | Runs | Median QU | p25–p75 | Estimate uses |',
+    '|---|---|---|---|---|---|',
+  );
+  for (const p of w.prices) {
+    const c = w.units.prices.get(p.agentType);
+    out.push(
+      `| ${p.agentType} | ${p.model} | ${p.runs} | ${f1(p.median, 2)} | ${f1(p.p25, 2)}–${f1(p.p75, 2)} | ${c ? `${f1(c.v, 2)} ${c.basis === 'prior' ? '[prior]' : ''}` : '–'} |`,
+    );
+  }
+  const b = w.backtest;
+  const err = (e: typeof b.model) =>
+    `rms ×${f1(e.rmsX, 2)}, median ×${f1(e.medianX, 2)}, ${e.within15} of ${e.n} within ×1.5, total ${qu(e.predicted)} QU predicted for ${qu(e.actual)}`;
+  out.push(
+    '',
+    '## Backtest',
+    '',
+    'Leave-one-out over the lens-regime PRs: each predicted from a refit on the others, from its merged lines, paths (ui), the lenses it ran and its general-purpose runs. The constants refit as PRs merge; read this before trusting an estimate.',
+    '',
+    `- This model: ${err(b.model)}.`,
+    `- PR-type median (the old forecast): ${err(b.type)}.`,
+    ...(b.dropped
+      ? [`- Left out: ${b.dropped} PRs with no usable prediction (≤ 0 or not a number).`]
+      : []),
+    `- The estimate's range: ×${f1(w.band.lo, 2)}–×${f1(w.band.hi, 2)} on the point, ${w.band.basis === 'fitted' ? "the backtest's 10th–90th percentile errors" : `the prior ÷/× ${f1(w.units.priors.band, 2)} (${MIN_FIT} or fewer backtest PRs)`}.`,
+    '',
+    '| PR | Branch | Lines | UI | Turns (pred) | QU | Predicted | Type median |',
+    '|---|---|---|---|---|---|---|---|',
+  );
+  for (const r of b.rows.slice(-30))
+    out.push(
+      `| ${r.number} | ${r.branch} | ${r.lines} | ${r.ui ? 'yes' : ''} | ${r.turns} (${Math.round(r.predTurns)}) | ${qu(r.qu)} | ${qu(r.pred)} | ${qu(r.typePred)} |`,
+    );
+  const src = (k: string) => f1((w.sources.find((x) => x.src === k)?.share ?? 0) * 100, 0);
+  out.push(
+    '',
+    '## Phase sources',
+    '',
+    `- Lane QU in PR windows, phase set by: a \`pnpm board lane\` marker ${src('marker')}% · the phase log ${src('log')}% · heuristics ${src('heuristic')}% · nothing ${src('none')}%. Phase-log rows read: ${w.logRows}.`,
+    `- Lens-regime PRs whose lane never wrote an explicit phase past plan: ${w.noPhasePastPlan.length ? `${w.noPhasePastPlan.length} (${w.noPhasePastPlan.slice(-12).join(', ')})` : 'none'}.`,
+    `- Shards built by an older parser (their transcript was gone at the last parser change; markers may be missing): ${w.oldParser} of ${w.shards}.`,
+    '',
+  );
+  return out;
+}
+
+export function estimateLines(o: {
+  inp: EstimateIn;
+  e: Estimate;
+  units: Units;
+  band: Range;
+  k: { k: number; lo: number; hi: number; basis: 'fitted' | 'prior' };
+  hubPerPR: number | null;
+  cache: { prs: number; to: number | null } | null;
+  priorsNote: string;
+}): string[] {
+  const { inp, e, units } = o;
+  const b = (c: Coef<unknown>) => (c.basis === 'prior' ? ' [prior]' : '');
+  const pct = (x: number) => `${x.toFixed(x < 1 ? 2 : 1)}%`;
+  return [
+    `estimate: ${inp.lines} lines${inp.ui ? ', ui' : ''}; lenses: Plan, ${['code-reviewer', ...inp.lenses.filter((l) => l !== 'code-reviewer')].join(', ')}${inp.fanout ? `; fan-out ${inp.fanout}` : ''}`,
+    `  turns ~${Math.round(e.turns)}${b(units.turns)} → main ${qu(e.main)} QU${b(units.main)}`,
+    `  agents ${qu(e.agents.reduce((s, a) => s + a.qu, 0))} QU: ${e.agents.map((a) => `${a.what} ${f1(a.qu, 1)}${a.basis === 'prior' ? '*' : ''}`).join(' · ')}`,
+    `  total ${qu(e.qu)} QU (${qu(e.quRange.lo)}–${qu(e.quRange.hi)}${o.band.basis === 'prior' ? `, ÷/× ${f1(units.priors.band, 2)} prior` : ', backtest p10–p90'})`,
+    `  meter ~${pct(e.pct)} of a week (${pct(e.pctRange.lo)}–${pct(e.pctRange.hi)}; k ${f1(o.k.k, 4)}${o.k.basis === 'prior' ? ' [prior]' : ` (80% ${f1(o.k.lo, 4)}–${f1(o.k.hi, 4)})`})`,
+    `  basis: ${units.regime} lens-regime PRs${o.cache ? ` of ${o.cache.prs} cached, calls to ${clock(o.cache.to)} PT` : ', no usage cache: every constant is a prior'}${e.agents.some((a) => a.basis === 'prior') ? '; * = a prior price' : ''}${o.hubPerPR !== null ? `; the hub adds ~${qu(o.hubPerPR)} QU per merged PR on top` : ''}`,
+    `  ${o.priorsNote}`,
+  ];
 }

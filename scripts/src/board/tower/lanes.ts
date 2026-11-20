@@ -19,6 +19,11 @@ export const PHASES = [
   'blocked',
 ] as const;
 export type Phase = (typeof PHASES)[number];
+// Names lanes write that aren't phases: FEATURE-WORKFLOW's phase 7 "Ready for dev" is the hand-off into phase 8's
+// local check, so `ready` is written as `local` (it was refused, and the lane's marker lost, before 2026-11-19).
+const PHASE_ALIASES: Record<string, Phase> = { ready: 'local' };
+export const phaseAlias = (k: string): Phase | undefined =>
+  Object.hasOwn(PHASE_ALIASES, k) ? PHASE_ALIASES[k] : undefined;
 // The phases a step plan covers, in order (the page's track up to the PR); time in the others counts to no step.
 export const STEP_PHASES = ['plan', 'build', 'gate', 'review', 'local', 'dev', 'pr'] as const;
 export type StepPhase = (typeof STEP_PHASES)[number];
@@ -174,6 +179,7 @@ export function readLanes(boardDir: string): { lanes: LaneFile[]; problems: Lane
 export type LaneArgs = {
   clear: boolean;
   phase: Phase | null;
+  alias?: string; // the name written, when it was an alias
   step: string | null;
   pr: number | null;
   slot: 'dev' | 'devb' | null;
@@ -190,7 +196,7 @@ export const LANE_USAGE =
   '         [--needs <what> (--link <https url> | --cmd <one-line Mac command>) [--unblocks <text>]]\n' +
   '         [--plan <step>=<lo>-<hi>[?],…] [--files <n>] [--eta-next <lo>-<hi>[?]] [--eta-pr <lo>-<hi>[?]]\n' +
   '       pnpm board lane --clear\n' +
-  `  phase: ${PHASES.join(' | ')}\n` +
+  `  phase: ${PHASES.join(' | ')} (ready = local)\n` +
   `  step:  ${STEP_PHASES.join(' | ')}; minutes, a trailing ? marks a guess (else measured)\n` +
   '  the plan is kept until replaced; time per step accrues at each phase change; the ETAs follow from it\n' +
   '  unless --eta-next / --eta-pr (minutes from now) set them';
@@ -267,7 +273,10 @@ export function parseLaneArgs(argv: string[]): LaneArgs {
       a.slot = v;
     } else if (k.startsWith('--')) throw new Error(`unknown flag ${k}`);
     else if (a.phase === null && (PHASES as readonly string[]).includes(k)) a.phase = k as Phase;
-    else throw new Error(`unknown phase or argument ${JSON.stringify(k)}`);
+    else if (a.phase === null && phaseAlias(k)) {
+      a.phase = phaseAlias(k)!;
+      a.alias = k;
+    } else throw new Error(`unknown phase or argument ${JSON.stringify(k)}`);
   }
   if (a.clear) {
     if (a.phase || what || a.plan || a.files !== null || a.etaNext || a.etaPr)
@@ -305,6 +314,11 @@ export function writeLane(boardDir: string, a: LaneArgs, env: LaneEnv): string {
   } catch {
     // first write
   }
+  // `ready` past local would be the queue's READY (merge-ready, the hub's to set), not phase 7: never a step back
+  if (a.alias && prev && (['dev', 'pr', 'merged', 'cleanup'] as Phase[]).includes(prev.phase))
+    throw new Error(
+      `${a.alias} is phase 7, written as ${a.phase}; this lane is at ${prev.phase}. Merge-ready (the queue's READY) is the hub's to set`,
+    );
   const t = env.now.toISOString();
   const now = env.now.getTime();
   const keepSince = prev && prev.phase === a.phase && prev.phaseSince !== null;

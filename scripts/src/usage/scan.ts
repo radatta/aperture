@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileRef, type FileRef } from './lanes.ts';
 import {
+  PARSER,
   readIndex,
   readShard,
   writeIndex,
@@ -123,13 +124,17 @@ export async function scan(o: ScanOpts): Promise<ScanResult> {
     }
     const old = plan.action === 'resume' ? readShard(o.cache, f.rel) : null;
     const from = old ? (plan as { from: number }).from : 0;
-    const s: SessionRec = old?.s ?? {
-      rel: f.rel,
-      project: f.ref.project,
-      sid: f.ref.sid,
-      agentId: f.ref.agentId,
-      kind: f.ref.kind,
-      ...(f.ref.kind === 'main' ? {} : meta(o.root, f.rel)),
+    // a resume only happens under the same PARSER (a bump resets the index), so every shard written is this one's
+    const s: SessionRec = {
+      ...(old?.s ?? {
+        rel: f.rel,
+        project: f.ref.project,
+        sid: f.ref.sid,
+        agentId: f.ref.agentId,
+        kind: f.ref.kind,
+        ...(f.ref.kind === 'main' ? {} : meta(o.root, f.rel)),
+      }),
+      parser: PARSER,
     };
     const merger = new CallMerger();
     for (const c of old?.calls ?? []) merger.add(c);

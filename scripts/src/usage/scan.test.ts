@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SID, SID2, agent, assistantRow, bash, titleRow } from './fixtures.ts';
 import { discover, planFile, scan } from './scan.ts';
-import { loadCache, readIndex } from './store.ts';
+import { PARSER, loadCache, readIndex, readShard, writeShard } from './store.ts';
 import { lines, type ReadStats } from './throttle.ts';
 
 let root: string;
@@ -162,6 +162,17 @@ describe('scan', () => {
     const ix = readIndex(cache);
     writeFileSync(join(cache, 'index.json'), JSON.stringify({ ...ix, parser: ix.parser - 1 }));
     expect(await run()).toMatchObject({ scanned: 1 });
+  });
+
+  it('stamps each shard with its parser; one an older parser built counts as old', async () => {
+    const rel = `${P}/${SID}.jsonl`;
+    write(rel, row('m1'));
+    await run();
+    expect(readShard(cache, rel)!.s.parser).toBe(PARSER);
+    expect(loadCache(cache).oldParser).toBe(0);
+    const sh = readShard(cache, rel)!;
+    writeShard(cache, { ...sh, s: { ...sh.s, parser: PARSER - 1 } }); // its transcript gone at the bump
+    expect(loadCache(cache).oldParser).toBe(1);
   });
 
   it('keeps each marker once when a crash left the index behind its shard', async () => {

@@ -3,6 +3,7 @@ import type { PR } from './gh.ts';
 import { agreement, clusters, phaseAt, timeline } from './phases.ts';
 import { attribute, overhead, POST_MS, prTable, prType, type PRRow } from './prs.ts';
 import { concurrency, reviewRounds, roundVerdicts } from './questions.ts';
+import { parsePhaseLog } from './phaselog.ts';
 import { loadShards, type Shard } from './store.ts';
 import type { Call, Marker } from './transcript.ts';
 import { SID, SID2 } from './fixtures.ts';
@@ -66,6 +67,26 @@ describe('phase timeline', () => {
     ]);
     expect(t.map((s) => s.phase)).toEqual(['plan', 'build', 'post']);
     expect(phaseAt(t, min(4.5))).toBe('build');
+  });
+
+  it('takes ready as local up to review, and skips it from dev on, as the CLI refuses it there', () => {
+    const t = timeline([
+      mk(1, 'lane-phase', { phase: 'review' }),
+      mk(2, 'lane-phase', { phase: 'local', alias: true }),
+      mk(3, 'lane-phase', { phase: 'pr' }),
+      mk(4, 'lane-phase', { phase: 'local', alias: true }), // refused: the lane stayed at pr
+      mk(5, 'lane-phase', { phase: 'local' }), // the real name still goes back
+      mk(6, 'lane-phase', { phase: 'dev' }),
+      mk(7, 'lane-phase', { phase: 'parked' }), // the file reads parked: the CLI takes ready again
+      mk(8, 'lane-phase', { phase: 'local', alias: true }),
+    ]);
+    expect([2, 4, 5, 7, 8].map((n) => phaseAt(t, min(n) + 1))).toEqual([
+      'local',
+      'pr',
+      'local',
+      'dev',
+      'local',
+    ]);
   });
 
   it('leaves calls before the first marker unattributed unless planning came first', () => {
@@ -266,6 +287,235 @@ describe('attribution and the PR table', () => {
       [8, 60], // c1 s1 s2
       [9, 60], // c2 a1 c3
     ]);
+  });
+});
+
+describe('lens-regime PR rows', () => {
+  const P = '-workspace--claude-worktrees-lane-b';
+  const spawned = (n: number, agentType: string) => mk(n, 'spawn', { agentType });
+  const sub = (id: string, agentType: string, model: string, n: number, o = 1_000_000): Shard => ({
+    s: {
+      rel: `${P}/${SID}/subagents/agent-${id}.jsonl`,
+      project: P,
+      sid: SID,
+      kind: 'subagent',
+      agentId: id,
+      agentType,
+    },
+    calls: [call(`${id}-1`, n, o, { model })],
+    markers: [],
+  });
+  const main: Shard = {
+    s: {
+      rel: `${P}/${SID}.jsonl`,
+      project: P,
+      sid: SID,
+      kind: 'main',
+      cwd: '/workspace/.claude/worktrees/lane-b',
+    },
+    calls: [call('m1', 1, 0, { cr: 100_000, cw5: 50_000 }), call('m2', 30, 0, { cr: 300_000 })],
+    markers: [
+      mk(0, 'plan'),
+      spawned(20, 'code-reviewer'),
+      mk(20, 'review'), // the old marker beside its spawn: one round
+      spawned(22, 'review-correctness'),
+      spawned(25, 'review-tests'),
+      spawned(60, 'review-fixes'), // a recheck is a round of its own
+      spawned(100, 'review-fixes'),
+      spawned(105, 'general-purpose'), // not a review lens
+    ],
+  };
+  const shards = [
+    main,
+    sub('c', 'review-correctness', 'claude-opus-5-5', 23),
+    sub('t', 'review-tests', 'claude-sonnet-5-5', 26, 500_000),
+    sub('f1', 'review-fixes', 'claude-opus-5-5', 61),
+    sub('f2', 'review-fixes', 'claude-opus-5-5', 101),
+  ];
+  const pr: PR = {
+    number: 11,
+    title: 't',
+    branch: 'lane-b',
+    mergedAt: min(200),
+    changedFiles: 2,
+    additions: 30,
+    deletions: 3,
+    files: ['app/src/x.ts', 'docs/y.md'],
+  };
+
+  it('counts lens spawns and fix rechecks as rounds, and reads ui from the paths', () => {
+    const [row] = prTable(attribute(loadShards(shards), 'hub'), [pr], min(-1000));
+    expect(row).toMatchObject({ rounds: 3, rechecks: 2, ui: true, lensRegime: true, turns: 2 });
+    expect(row!.roundStarts).toEqual([min(20), min(60), min(100)]);
+    const [noUi] = prTable(
+      attribute(loadShards(shards), 'hub'),
+      [{ ...pr, files: ['scripts/a.ts'] }],
+      min(-1000),
+    );
+    expect(noUi!.ui).toBe(false);
+    const [ext] = prTable(
+      attribute(loadShards(shards), 'hub'),
+      [{ ...pr, changedFiles: 1, files: ['extension/Shared/a.js'] }],
+      min(-1000),
+    );
+    expect(ext).toMatchObject({ ui: true, filesCut: false });
+    const [cut] = prTable(
+      attribute(loadShards(shards), 'hub'),
+      [{ ...pr, changedFiles: 120, files: Array.from({ length: 100 }, (_, i) => `s/${i}.ts`) }],
+      min(-1000),
+    );
+    expect(cut!.filesCut).toBe(true); // gh lists 100 at most
+  });
+
+  it('counts a recheck once when a fork copied its spawn, and a recheck-only lane is in the regime', () => {
+    const copy = (n: number, id: string) =>
+      mk(n, 'spawn', { agentType: 'review-fixes', toolUseId: id });
+    const forked: Shard = {
+      ...main,
+      markers: [mk(0, 'plan'), copy(60, 'tu1'), copy(60, 'tu1'), copy(100, 'tu2')],
+    };
+    const only = [forked, sub('f1', 'review-fixes', 'claude-opus-5-5', 61)];
+    const [row] = prTable(attribute(loadShards(only), 'hub'), [pr], min(-1000));
+    expect(row).toMatchObject({ rechecks: 2, lensRegime: true });
+  });
+
+  it('lists each agent run with its type and model, and sums the main session apart', () => {
+    const [row] = prTable(attribute(loadShards(shards), 'hub'), [pr], min(-1000));
+    expect(row!.runs.map((r) => [r.agentType, r.model, Math.round(r.qu)]).sort()).toEqual([
+      ['review-correctness', 'claude-opus-5-5', 20],
+      ['review-fixes', 'claude-opus-5-5', 20],
+      ['review-fixes', 'claude-opus-5-5', 20],
+      ['review-tests', 'claude-sonnet-5-5', 5], // sonnet 5.5 output: $10 per MTok
+    ]);
+    // m1: 100k read at 0.2 + 50k written at 5 per MTok; m2: 300k read
+    expect(row!.mainQU).toBeCloseTo(0.02 + 0.25 + 0.06);
+    expect(row!.ctxSumM).toBeCloseTo(0.45);
+    const [plain] = prTable(
+      attribute(loadShards([main, sub('g', 'general-purpose', 'claude-opus-5-5', 23)]), 'hub'),
+      [pr],
+      min(-1000),
+    );
+    expect(plain!.lensRegime).toBe(false);
+  });
+
+  it("splits each call's QU into re-read, ingest and output, summing to its QU", () => {
+    const a = attribute(loadShards(shards), 'hub');
+    const m1 = a.calls.find((c) => c.ts === min(1))!;
+    expect(m1.parts.reread).toBeCloseTo(0.02);
+    expect(m1.parts.ingest).toBeCloseTo(0.25);
+    expect(m1.parts.output).toBe(0);
+    expect(m1.ctx).toBe(150_000);
+    for (const c of a.calls)
+      expect(c.parts.reread + c.parts.ingest + c.parts.output).toBeCloseTo(c.qu, 10);
+  });
+});
+
+describe('the phase log', () => {
+  const P = '-workspace--claude-worktrees-lane-c';
+  const main = (markers: Marker[] = []): Shard => ({
+    s: {
+      rel: `${P}/${SID}.jsonl`,
+      project: P,
+      sid: SID,
+      kind: 'main',
+      cwd: '/workspace/.claude/worktrees/lane-c',
+    },
+    calls: [call('p1', 10, 1000), call('p2', 30, 1000), call('p3', 60, 1000), call('p4', 90, 1000)],
+    markers,
+  });
+  const row = (lane: string, to: string | null, n: number, from: string | null = null) =>
+    JSON.stringify({ v: 1, lane, from, to, ts: new Date(min(n)).toISOString(), pct: 12 });
+
+  it('parses rows, dropping torn, foreign and repeated ones', () => {
+    const text = [
+      row('lane-c', 'build', 20),
+      row('lane-c', 'build', 20), // the logger lost its state: said again
+      '{"v":1,"lane":"lane-c","to":"bu',
+      row('Lane_C', 'gate', 25),
+      row('lane-c', 'shipping', 25),
+      JSON.stringify({ v: 2, lane: 'lane-c', to: 'gate', ts: new Date(min(26)).toISOString() }),
+      row('lane-c', 'gate', 30, 'shipping'), // a foreign from: the row stands, from null
+      row('lane-c', null, 99, 'pr'),
+      row('lane-c', null, 100, 'pr'), // the logger couldn't save its state: the removal repeats
+      row('lane-c', 'plan', 120),
+      row('lane-c', null, 130, 'plan'), // gone again after a sighting: a removal of its own
+    ].join('\n');
+    expect(parsePhaseLog(text)).toEqual([
+      { lane: 'lane-c', from: null, to: 'build', ts: min(20), pct: 12 },
+      { lane: 'lane-c', from: null, to: 'gate', ts: min(30), pct: 12 },
+      { lane: 'lane-c', from: 'pr', to: null, ts: min(99), pct: 12 },
+      { lane: 'lane-c', from: null, to: 'plan', ts: min(120), pct: 12 },
+      { lane: 'lane-c', from: 'plan', to: null, ts: min(130), pct: 12 },
+    ]);
+  });
+
+  it("opens a resumed session at the lane's last logged phase, not after a removal", () => {
+    const second = (markers: Marker[] = []): Shard => {
+      const m = main(markers);
+      return {
+        ...m,
+        s: { ...m.s, sid: 'cafe0000-0000-4000-8000-000000000000', rel: `${P}/cafe.jsonl` },
+        calls: m.calls.map((c) => ({ ...c, id: `${c.id}b`, ts: c.ts + min(300) - min(0) })),
+      };
+    };
+    const log = parsePhaseLog(
+      [
+        row('lane-c', 'review', 50),
+        row('lane-c', null, 200, 'review'),
+        row('lane-c', 'dev', 280),
+      ].join('\n'),
+    );
+    const a = attribute(loadShards([main(), second()]), 'hub', log);
+    const at = (n: number) =>
+      a.calls.filter((c) => c.ts === min(n)).map((c) => [c.phase, c.phaseSrc]);
+    expect(at(60)).toEqual([['review', 'log']]);
+    expect(at(310)).toEqual([['dev', 'log']]); // the second session, no row in its span: opens at dev
+    // an explicit marker on that first call wins over the opening step
+    const own = attribute(
+      loadShards([second([mk(310, 'lane-phase', { phase: 'build' })])]),
+      'hub',
+      log,
+    );
+    expect(own.calls.filter((c) => c.ts === min(310)).map((c) => [c.phase, c.phaseSrc])).toEqual([
+      ['build', 'marker'],
+    ]);
+    // a removal before the span opens nothing
+    const gone = parsePhaseLog(
+      [row('lane-c', 'review', 50), row('lane-c', null, 200, 'review')].join('\n'),
+    );
+    expect(attribute(loadShards([second()]), 'hub', gone).calls[0]!.phaseSrc).toBe('none');
+  });
+
+  it('drives a track that has no transcript markers, inside its span only', () => {
+    const log = parsePhaseLog(
+      [
+        row('lane-c', 'gate', 1), // before the span's first call less the slack: another session's
+        row('lane-c', 'plan', 9), // inside the slack
+        row('lane-c', 'review', 50),
+        row('lane-c', 'gate', 200), // after the span
+        row('lane-d', 'pr', 55), // another lane
+      ].join('\n'),
+    );
+    const a = attribute(loadShards([main()]), 'hub', log);
+    const ph = (n: number) => a.calls.find((c) => c.ts === min(n))!;
+    expect([10, 30, 60, 90].map((n) => ph(n).phase)).toEqual(['plan', 'plan', 'review', 'review']);
+    expect(ph(60).phaseSrc).toBe('log');
+    // without the log the same track is unattributed
+    expect(attribute(loadShards([main()]), 'hub').calls.map((c) => c.phaseSrc)).toEqual([
+      'none',
+      'none',
+      'none',
+      'none',
+    ]);
+  });
+
+  it('counts as explicit: heuristics give way from the first logged phase on', () => {
+    const shard = main([mk(5, 'plan'), mk(20, 'edit', { cls: 'src' }), mk(70, 'gate')]);
+    const a = attribute(loadShards([shard]), 'hub', parsePhaseLog(row('lane-c', 'review', 50)));
+    const ph = (n: number) => a.calls.find((c) => c.ts === min(n))!;
+    expect([ph(10).phase, ph(10).phaseSrc]).toEqual(['plan', 'heuristic']);
+    expect([ph(30).phase, ph(30).phaseSrc]).toEqual(['build', 'heuristic']);
+    expect([ph(90).phase, ph(90).phaseSrc]).toEqual(['review', 'log']); // the gate marker after it is ignored
   });
 });
 

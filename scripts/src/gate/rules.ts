@@ -310,6 +310,7 @@ export const INPUT_RULES: InputRule[] = [
       'scripts/src/board/budget.test.ts',
       'scripts/src/board/lease.test.ts',
       'scripts/src/board/perf-fields.test.ts',
+      'scripts/src/board/phase-log.test.ts',
       'scripts/src/board/limits.test.ts',
       'scripts/src/board/merge-watch.test.ts',
       'scripts/src/board/tower/queue.test.ts',

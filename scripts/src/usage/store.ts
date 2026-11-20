@@ -11,7 +11,7 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Kind } from './lanes.ts';
-import { priceCall, type PriceFlag } from './prices.ts';
+import { priceParts, type Parts, type PriceFlag } from './prices.ts';
 import { minOf } from './stats.ts';
 import type { Call, Marker } from './transcript.ts';
 
@@ -25,6 +25,7 @@ export interface SessionRec {
   workflowPhase?: string;
   name?: string;
   cwd?: string;
+  parser?: number; // the PARSER that built this shard; a shard whose transcript is gone keeps an older one
 }
 export interface Shard {
   s: SessionRec;
@@ -33,6 +34,7 @@ export interface Shard {
 }
 export interface PricedCall extends Call {
   qu: number;
+  parts: Parts;
   flags: PriceFlag[];
   file: string; // the owning shard's rel
 }
@@ -50,7 +52,7 @@ export interface Index {
 }
 
 // Bump when transcript.ts extracts something new or different: the next scan rereads every file.
-export const PARSER = 6;
+export const PARSER = 8;
 
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });
@@ -107,6 +109,7 @@ export interface Loaded {
   calls: PricedCall[];
   markers: Map<string, Marker[]>; // by rel
   dupes: number;
+  oldParser: number; // shards an older PARSER built (their transcript was gone at the bump)
 }
 
 // A call seen in two files belongs to the more specific one (a subagent's own file over its parent's), then the
@@ -138,9 +141,10 @@ export function loadShards(shards: Shard[]): Loaded {
     }
   }
   const calls = [...best.values()]
-    .map(({ c, s }) => ({ ...c, ...priceCall(c.model, c, c), file: s.rel }))
+    .map(({ c, s }) => ({ ...c, ...priceParts(c.model, c, c), file: s.rel }))
     .sort((a, b) => a.ts - b.ts);
-  return { sessions: shards.map((s) => s.s), calls, markers, dupes };
+  const oldParser = shards.filter((s) => s.s.parser !== PARSER).length;
+  return { sessions: shards.map((s) => s.s), calls, markers, dupes, oldParser };
 }
 
 export function loadCache(cache: string): Loaded {

@@ -1,7 +1,7 @@
 // One Claude Code transcript line → what the cost model keeps: a call's usage (deduped later by message id), the
 // session's name, and phase markers from the call's tool_use blocks. Markers hold enums only — never command text,
 // paths or content — because the cache is the only thing derived from transcripts (docs/ops/USAGE-METER.md).
-import { PHASES } from '../board/tower/lanes.ts';
+import { PHASES, phaseAlias } from '../board/tower/lanes.ts';
 import { rowLane } from './lanes.ts';
 import type { Tokens } from './prices.ts';
 
@@ -41,6 +41,8 @@ export interface Marker {
   agentType?: string;
   toolUseId?: string;
   lane?: string;
+  src?: 'log'; // a lane-phase from the phase logger (phaselog.ts), not the transcript
+  alias?: true; // written as an alias (`ready`): the CLI refuses it from dev on, so the timeline skips it there
 }
 
 export interface Parsed {
@@ -76,23 +78,34 @@ export function editClass(path: string): EditClass {
 // runs — at the start of the line or of a `&&`/`;`/`|` segment, after `cd …` or env assignments, or as heavy.sh's
 // payload — never quoted inside a grep or an echo.
 const AT = String.raw`(?:^|[;&|(]\s*|\s--\s+)(?:\w+=\S*\s+)*`;
+// pnpm's own options before the script name: lanes run `pnpm -s board lane …` (the silent flag), the hub `pnpm -C <dir> …`
+const PNPM = String.raw`pnpm(?:\s+(?:-s|--silent|-w|--workspace-root|-C\s+\S+|--dir(?:=|\s+)\S+))*\s+`;
+// the same without a directory: `pnpm -C app test` is one package's run, never the full one
+const PNPM_ROOT = String.raw`pnpm(?:\s+(?:-s|--silent|-w|--workspace-root))*\s+`;
 const run = (body: string) => new RegExp(`${AT}${body}`, 'm');
-const LANE = run(String.raw`pnpm board lane (\w+)`);
-const LOCAL = run(String.raw`pnpm devcheck:local\b`);
-const DEVCHECK = run(String.raw`pnpm devcheck\b(?!:)`);
-const PUSH = run(String.raw`pnpm bot (?:push|deploy-dev)\b`);
-const OPEN_PR = run(String.raw`pnpm mailroom open-pr\b`);
-// a full run: nothing after the command but a redirect, a pipe or the next command (`pnpm test <file>` isn't the gate)
+const LANE = run(String.raw`${PNPM}board lane (\w+)`);
+const LOCAL = run(String.raw`${PNPM}devcheck:local\b`);
+const DEVCHECK = run(String.raw`${PNPM}devcheck\b(?!:)`);
+const PUSH = run(String.raw`${PNPM}bot (?:push|deploy-dev)\b`);
+const OPEN_PR = run(String.raw`${PNPM}mailroom open-pr\b`);
+// a full run: nothing after the command but a redirect, a pipe or the next command (`pnpm test <file>` isn't the gate);
+// `gate:fast` takes flags, with or without a value (`--base <ref>`), but `--dry-run` and `--help` run nothing
+const GATE_FLAG = String.raw`\s+--(?!dry-run\b|help\b)[\w-]+(?:[=\s]+[^\s;&|)>-][^\s;&|)>]*)?`;
 const GATE = run(
-  String.raw`(?:\S*heavy\.sh\s+--\s+)?pnpm (?:typecheck|lint|test)(?=\s*(?:$|[;&|)>]|2>))`,
+  String.raw`(?:\S*heavy\.sh\s+--\s+)?(?:${PNPM_ROOT}(?:typecheck|lint|test)|${PNPM}gate:fast(?:${GATE_FLAG})*)(?=\s*(?:$|[;&|)>]|2>))`,
 );
 const COMMIT = run(String.raw`git (?:-C \S+ )?commit\b`);
 
 export function bashMarkers(cmd: string): Omit<Marker, 'ts'>[] {
   const out: Omit<Marker, 'ts'>[] = [];
-  const phase = LANE.exec(cmd)?.[1];
+  const raw = LANE.exec(cmd)?.[1];
+  const phase = raw && (phaseAlias(raw) ?? raw);
   if (phase && (LANE_PHASES as readonly string[]).includes(phase))
-    out.push({ kind: 'lane-phase', phase: phase as LanePhase });
+    out.push({
+      kind: 'lane-phase',
+      phase: phase as LanePhase,
+      ...(phase !== raw ? { alias: true as const } : {}),
+    });
   if (LOCAL.test(cmd)) out.push({ kind: 'local' });
   else if (DEVCHECK.test(cmd)) out.push({ kind: 'devcheck' });
   if (PUSH.test(cmd)) out.push({ kind: 'dev' });
