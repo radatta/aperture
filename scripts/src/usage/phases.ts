@@ -52,6 +52,8 @@ export interface Step {
 
 // A session's phase timeline. With any explicit marker, heuristics count only before the first one (a lane that
 // writes its status file says exactly where it is from then on).
+const REFUSES_READY = new Set(['dev', 'pr', 'merged', 'cleanup']);
+
 export function timeline(markers: Marker[]): Step[] {
   const ms = [...markers].sort((a, b) => a.ts - b.ts);
   // the first explicit marker that names a phase; a leading parked/blocked says nothing yet
@@ -60,6 +62,7 @@ export function timeline(markers: Marker[]): Step[] {
   const out: Step[] = [];
   let cur = 'unattributed' as Phase;
   let reviewed = false;
+  let written: string | null = null; // the last phase name written, parked and blocked too: what the lane file holds
   const set = (ts: number, p: Phase, src: PhaseSrc = 'heuristic') => {
     if (p === cur) return;
     cur = p;
@@ -67,8 +70,9 @@ export function timeline(markers: Marker[]): Step[] {
   };
   for (const m of ms) {
     if (m.kind === 'lane-phase') {
-      // `board lane ready` from dev on was refused (lanes.ts writeLane): the lane never moved
-      if (m.alias && order(cur) >= order('dev')) continue;
+      // `board lane ready` with the lane file at dev or later was refused (lanes.ts writeLane): the lane never moved
+      if (m.alias && written && REFUSES_READY.has(written)) continue;
+      if (m.phase) written = m.phase;
       const p = m.phase ? EXPLICIT[m.phase] : null;
       if (p) set(m.ts, p, m.src === 'log' ? 'log' : 'marker');
       if (p === 'review') reviewed = true;

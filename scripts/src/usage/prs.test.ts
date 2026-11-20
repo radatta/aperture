@@ -76,8 +76,17 @@ describe('phase timeline', () => {
       mk(3, 'lane-phase', { phase: 'pr' }),
       mk(4, 'lane-phase', { phase: 'local', alias: true }), // refused: the lane stayed at pr
       mk(5, 'lane-phase', { phase: 'local' }), // the real name still goes back
+      mk(6, 'lane-phase', { phase: 'dev' }),
+      mk(7, 'lane-phase', { phase: 'parked' }), // the file reads parked: the CLI takes ready again
+      mk(8, 'lane-phase', { phase: 'local', alias: true }),
     ]);
-    expect([2, 4, 5].map((n) => phaseAt(t, min(n) + 1))).toEqual(['local', 'pr', 'local']);
+    expect([2, 4, 5, 7, 8].map((n) => phaseAt(t, min(n) + 1))).toEqual([
+      'local',
+      'pr',
+      'local',
+      'dev',
+      'local',
+    ]);
   });
 
   it('leaves calls before the first marker unattributed unless planning came first', () => {
@@ -461,6 +470,15 @@ describe('the phase log', () => {
       a.calls.filter((c) => c.ts === min(n)).map((c) => [c.phase, c.phaseSrc]);
     expect(at(60)).toEqual([['review', 'log']]);
     expect(at(310)).toEqual([['dev', 'log']]); // the second session, no row in its span: opens at dev
+    // an explicit marker on that first call wins over the opening step
+    const own = attribute(
+      loadShards([second([mk(310, 'lane-phase', { phase: 'build' })])]),
+      'hub',
+      log,
+    );
+    expect(own.calls.filter((c) => c.ts === min(310)).map((c) => [c.phase, c.phaseSrc])).toEqual([
+      ['build', 'marker'],
+    ]);
     // a removal before the span opens nothing
     const gone = parsePhaseLog(
       [row('lane-c', 'review', 50), row('lane-c', null, 200, 'review')].join('\n'),

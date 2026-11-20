@@ -24,7 +24,7 @@ export interface Priors {
   ctx: { g0: number; g1: number };
   rechecks: { a: number; bLines: number; cUi: number };
   prices: Record<string, number>; // QU per PR, or per run for PER_RUN types
-  band: number; // the range is QU ÷ band to × band until the backtest has MIN_FIT errors
+  band: number; // the range is QU ÷ band to × band until the backtest has more than MIN_FIT errors
   k: { k: number; lo: number; hi: number }; // meter % per QU, with its 80% interval
 }
 

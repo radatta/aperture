@@ -52,7 +52,7 @@ export interface Index {
 }
 
 // Bump when transcript.ts extracts something new or different: the next scan rereads every file.
-export const PARSER = 7;
+export const PARSER = 8;
 
 export function writeAtomic(path: string, text: string) {
   mkdirSync(dirname(path), { recursive: true });

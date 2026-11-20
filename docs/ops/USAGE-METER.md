@@ -238,7 +238,7 @@ QU     = main + agents;  meter % = k · QU
   The priors are `<usage dir>/priors.json`, gitignored like the rest of the usage dir, because a real fit's values are
   usage numbers and costs. Its shape is `estimate.ts` → `Priors` (`turns`, `main`, `ctx`, `rechecks`, `prices`,
   `band`, `k`); any subset overlays the tracked defaults, keys starting `_` are comments, and a key or value that
-  doesn't fit (a price for a type the defaults don't name, a non-positive price, band, smear or k) is named in the
+  doesn't fit (a price for a type the defaults don't name, a non-positive price, smear or k, a band below 1) is named in the
   output and ignored; the output also lists every number the file left on its placeholder. The tracked defaults (`DEFAULT_PRIORS`) are invented placeholders so
   a fresh checkout and CI run end to end; without the file, the estimate and the report say so. The numbers don't
   transfer between repos (the analysis's sister-project addendum); the structure does, so another repo's cache
