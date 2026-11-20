@@ -384,8 +384,8 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   Plaid's raw sign, so on a flipped account it splits card credits instead (they then read as broken
   splits, in Sort). A sync already running on old code during a deploy (up to 300 s) writes its
   pass-start copy of the new fields under the fresh row's own, on any row it writes in that window: it can
-  drop a split saved then, put an edited split's earlier parts back, or bring back an allocation unlinked
-  then (a Remove split or a sort in the window is caught by the read checks). Merging away from the
+  drop a split or a refund allocation saved then, or put an edited one's earlier parts back (a Remove
+  split, an unlink, a pin or a sort in the window is caught by the read checks). Merging away from the
   scheduled sync times keeps the window empty.
 - **Accepted (revert undo cases):** after a revert and re-land, an older pin then unpin of a refund across
   charges (an older pin writes only the pin, so `bucketSetBy` survives it), or a split rule retargeted away

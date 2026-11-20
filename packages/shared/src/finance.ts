@@ -709,7 +709,7 @@ export const liveRefundParts = (t: FinanceTransaction): FinanceRefundPart[] | nu
   t.bucket === null &&
   t.periodOverride === null &&
   !t.startsPeriod &&
-  t.bucketSetBy != null // set by every newer allocation; an older unlink, unsort or mark nulls it
+  t.bucketSetBy != null // set by every newer allocation; an older link, unsort or mark nulls it
     ? t.refundParts
     : null;
 // A rule's split, unless an older write retargeted the rule's bucket away from the split's largest part.

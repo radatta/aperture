@@ -185,7 +185,7 @@ export function financeSplitContract(h: FinanceSplitHarness) {
       { chargeId: 'fx-card-8', cents: 3000 },
       { chargeId: 'fx-card-6', cents: 1500 },
     ]);
-    // bucketSetBy 'user': the marker an older unlink, unsort or mark would null (liveRefundParts).
+    // bucketSetBy 'user': the marker an older link, unsort or mark would null (liveRefundParts).
     expect([linked.refundOfId, linked.bucket, linked.bucketSetBy]).toEqual([null, null, 'user']);
     const after = await overview();
     expect(delta(before, after)).toEqual({
@@ -281,6 +281,14 @@ export function financeSplitContract(h: FinanceSplitHarness) {
     expect([marked.refundParts, marked.splits]).toEqual([null, null]);
     // Always sorts every unsorted match but never a split row, and saves a one-bucket rule.
     await api.setFinanceSplit('fx-card-8', [p('budget', 1500), p('i_pay', 1500)]);
+    // A pin on a split charge keeps the split and its marker (else the read check drops it).
+    const pinnedSplit = await api.setFinancePeriodOverride('fx-card-8', 'current');
+    expect([pinnedSplit.splits?.length, pinnedSplit.bucketSetBy]).toEqual([2, 'user']);
+    const listed = (await api.listFinanceTransactions(await h.finRange())).find(
+      (t) => t.id === 'fx-card-8',
+    )!;
+    expect([listed.splits?.length, listed.bucketSetBy]).toEqual([2, 'user']);
+    await api.setFinancePeriodOverride('fx-card-8', null);
     await api.setFinancePeriodStart('fx-refund-1', false);
     const swept = await api.setFinanceBucket({
       ids: ['fx-refund-1'],

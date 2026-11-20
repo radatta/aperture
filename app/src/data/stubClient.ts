@@ -3311,8 +3311,8 @@ class StubClient implements ApiClient {
       periodOverride: override,
       refundOfId: null, // moving a refund yourself unlinks it
       refundParts: null,
-      // An allocation's marker goes with it (a split keeps its own: the two are never on one row).
-      bucketSetBy: t.refundParts ? null : t.bucketSetBy,
+      // The marker stays only with what it marks — a bucket or a split; an allocation's goes with it.
+      bucketSetBy: t.bucket !== null || t.splits !== null ? t.bucketSetBy : null,
     });
   }
   async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
@@ -3321,7 +3321,7 @@ class StubClient implements ApiClient {
       return this.writes.patch(this.store.financeTransactions, refundId, {
         refundOfId: null,
         refundParts: null,
-        bucketSetBy: refund.refundParts ? null : refund.bucketSetBy, // an allocation's marker goes with it
+        bucketSetBy: refund.bucket !== null || refund.splits !== null ? refund.bucketSetBy : null, // only with a bucket or a split
       });
     const charge = this.mustFind(this.store.financeTransactions, chargeId);
     const accounts = this.alive(this.store.financeAccounts);
