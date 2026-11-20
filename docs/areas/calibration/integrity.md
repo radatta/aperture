@@ -40,3 +40,11 @@ Stays ignored, decided 2026-11-05 ([calendar](../calendar/index.md) → Status).
 ## Legacy rows
 
 Rows finished before the gate keep their shape: no `estimateSource`, and possibly no lock, in which case the night review keeps its "no estimate" row and `update_task {estimateMin}` can backfill it once.
+
+## Pulses
+
+`pulse` ([mcp/pulse](../mcp/pulse.md), `packages/shared/src/pulse.ts` → `decidePulse`) starts an unstarted task through
+the same transition, so the lock freezes there; it credits tracked minutes as a timer does, only once they have passed,
+and never takes any back. Its `done` runs the done gate: refused, it answers `needs` (an estimate, or the user's own
+actual through `complete_task`) and finishes nothing. A timer or a sitting on the task blocks it, so no minute counts
+twice.

@@ -252,6 +252,21 @@ export interface McpDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
+// What `pulse` answers (lambdas/src/mcp/pulseTools.ts, packages/shared/src/pulse.ts PulseResult).
+export interface DevPulseResult {
+  task: { id: string; title: string; status: string };
+  counted: boolean;
+  reason?: 'timer' | 'sitting';
+  opened: boolean;
+  sessionMin: number;
+  taskActualMin: number;
+  pulses: number;
+  closed?: { taskId: string; minutes: number };
+  done?: boolean;
+  needs?: 'app' | 'estimate' | 'actual';
+  message?: string;
+}
+
 export interface ToolResult {
   text: string;
   isError: boolean;

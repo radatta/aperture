@@ -60,7 +60,7 @@ import type { Tool, ToolContext } from './types';
 // each only on their yes, and import_catalog writes the stage's full problem catalog (stage-wide metadata, no user
 // data), on their yes too.
 
-// Every write's description opens with this, so the posture travels with the tool (MCP has no annotations).
+// Every write's description opens with this, so the posture travels with the tool (annotations are only hints).
 const ASK_FIRST =
   'Writes to their Aperture data. Before calling, say exactly what you will write and wait for their yes in this conversation; never infer it.';
 

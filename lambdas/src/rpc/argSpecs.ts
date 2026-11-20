@@ -14,6 +14,7 @@ import type {
   DateRange,
   FinanceBucket,
   IdeaStatus,
+  PulseInput,
   LinkAccountMeta,
   RecurrenceRule,
   TaskStatus,
@@ -328,6 +329,14 @@ export const RPC_ARGS = {
   findRunningSession: [],
   listRunningSessions: [],
   resolveStaleSession: [id, named('decision', lit('keep', 'discard'))],
+  // A note longer than a line is the domain's to cut (normalizePulseNote); TEXT_MAX only bounds the body.
+  pulseTask: [
+    obj<PulseInput>('pulse', {
+      taskId: str(ID_MAX),
+      note: opt(nullable(str(TEXT_MAX))),
+      done: opt(bool),
+    }),
+  ],
 
   // Habits
   listHabits: [],

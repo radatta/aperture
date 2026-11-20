@@ -29,10 +29,21 @@ export interface JsonSchema {
   additionalProperties?: boolean;
 }
 
+// MCP tool annotations (spec 2025-06-18): hints a client may use for its approval prompt. claude.ai lets a
+// read-only tool run without a per-call prompt and always prompts a destructive one; a write that omits
+// destructiveHint reads as destructive (the spec's default). Hints only — never a security boundary.
+export interface ToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 export interface Tool {
   name: string;
   description: string;
   inputSchema: JsonSchema;
+  annotations?: ToolAnnotations; // emitted in tools/list when set
   // Returns the raw data (Task, Task[], …); protocol.ts JSON-stringifies it into the tool result. Throws
   // RpcParamError for bad args (→ -32602) or a plain Error for an execution failure (→ isError result).
   run(args: Record<string, unknown>, ctx: ToolContext): Promise<unknown>;

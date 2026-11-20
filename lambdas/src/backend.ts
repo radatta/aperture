@@ -246,6 +246,8 @@ import type {
   TokenScope,
   CaptureResult,
   PomodoroSession,
+  PulseInput,
+  PulseResult,
   PushDevice,
   PushStatus,
   ReminderSettingKey,
@@ -326,6 +328,7 @@ import {
 } from './auth/placeToken';
 import { FinanceService } from './finance/service';
 import { SessionService } from './sessions';
+import { PulseService } from './pulse';
 import { PushService } from './push/service';
 import { noopInvoker } from './finance/invoker';
 import type { FinanceSyncInvoker } from './finance/invoker';
@@ -508,6 +511,7 @@ export class BackendClient implements ApiClient {
   private readonly objects: ObjectStore;
   private readonly finance: FinanceService;
   private readonly sessions: SessionService;
+  private readonly pulses: PulseService;
   private readonly anthropic: AnthropicGateway;
   private readonly coachPick: CoachPickInvoker;
   private readonly catalog: CatalogStore | null;
@@ -550,6 +554,15 @@ export class BackendClient implements ApiClient {
       settings: () => this.ensureSettings(),
     });
     this.sessions = new SessionService({ repo, now: this.now, base: () => this.base() });
+    this.pulses = new PulseService({
+      repo,
+      userId: this.userId,
+      now: this.now,
+      ulid: this.ulid,
+      base: () => this.base(),
+      dayStartHour: async () => (await this.ensureSettings()).dayStartHour,
+      transitionTask: (id, to) => this.transitionTask(id, to),
+    });
     this.push = new PushService({
       repo,
       userId: this.userId,
@@ -2599,7 +2612,21 @@ export class BackendClient implements ApiClient {
 
   // --- Sessions (sessions.ts) ---
   async startSession(input: StartSessionInput): Promise<PomodoroSession> {
-    return this.sessions.startSession(input);
+    const session = await this.sessions.startSession(input);
+    // The timer is the clock from here: the task's open pulse session is settled now (pulse.ts yieldPulse).
+    // Best-effort: the timer already landed, so a lost race here is logged, never a failed start — the next
+    // pulse on the task is blocked by the timer and settles the session itself.
+    if (input.kind === 'work' && input.taskId)
+      await this.pulses.yieldTo(input.taskId).catch((err: unknown) => {
+        console.log(
+          JSON.stringify({
+            event: 'pulse_yield_deferred',
+            taskId: input.taskId,
+            error: String(err),
+          }),
+        );
+      });
+    return session;
   }
   async heartbeatSession(id: string): Promise<PomodoroSession> {
     return this.sessions.heartbeatSession(id);
@@ -2628,6 +2655,9 @@ export class BackendClient implements ApiClient {
   }
   async resolveStaleSession(id: string, decision: 'keep' | 'discard'): Promise<PomodoroSession> {
     return this.sessions.resolveStaleSession(id, decision);
+  }
+  async pulseTask(input: PulseInput): Promise<PulseResult> {
+    return this.pulses.pulse(input);
   }
 
   // --- Habits ---
@@ -2891,6 +2921,7 @@ export class BackendClient implements ApiClient {
         await this.repo.putSession({ ...s, wasWork: isWork, updatedAt: this.now() });
         backfilled++;
       }
+      await this.pulses.setWasWork(id, isWork);
     }
     return { category, backfilled };
   }

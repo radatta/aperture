@@ -43,6 +43,7 @@ import { COACH_TOOLS } from './coachTools';
 import { LEETCODE_TOOLS } from './leetcodeTools';
 import { LOG_TOOLS } from './logTools';
 import { PLACE_ARG_DESC, PLACE_TOOLS, placeArg } from './placeTools';
+import { PULSE_TOOLS } from './pulseTools';
 import { SERIES_TOOLS } from './seriesTools';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
@@ -1003,6 +1004,7 @@ export const TOOLS: Tool[] = [
   ...COACH_TOOLS,
   ...LOG_TOOLS,
   ...PLACE_TOOLS,
+  ...PULSE_TOOLS,
   ...SERIES_TOOLS,
 ];
 

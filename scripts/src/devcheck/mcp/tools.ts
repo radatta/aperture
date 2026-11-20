@@ -11,10 +11,14 @@ export function toolsReads(c: Core) {
     // The tools as claude.ai sees them, schemas and descriptions included.
     toolSchemas: async () =>
       (
-        await rpc<{ tools: { name: string; description?: string; inputSchema: unknown }[] }>(
-          'tools/list',
-          {},
-        )
+        await rpc<{
+          tools: {
+            name: string;
+            description?: string;
+            inputSchema: unknown;
+            annotations?: Record<string, unknown>;
+          }[];
+        }>('tools/list', {})
       ).tools,
   };
   return reads;

@@ -29,6 +29,7 @@ import type {
   LogEntry,
   Place,
   PomodoroSession,
+  PulseState,
   PushSub,
   ReminderCandidate,
   Roll,
@@ -41,7 +42,7 @@ import type {
   FluxWeekNoteRow,
   SittingActivity,
 } from '@aperture/shared';
-import { headRowOf, isHeadEvent } from '@aperture/shared';
+import { accruesTime, headRowOf, isHeadEvent } from '@aperture/shared';
 import { ConditionFailedError, SK_END } from './DocClient';
 import type { DocClient, Item, QueryOpts } from './DocClient';
 import type { Writes } from './writes';
@@ -781,9 +782,9 @@ export class Repo {
       (await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)),
     );
   }
-  async listRunningSessions(): Promise<PomodoroSession[]> {
+  async listRunningSessions(opts?: { consistent?: boolean }): Promise<PomodoroSession[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.sessionRunningPrefix())).map((i) =>
+      (await this.doc.query(this.p(), sk.sessionRunningPrefix(), opts)).map((i) =>
         toEntity<PomodoroSession>(i),
       ),
     );
@@ -803,6 +804,48 @@ export class Repo {
       await this.writes.put(entityItem(this.userId, sk.session(s.day, s.id), s));
     }
     return s;
+  }
+
+  // --- Pulses (pulse.ts) ---
+  // The one state row: the open pulse session. Every change is a casUpdate on it (PulseService).
+  pulseStateShape(): CasShape<PulseState> {
+    return {
+      sk: sk.pulseState(),
+      read: (i) => toEntity<PulseState>(i),
+      toItem: (s) => entityItem(this.userId, sk.pulseState(), s),
+    };
+  }
+  async getPulseState(opts?: { consistent?: boolean }): Promise<PulseState | null> {
+    const it = await this.doc.get(this.p(), sk.pulseState(), opts);
+    return it ? toEntity<PulseState>(it) : null;
+  }
+  // A pulse session is completed from birth: straight to its day bucket, with no running copy to drop.
+  async putPulseSession(s: PomodoroSession): Promise<PomodoroSession> {
+    await this.writes.put(entityItem(this.userId, sk.session(s.day, s.id), s));
+    return s;
+  }
+  // A delta onto a task's tracked minutes, conditional on the row as read: a write landing meanwhile (a
+  // Done or an edit from the app) is re-read and kept, never flattened. A task finished meanwhile keeps its
+  // actual (accruesTime); a gone one is null. Pulse deltas are never negative; the floor at 0 only
+  // guards a caller that passes one.
+  async accrueTaskMinutes(id: string, deltaMin: number, now: number): Promise<Task | null> {
+    for (let attempt = 0; attempt < CAS_ATTEMPTS; attempt++) {
+      const t = await this.getTask(id, { consistent: true });
+      if (!t || !accruesTime(t) || deltaMin === 0) return t;
+      const next: Task = {
+        ...t,
+        actualAccruedMin: Math.max(0, t.actualAccruedMin + deltaMin),
+        updatedAt: Math.max(now, t.updatedAt + 1),
+      };
+      try {
+        await this.writes.putIf(await this.taskItemArmed(next), t.updatedAt);
+        return next;
+      } catch (err) {
+        if (err instanceof ConditionFailedError) continue;
+        throw err;
+      }
+    }
+    throw new ConflictError();
   }
 
   // --- Habits ---
