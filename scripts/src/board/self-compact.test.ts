@@ -119,13 +119,17 @@ beforeEach(() => {
     APERTURE_BOARD_DIR: board,
     TMUX_PANE: PANE,
     SHIM: shim,
+    // no real tmux server is reachable: a send still running when afterEach removes the shim falls through PATH
+    // to the real tmux, which must find no server (never this session's own pane %7)
+    TMUX_TMPDIR: join(tmp, 'no-tmux'),
   };
+  delete env.TMUX;
   delete env.APERTURE_HANDOFF_FORK;
   delete env.GIT_AUTHOR_NAME;
 });
 afterEach(() => {
   children.splice(0).forEach((c) => c.kill());
-  rmSync(tmp, { recursive: true, force: true }); // a detached send still running fails harmlessly
+  rmSync(tmp, { recursive: true, force: true }); // a send still running finds no shim, main or tmux server
 });
 
 function lane(minutesOld = 0) {
