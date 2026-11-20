@@ -4,9 +4,12 @@ import {
   FINANCE_BUCKET_LABELS,
   addDays,
   bucketOf,
+  bucketsOf,
+  countedParts,
   dayKeyInZone,
   daysBetween,
   deriveFinanceView,
+  filterCents,
   financeListRange,
   financeSyncErrorMessage,
   isDayKey,
@@ -15,6 +18,8 @@ import {
   needsSorting,
   netCents,
   periodOf,
+  splitBroken,
+  splitOf,
   USER_TIME_ZONE,
 } from '@aperture/shared';
 import type {
@@ -97,6 +102,7 @@ export const FINANCE_TOOLS: Tool[] = [
     name: 'get_finance_overview',
     description: [
       'The budget at a glance — "how much budget is left?". The current billing period (from the card payment the user marked, else their payment day), budget / spent / left (left < 0 = over), totals per bucket (parents_pay "Covered", budget "Budget", i_pay "I pay"; rows the user sorted as not_spending "Not spending" — a transfer to an outside account, a cash withdrawal — are in no total), how many charges are still to sort, account balances, and each bank\'s sync status.',
+      'A charge split across buckets counts each part in its own bucket total. nextPeriod: split parts the user set to the next period, which count in no total until that period starts (when they mark the card payment).',
       "Hidden accounts are listed (hidden: true) but excluded from every total. A credit account's balance is the amount owed.",
       SIGN,
       TODAY_ARG,
@@ -151,6 +157,7 @@ export const FINANCE_TOOLS: Tool[] = [
           ]),
         ),
         toSort: { count: o.unsortedCount, totalUsd: usd(o.unsortedCents) },
+        nextPeriod: { count: o.upcoming.count, totalUsd: usd(o.upcoming.totalCents) },
         settings: {
           budgetUsd: usd(settings.financeBudgetCents),
           paymentDay: settings.financePaymentDay,
@@ -199,6 +206,7 @@ export const FINANCE_TOOLS: Tool[] = [
       "kind: expense (a charge) | refund | income | transfer (between the user's own accounts) | card_payment. Only expense and refund rows (and deposits linked as refunds) count toward buckets.",
       "A linked refund larger than what's left of its charge counts only that much: countedUsd says how much (else all of amountUsd counts); a charge's refundedUsd never exceeds its amount.",
       "bucket is resolved through refund links (a linked refund takes its charge's bucket); period is which billing period it counts in (current | previous | outside).",
+      "A charge split across buckets has split: true, bucket null, and parts [{bucket, amountUsd, period (current | previous | next = waiting for a period that hasn't started | outside), pinned (the part's own period choice, or null = with the charge), refundedUsd?}]; the bucket filter matches any part, and under it totalUsd counts only that bucket's parts. splitBroken: true = the amount changed after it was split, so it counts as unsorted. A refund allocated across several charges has refundParts [{chargeId, merchant, allocatedUsd, countedUsd, buckets, period}]; linkedChargeId is then its largest part.",
       "category is Plaid's (e.g. FOOD_AND_DRINK / FOOD_AND_DRINK_RESTAURANT). Newest first; limit defaults to 100 (max 300), truncated says if more matched.",
       SIGN,
       TODAY_ARG,
@@ -276,13 +284,18 @@ export const FINANCE_TOOLS: Tool[] = [
         period: { start: o.period.start, end: o.period.end, previous: o.period.previous },
         range: window ?? { from: o.period.previous.start, to: o.period.end },
         total: rows.length,
-        totalUsd: usd(netCents(rows, ({ t, v }) => v.amount(t))), // every match, like the All tab
+        // every match, like the All tab; under a bucket, a split charge counts only that bucket's parts
+        totalUsd: usd(netCents(rows, ({ t, v }) => filterCents(t, v, bucket ?? 'all'))),
         returned: shown.length,
         truncated: rows.length > shown.length,
         transactions: shown.map(({ t, v }) => {
           const acct = v.accounts.get(t.accountId);
           const refunded = v.refunded.get(t.id) ?? 0;
           const counted = v.counted.get(t.id);
+          const cents = v.amount(t);
+          const isCharge = v.kindOf(t) === 'expense';
+          const split = isCharge ? splitOf(t, cents) : null;
+          const claims = t.refundParts ? v.claims.get(t.id) : undefined;
           return {
             id: t.id,
             date: t.date,
@@ -313,6 +326,31 @@ export const FINANCE_TOOLS: Tool[] = [
               ? { countedUsd: usd(-counted) }
               : {}),
             startsPeriod: t.startsPeriod,
+            ...(split
+              ? {
+                  split: true,
+                  parts: countedParts(t, cents, refunded, o.period).map((p) => ({
+                    bucket: p.bucket,
+                    amountUsd: usd(p.cents),
+                    period: p.window === 'upcoming' ? 'next' : (p.window ?? 'outside'),
+                    pinned: p.pin,
+                    ...(p.refundedCents > 0 ? { refundedUsd: usd(p.refundedCents) } : {}),
+                  })),
+                }
+              : {}),
+            ...(isCharge && splitBroken(t, cents) ? { splitBroken: true } : {}),
+            ...(claims
+              ? {
+                  refundParts: claims.map(({ charge, cents: asked }) => ({
+                    chargeId: charge.id,
+                    merchant: charge.merchantName ?? charge.name,
+                    allocatedUsd: usd(-(asked ?? -cents)),
+                    countedUsd: usd(-(v.countedByClaim.get(t.id)?.get(charge.id) ?? 0)),
+                    buckets: bucketsOf(charge, v),
+                    period: periodOf(charge, o.period) ?? 'outside',
+                  })),
+                }
+              : {}),
           };
         }),
       };
@@ -321,7 +359,7 @@ export const FINANCE_TOOLS: Tool[] = [
   {
     name: 'list_finance_rules',
     description:
-      'The user\'s auto-sort rules: "always put <pattern> in <bucket>". A pattern is a case-insensitive substring of the merchant; the longest active match wins, and a rule never re-sorts a charge the user sorted by hand. ' +
+      'The user\'s auto-sort rules: "always put <pattern> in <bucket>". A pattern is a case-insensitive substring of the merchant; the longest active match wins, and a rule never re-sorts a charge the user sorted by hand. A rule with split [{bucket, percent}] splits new matching charges by those percents instead (its bucket is then the largest part). ' +
       READ_ONLY,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     async run(_args, ctx) {
@@ -331,6 +369,13 @@ export const FINANCE_TOOLS: Tool[] = [
         bucket: r.bucket,
         bucketLabel: FINANCE_BUCKET_LABELS[r.bucket],
         active: r.active,
+        split: r.split
+          ? r.split.map((p) => ({
+              bucket: p.bucket,
+              bucketLabel: FINANCE_BUCKET_LABELS[p.bucket],
+              percent: p.percent,
+            }))
+          : null,
       }));
     },
   },
