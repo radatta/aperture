@@ -6,15 +6,20 @@ import {
   FINANCE_BUCKETS,
   fmtMonthShortDay,
   isPeriodStart,
-  periodOf,
   REFUND_MATCH_WINDOW_DAYS,
+  liveRefundParts,
   refundSideError,
+  resolveRefundPartIds,
   searchRefundCharges,
+  splitBroken,
+  splitOf,
   suggestRefundMatches,
+  suggestRefundSets,
 } from '@aperture/shared';
 import type {
   FinanceOverview,
   FinancePeriodOverride,
+  FinanceRefundPart,
   FinanceTransaction,
   FinanceTxnKind,
 } from '@aperture/shared';
@@ -30,9 +35,14 @@ import {
   useSetFinanceNote,
   useSetFinancePeriodOverride,
   useSetFinancePeriodStart,
+  useSetFinanceRefundParts,
+  useSetFinanceSplit,
 } from '../../data/hooks/useFinances';
 import { SearchBox } from './LedgerControls';
 import { fmtMoney, fmtSigned } from './money';
+import { chargeWhere, leftForRefund } from './amounts';
+import { RefundAllocation, RefundPartsEditor } from './RefundParts';
+import { BrokenSplit, SplitEditor, SplitSummary } from './SplitEditor';
 import type { FinanceView } from './useFinanceData';
 
 const KIND_LABEL: Record<FinanceTxnKind, string> = {
@@ -69,8 +79,21 @@ export function TransactionDetail({
   const isRefund = kind === 'refund';
   const isIncome = kind === 'income';
   const linkedTo = view.links.get(txn.id);
-  const dangling = txn.refundOfId !== null && !linkedTo; // its charge isn't loaded / is gone
+  // Stored parts with a posted charge's id in place of its pending one, as the server stores them.
+  const ownParts = liveRefundParts(txn);
+  const parts = ownParts && resolveRefundPartIds(ownParts, view.allTxns);
+  const linkedAny = txn.refundOfId != null || parts !== null;
+  const dangling = linkedAny && !linkedTo; // its charge(s) aren't loaded / are gone
   const cents = view.amount(txn);
+  const split = kind === 'expense' ? splitOf(txn, cents) : null;
+  const broken = kind === 'expense' && splitBroken(txn, cents);
+  const setSplit = useSetFinanceSplit();
+  const setParts = useSetFinanceRefundParts();
+  const splitEditor = useDisclosure();
+  // Editing a refund's allocation: the parts it starts from (a single link becomes its first row).
+  const [partsDraft, setPartsDraft] = useState<FinanceRefundPart[] | null>(null);
+  // After Remove split, focus goes to the Bucket group that replaces the summary.
+  const [focusBucket, setFocusBucket] = useState(false);
   const acct = view.accounts.get(txn.accountId);
   const markable = acct?.type === 'credit' && cents < 0;
   // Money in that could be a refund at all — a Venmo cash-out, a transfer or a period mark never is.
@@ -89,6 +112,25 @@ export function TransactionDetail({
     setUndid(chargeId === null);
     link.mutate({ refundId: txn.id, chargeId });
   };
+  // Unlink one charge of an allocation: the rest stays; the last one unlinks the refund.
+  const unlinkOne = (chargeId: string) => {
+    const rest = (parts ?? []).filter((p) => p.chargeId !== chargeId);
+    if (rest.length === 0) return setLink(null);
+    setActed(true);
+    setParts.mutate({ refundId: txn.id, parts: rest });
+  };
+  const linkSet = (parts: FinanceRefundPart[]) => {
+    setActed(true);
+    setParts.mutate({ refundId: txn.id, parts });
+  };
+  // A single link's allocation to start editing from: its charge, at what this refund counts there.
+  const startAllocation = () =>
+    setPartsDraft(
+      parts ??
+        (linkedTo
+          ? [{ chargeId: linkedTo.id, cents: Math.min(-cents, leftForRefund(txn, view)(linkedTo)) }]
+          : []),
+    );
   const setMark = (marked: boolean) => {
     setActed(true);
     setUndid(!marked);
@@ -98,7 +140,7 @@ export function TransactionDetail({
   const incomeLink = useDisclosure();
   // The Bucket group is where the detail opens. Without one (linked, money in, a payment), it opens on
   // the dialog itself: the first button would be Unlink or a mark, and a stray Enter would press it.
-  const sortable = (kind === 'expense' || isRefund) && !txn.refundOfId;
+  const sortable = (kind === 'expense' || isRefund) && !linkedAny && !split;
   // After an Unlink or Unmark that leaves nothing to focus (a card credit with no suggestions), focus goes
   // to the Bucket group — sorting it is the next thing you do. Never the search box: that pops the iPhone
   // keyboard. Never after a Mark (`undid`): one in flight would otherwise hop there before Unmark mounts.
@@ -109,6 +151,11 @@ export function TransactionDetail({
     const at = document.activeElement;
     if (!at || at === document.body || at.tagName === 'DIALOG') bucketRef.current?.focus();
   };
+  useEffect(() => {
+    if (!focusBucket || !sortable) return;
+    setFocusBucket(false);
+    bucketRef.current?.focus();
+  }, [focusBucket, sortable]);
   // null until you type: an untouched field tracks the server's note, so closing never writes it.
   const [draft, setDraft] = useState<string | null>(null);
   const overrides: { value: FinancePeriodOverride | null; label: string }[] = [
@@ -149,16 +196,60 @@ export function TransactionDetail({
           </Text>
         </div>
 
-        {linkedTo && (
-          <LinkedRefund
+        {partsDraft !== null ? (
+          <RefundPartsEditor
             refund={txn}
-            charge={linkedTo}
+            view={view}
+            initial={partsDraft}
+            adder={(exclude, add) => (
+              <RefundSuggestions
+                refund={txn}
+                view={view}
+                busy={false}
+                focus={false}
+                exclude={exclude}
+                actionLabel="Add"
+                fallback="No other likely charge — search for it above."
+                onLink={add}
+              />
+            )}
+            onSaved={() => {
+              setActed(true);
+              setPartsDraft(null);
+            }}
+            onCancel={() => setPartsDraft(null)}
+          />
+        ) : parts !== null && linkedTo ? (
+          <RefundAllocation
+            refund={txn}
             view={view}
             overview={overview}
-            busy={link.isPending}
+            busy={setParts.isPending || link.isPending}
             focus={acted}
-            onUnlink={() => setLink(null)}
+            onEdit={startAllocation}
+            onUnlinkOne={unlinkOne}
+            onUnlinkAll={() => setLink(null)}
           />
+        ) : (
+          linkedTo && (
+            <LinkedRefund
+              refund={txn}
+              charge={linkedTo}
+              view={view}
+              overview={overview}
+              busy={link.isPending}
+              focus={acted}
+              onUnlink={() => setLink(null)}
+              onAddAnother={startAllocation}
+            />
+          )
+        )}
+        {setParts.isError && partsDraft === null && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn&apos;t change the links: {setParts.error.message}
+            </Text>
+          </div>
         )}
         {dangling && (
           <div className="flex flex-wrap items-center gap-3">
@@ -176,27 +267,30 @@ export function TransactionDetail({
             </Button>
           </div>
         )}
-        {isRefund && linkable && !txn.refundOfId && (
+        {isRefund && linkable && !linkedAny && partsDraft === null && (
           <RefundSuggestions
             refund={txn}
             view={view}
-            busy={link.isPending}
+            busy={link.isPending || setParts.isPending}
             focus={acted}
             fallback="No likely charge found — search for it above, or sort it below instead."
             onLink={(chargeId) => setLink(chargeId)}
+            onLinkSet={linkSet}
             onNothingToFocus={undid ? focusBucketIfLost : undefined}
           />
         )}
         {linkableIncome &&
-          !txn.refundOfId &&
+          !linkedAny &&
+          partsDraft === null &&
           (incomeLink.open ? (
             <RefundSuggestions
               refund={txn}
               view={view}
-              busy={link.isPending}
+              busy={link.isPending || setParts.isPending}
               focus
               fallback="No likely charge found — search for it above, or it stays money in, outside the budget."
               onLink={(chargeId) => setLink(chargeId)}
+              onLinkSet={linkSet}
               onCancel={incomeLink.onClose}
             />
           ) : (
@@ -230,19 +324,78 @@ export function TransactionDetail({
           />
         )}
 
-        {sortable && (
+        {broken && !splitEditor.open && (
+          <BrokenSplit
+            txn={txn}
+            view={view}
+            fixRef={splitEditor.triggerRef}
+            onFix={splitEditor.onOpen}
+          />
+        )}
+        {split && !splitEditor.open && (
+          <SplitSummary
+            txn={txn}
+            view={view}
+            overview={overview}
+            busy={setSplit.isPending}
+            focus={acted}
+            editRef={splitEditor.triggerRef}
+            onEdit={splitEditor.onOpen}
+            onRemove={() =>
+              setSplit.mutate(
+                { id: txn.id, parts: null },
+                { onSuccess: () => setFocusBucket(true) },
+              )
+            }
+          />
+        )}
+        {splitEditor.open && (
+          <SplitEditor
+            txn={txn}
+            view={view}
+            overview={overview}
+            onSaved={() => {
+              setActed(true); // focus lands on the summary's Edit split
+              splitEditor.onClose();
+            }}
+            onCancel={splitEditor.onClose}
+          />
+        )}
+        {setSplit.isError && !splitEditor.open && (
+          <div role="alert">
+            <Text size="sm" tone="danger">
+              Couldn&apos;t remove the split: {setSplit.error.message}
+            </Text>
+          </div>
+        )}
+        {(sortable || split) && (
           <>
-            <Segmented
-              ref={bucketRef}
-              label="Bucket"
-              autoFocus
-              options={[
-                ...FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BUCKET_LABELS[b] })),
-                { value: null, label: 'Unsorted' },
-              ]}
-              value={txn.bucket}
-              onChange={(bucket) => setBucket.mutate({ ids: [txn.id], bucket })}
-            />
+            {sortable && !splitEditor.open && (
+              <div className="flex flex-col gap-1.5">
+                <Segmented
+                  ref={bucketRef}
+                  label="Bucket"
+                  autoFocus
+                  options={[
+                    ...FINANCE_BUCKETS.map((b) => ({ value: b, label: FINANCE_BUCKET_LABELS[b] })),
+                    { value: null, label: 'Unsorted' },
+                  ]}
+                  value={txn.bucket}
+                  onChange={(bucket) => setBucket.mutate({ ids: [txn.id], bucket })}
+                />
+                {kind === 'expense' && cents > 0 && !broken && (
+                  <Button
+                    ref={splitEditor.triggerRef}
+                    size="sm"
+                    variant="quiet"
+                    className="self-start"
+                    onClick={splitEditor.onOpen}
+                  >
+                    Split across buckets…
+                  </Button>
+                )}
+              </div>
+            )}
             <Segmented
               label="Counts in"
               options={overrides}
@@ -310,6 +463,7 @@ function LinkedRefund({
   busy,
   focus,
   onUnlink,
+  onAddAnother,
 }: {
   refund: FinanceTransaction;
   charge: FinanceTransaction;
@@ -318,8 +472,8 @@ function LinkedRefund({
   busy: boolean;
   focus: boolean;
   onUnlink: () => void;
+  onAddAnother: () => void;
 }) {
-  const which = periodOf(charge, overview.period);
   const counted = view.counted.get(refund.id) ?? 0;
   const capped = counted < -view.amount(refund);
   return (
@@ -346,15 +500,7 @@ function LinkedRefund({
         {charge.bucket === 'not_spending' ? (
           'Not spending, like its charge — outside every total.'
         ) : (
-          <>
-            Counts as {charge.bucket ? FINANCE_BUCKET_LABELS[charge.bucket] : 'unsorted'},{' '}
-            {which === 'current'
-              ? 'this period'
-              : which === 'previous'
-                ? 'last period'
-                : 'an earlier period'}{' '}
-            — it follows the charge.
-          </>
+          <>Counts as {chargeWhere(charge, view, overview)} — it follows the charge.</>
         )}
       </Text>
       {capped && (
@@ -363,6 +509,15 @@ function LinkedRefund({
           rest stays money in, outside the budget.
         </Text>
       )}
+      <Button
+        size="sm"
+        variant="quiet"
+        className="self-start"
+        aria-disabled={busy || undefined}
+        onClick={busy ? undefined : onAddAnother}
+      >
+        Split it across another charge…
+      </Button>
     </div>
   );
 }
@@ -379,8 +534,11 @@ function RefundSuggestions({
   focus,
   fallback,
   onLink,
+  onLinkSet,
   onCancel,
   onNothingToFocus,
+  exclude,
+  actionLabel = 'Link',
 }: {
   refund: FinanceTransaction;
   view: FinanceView;
@@ -388,6 +546,9 @@ function RefundSuggestions({
   focus: boolean;
   fallback: string;
   onLink: (chargeId: string) => void;
+  onLinkSet?: (parts: FinanceRefundPart[]) => void; // offers sets of charges that cover it together
+  exclude?: Set<string>; // charges already chosen (the allocation editor's adder)
+  actionLabel?: string;
   onCancel?: () => void; // a collapsible list gets a way back (and a focus target when it's empty)
   onNothingToFocus?: () => void; // asked to focus, but no Link row and no Cancel to take it
 }) {
@@ -406,15 +567,21 @@ function RefundSuggestions({
     txns: view.allTxns,
     accounts: [...view.accounts.values()],
     moves: view.moves,
-    links: view.links,
+    claims: view.claims,
   };
+  const keep = (c: FinanceTransaction) => !exclude?.has(c.id);
   const suggest = (anyMerchant: boolean) =>
-    suggestRefundMatches({ ...args, anyMerchant }).slice(0, 5);
+    suggestRefundMatches({ ...args, anyMerchant })
+      .filter(keep)
+      .slice(0, 5);
   const sameMerchant = suggest(false);
   // A card credit's descriptor doesn't always match its charge's merchant — fall back to any charge.
   const matches = sameMerchant.length ? sameMerchant : suggest(true);
   const searching = query.trim() !== '';
-  const found = searching ? searchRefundCharges({ ...args, query }) : [];
+  const found = searching ? searchRefundCharges({ ...args, query }).filter(keep) : [];
+  // Sets of charges this refund covers together — offered when no single charge fits it exactly.
+  const exact = matches.some((c) => over(c) === 0);
+  const sets = onLinkSet && !searching && !exact ? suggestRefundSets(args) : [];
   const merchant = refund.merchantName ?? refund.name;
   const labelId = `refund-of-${refund.id}`;
   const statusId = `refund-search-${refund.id}`;
@@ -432,11 +599,13 @@ function RefundSuggestions({
     nothingRef.current?.();
   }, [nothingToFocus, canHandOff]);
 
+  const left = leftForRefund(refund, view);
   const row = (
     c: FinanceTransaction,
     opts: { named: boolean; primary: boolean; focus: boolean },
   ) => {
-    const refunded = view.refunded.get(c.id) ?? 0;
+    // What other refunds took: this refund's own claim on the charge isn't "already refunded".
+    const refunded = view.amount(c) - left(c);
     const bucket = c.bucket ? FINANCE_BUCKET_LABELS[c.bucket] : 'Unsorted';
     // Under the merchant, on their own line: a phone truncates the line above, and the bucket and what's
     // already refunded were what got cut. A same-merchant row names no merchant, so its bucket stays up.
@@ -454,7 +623,8 @@ function RefundSuggestions({
         <Text size="sm" tone="muted" tabular className="w-12 shrink-0">
           {fmtMonthShortDay(c.date)}
         </Text>
-        <Text size="sm" className="min-w-0 flex-1 truncate">
+        {/* Wraps, not truncates: at 390 the date, amount and button leave the name ~70px. */}
+        <Text size="sm" className="min-w-0 flex-1 break-words">
           {opts.named ? (c.merchantName ?? c.name) : bucket}
         </Text>
         <Text size="sm" tabular>
@@ -466,9 +636,9 @@ function RefundSuggestions({
           aria-disabled={busy || undefined}
           autoFocus={opts.focus}
           onClick={busy ? undefined : () => onLink(c.id)}
-          aria-label={`Link to ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
+          aria-label={`${actionLabel === 'Link' ? 'Link to' : actionLabel} ${c.merchantName ?? c.name} on ${fmtMonthShortDay(c.date)}, ${fmtMoney(view.amount(c))}`}
         >
-          Link
+          {actionLabel}
         </Button>
         {meta && (
           <Text size="xs" tone="muted" className="w-full truncate">
@@ -477,7 +647,7 @@ function RefundSuggestions({
         )}
         {/* Its own line: the row above truncates on a phone, and this is why it only counts
             part of the money. */}
-        {over(c) > 0 && (
+        {actionLabel === 'Link' && over(c) > 0 && (
           <Text size="xs" tone="muted" className="w-full">
             {fmtMoney(over(c))} more than what&apos;s left of the charge — only that counts.
           </Text>
@@ -518,10 +688,54 @@ function RefundSuggestions({
           </ul>
         </>
       )}
-      {!searching && matches.length === 0 && (
+      {!searching && matches.length === 0 && sets.length === 0 && (
         <Text size="sm" tone="muted">
           {fallback}
         </Text>
+      )}
+      {sets.length > 0 && (
+        <>
+          <Text id={`${labelId}-sets`} size="sm" tone="muted">
+            Or several charges together:
+          </Text>
+          <ul aria-labelledby={`${labelId}-sets`} className="flex flex-col gap-1.5">
+            {sets.map((set) => {
+              const label = set.charges
+                // Dated: two sets of the same merchants and amounts must read apart.
+                .map(
+                  (c, i) =>
+                    `${c.merchantName ?? c.name} · ${fmtMonthShortDay(c.date)} ${fmtMoney(set.cents[i]!)}`,
+                )
+                .join(' + ');
+              return (
+                <li
+                  key={set.charges.map((c) => c.id).join('|')}
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-line px-3 py-2"
+                >
+                  <Text size="sm" className="min-w-0 flex-1">
+                    {label}
+                  </Text>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-disabled={busy || undefined}
+                    aria-label={`Link to ${label}`}
+                    onClick={
+                      busy
+                        ? undefined
+                        : () =>
+                            onLinkSet!(
+                              set.charges.map((c, i) => ({ chargeId: c.id, cents: set.cents[i]! })),
+                            )
+                    }
+                  >
+                    Link all {set.charges.length}
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </>
       )}
       {searching && (
         <>
@@ -597,7 +811,9 @@ function PeriodMark({
 
 // On a charge: what's been refunded against it, so a smaller net makes sense at a glance.
 function RefundsAgainst({ charge, view }: { charge: FinanceTransaction; view: FinanceView }) {
-  const refunds = view.allTxns.filter((t) => view.links.get(t.id)?.id === charge.id);
+  const refunds = view.allTxns.filter((t) =>
+    view.claims.get(t.id)?.some((c) => c.charge.id === charge.id),
+  );
   if (refunds.length === 0) return null;
   const total = view.refunded.get(charge.id) ?? 0;
   return (
@@ -606,11 +822,16 @@ function RefundsAgainst({ charge, view }: { charge: FinanceTransaction; view: Fi
         Refunded {fmtMoney(total)} of {fmtMoney(view.amount(charge))}
       </Text>
       {refunds.map((r) => {
-        const counted = view.counted.get(r.id) ?? 0;
+        const counted = view.countedByClaim.get(r.id)?.get(charge.id) ?? 0;
+        const many = (view.claims.get(r.id)?.length ?? 0) > 1;
         return (
           <Text key={r.id} size="sm" tone="muted" tabular>
             {fmtMonthShortDay(r.date)} · +{fmtMoney(-view.amount(r))}
-            {counted < -view.amount(r) ? ` (counts ${fmtMoney(counted)})` : ''}
+            {many
+              ? ` (${fmtMoney(counted)} of it to this charge)`
+              : counted < -view.amount(r)
+                ? ` (counts ${fmtMoney(counted)})`
+                : ''}
           </Text>
         );
       })}

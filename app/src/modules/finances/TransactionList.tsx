@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   bucketOf,
+  bucketsOf,
+  filterCents,
   FINANCE_BUCKET_LABELS,
   FINANCE_BUCKETS,
   fmtMonthShortDay,
@@ -10,6 +12,7 @@ import {
   matchesFinanceText,
   netCents,
   periodOf,
+  splitOf,
 } from '@aperture/shared';
 import type {
   FinanceBucket,
@@ -26,7 +29,7 @@ import { cx } from '../../lib/cx';
 import { BucketTag } from './BucketTag';
 import { BRUSH_HINT_ID, BrushPicker, ListSummary, SearchBox, ShowChips } from './LedgerControls';
 import { fmtSigned } from './money';
-import { refundMeta } from './refundMeta';
+import { refundMeta, splitPartsText } from './refundMeta';
 import { TransactionDetail } from './TransactionDetail';
 import { useLedgerKeys } from './useLedgerKeys';
 import type { FinanceView } from './useFinanceData';
@@ -126,8 +129,16 @@ export function TransactionList({
   }, []);
   // Paintable: a charge or card credit on a shown account, not riding on a charge (a linked refund
   // takes its charge's bucket, so painting it would mean nothing).
+  // A split row isn't either: painting it one bucket would silently undo the split — open it instead.
   const paintable = useMemo(
-    () => new Set(view ? view.sortable.filter((t) => !view.links.has(t.id)).map((t) => t.id) : []),
+    () =>
+      new Set(
+        view
+          ? view.sortable
+              .filter((t) => !view.links.has(t.id) && !splitOf(t, view.amount(t)))
+              .map((t) => t.id)
+          : [],
+      ),
     [view],
   );
 
@@ -207,7 +218,9 @@ export function TransactionList({
       periodOf(t, overview.period, view.links) === null &&
       matches(t),
   );
-  const shown = [...view.txns.filter(matches), ...followed];
+  // view.txns already lists a refund across charges while any charge is in a window: once, not twice.
+  const listed = new Set(view.txns.map((t) => t.id));
+  const shown = [...view.txns.filter(matches), ...followed.filter((t) => !listed.has(t.id))];
   const narrowed = needle !== '' || filter !== 'all';
   const sections = [
     {
@@ -242,14 +255,20 @@ export function TransactionList({
       <BrushPicker brush={brush} onToggle={toggleBrush} onDone={disarm} toggleRefs={toggleRefs} />
       <div className="flex flex-col gap-1.5">
         <SearchBox ref={searchRef} value={search} onChange={changeSearch} />
-        {narrowed && <ListSummary count={shown.length} cents={netCents(shown, view.amount)} />}
+        {narrowed && (
+          <ListSummary
+            count={shown.length}
+            cents={netCents(shown, (t) => filterCents(t, view, filter))}
+          />
+        )}
       </div>
       <ShowChips filter={filter} onChange={changeFilter} />
       <span role="status" className="sr-only">
         {announce}
       </span>
       <span id={INERT_ID} hidden>
-        Can&apos;t be sorted here — not a charge, or it follows its charge.
+        Can&apos;t be sorted here — not a charge, it follows its charge, or it&apos;s split (open it
+        to change the split).
       </span>
       {paintFailed && (
         <div role="alert">
@@ -275,6 +294,7 @@ export function TransactionList({
                   key={t.id}
                   txn={t}
                   view={view}
+                  period={overview.period}
                   kind={kindOf(t)}
                   brush={brush}
                   paintable={paintable.has(t.id)}
@@ -305,6 +325,7 @@ export function TransactionList({
 function TransactionRow({
   txn,
   view,
+  period,
   kind,
   brush,
   paintable,
@@ -314,6 +335,7 @@ function TransactionRow({
 }: {
   txn: FinanceTransaction;
   view: FinanceView;
+  period: FinanceOverview['period'];
   kind: FinanceTxnKind;
   brush: FinanceBucket | null;
   paintable: boolean;
@@ -326,11 +348,18 @@ function TransactionRow({
   const setBucket = useSetFinanceBucket(txn.id, { onError: onPaintError });
   const acct = view.accounts.get(txn.accountId);
   const cents = view.amount(txn);
+  const parts = kind === 'expense' ? splitPartsText(txn, view, period) : null;
   // Counts toward a bucket: a charge, a card credit, or a deposit linked as a refund.
   const expense = isSortableKind(kind) || view.links.has(txn.id);
+  // Every bucket its money lands in: more than one, or a split charge, reads "Split".
+  const buckets = bucketsOf(txn, view);
+  const split =
+    buckets.length > 1 ||
+    (view.claims.get(txn.id)?.length ?? 0) > 1 ||
+    (kind === 'expense' && splitOf(txn, cents) !== null);
   // Muted like a transfer once sorted as Not spending: listed, so the ledger matches the bank, but
   // in no total.
-  const counts = expense && bucketOf(txn, view.links) !== 'not_spending';
+  const counts = expense && !(buckets.length > 0 && buckets.every((b) => b === 'not_spending'));
   const markable = acct?.type === 'credit' && cents < 0;
   const disabled = !(expense || markable || kind === 'income');
   // Armed, a row that can't take a bucket goes inert — aria-disabled, not disabled, so a focused row
@@ -375,13 +404,19 @@ function TransactionRow({
             {txn.periodOverride ? ` · moved to ${txn.periodOverride} period` : ''}
             {txn.note ? ` · ${txn.note}` : ''}
           </Text>
+          {/* Its own line, unclamped: a phone would otherwise cut a part (or its period) off. */}
+          {parts && (
+            <Text size="xs" tone="muted" className="break-words">
+              {parts}
+            </Text>
+          )}
         </span>
         <Text size="sm" tabular tone={counts && !inert ? 'ink' : 'muted'}>
           {fmtSigned(cents)}
         </Text>
         <span className="w-24 shrink-0 text-right">
           {expense ? (
-            <BucketTag bucket={bucketOf(txn, view.links)} />
+            <BucketTag bucket={buckets[0] ?? null} split={split} />
           ) : (
             <Text size="xs" tone="muted">
               {KIND_LABEL[kind as keyof typeof KIND_LABEL]}

@@ -35,6 +35,8 @@ function txn(id: string, date: string, over: Partial<FinanceTransaction> = {}): 
     note: null,
     refundOfId: null,
     startsPeriod: false,
+    splits: null,
+    refundParts: null,
     ...over,
   };
 }
@@ -66,15 +68,80 @@ describe('Repo finances', () => {
     const legacy = financeTxnItem(U, txn('old', '2026-09-02'));
     delete legacy.startsPeriod;
     delete legacy.refundOfId;
+    delete legacy.splits;
+    delete legacy.refundParts;
     await doc.put(legacy);
     const got = await repo.listFinanceTxnsInRange('2026-09-01', '2026-09-10');
     expect(got.map((t) => t.id).sort()).toEqual(['a', 'b', 'old']);
     const old = got.find((t) => t.id === 'old')!;
-    expect([old.startsPeriod, old.refundOfId]).toEqual([false, null]);
+    expect([old.startsPeriod, old.refundOfId, old.splits, old.refundParts]).toEqual([
+      false,
+      null,
+      null,
+      null,
+    ]);
     expect((await repo.listFinanceTxnsInRange('2026-09-10')).map((t) => t.id).sort()).toEqual([
       'b',
       'c',
     ]);
+  });
+
+  describe('a stale split or allocation an older write left is dropped as the row is read', () => {
+    const parts = [
+      { bucket: 'budget' as const, cents: 50, period: null },
+      { bucket: 'i_pay' as const, cents: 50, period: null },
+    ];
+    const seedStale = async () => {
+      await seed(txn('live', '2026-09-01', { splits: parts, bucketSetBy: 'user' }));
+      // An older sort kept the split beside its bucket; an older sort then unsort nulled bucketSetBy.
+      await seed(
+        txn('sorted', '2026-09-02', { splits: parts, bucket: 'budget', bucketSetBy: 'user' }),
+      );
+      await seed(txn('undone', '2026-09-03', { splits: parts }));
+      await seed(
+        txn('linked', '2026-09-04', {
+          rawAmountCents: -100,
+          refundOfId: 'live', // an older single link beside a marked allocation
+          refundParts: [{ chargeId: 'live', cents: 100 }],
+          bucketSetBy: 'user',
+        }),
+      );
+      await seed(
+        txn('allocated', '2026-09-05', {
+          rawAmountCents: -100,
+          refundParts: [{ chargeId: 'live', cents: 100 }],
+          bucketSetBy: 'user',
+        }),
+      );
+    };
+    const shape = (rows: FinanceTransaction[]) =>
+      Object.fromEntries(rows.map((t) => [t.id, [t.splits !== null, t.refundParts !== null]]));
+    const want = {
+      live: [true, false],
+      sorted: [false, false],
+      undone: [false, false],
+      linked: [false, false],
+      allocated: [false, true], // a live allocation survives every read
+    };
+
+    it('through every read: range, all, one, several', async () => {
+      await seedStale();
+      expect(shape(await repo.listFinanceTxnsInRange('2026-09-01', '2026-09-30'))).toEqual(want);
+      expect(shape(await repo.listAllFinanceTxns())).toEqual(want);
+      expect((await repo.getFinanceTxn('sorted'))!.splits).toBeNull();
+      expect(shape([...(await repo.getFinanceTxns(Object.keys(want))).values()])).toEqual(want);
+    });
+
+    it('the next write of the row stores the null; a CAS that changes nothing writes nothing', async () => {
+      await seedStale();
+      const raw = async (id: string) => (await doc.get(pk(U), sk.finTxn(id)))!;
+      const before = await raw('undone');
+      await repo.casUpdate(repo.finTxnShape('undone'), 'undone', () => null, 5);
+      expect(await raw('undone')).toEqual(before); // reading alone never writes
+      await repo.casUpdate(repo.finTxnShape('sorted'), 'sorted', (t) => ({ ...t, note: 'x' }), 5);
+      expect((await raw('sorted')).splits).toBeNull();
+      expect((await raw('sorted')).bucket).toBe('budget');
+    });
   });
 
   it('getFinanceTxns returns tombstones too', async () => {
@@ -171,5 +238,59 @@ describe('Repo finances', () => {
     );
     expect([merged.bucket, merged.rawAmountCents]).toEqual(['budget', 999]);
     expect((await repo.getFinanceTxn('e'))!.bucket).toBe('budget');
+  });
+});
+
+describe('Repo finance rules', () => {
+  it('a rule stored before split rules reads as a one-bucket rule', async () => {
+    const doc = new InMemoryDoc();
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const base = { id: 'r1', userId: U, createdAt: 1, updatedAt: 1, deletedAt: null };
+    await doc.put({
+      PK: pk(U),
+      SK: sk.finRule('r1'),
+      ...base,
+      pattern: 'store a',
+      bucket: 'budget',
+      active: true,
+    });
+    expect((await repo.listFinanceRules())[0]!.split).toBeNull();
+    expect((await repo.getFinanceRule('r1'))!.split).toBeNull();
+  });
+
+  it('a split rule an older write retargeted reads as one-bucket, and the next write stores it so', async () => {
+    const doc = new InMemoryDoc();
+    const repo = new Repo(doc, liveWrites(doc), U);
+    const base = { id: 'r1', userId: U, createdAt: 1, updatedAt: 1, deletedAt: null };
+    const split = [
+      { bucket: 'budget', percent: 70 },
+      { bucket: 'i_pay', percent: 30 },
+    ];
+    await doc.put({
+      PK: pk(U),
+      SK: sk.finRule('r1'),
+      ...base,
+      pattern: 'store a',
+      bucket: 'parents_pay',
+      active: true,
+      split,
+    });
+    await doc.put({
+      PK: pk(U),
+      SK: sk.finRule('r2'),
+      ...base,
+      id: 'r2',
+      pattern: 'store b',
+      bucket: 'budget',
+      active: true,
+      split,
+    });
+    const rules = await repo.listFinanceRules();
+    expect(rules.map((r) => [r.id, r.split !== null])).toEqual([
+      ['r1', false],
+      ['r2', true],
+    ]);
+    await repo.casUpdate(repo.finRuleShape('r1'), 'r1', (r) => ({ ...r, active: false }), 5);
+    expect((await doc.get(pk(U), sk.finRule('r1')))!.split).toBeNull();
   });
 });

@@ -7,11 +7,17 @@ import {
   FINANCE_OVERVIEW_LOOKBACK_DAYS,
   FINANCE_REFRESH_COOLDOWN_MS,
   financeBucketError,
+  financeRuleFields,
+  financeSplitError,
   duplicateItemMessage,
   isDuplicateItem,
-  normalizeRulePattern,
+  orderRefundParts,
   periodStartError,
   refundLinkError,
+  refundPartsError,
+  refundPartsFrom,
+  resolveRefundPartIds,
+  splitSortError,
   USER_TIME_ZONE,
 } from '@aperture/shared';
 import type {
@@ -23,7 +29,9 @@ import type {
   FinanceItem,
   FinanceOverview,
   FinancePeriodOverride,
+  FinanceRefundPart,
   FinanceRule,
+  FinanceSplitPartInput,
   FinanceSyncState,
   FinanceTransaction,
   LinkTokenResult,
@@ -105,21 +113,31 @@ export class FinanceService {
     const found = await this.repo.getFinanceTxns(input.ids);
     for (const id of input.ids)
       if (found.get(id)?.deletedAt !== null) throw new Error(`Not found: ${id}`);
+    const accounts = new Map((await this.repo.listFinanceAccounts()).map((a) => [a.id, a]));
+    const refuse = (t: FinanceTransaction) => splitSortError(t, accounts.get(t.accountId));
+    for (const t of found.values()) {
+      const error = refuse(t);
+      if (error) throw new Error(error);
+    }
     const changed = new Map<string, FinanceTransaction>();
     // A row a sync tombstoned since the check above (a pending charge that posted) is skipped, not an
     // error halfway through — its posted replacement carries the old row's fields anyway.
     const set = await this.repo.casMany(input.ids, (id) =>
       this.txnUpdate(
         id,
-        (t) =>
-          t.deletedAt !== null
-            ? null
-            : {
-                ...t,
-                bucket: input.bucket,
-                bucketSetBy: input.bucket ? 'user' : null,
-                refundOfId: null, // sorting a refund yourself unlinks it
-              },
+        (t) => {
+          if (t.deletedAt !== null) return null;
+          const error = refuse(t); // split meanwhile, from another device
+          if (error) throw new Error(error);
+          return {
+            ...t,
+            bucket: input.bucket,
+            bucketSetBy: input.bucket ? 'user' : null,
+            refundOfId: null, // sorting a refund yourself unlinks it
+            refundParts: null,
+            splits: null, // only a broken split gets here: sorting it replaces it
+          };
+        },
         { allowDeleted: true },
       ),
     );
@@ -128,11 +146,14 @@ export class FinanceService {
       const rule = await this.upsertFinanceRule({
         pattern: input.rule.pattern,
         bucket: input.bucket,
+        split: null, // "Always put it in <bucket>"
       });
       const sweepable = (x: FinanceTransaction) =>
         x.deletedAt === null &&
         x.bucket === null &&
         x.refundOfId === null &&
+        x.refundParts === null &&
+        x.splits === null &&
         !x.startsPeriod &&
         applyRules([rule], x) !== null;
       const targets = (await this.repo.listAllFinanceTxns()).filter(
@@ -162,7 +183,14 @@ export class FinanceService {
     override: FinancePeriodOverride | null,
   ): Promise<FinanceTransaction> {
     // Moving a refund yourself unlinks it.
-    return this.txnUpdate(id, (t) => ({ ...t, periodOverride: override, refundOfId: null }));
+    return this.txnUpdate(id, (t) => ({
+      ...t,
+      periodOverride: override,
+      refundOfId: null,
+      refundParts: null,
+      // The marker stays only with what it marks — a bucket or a split; an allocation's goes with it.
+      bucketSetBy: t.bucket !== null || t.splits !== null ? t.bucketSetBy : null,
+    }));
   }
 
   async setFinanceNote(id: string, note: string | null): Promise<FinanceTransaction> {
@@ -184,6 +212,8 @@ export class FinanceService {
         bucketSetBy: null,
         periodOverride: null,
         refundOfId: null,
+        refundParts: null,
+        splits: null,
       };
     });
   }
@@ -191,7 +221,13 @@ export class FinanceService {
   async linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
     const refund = await this.repo.getFinanceTxn(refundId);
     if (!refund || refund.deletedAt !== null) throw new Error(`Not found: ${refundId}`);
-    if (chargeId === null) return this.txnUpdate(refundId, (t) => ({ ...t, refundOfId: null }));
+    if (chargeId === null)
+      return this.txnUpdate(refundId, (t) => ({
+        ...t,
+        refundOfId: null,
+        refundParts: null,
+        bucketSetBy: t.bucket !== null || t.splits !== null ? t.bucketSetBy : null, // only with a bucket or a split
+      }));
     const charge = await this.repo.getFinanceTxn(chargeId);
     if (!charge || charge.deletedAt !== null) throw new Error(`Not found: ${chargeId}`);
     const accounts = await this.repo.listFinanceAccounts();
@@ -213,7 +249,99 @@ export class FinanceService {
     return this.txnUpdate(refundId, (t) => {
       const again = check(t); // the fresh refund row (a mark or a sort may have landed)
       if (again) throw new Error(again);
-      return { ...t, refundOfId: chargeId, bucket: null, bucketSetBy: null, periodOverride: null };
+      return {
+        ...t,
+        refundOfId: chargeId,
+        refundParts: null,
+        splits: null,
+        bucket: null,
+        bucketSetBy: null,
+        periodOverride: null,
+      };
+    });
+  }
+
+  async setFinanceSplit(
+    id: string,
+    parts: FinanceSplitPartInput[] | null,
+  ): Promise<FinanceTransaction> {
+    const current = await this.repo.getFinanceTxn(id);
+    if (!current || current.deletedAt !== null) throw new Error(`Not found: ${id}`);
+    if (parts === null)
+      // Only a row still split: a stale Remove never unsorts a row sorted since (null: no write).
+      return this.txnUpdate(id, (t) =>
+        t.splits === null ? null : { ...t, splits: null, bucket: null, bucketSetBy: null },
+      );
+    const accounts = await this.repo.listFinanceAccounts();
+    // Moves over the same window the overview reads, so pairing at the edge matches the page.
+    const recent = await this.repo.listFinanceTxnsInRange(
+      addDays(await this.today(), -FINANCE_OVERVIEW_LOOKBACK_DAYS),
+    );
+    const moves = detectInternalMoves(recent, accounts);
+    const check = (t: FinanceTransaction) =>
+      financeSplitError({
+        txn: t,
+        account: accounts.find((a) => a.id === t.accountId),
+        moves,
+        parts,
+      });
+    const error = check(current);
+    if (error) throw new Error(error);
+    return this.txnUpdate(id, (t) => {
+      const again = check(t); // the fresh row (a sync may have posted a new amount)
+      if (again) throw new Error(again);
+      return {
+        ...t,
+        splits: parts.map((p) => ({ bucket: p.bucket, cents: p.cents, period: p.period })),
+        bucket: null,
+        bucketSetBy: 'user',
+        refundOfId: null,
+        refundParts: null,
+      };
+    });
+  }
+
+  async setFinanceRefundParts(
+    refundId: string,
+    parts: FinanceRefundPart[],
+  ): Promise<FinanceTransaction> {
+    const refund = await this.repo.getFinanceTxn(refundId);
+    if (!refund || refund.deletedAt !== null) throw new Error(`Not found: ${refundId}`);
+    const [accounts, found] = await Promise.all([
+      this.repo.listFinanceAccounts(),
+      this.repo.getFinanceTxns(parts.map((p) => p.chargeId)),
+    ]);
+    const today = await this.today();
+    // Tombstoned too: a pending charge that posted still dates the range its posted row sits in.
+    const charges = [...found.values()];
+    const lookback = addDays(today, -FINANCE_OVERVIEW_LOOKBACK_DAYS);
+    const rows = await this.repo.listFinanceTxnsInRange(refundPartsFrom(today, charges));
+    const moves = detectInternalMoves(
+      rows.filter((x) => x.date >= lookback),
+      accounts,
+    );
+    const check = (r: FinanceTransaction) =>
+      refundPartsError({
+        refund: r,
+        parts,
+        txns: rows.map((x) => (x.id === r.id ? r : x)),
+        accounts,
+        moves,
+      });
+    const error = check(refund);
+    if (error) throw new Error(error);
+    return this.txnUpdate(refundId, (t) => {
+      const again = check(t); // the fresh refund row (a mark or a sort may have landed)
+      if (again) throw new Error(again);
+      return {
+        ...t,
+        refundParts: orderRefundParts(resolveRefundPartIds(parts, rows)),
+        refundOfId: null,
+        bucket: null,
+        bucketSetBy: 'user', // the marker the read check needs (liveRefundParts)
+        periodOverride: null,
+        splits: null,
+      };
     });
   }
 
@@ -223,16 +351,22 @@ export class FinanceService {
 
   // One live rule per pattern: saving an existing pattern updates it.
   async upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule> {
-    const bucketError = financeBucketError(input.bucket, { nullable: false });
-    if (bucketError) throw new Error(bucketError);
-    const pattern = normalizeRulePattern(input.pattern);
-    if (!pattern) throw new Error('A rule needs a pattern');
-    const fields = { pattern, bucket: input.bucket, active: input.active ?? true };
-    const id =
-      input.id ?? (await this.repo.listFinanceRules()).find((r) => r.pattern === pattern)?.id;
+    const pattern = financeRuleFields({ ...input, split: null }).pattern;
+    const rules = await this.repo.listFinanceRules();
+    const id = input.id ?? rules.find((r) => r.pattern === pattern)?.id;
+    const fields = financeRuleFields(
+      input,
+      rules.find((r) => r.id === id),
+    );
     const t = this.d.now();
+    // The kept split is decided against the rule as the CAS re-reads it, not the list read above.
     if (id)
-      return this.repo.casUpdate(this.repo.finRuleShape(id), id, (r) => ({ ...r, ...fields }), t);
+      return this.repo.casUpdate(
+        this.repo.finRuleShape(id),
+        id,
+        (r) => ({ ...r, ...financeRuleFields(input, r) }),
+        t,
+      );
     const rule: FinanceRule = {
       id: this.d.ulid(),
       userId: this.d.userId,

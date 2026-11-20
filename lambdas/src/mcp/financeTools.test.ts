@@ -340,8 +340,114 @@ describe('list_finance_rules', () => {
   it('lists pattern, bucket, label and active', async () => {
     await setup.upsertFinanceRule({ pattern: 'Uber', bucket: 'i_pay' });
     expect(await call('list_finance_rules')).toEqual([
-      { pattern: 'uber', bucket: 'i_pay', bucketLabel: 'I pay', active: true },
+      { pattern: 'uber', bucket: 'i_pay', bucketLabel: 'I pay', active: true, split: null },
     ]);
+  });
+
+  it('lists a split rule’s percents', async () => {
+    await setup.upsertFinanceRule({
+      pattern: 'Store A',
+      bucket: 'budget',
+      split: [
+        { bucket: 'budget', percent: 60 },
+        { bucket: 'i_pay', percent: 40 },
+      ],
+    });
+    expect(await call('list_finance_rules')).toEqual([
+      {
+        pattern: 'store a',
+        bucket: 'budget',
+        bucketLabel: 'Budget',
+        active: true,
+        split: [
+          { bucket: 'budget', bucketLabel: 'Budget', percent: 60 },
+          { bucket: 'i_pay', bucketLabel: 'I pay', percent: 40 },
+        ],
+      },
+    ]);
+  });
+});
+
+describe('splits and refunds across charges', () => {
+  interface SplitRow extends TxnRow {
+    split?: true;
+    splitBroken?: true;
+    parts?: { bucket: string; amountUsd: number; period: string; pinned: string | null }[];
+    refundParts?: {
+      chargeId: string;
+      allocatedUsd: number;
+      countedUsd: number;
+      buckets: string[];
+    }[];
+  }
+  const rows = async (args: Record<string, unknown> = {}) =>
+    (await call<unknown>('list_finance_transactions', { limit: 300, ...args })) as Omit<
+      TxnsOut,
+      'transactions'
+    > & { transactions: SplitRow[] };
+
+  it('a split charge lists its parts with periods; the overview totals include them', async () => {
+    const before = await call<OverviewOut & { nextPeriod: { count: number } }>(
+      'get_finance_overview',
+    );
+    await setup.setFinanceSplit('fx-card-8', [
+      { bucket: 'budget', cents: 1000, period: null },
+      { bucket: 'parents_pay', cents: 500, period: 'current' },
+      { bucket: 'parents_pay', cents: 1500, period: 'next' },
+    ]);
+    const all = await rows();
+    const row = all.transactions.find((x) => x.id === 'fx-card-8')!;
+    expect(row).toMatchObject({ split: true, bucket: null });
+    expect(row.parts).toEqual([
+      { bucket: 'budget', amountUsd: 10, period: 'current', pinned: null },
+      { bucket: 'parents_pay', amountUsd: 5, period: 'current', pinned: 'current' },
+      { bucket: 'parents_pay', amountUsd: 15, period: 'next', pinned: 'next' },
+    ]);
+    // An unsplit row keeps the old fields and gains none.
+    const plain = all.transactions.find((x) => x.id === 'fx-card-6')!;
+    expect(plain).not.toHaveProperty('parts');
+    expect(plain).not.toHaveProperty('split');
+    const o = await call<OverviewOut & { nextPeriod: { count: number; totalUsd: number } }>(
+      'get_finance_overview',
+    );
+    expect(o.spentUsd - before.spentUsd).toBe(10);
+    expect(o.nextPeriod).toEqual({ count: 1, totalUsd: 15 });
+    // The bucket filter matches any part, and its total counts only that bucket's parts.
+    const covered = await rows({ bucket: 'parents_pay' });
+    expect(covered.transactions.map((x) => x.id)).toContain('fx-card-8');
+    const others = covered.transactions.filter((x) => x.id !== 'fx-card-8');
+    expect(covered.totalUsd).toBeCloseTo(others.reduce((n, x) => n + x.amountUsd, 0) + 20, 2);
+  });
+
+  it('a deposit across two charges lists its parts; single links read as before', async () => {
+    await setup.setFinanceRefundParts('fx-reimburse', [
+      { chargeId: 'fx-card-8', cents: 3000 },
+      { chargeId: 'fx-card-6', cents: 1500 },
+    ]);
+    await setup.linkFinanceRefund('fx-refund-2', 'fx-card-4');
+    const all = await rows();
+    const dep = all.transactions.find((x) => x.id === 'fx-reimburse')!;
+    expect(dep.linkedChargeId).toBe('fx-card-8');
+    expect(dep.refundParts).toEqual([
+      expect.objectContaining({ chargeId: 'fx-card-8', allocatedUsd: -30, countedUsd: -30 }),
+      expect.objectContaining({ chargeId: 'fx-card-6', allocatedUsd: -15, countedUsd: -15 }),
+    ]);
+    expect(all.transactions.find((x) => x.id === 'fx-card-8')!.refundedUsd).toBe(30);
+    const single = all.transactions.find((x) => x.id === 'fx-refund-2')!;
+    expect(single).toMatchObject({ linkedChargeId: 'fx-card-4' });
+    expect(single).not.toHaveProperty('refundParts');
+  });
+
+  it('a split posted at a new amount reads splitBroken and unsorted', async () => {
+    await setup.setFinanceSplit('fx-pending-1', [
+      { bucket: 'budget', cents: 1100, period: null },
+      { bucket: 'i_pay', cents: 1100, period: null },
+    ]);
+    await setup.requestFinanceSync({ refresh: false });
+    const unsorted = await rows({ unsorted: true });
+    const posted = unsorted.transactions.find((x) => x.id === 'fx-posted-1')!;
+    expect(posted).toMatchObject({ splitBroken: true, bucket: null });
+    expect(posted).not.toHaveProperty('parts');
   });
 });
 

@@ -85,7 +85,9 @@ import type {
   FinanceItem,
   FinanceOverview,
   FinancePeriodOverride,
+  FinanceRefundPart,
   FinanceRule,
+  FinanceSplitPartInput,
   FinanceSyncState,
   FinanceTransaction,
   LinkTokenResult,
@@ -775,6 +777,14 @@ export interface ApiClient {
   // sorting or moving a linked refund yourself (setFinanceBucket / setFinancePeriodOverride) unlinks it —
   // which is also how a refund whose charge dropped out of view gets sorted.
   linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction>;
+  // Split a charge across buckets, each part with its own period (null = unsplit: the row reads Unsorted).
+  // Throws per financeSplitError (a charge, 2–8 parts that add up to its amount). Clears the row's bucket;
+  // a split row refuses setFinanceBucket until the split is removed here.
+  setFinanceSplit(id: string, parts: FinanceSplitPartInput[] | null): Promise<FinanceTransaction>;
+  // Allocate money in across charges, each part at most what's left of its charge, together at most the
+  // refund. Throws per refundPartsError. Clears the single link, bucket and override;
+  // linkFinanceRefund(id, null) unlinks every part.
+  setFinanceRefundParts(refundId: string, parts: FinanceRefundPart[]): Promise<FinanceTransaction>;
   listFinanceRules(): Promise<FinanceRule[]>; // alive, pattern asc
   upsertFinanceRule(input: UpsertFinanceRuleInput): Promise<FinanceRule>;
   deleteFinanceRule(id: string): Promise<void>; // soft-delete

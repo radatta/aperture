@@ -225,6 +225,8 @@ import type {
   FinanceOverview,
   FinancePeriodOverride,
   FinanceRule,
+  FinanceRefundPart,
+  FinanceSplitPartInput,
   FinanceTransaction,
   LinkTokenResult,
   RequestFinanceSyncResult,
@@ -3790,6 +3792,12 @@ export class BackendClient implements ApiClient {
   }
   linkFinanceRefund(refundId: string, chargeId: string | null): Promise<FinanceTransaction> {
     return this.finance.linkFinanceRefund(refundId, chargeId);
+  }
+  setFinanceSplit(id: string, parts: FinanceSplitPartInput[] | null): Promise<FinanceTransaction> {
+    return this.finance.setFinanceSplit(id, parts);
+  }
+  setFinanceRefundParts(refundId: string, parts: FinanceRefundPart[]): Promise<FinanceTransaction> {
+    return this.finance.setFinanceRefundParts(refundId, parts);
   }
   listFinanceRules(): Promise<FinanceRule[]> {
     return this.finance.listFinanceRules();

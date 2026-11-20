@@ -78,6 +78,8 @@ export const USER_TXN_FIELDS = [
   'note',
   'refundOfId',
   'startsPeriod',
+  'splits',
+  'refundParts',
 ] as const satisfies readonly (keyof FinanceTransaction)[];
 type UserFields = Pick<FinanceTransaction, (typeof USER_TXN_FIELDS)[number]>;
 const pickUser = (t: FinanceTransaction): UserFields => ({
@@ -87,8 +89,12 @@ const pickUser = (t: FinanceTransaction): UserFields => ({
   note: t.note,
   refundOfId: t.refundOfId,
   startsPeriod: t.startsPeriod,
+  splits: t.splits,
+  refundParts: t.refundParts,
 });
-const sameUser = (a: UserFields, b: UserFields) => USER_TXN_FIELDS.every((k) => a[k] === b[k]);
+// Structural: splits and refundParts are arrays, read fresh each time.
+const sameUser = (a: UserFields, b: UserFields) =>
+  USER_TXN_FIELDS.every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
 
 export const MAX_PASSES = 3; // the first pass + up to two reruns for requests that landed mid-run
 export const RUN_BUDGET_MS = 290_000; // default deadline when the caller gives none

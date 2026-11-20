@@ -143,6 +143,8 @@ export const API_METHODS = [
   'setFinanceNote',
   'setFinancePeriodStart',
   'linkFinanceRefund',
+  'setFinanceSplit',
+  'setFinanceRefundParts',
   'listFinanceRules',
   'upsertFinanceRule',
   'deleteFinanceRule',

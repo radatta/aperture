@@ -705,8 +705,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return (await client.reads.getPlaceTokenStatus()).active;
       case 'financeBucket':
         return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.bucket != null;
-      case 'financeLink':
-        return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.refundOfId != null;
+      case 'financeLink': {
+        const t = await client.reads.getFinanceTransaction(financeRowOf(id));
+        return t?.refundOfId != null || t?.refundParts != null;
+      }
+      case 'financeSplit':
+        return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.splits != null;
       case 'financeMark':
         return (await client.reads.getFinanceTransaction(financeRowOf(id)))?.startsPeriod === true;
       case 'financeRule':
@@ -781,6 +785,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
         return true;
       case 'financeMark':
         await client.writes.unmarkFinancePeriodStart(id);
+        return true;
+      case 'financeSplit':
+        await client.writes.unsetFinanceSplit(id);
         return true;
       case 'financeRule':
         await client.writes.deleteFinanceRule(id);

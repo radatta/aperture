@@ -6,6 +6,8 @@ import type {
   FinanceAccountPatch,
   FinanceOverview,
   FinancePeriodOverride,
+  FinanceRefundPart,
+  FinanceSplitPartInput,
   FinanceTransaction,
   SetFinanceBucketInput,
   UpsertFinanceRuleInput,
@@ -88,6 +90,8 @@ export function useSetFinanceBucket(scopeId?: string, opts: { onError?: () => vo
               bucket: input.bucket,
               bucketSetBy: input.bucket ? 'user' : null,
               refundOfId: null,
+              refundParts: null,
+              splits: null,
             }
           : t,
       );
@@ -123,13 +127,38 @@ export function useLinkFinanceRefund() {
             ? {
                 ...t,
                 refundOfId: v.chargeId,
+                refundParts: null,
                 bucket: null,
                 bucketSetBy: null,
                 periodOverride: null,
               }
-            : { ...t, refundOfId: null },
+            : { ...t, refundOfId: null, refundParts: null },
       );
     },
+    onSettled: () => invalidateFinance(qc),
+  });
+}
+
+// Split / allocation saves are explicit (a half-typed split is invalid), so no optimistic patch: the
+// editor keeps its draft until the server answers, and on a refusal shows why with the draft intact.
+export function useSetFinanceSplit() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { id: string; parts: FinanceSplitPartInput[] | null }) =>
+      api.setFinanceSplit(v.id, v.parts),
+    onSuccess: (row) => patchTxnCaches(qc, (t) => (t.id === row.id ? row : t)),
+    onSettled: () => invalidateFinance(qc),
+  });
+}
+
+export function useSetFinanceRefundParts() {
+  const api = useApi();
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { refundId: string; parts: FinanceRefundPart[] }) =>
+      api.setFinanceRefundParts(v.refundId, v.parts),
+    onSuccess: (row) => patchTxnCaches(qc, (t) => (t.id === row.id ? row : t)),
     onSettled: () => invalidateFinance(qc),
   });
 }
@@ -152,6 +181,8 @@ export function useSetFinancePeriodStart() {
                 bucketSetBy: null,
                 periodOverride: null,
                 refundOfId: null,
+                refundParts: null,
+                splits: null,
               }
             : { ...t, startsPeriod: false },
       );

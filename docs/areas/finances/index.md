@@ -66,6 +66,19 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   `LOAN_PAYMENTS_CREDIT_CARD_PAYMENT` still counts as a card payment (the "hint").
 - **Hidden accounts** are listed but excluded from every total, the sort queue and refund links. A hidden
   card's period marks still count.
+- **A split** (`splits`, a charge only): 2–`FINANCE_SPLIT_MAX_PARTS` (8) parts `{bucket, cents, period}` that
+  add up exactly to the charge (`financeSplitError`, both impls), set from the detail's **Split across
+  buckets…** (it opens half and half; with two parts the one you haven't typed in follows). Each part counts
+  in its own bucket (`countedParts`; a bucket counts the charge once however many parts it holds); the row's
+  own `bucket` is null and it is sorted. A bucket chip matches any part, and under it the row counts only
+  that bucket's parts (`bucketsOf`, `filterCents`). The brush leaves a split row alone and `setFinanceBucket`
+  refuses it ("… is split — change it from its detail"); **Remove split** (`setFinanceSplit(id, null)`)
+  returns it to Unsorted. A refund on a split charge comes off its parts in proportion
+  (`allocateProportional`: largest remainder, ties to the earlier part), never below $0.
+- **A broken split** is decided at read time (`splitOf`): parts that no longer add up to the amount — a
+  pending charge posted at a new amount, which Plaid allows — count nowhere; the row is back in Sort as
+  "split no longer adds up (was $X)", and its detail says what changed with **Fix the split**. Sorting it
+  replaces the split. A rule-made split (parts carry `percent`) recomputes at any amount instead.
 
 ## 3. Periods and marks
 
@@ -77,6 +90,12 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   nudge) — it never moves the period on its own.
 - Marking today's payment leaves an empty current period that starts tomorrow.
 - A row can be pinned to **This period** or **Last period** (`periodOverride`), overriding its date.
+- **A split's part** has its own period (`periodOfPart`): **With the charge** (`null`, follows the row,
+  override and all), **This**, **Last**, or **Next**. Next is relative to the charge's own window: on a
+  this-period charge the part waits in no total (`overview.upcoming`; the header says "$X waiting for next
+  period"; the row "(next period)") until a later payment is marked; on a last-period charge it counts in
+  the current one. A charge outside both windows counts nowhere, pin or not. A whole unsplit charge can't
+  be moved to next period yet (§14).
 
 ## 4. Refunds
 
@@ -108,6 +127,18 @@ Plaid facts we rely on, and the operator checklist. Built on `feature/finances-p
   merchant, bank text, note or dollar amount (`$800.50`, `30.00`); newest first, eight shown with
   "Showing 8 of N". While you type, its results replace the suggestions; Escape clears it first, then
   closes the detail.
+- **A refund across charges** (`refundParts`, exclusive with `refundOfId`): from a linked refund's
+  **Split it across another charge…** (or a suggested set), up to `FINANCE_REFUND_MAX_PARTS` (8)
+  `{chargeId, cents}`, each a valid link (`refundLinkError`) and at most what's left of its charge, summing
+  to at most the refund (`refundPartsError`, both impls; `refundPartsFrom` loads an older charge). The rest
+  stays money in. Stored largest first; the largest is the refund's primary link (`linksOf`), so code that
+  reads one link still gets one. Each charge nets by its part; the cap runs over every allocation from every
+  refund (`resolveRefundClaims` → `capRefunds`). Each charge has its own **Unlink**, plus **Unlink all**;
+  **Link** (one charge), a sort, a period pin or a mark clears the parts.
+- **Set suggestions** (`suggestRefundSets`): when no single charge fits exactly, up to `REFUND_SET_SHOWN`
+  (3) sets of 2–3 charges, drawn from the `REFUND_SET_POOL` (12) nearest in date, whose sum the refund
+  matches or exceeds by at most 10% — one merchant across the set first. **Link all N** links them in one
+  click.
 - Sorting or moving a linked refund yourself unlinks it. A link whose charge is gone, hidden or out of the
   loaded range reads as unlinked. Two refunds on one charge are fine; the cap applies across them.
 - A row in either list keeps the merchant (on a same-merchant suggestion, the bucket) on one line and puts the
@@ -127,6 +158,14 @@ pattern wins (`applyRules`, also matched against the digit-stripped `merchantKey
 sync time. Ticking **Always** while sorting saves the rule and sorts every currently-unsorted match (skipping
 linked refunds and period marks). A rule never re-sorts a charge you sorted by hand. A rule can target Not
 spending ("always that transfer"); retargeting a rule doesn't re-sort rows it already sorted.
+
+**Split rules** ("Sort into" → **Split by percent…**): `split` holds 2–`FINANCE_RULE_SPLIT_MAX_PARTS` (4)
+distinct buckets with whole percents summing to 100 (`financeRuleSplitError`). A new matching charge arrives
+split by those percents (`splitFromRule`, parts carry `percent` so they recompute at a new amount); a
+matching card credit takes the rule's `bucket`, its largest part (`ruleSplitBucket`). An upsert that omits
+`split` keeps the stored one while the bucket is unchanged (`financeRuleFields`), so **Pause**/**Resume** and an
+older cached client never wipe it; picking one bucket on the rule's row clears it, and **Always** saves a
+one-bucket rule.
 
 ## 6. Sync
 
@@ -293,7 +332,22 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   5. Revert the PR — remove the bank first, since the revert removes the code that calls `/item/remove`.
      The `fin#` rows (RETAIN table) and the SSM credentials stay. Reverting past Not spending: first set
      every Not-spending row back to Unsorted and delete or retarget Not-spending rules — older code throws on
-     the unknown bucket and the overview 500s.
+     the unknown bucket and the overview 500s. Reverting past splits throws nothing server-side: older code
+     ignores `splits`, `refundParts` and a rule's `split`, so a split charge reads Unsorted, a refund across
+     charges reads unlinked (a deposit as income, a card credit as an unsorted refund), and a split rule
+     sorts into its largest part. Older writes keep the fields on the row they write (a pending row that
+     posts drops them). On a re-deploy the server drops a stale field as it reads the row (`toFinanceTxn`,
+     `toFinanceRule` → `normalizeFinanceTxn`, `normalizeFinanceRule`): a split beside a bucket, a mark or an
+     empty `bucketSetBy` (so an older unsort, unmark or unlink doesn't bring it back); refund parts beside a
+     single link, a bucket, a pin, a mark or an empty `bucketSetBy` (every newer allocation stores `'user'`); a rule split whose bucket isn't its largest part. The next write
+     of that row stores the cleared field; reading alone writes nothing. The client applies the same checks
+     (`liveSplits`, `liveRefundParts`, `ruleSplitOf`), so a still-cached new PWA against a reverted BFF reads
+     a stale or missing field as none. Its edits that need the new server are refused, loudly, with nothing stored, until its next launch:
+     a split or an allocation save is an unknown method, and adding a rule or changing a rule's bucket on the Rules
+     tab carries a `split` key the older server refuses (Pause, and Always from a row, still work). Undo cases not caught (§14): an older pin then unpin of a refund across
+     charges (an older pin writes only the pin), and an older retarget of a split rule away and back to its
+     largest part — each brings the old field back. For a clean revert, remove the
+     splits, the multi-links and the split rules first.
 
 ## 13. What each test surface proves
 
@@ -306,6 +360,9 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
   and the alarms.
 - **MCP** (`lambdas/src/mcp/financeTools.test.ts`, `index.test.ts`): the read-only tools match the page
   and never reach Plaid. See [mcp/](../mcp/index.md).
+- **Splits and refunds across charges:** `financeSplits.test.ts` (the pure decisions),
+  `financeSplitContract.ts` (stub/Lambda parity, from the contract suite), `FinanceSplits.test.tsx` (the
+  editors), and the `finance-splits` dev-check scenario on the fixture bank.
 
 | Where                                                                   | What                                     |
 | ----------------------------------------------------------------------- | ---------------------------------------- |
@@ -319,6 +376,21 @@ aperture-finance-<stage> --name aperture-finance-sync-<stage> --state DISABLED -
 | `cdk/src/lib/finance-sync.ts`, `app-stack.ts`, `monitoring.ts`          | the function, schedule, IAM, alarms      |
 
 ## 14. Known limits and deferred
+
+- **Deferred:** moving a whole unsplit charge to next period (today only a split's part can wait).
+- **Accepted (splits):** two allocations onto one charge saved seconds apart can both pass the "left" check
+  (the other refunds are read off the eventually consistent index); the cap still keeps the charge at or
+  above $0, so the cost is an over-allocation stored, not a wrong total. A split rule decides money out by
+  Plaid's raw sign, so on a flipped account it splits card credits instead (they then read as broken
+  splits, in Sort). A sync already running on old code during a deploy (up to 300 s) writes its
+  pass-start copy of the new fields under the fresh row's own, on any row it writes in that window: it can
+  drop a split or a refund allocation saved then, or put an edited one's earlier parts back (a Remove
+  split, an unlink, a pin or a sort in the window is caught by the read checks). Merging away from the
+  scheduled sync times keeps the window empty.
+- **Accepted (revert undo cases):** after a revert and re-land, an older pin then unpin of a refund across
+  charges (an older pin writes only the pin, so `bucketSetBy` survives it), or a split rule retargeted away
+  and back to its largest part, brings the old allocation or split back; the clean-revert step in §12
+  avoids it. An older link, sort or mark nulls `bucketSetBy`, so its undo can't.
 
 - **Accepted:** a late BFF invoke after a deferred request can show a "try again" the data didn't need;
   `SYNC_DEFERRED` after a pass that did land data shows as a red banner; **Always** scans every

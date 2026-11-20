@@ -271,11 +271,21 @@ export interface DevFinanceTransaction {
   bucket: string | null;
   refundOfId: string | null;
   startsPeriod: boolean;
+  // A server from before splits sends neither (read as null).
+  splits?: { bucket: string; cents: number; period: string | null }[] | null;
+  refundParts?: { chargeId: string; cents: number }[] | null;
 }
 export interface DevFinanceRule {
   id: string;
   pattern: string;
   bucket: string;
+  split?: { bucket: string; percent: number }[] | null;
+}
+// The slice of the finance overview the check reads (cents).
+export interface DevFinanceOverview {
+  buckets: Record<'parents_pay' | 'budget' | 'i_pay', { totalCents: number; count: number }>;
+  upcoming?: { totalCents: number; count: number };
+  period: { start: string; end: string; previous: { start: string; end: string } };
 }
 
 // The slice of an attachment the check reads. Attachments are never ledgered: each lives on a ledgered
@@ -688,10 +698,13 @@ export const REMINDERS_ON = Object.fromEntries(REMINDER_KEYS.map((k) => [k, true
 export const FINANCE_BUCKET_VIA = 'ui:setFinanceBucket';
 export const FINANCE_LINK_VIA = 'ui:linkFinanceRefund';
 export const FINANCE_MARK_VIA = 'ui:setFinancePeriodStart';
+// A split on a fixture row, like a bucket: `finance-split:<run>:<row>`, cleared by setting it unsplit.
+export const FINANCE_SPLIT_VIA = 'ui:setFinanceSplit';
 export const FINANCE_RULE_VIA = 'api:upsertFinanceRule';
 export const financeBucketId = (run: string, row: string): string => `finance-bucket:${run}:${row}`;
 export const financeLinkId = (run: string, row: string): string => `finance-link:${run}:${row}`;
 export const financeMarkId = (run: string, row: string): string => `finance-mark:${run}:${row}`;
+export const financeSplitId = (run: string, row: string): string => `finance-split:${run}:${row}`;
 // The row a finance-bucket / -link / -mark ledger id names — after the last colon (a ULID has none).
 export const financeRowOf = (id: string): string => id.slice(id.lastIndexOf(':') + 1);
 
@@ -708,6 +721,7 @@ export type LedgerKind =
   | 'financeBucket'
   | 'financeLink'
   | 'financeMark'
+  | 'financeSplit'
   | 'financeRule'
   | 'pushsub'
   | 'reminderToggles'
@@ -742,6 +756,7 @@ export function ledgerKind(entries: LedgerEntry[], id: string): LedgerKind {
   if (via === FINANCE_BUCKET_VIA) return 'financeBucket';
   if (via === FINANCE_LINK_VIA) return 'financeLink';
   if (via === FINANCE_MARK_VIA) return 'financeMark';
+  if (via === FINANCE_SPLIT_VIA) return 'financeSplit';
   if (via === FINANCE_RULE_VIA) return 'financeRule';
   if (via === PUSH_SUB_VIA || via === UI_PUSH_SUB_VIA) return 'pushsub';
   if (via === REMINDER_TOGGLES_VIA) return 'reminderToggles';
