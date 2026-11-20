@@ -28,13 +28,14 @@ const BRANCH = 'lane-x';
 const PANE = '%7';
 const AT = '2026-11-19T10:00:00Z';
 const RULE = '─'.repeat(40);
+const NBSP = String.fromCharCode(0xa0); // the box pads the prompt glyph with one
 const screen = (box: string, { above = [] as string[], footer = ['  status line'] } = {}) =>
   [
     'earlier output',
     ...above,
     '',
     RULE,
-    `❯ ${box}`,
+    `❯${NBSP}${box}`,
     RULE,
     ...footer,
     '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
