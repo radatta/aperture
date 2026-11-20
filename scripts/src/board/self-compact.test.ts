@@ -323,6 +323,13 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(log()).toMatch(new RegExp(`refuse pid=\\S* branch=(lane-x|-) reason=${reason}\\n`));
     });
 
+    it('a replace ref on main (refs/replace/) cannot switch it on', async () => {
+      const on = git(main, 'rev-parse', 'HEAD').trim();
+      commitMain(false);
+      git(main, 'replace', git(main, 'rev-parse', 'HEAD').trim(), on);
+      expect((await request()).out).toBe('self-compact: refused (off)\n');
+    });
+
     it('off writes no flag dir at all', async () => {
       commitMain(false);
       await request();
@@ -630,7 +637,7 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(existsSync(join(flagDir(), `${pid}.req`))).toBe(false);
     });
 
-    it('reads no stdin: an open, silent stdin never holds it, flag or not', async () => {
+    it('reads no stdin: an open, silent stdin never holds it (the claim path)', async () => {
       const pid = session();
       flag(pid);
       const c = spawn('bash', [join(main, 'scripts/board/self-compact.sh'), 'stop', String(pid)], {
@@ -639,6 +646,7 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       children.push(c);
       const code = await new Promise<number>((r) => c.on('close', (n) => r(n ?? -1)));
       expect(code).toBe(0);
+      expect(existsSync(join(flagDir(), `${pid}.req`))).toBe(false); // claimed: it got past the flag check
     });
 
     it('switched off between request and Stop: nothing claimed or sent', async () => {

@@ -164,7 +164,9 @@ Measured upstream on 2.1.329 (a peer project's trials, 2026-11-19), unmeasured h
 and neither does UserPromptSubmit; a peer message does fire it and wakes the compacted session. So a compacted lane
 waits for its next message: `request` belongs only where the lane waits for the hub anyway.
 
-Unmeasured anywhere, run-only at the switch flip: whether UserPromptSubmit fires for a message queued mid-turn and for
+Unmeasured anywhere, run-only at the switch flip: a Stop another Stop hook blocks still runs the hand-off (the
+heartbeat can't see a peer hook's block on the same Stop; only `send`'s 2 s wait and busy check cover it, and no
+blocking Stop hook is registered today); whether UserPromptSubmit fires for a message queued mid-turn and for
 a turn a finished background task starts (if not, `lastPromptAt` misses it and the dirty-tree and busy checks are the
 only cover); the box with the slash menu open after typing.
 
