@@ -80,7 +80,10 @@ export function SplitEditor({
   const [error, setError] = useState<string | null>(null);
   const busy = save.isPending;
 
-  const update = (i: number, patch: Partial<DraftPart>) =>
+  // Any edit clears a refusal: it was about the parts as they were.
+  const update = (i: number, patch: Partial<DraftPart>) => {
+    setError(null);
+    save.reset();
     setRows((rs) => {
       const next = rs.map((r, j) => (j === i ? { ...r, ...patch } : r));
       // Two parts and the other untouched: it takes whatever's left, so typing one amount is enough.
@@ -91,6 +94,7 @@ export function SplitEditor({
       }
       return next;
     });
+  };
   const addPart = () =>
     setRows((rs) => {
       const sum = parsedSum(rs.map((r) => r.amount)) ?? total;

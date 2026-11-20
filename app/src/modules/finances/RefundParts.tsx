@@ -189,7 +189,8 @@ export function RefundPartsEditor({
             const name = c ? (c.merchantName ?? c.name) : 'A charge that isn’t loaded';
             return (
               <li key={r.chargeId} className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <Text size="sm" className="min-w-0 flex-1 truncate">
+                {/* Its own line: beside the field a phone cut the name to a few letters. */}
+                <Text size="sm" className="w-full truncate">
                   {name}
                   {c ? ` · ${fmtMonthShortDay(c.date)}` : ''}
                 </Text>
@@ -197,9 +198,11 @@ export function RefundPartsEditor({
                   label={`Amount for ${name}`}
                   value={r.amount}
                   autoFocus={i === 0}
-                  onChange={(amount) =>
-                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, amount } : x)))
-                  }
+                  onChange={(amount) => {
+                    setError(null); // a refusal was about the amounts as they were
+                    save.reset();
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, amount } : x)));
+                  }}
                 />
                 <Button
                   size="sm"

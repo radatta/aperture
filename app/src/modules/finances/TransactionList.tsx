@@ -347,7 +347,10 @@ function TransactionRow({
   const expense = isSortableKind(kind) || view.links.has(txn.id);
   // Every bucket its money lands in: more than one, or a split charge, reads "Split".
   const buckets = bucketsOf(txn, view);
-  const split = buckets.length > 1 || (kind === 'expense' && splitOf(txn, cents) !== null);
+  const split =
+    buckets.length > 1 ||
+    (view.claims.get(txn.id)?.length ?? 0) > 1 ||
+    (kind === 'expense' && splitOf(txn, cents) !== null);
   // Muted like a transfer once sorted as Not spending: listed, so the ledger matches the bank, but
   // in no total.
   const counts = expense && !(buckets.length > 0 && buckets.every((b) => b === 'not_spending'));

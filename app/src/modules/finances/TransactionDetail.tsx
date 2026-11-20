@@ -638,7 +638,7 @@ function RefundSuggestions({
         )}
         {/* Its own line: the row above truncates on a phone, and this is why it only counts
             part of the money. */}
-        {over(c) > 0 && (
+        {actionLabel === 'Link' && over(c) > 0 && (
           <Text size="xs" tone="muted" className="w-full">
             {fmtMoney(over(c))} more than what&apos;s left of the charge — only that counts.
           </Text>
