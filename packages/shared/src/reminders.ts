@@ -183,8 +183,9 @@ export function reminderCopy(cands: readonly ReminderCandidate[]): { title: stri
   return { title: `${cands.length} reminders`, body: clip(titles.join(' · '), PUSH_BODY_MAX) };
 }
 
-// The notification's tag (a later one with the same tag replaces it) and the push Topic header: the task
-// id (a ULID — 26 chars, inside Topic's 32), the ritual's kind, or a batch's minute.
+// The notification's tag (a later one with the same tag replaces it), also the logical push topic: the
+// task id, the ritual's kind, or a batch's minute. The wire Topic header is derived from it
+// (lambdas/src/push/livePush.ts wireTopic; reminders.md → D25), since raw tags aren't all valid Topics.
 export const reminderTag = (cands: readonly ReminderCandidate[]): string => {
   if (cands.length > 1) return `b${Math.floor(cands[0]!.fireAt / 60_000)}`;
   const c = cands[0]!;

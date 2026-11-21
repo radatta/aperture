@@ -554,6 +554,26 @@ describe('push dispatch — retry and catch-up', () => {
     }
   });
 
+  it("a transient or gone refusal carries the service's reason into its text", async () => {
+    const w = world();
+    await w.device('S1');
+    await w.repo().putTask(task({ dueDay: TODAY, dueTime: '14:00' }));
+    w.push.status = () => ({ status: 503, detail: 'ServiceUnavailable' });
+    await w.tick();
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(
+      "Last reminder didn't reach this device (push service answered 503: ServiceUnavailable) — retrying",
+    );
+    expect((await w.repo().listPushQueue()).retries).toEqual([
+      expect.objectContaining({ why: 'push service answered 503: ServiceUnavailable' }),
+    ]);
+    w.push.status = () => ({ status: 410, detail: 'Unregistered' });
+    w.set(TWO_PM + MIN);
+    await w.tick();
+    expect((await w.repo().getPushUserHealth())?.lastError).toBe(
+      'iPhone S1 stopped accepting reminders (push service answered 410: Unregistered) — turn them on again on that device',
+    );
+  });
+
   it('400, 403 and 413 are final: stamped, never retried', async () => {
     for (const [status, why] of [
       [400, 'push service answered 400'],
@@ -1471,6 +1491,31 @@ describe('push dispatch — ritual nudges', () => {
     expect(w.push.sends[0]!.opts.topic).toBe('ritualMorning');
   });
 
+  // The 2026-11-21 shape: Apple refused the morning nudge with a bare 400. Its reason now reaches
+  // the device, the health line and the log line, which names the notification by its tag.
+  it("a nudge the push service refuses names the service's reason everywhere it's said", async () => {
+    const w = world(undefined, { rituals: true });
+    await w.device('S1');
+    w.push.status = () => ({ status: 400, detail: 'BadWebPushTopic' });
+    w.set(MORNING);
+    await w.tick();
+    const why =
+      "Last reminder didn't reach this device (push service answered 400: BadWebPushTopic)";
+    expect((await w.repo().getPushSub('S1'))?.lastError).toBe(why);
+    expect((await w.repo().getPushUserHealth())?.lastError).toBe(`iPhone S1: ${why}`);
+    expect(JSON.parse(w.logs.at(-1)!)).toEqual({
+      event: 'push_failed',
+      status: 400,
+      detail: 'BadWebPushTopic',
+      sub: 'S1',
+      tasks: [],
+      topic: 'ritualMorning',
+    });
+    w.set(MORNING + MIN);
+    await w.tick();
+    expect(w.push.sends).toHaveLength(1); // final, as before
+  });
+
   it('an empty plan still nudges, by count', async () => {
     const w = world(undefined, { rituals: true });
     await w.device();
@@ -1743,7 +1788,8 @@ describe('push dispatch — the tick', () => {
     await w.device('S1');
     await w.device('S2');
     await w.repo().putTask(task({ title: 'Secret title', dueDay: TODAY, dueTime: '14:00' }));
-    w.push.status = (t: PushTarget) => (t.endpoint.endsWith('S1') ? 201 : 410);
+    w.push.status = (t: PushTarget) =>
+      t.endpoint.endsWith('S1') ? 201 : { status: 410, detail: 'Unregistered' };
     await w.tick();
     expect(w.events()).toEqual(['push_sent', 'push_failed']);
     expect(JSON.parse(w.logs[0]!)).toEqual({
@@ -1751,6 +1797,11 @@ describe('push dispatch — the tick', () => {
       status: 201,
       sub: 'S1',
       tasks: ['T1'],
+    });
+    expect(JSON.parse(w.logs[1]!)).toMatchObject({
+      detail: 'Unregistered',
+      topic: 'T1',
+      removed: true,
     });
     for (const line of w.logs)
       for (const leak of ['secret-', P256DH, AUTH, 'Secret title', 'web.push.apple.com', 'iPhone'])

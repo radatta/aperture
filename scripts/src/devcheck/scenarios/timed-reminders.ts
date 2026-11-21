@@ -86,8 +86,11 @@ export const droppedForKeys = (label: string) =>
 // writes. Apple refuses a never-issued endpoint, and a refusal is an error, never a send (lastSentAt moves
 // only when a push service accepts), so the error's time says the attempt happened:
 //   404/410 → the device is deleted and an entry of the user's health line names it:
-//             "<label> stopped accepting reminders (push service answered 404|410) — …"
-//   400/403 → the device stays, carrying "Last reminder didn't reach this device (push service answered 400|403)"
+//             "<label> stopped accepting reminders (push service answered 404|410[: <reason>]) — …"
+//   400/403 → the device stays, carrying "Last reminder didn't reach this device (push service answered
+//             400|403[: <reason>])". A 400 must name Apple's reason (livePush.ts reads it from the body; Apple
+//             documents one for every 400, and a never-issued endpoint gets BadWebPushToken): that is the
+//             dev proof the reason capture works against Apple itself.
 // null = not yet. Anything else a send can produce (a 5xx, 429, a timeout, a network failure, a 2xx, the
 // stage's own error, the daily guard) is a failure, named.
 export function e2eOutcome(
@@ -109,23 +112,28 @@ export function e2eOutcome(
   if (!device) {
     if (!fresh) return null;
     const re = new RegExp(
-      `^${escape(deviceLabel)} stopped accepting reminders \\(push service answered (404|410)\\)`,
+      `^${escape(deviceLabel)} stopped accepting reminders \\(push service answered (404|410)(?:: ([^)]+))?\\)`,
     );
     const gone = errorsOf(s)
       .map((e) => re.exec(e))
       .find(Boolean);
     if (gone && !s.removedDeviceIds.includes(deviceId))
-      return { ok: true, how: `Apple answered ${gone[1]}: the poller deleted the device` };
+      return { ok: true, how: `Apple answered ${answer(gone)}: the poller deleted the device` };
     return { ok: false, why: `the device left without a 404/410: ${JSON.stringify(s.poller)}` };
   }
   if ((device.lastErrorAt ?? 0) < since - CLOCK_SLACK_MS) return null;
-  const kept = /^Last reminder didn't reach this device \(push service answered (400|403)\)$/.exec(
-    device.lastError ?? '',
-  );
-  if (kept) return { ok: true, how: `Apple answered ${kept[1]}: the device carries the error` };
+  const kept =
+    /^Last reminder didn't reach this device \(push service answered (400|403)(?:: ([^)]+))?\)$/.exec(
+      device.lastError ?? '',
+    );
+  if (kept?.[1] === '400' && !kept[2])
+    return { ok: false, why: `Apple's 400 came without its reason: ${device.lastError}` };
+  if (kept)
+    return { ok: true, how: `Apple answered ${answer(kept)}: the device carries the error` };
   return { ok: false, why: `unexpected outcome: ${JSON.stringify({ device, poller: s.poller })}` };
 }
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const answer = (m: RegExpExecArray) => (m[2] ? `${m[1]} (${m[2]})` : m[1]);
 
 // N's state as push/deliver.ts writes it: its error and when. A send that never resolves reads as a network
 // failure (or, if the resolver stalls past the 10 s cap, a timeout) — both retried.
@@ -245,7 +253,7 @@ export const timedReminders: Scenario = {
       id: 'api-e2e',
       entry: 'api',
       kind: 'nominal',
-      what: 'A device with real keys and a task due in a couple of minutes → the first tick past it encrypts, signs and POSTs it, and the push service’s answer lands on the health line (Apple refuses a never-issued endpoint: 404/410 drops the device, 400/403 marks it)',
+      what: 'A device with real keys and a task due in a couple of minutes → the first tick past it encrypts, signs and POSTs it, and the push service’s answer lands on the health line (Apple refuses a never-issued endpoint: 404/410 drops the device, 400/403 marks it, and a 400 names Apple’s reason, read from its body)',
     },
     {
       id: 'api-ssrf',

@@ -5,7 +5,8 @@
 **Status: building 2026-11-04.** PR 2 of the reminders feature (prod task "Reminders + notifications"; PR 1 was
 [places](places.md), PR 3 the morning/night ritual nudges). Plan, research and the full decision log: the branch's
 `localNotes/` (archived with the branch). **2026-11-18, branch `reminders-retry-nudges`:** PR 3 — the ritual
-nudges — and the retry of transient send failures with a one-time catch-up (D17–D24).
+nudges — and the retry of transient send failures with a one-time catch-up (D17–D24). **2026-11-21, branch
+`push-morning-400`:** the wire Topic and the push service's reason (D25–D26, §8).
 
 Permanent design-of-record: §6 is the decision log, §7 the build record. Where this doc and the code disagree,
 fix whichever is wrong and say so here.
@@ -137,6 +138,9 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
     (within the 5-minute expiry). A new failure under a Topic still retrying replaces that row;
   - final — anything else (400, 403, 413, a fault of ours): the device's error, as before.
 
+  Every refusal names the push service's own reason when its body gives one (D26): "push service answered
+  400: BadWebPushTopic", on the device, the health line, a retry's and a run-out's text alike.
+
   Retries that run out (or a retry older than 5 minutes: the poller stalled) leave the device "… after N
   tries" and its reminders as misses, `pq#m#<subId>#<fireAt>#<key>`. **A poller gap** — no tick the stage
   could check (the poller's `lastCheckedAt`: it could sign, read the registry and start a user's tick, or had
@@ -166,7 +170,15 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
 - **Crypto is hand-rolled** in `node:crypto` (`lambdas/src/push/webpush.ts`): VAPID ES256 (RFC 8292) and
   aes128gcm (RFC 8291), pinned by RFC 8291 Appendix A's test vector. `web-push` (3.6.7, last published
   2024-01) stays a fallback only if Apple rejects output that passes the vector.
-- Send headers: `TTL: 3600`, `Urgency: high`, `Topic: <tag>`.
+- Send headers: `TTL: 3600`, `Urgency: high`, `Topic: <wireTopic(tag)>` — the tag's sha256, base64url, its
+  first 24 characters (D25). The tag itself stays the notification's `tag`, the retry rows' key and the `n=`
+  param; the same tag gives the same Topic, so a retry still replaces an undelivered first copy.
+- **A refusal's reason** (D26, `livePush.ts`): a non-2xx body is read, at most 2 KB within 500 ms (past either:
+  no reason), and parsed in this order — Apple's `{"reason"}` (served as `text/plain`), Mozilla autopush's
+  `errno` + `message`, Google's `error.status` or `error.message`, a string `error`, else the plain text (an
+  HTML page or an empty body says nothing). It's untrusted, so it is cut to 80 characters of
+  `[A-Za-z0-9 _.:,/'-]`, everything else a space: it can't forge the error text's `(…)`, the health line's
+  `·` or a log line. A 2xx body is never read.
 
 ## 4. Visible health
 
@@ -215,7 +227,9 @@ proves the whole chain. The BFF never holds the private key.
 - **Logs:** one JSON line per send, error or skip: `push_sent`, `push_failed`, `push_guard_tripped`,
   `push_deadline` (the tick ran out of time), `push_retry_exhausted` (a device's retries ran out),
   `push_user_dropped` (a user with no live device left the registry), and the once-per-container stage faults `push_no_key`, `push_bad_key`, `push_no_app_url`. A send
-  line carries the status, the task ids and a sub-id prefix — never the endpoint, the keys or the title.
+  line carries the status, the task ids and a sub-id prefix — never the endpoint, the keys or the title. A
+  `push_failed` line adds the notification's tag as `topic` (a ritual or a batch has no task ids) and the
+  service's sanitised reason as `detail` when it gave one.
 - **Cost bound:**
   - Steady state is about 43 k invocations a month at about 0.3 s, roughly **$0.04/mo**, all inside the free
     tiers. A tick reads a user's send queue, dedup and Send-test rows in one consistent range Query (`pq#` …
@@ -284,6 +298,13 @@ Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full lo
 - **D23 Ritual nudges** at 08:30 and 21:30, counts only, each toggle on by default, no auto-mute (16.1 as
   amended, 2026-11-18); each its own notification, opening Home.
 - **D24 A tap clears a sticky Tasks search** (the maintainer's yes, 2026-11-18).
+- **D25 The wire Topic is derived from the tag** (2026-11-21): `base64url(sha256(tag))`, its first 24
+  characters — 18 octets, no leftover bits, inside RFC 8030's 32. Every tag, not only the ones that failed: one
+  rule that rests on no guess about Apple's decoder, and a Send test then proves the form every kind uses.
+  Rejected: passing "valid" lengths through (a guessed rule), renaming the tags at the source (they are the
+  retry key and the notification's `tag`). Why: §8.
+- **D26 Read the push service's reason** from a refusal's body (2026-11-21): a bare "answered 400" left the
+  morning failures undiagnosable from the log. Capped, parsed per service and sanitised (§3).
 - **Deferred:**
   - per-task "remind me at";
   - `app_badge`;
@@ -291,4 +312,12 @@ Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full lo
 
 ## 8. Build record
 
-_Filled in at the end of the build._
+- **2026-11-21, `push-morning-400`.** On prod, the 08:30 morning nudge and a 09:00 two-task batch got a final 400
+  from Apple, while Send test and the 21:30 night nudge landed on the same subscription; the morning ones had
+  never arrived. The body is end-to-end encrypted, so Apple's service can refuse only on the headers, and only
+  the Topic differed. The raw Topics that failed (`ritualMorning`, 13 characters; `b<minute>`, 9; a catch-up's
+  `c<minute>`, 9) have a length 1 more than a multiple of 4, which no base64url decoder can decode; the ones
+  that landed (`test`, `ritualNight`, a task id: 4, 11, 26) don't, and Apple documents a `BadWebPushTopic`
+  reason. **Inference, not yet confirmed by an Apple send:** Apple checks the token before the headers (a POST
+  to a never-issued endpoint answers `BadWebPushToken` whatever the Topic), so only a real subscription can
+  show it. D25 and D26 ship together: if a refusal remains, its reason is in Settings and the log.
