@@ -274,8 +274,8 @@ acting lane's pane: actions on live state, with no whole diff to show, no undo a
   each `[kickoff]`, and with every queue write once the hub's `pq-check` calls `estimateGaps()` from
   `scripts/src/usage/cli.ts` (the same check; the hub adds the call, its own file). A lane past plan with no
   estimate goes back to it (or the hub runs `pnpm usage estimate --lane <branch> …` on the kickoff's numbers, recorded
-  late, while its PR is unmerged: once the lane's own PR has merged the check stops asking, `estimate --lane`
-  refuses, and the PR counts under the score's merged-with-none); an estimate with no lane file and no merged PR means `pnpm usage score --refresh`, or for an abandoned lane
+  late, before its PR merges: after that the check stops asking and `estimate --lane` refuses,
+  USAGE-METER.md → _Ledger and score_); an estimate with no lane file and no merged PR means `pnpm usage score --refresh`, or for an abandoned lane
   `pnpm usage score --lane <branch> --void "<why>"`. At `[merged]`, `pnpm usage score --lane <branch>` gives the
   actual beside the estimate: provisional until the merge's 6 h window has passed, then final. The numbers stay in
   the hub's own notes and messages, never in a PR or tracked text (`docs/ops/PUBLIC-CONTENT.md`).

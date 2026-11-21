@@ -132,23 +132,23 @@ export function current(rows: LedgerRow[], prs: PR[]): Entry[] {
   return [...by.values()].map((e) => ({ ...e, reestimates: Math.max(0, e.reestimates) }));
 }
 
-// A lane's cycle, the one judgment the check, `estimate --lane` and `--void` share: `merged` once the lane's own PR
-// merged in this life (past the point, like the merged phase: its estimate, or its absence, is the score's), else
-// the open cycle after the branch's newest merge. In plan it is always open (plan starts a cycle). Its own PR is the
-// one the lane file names, when that merged on this branch; else the newest merged on the branch since its phase began.
-export type LaneCycle = { merged: PR; prev?: never } | { merged: null; prev: PR | null };
+// A lane's cycle, the one judgment the check, `estimate --lane` and `--void` share: the lane's own merged PR once it
+// merged in this life (past the point: its estimate, or its absence, is the score's), else null for the open cycle.
+// In plan it is always open (plan starts a cycle). Its own PR is the one the lane file names, when that merged on
+// this branch; else, in merged or cleanup (a phase begun after the merge), the newest merged on the branch; else the
+// newest merged on the branch since its phase began.
+export const PAST_MERGE = new Set(['merged', 'cleanup']);
 export function laneCycle(
   l: Pick<LaneFile, 'branch' | 'phase' | 'pr' | 'phaseSince'>,
   prs: PR[],
-): LaneCycle {
+): PR | null {
   const mine = prs.filter((p) => p.branch === l.branch).sort((a, b) => a.mergedAt - b.mergedAt);
-  const open = { merged: null, prev: mine.at(-1) ?? null };
-  if (l.phase === 'plan') return open;
+  if (l.phase === 'plan') return null;
   const named = l.pr === null ? undefined : mine.find((p) => p.number === l.pr);
-  if (named) return { merged: named };
+  if (named) return named;
+  if (PAST_MERGE.has(l.phase)) return mine.at(-1) ?? null;
   const since = l.phaseSince;
-  const after = since === null ? undefined : mine.filter((p) => p.mergedAt >= since).at(-1);
-  return after ? { merged: after } : open;
+  return (since === null ? undefined : mine.filter((p) => p.mergedAt >= since).at(-1)) ?? null;
 }
 
 // The open cycle's entry for a lane: where a row recorded now lands.
@@ -292,7 +292,7 @@ export function gaps(o: {
   const estimated = (e: Entry | undefined) => !!e && !!e.row && !e.voided;
   for (const l of o.lanes) {
     const due = PAST_PLAN.has(l.phase) || (l.phase === 'plan' && l.plan !== null);
-    if (!due || laneCycle(l, prs).merged) continue;
+    if (!due || laneCycle(l, prs)) continue;
     if (!estimated(openEntry(entries, l.branch)))
       out.push(
         `${l.branch}: no usage estimate (phase ${l.phase}) → pnpm usage estimate --lane ${l.branch} --lines <n> [--ui] --lenses <…>`,

@@ -387,14 +387,16 @@ export function scoreLines(s: LiveScore, table: string, lane?: string): string[]
       ? [`- estimates.jsonl: unreadable rows skipped, at line ${s.bad.join(', ')}.`]
       : []),
     ...(s.left
-      ? [`- ${s.left} estimates before this report's --since left out: pnpm usage score has them.`]
+      ? [
+          `- ${s.left} estimates left out, their PR merged before this report's --since (or, unmerged, recorded before it): pnpm usage score has them.`,
+        ]
       : []),
     '',
   ];
   if (!rows.length) {
     out.push(
       lane
-        ? `No estimate recorded for ${lane}: pnpm usage estimate --lane ${lane} --lines <n> [--ui] --lenses <…>.`
+        ? `No estimate recorded for ${lane}. Before its PR merges: pnpm usage estimate --lane ${lane} --lines <n> [--ui] --lenses <…>; after, the PR counts under merged-with-none.`
         : 'No estimates recorded: a lane records one with pnpm usage estimate --lane <branch> … after Plan.',
       '',
     );

@@ -14,6 +14,7 @@ import {
   parseArgs,
   ptMidnight,
   statuslineScript,
+  tableCut,
 } from './cli.ts';
 import { cachedPRs, mergedPRs, PR_LIMIT } from './gh.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
@@ -203,6 +204,16 @@ describe('since and merged PRs', () => {
     expect(cachedPRs(cache)).toBeNull();
     writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: 5, prs: [] }));
     expect(cachedPRs(cache)).toEqual({ prs: [], fetchedAt: 5, since: null });
+    writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: '5', prs: [] }));
+    expect(cachedPRs(cache)).toBeNull();
+    writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: 5, prs: {} }));
+    expect(cachedPRs(cache)).toBeNull();
+    // a since that isn't a real day reads as none, so it never reaches the search's date math
+    writeFileSync(
+      join(cache, 'prs.json'),
+      JSON.stringify({ fetchedAt: 5, since: '2026-13-01', prs: [] }),
+    );
+    expect(cachedPRs(cache)?.since).toBeNull();
   });
 
   it('falls back to the cache with a note when gh fails, and fails loud with none', async () => {
@@ -261,6 +272,13 @@ describe('since and merged PRs', () => {
     expect(calls[2]).toContain('merged:>=2026-01-05');
     await mergedPRs(cache, { since: '2025-12-01', now: 20 + 3_600_000, gh });
     expect(calls[3]).toContain('merged:>=2025-10-02');
+    // a later --since is inside the cache for an earlier one: no refetch, and a refresh stays incremental and keeps
+    // the earlier since, so score and a report never refetch in turn
+    await mergedPRs(cache, { since: '2026-01-15', now: 25 + 3_600_000, gh });
+    expect(calls).toHaveLength(4);
+    await mergedPRs(cache, { since: '2026-01-15', now: 26 + 3_600_000, refresh: true, gh });
+    expect(calls[4]).toContain('merged:>=2026-01-05');
+    expect(cachedPRs(cache)?.since).toBe('2025-12-01');
     // an incremental page at the gh limit still says so
     reply = Array.from({ length: PR_LIMIT }, (_, i) => at(10 + i, '2026-01-07T00:00:00Z'));
     const full = await mergedPRs(cache, {
@@ -565,16 +583,19 @@ describe('usage report end to end', () => {
       /^usage \(local only, never pasted\): estimate 2\.0 QU \(1\.0–4\.0\) at 8 lines; provisional [\d.]+ QU \(×[\d.]+\), PR 3$/m,
     );
     expect(sc).toMatch(/- lane-q: estimated .* no lane file and no merged PR after it/);
-    // a report for a later --since with gh down: the stale header, and its estimates before --since left out
+    // a report for a later --since reads the same cache; refreshed with gh down: the stale header, and its estimates
+    // before --since left out
     lines.length = 0;
     expect(await main(['report', '--no-scan', '--since', '2026-01-06'], out, { gh: down })).toBe(0);
+    expect(lines.join('\n')).not.toContain('PR table stale');
+    lines.length = 0;
+    const args = ['report', '--no-scan', '--refresh', '--since', '2026-01-06'];
+    expect(await main(args, out, { gh: down })).toBe(0);
     const rp = lines.join('\n');
-    expect(rp).toMatch(
-      /^\*\*PR table stale: newest PR 4, fetched .* \(gh: HTTP 504; the cache is for --since 2026-01-01\)/,
-    );
+    expect(rp).toMatch(/^\*\*PR table stale: newest PR 4, fetched .* \(gh: HTTP 504\)/);
     expect(rp).toContain('- PR table: STALE: newest PR 4');
     expect(rp).toContain(
-      "- 2 estimates before this report's --since left out: pnpm usage score has them.",
+      "- 2 estimates left out, their PR merged before this report's --since (or, unmerged, recorded before it): pnpm usage score has them.",
     );
   });
 });
@@ -754,11 +775,14 @@ describe('the estimate ledger: estimate --lane and score', () => {
     mkdirSync(join(usage, 'cache'), { recursive: true });
     writeFileSync(join(usage, 'cache', 'prs.json'), JSON.stringify(prs(9)));
     mkdirSync(join(board(), 'lanes'), { recursive: true });
-    const file = (phase: string) =>
+    const file = (phase: string, o: object = { pr: 9 }) =>
       writeFileSync(
         join(board(), 'lanes', 'lane-a.json'),
-        JSON.stringify({ v: 1, branch: 'lane-a', phase, pr: 9, updatedAt: '2026-01-05T10:00:00Z' }),
+        JSON.stringify({ v: 1, branch: 'lane-a', phase, updatedAt: '2026-01-05T10:00:00Z', ...o }),
       );
+    // the file never named the PR, and its merged phase began after the merge
+    file('merged', { pr: null, phaseSince: '2026-01-05T10:00:00Z' });
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(2);
     file('pr');
     const r = await run('estimate', '--lines', '300', '--lane', 'lane-a');
     expect(r.code).toBe(2);
@@ -768,52 +792,91 @@ describe('the estimate ledger: estimate --lane and score', () => {
     expect(existsSync(ledger())).toBe(false);
     expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
     expect((await run('score', '--lane', 'lane-a', '--void', 'gone')).text).toBe(
-      '--void: lane-a has no open estimate: its PR 9 merged, and the estimate is scored against it',
+      '--void: lane-a has no open estimate: its PR 9 merged, and it has no estimate, so pnpm usage score counts it as merged with none',
     );
     file('plan'); // a new cycle on the name starts in plan
     expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
+    // a stale table let a row in after the merge: back in pr, the lane can still void it
+    file('pr');
+    const v = await run('score', '--lane', 'lane-a', '--void', 'recorded past the merge');
+    expect(v.code).toBe(0);
+    expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
   });
 
-  it("score reuses a cache whose list reaches back to its cut, and never cuts its table by the cache's since", async () => {
+  it("says a merged PR's estimate is scored when it has one", async () => {
+    mkdirSync(join(usage, 'cache'), { recursive: true });
+    mkdirSync(join(board(), 'lanes'), { recursive: true });
+    const lanePath = join(board(), 'lanes', 'lane-a.json');
+    writeFileSync(
+      lanePath,
+      JSON.stringify({ v: 1, branch: 'lane-a', phase: 'build', updatedAt: '2026-01-05T10:00:00Z' }),
+    );
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
+    const merged = Date.now() + 60_000; // after the row
+    writeFileSync(
+      join(usage, 'cache', 'prs.json'),
+      JSON.stringify({
+        fetchedAt: merged,
+        since: DEFAULT_SINCE,
+        prs: [
+          {
+            number: 9,
+            title: 't',
+            branch: 'lane-a',
+            mergedAt: merged,
+            changedFiles: 1,
+            additions: 1,
+            deletions: 0,
+            files: [],
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      lanePath,
+      JSON.stringify({
+        v: 1,
+        branch: 'lane-a',
+        phase: 'pr',
+        pr: 9,
+        updatedAt: '2026-01-05T10:00:00Z',
+      }),
+    );
+    const r = await run('estimate', '--lines', '300', '--lane', 'lane-a');
+    expect(r.code).toBe(2);
+    expect(r.text).toContain('On PR 9: its estimate is scored against it.');
+  });
+
+  it("score reuses a cache for the default since or earlier, and refetches past a later one's", async () => {
     const t = Date.parse(`${DEFAULT_SINCE}T12:00:00Z`);
     const gh = vi.fn(async (): Promise<string> => {
       throw new Error('HTTP 504');
     });
-    const write = (since: string, mergedAt: number) => {
+    const write = (since: string) => {
       mkdirSync(join(usage, 'cache'), { recursive: true });
       writeFileSync(
         join(usage, 'cache', 'prs.json'),
-        JSON.stringify({
-          fetchedAt: Date.now(),
-          since,
-          prs: [
-            {
-              number: 5,
-              title: 't',
-              branch: 'lane-b',
-              mergedAt,
-              changedFiles: 1,
-              additions: 9,
-              deletions: 0,
-              files: [],
-            },
-          ],
-        }),
+        JSON.stringify({ fetchedAt: Date.now(), since, prs: [] }),
       );
     };
-    const later = new Date(t + 10 * 86_400_000).toISOString().slice(0, 10);
-    write(later, t + 86_400_000);
+    const day = (d: number) => new Date(t + d * 86_400_000).toISOString().slice(0, 10);
+    write(day(-20));
     expect(await main(['score', '--no-scan'], out, { gh })).toBe(0);
     expect(gh).not.toHaveBeenCalled();
-    expect(JSON.parse(readFileSync(join(usage, 'cache', 'prs.json'), 'utf8')).since).toBe(later);
-    // an older since is reused too, but a PR merged before the default since stays out of the score's table
-    const older = new Date(t - 20 * 86_400_000).toISOString().slice(0, 10);
-    write(older, t - 5 * 86_400_000);
+    expect(lines.join('\n')).not.toContain('PR table stale');
+    // a report's later --since leaves too short a lookback before the cut: score refetches (here gh is down)
+    write(day(10));
     lines.length = 0;
     expect(await main(['score', '--no-scan'], out, { gh })).toBe(0);
-    expect(gh).not.toHaveBeenCalled();
-    expect(lines.join('\n')).toContain('Merged since the first estimate with none: none.');
-    expect(lines.join('\n')).not.toContain('PR table stale');
+    expect(gh).toHaveBeenCalled();
+    expect(lines.join('\n')).toContain(`the cache is for --since ${day(10)}`);
+  });
+
+  it("cuts the score's table at the default since, or an older first estimate, never at the cache's since", () => {
+    expect(tableCut([])).toBe(ptMidnight(DEFAULT_SINCE));
+    const early = ptMidnight(DEFAULT_SINCE) - 86_400_000;
+    expect(tableCut([{ at: early }, { at: early + 5e8 }])).toBe(early);
+    expect(tableCut([{ at: ptMidnight(DEFAULT_SINCE) + 1 }])).toBe(ptMidnight(DEFAULT_SINCE));
   });
 
   it('treats an unreadable prs.json as no cache: a good fetch rewrites it, a failed one says so', async () => {

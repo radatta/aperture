@@ -269,13 +269,24 @@ describe('the live score', () => {
       prRow({ number: p.number, branch: p.branch, mergedAt: p.mergedAt, qu: 8 }),
     );
     const ledger = {
-      rows: [est('lane-a', 1), est('lane-a', 1.2), est('lane-b', 1), est('lane-c', 1)],
+      rows: [
+        est('lane-a', 1),
+        est('lane-a', 1.2),
+        est('lane-b', 1),
+        est('lane-c', 1),
+        est('lane-d', 2),
+        voided('lane-e', 3),
+      ],
       bad: [],
     };
     const s = liveScore({ ledger, prs, rows, calls: [], units, lastCall: T(100), from: T(2) });
-    // lane-a: kept (merged at 10, re-estimated: 2 rows); lane-b: merged before from; lane-c: open, recorded before
-    expect(s.rows.map((r) => [r.lane, r.reestimates])).toEqual([['lane-a', 1]]);
-    expect(s).toMatchObject({ recorded: 2, left: 2, unestimated: [] });
+    // lane-a: kept (merged at 10, re-estimated: 2 rows); lane-b: merged before from; lane-c: open, recorded before;
+    // lane-d: open, recorded at from (kept); lane-e: a void with no estimate (no row to score)
+    expect(s.rows.map((r) => [r.lane, r.reestimates])).toEqual([
+      ['lane-a', 1],
+      ['lane-d', 0],
+    ]);
+    expect(s).toMatchObject({ recorded: 3, left: 2, unestimated: [] });
   });
 
   it('counts merged PRs with no estimate only after the first one, per cycle', () => {
@@ -300,26 +311,28 @@ describe('the live score', () => {
 describe('laneCycle', () => {
   const two = [pr(1, 'lane-a', 10), pr(2, 'lane-a', 20), pr(7, 'lane-z', 15)];
   const at = (o: Partial<LaneFile>, prs = two) =>
-    laneCycle({ ...lane('lane-a', 'build'), ...o }, prs);
+    laneCycle({ ...lane('lane-a', 'build'), ...o }, prs)?.number ?? null;
   it('prefers the PR the lane file names, else the newest merged since its phase began', () => {
-    expect(at({ pr: 1, phaseSince: T(5) }).merged?.number).toBe(1);
-    expect(at({ pr: 2, phaseSince: T(5) }).merged?.number).toBe(2);
-    expect(at({ pr: null, phaseSince: T(5) }).merged?.number).toBe(2);
-    expect(at({ pr: 1, phaseSince: null }).merged?.number).toBe(1);
+    expect(at({ pr: 1, phaseSince: T(5) })).toBe(1);
+    expect(at({ pr: 2, phaseSince: T(5) })).toBe(2);
+    expect(at({ pr: null, phaseSince: T(5) })).toBe(2);
+    expect(at({ pr: null, phaseSince: T(20) })).toBe(2); // merged the instant the phase began
+    expect(at({ pr: 1, phaseSince: null })).toBe(1);
+    // known: a lane back in build for a follow-up PR, its file still naming the merged one, reads as merged
+    expect(at({ pr: 2, phaseSince: T(21) })).toBe(2);
+  });
+  it('in merged or cleanup, a phase begun after the merge, takes the newest merged on the branch', () => {
+    expect(at({ phase: 'merged', pr: null, phaseSince: T(21) })).toBe(2);
+    expect(at({ phase: 'cleanup', pr: null, phaseSince: T(30) })).toBe(2);
+    expect(at({ phase: 'merged', pr: null, phaseSince: T(21) }, [])).toBe(null);
   });
   it('is open after the newest merge otherwise, and always open in plan', () => {
-    expect(at({ pr: null, phaseSince: T(21) })).toMatchObject({
-      merged: null,
-      prev: { number: 2 },
-    });
-    expect(at({ pr: null, phaseSince: null })).toMatchObject({ merged: null, prev: { number: 2 } });
-    expect(at({ pr: 7, phaseSince: T(21) })).toMatchObject({ merged: null }); // another branch's PR
-    expect(at({ pr: 9, phaseSince: null })).toMatchObject({ merged: null }); // unmerged or unknown
-    expect(at({ phase: 'plan', pr: 1, phaseSince: T(5) })).toMatchObject({
-      merged: null,
-      prev: { number: 2 },
-    });
-    expect(at({}, [])).toEqual({ merged: null, prev: null });
+    expect(at({ pr: null, phaseSince: T(21) })).toBe(null);
+    expect(at({ pr: null, phaseSince: null })).toBe(null);
+    expect(at({ pr: 7, phaseSince: T(21) })).toBe(null); // another branch's PR
+    expect(at({ pr: 9, phaseSince: null })).toBe(null); // unmerged or unknown
+    expect(at({ phase: 'plan', pr: 1, phaseSince: T(5) })).toBe(null);
+    expect(at({}, [])).toBe(null);
   });
 });
 

@@ -106,24 +106,27 @@ export async function mergedPRs(
     got.length >= PR_LIMIT
       ? `${PR_LIMIT} merged PRs since ${from}, the gh limit: older ones may be missing`
       : null;
-  const same = cached?.since === o.since;
-  if (cached && same && o.now - cached.fetchedAt < 3_600_000 && !o.refresh)
+  // a cache for an earlier --since holds every PR this one asks for: reuse it and keep its since, so a report and
+  // score never refetch in turn (the cache's since only moves earlier)
+  const covers = !!cached?.since && cached.since <= o.since;
+  const keep = covers ? cached!.since! : o.since;
+  if (cached && covers && o.now - cached.fetchedAt < 3_600_000 && !o.refresh)
     return { prs: cached.prs, note: null, stale: null, fetchedAt: cached.fetchedAt };
   const gh = o.gh ?? ghText;
   // the cache's newest merge less a day (the search reads a bare date in its own zone), else the whole lookback
-  const base = cached && same && cached.prs.length ? cached.prs : null;
+  const base = cached && covers && cached.prs.length ? cached.prs : null;
   const newest = base && newestPR(base);
   const from = newest
     ? new Date(newest.mergedAt - DAY_MS).toISOString().slice(0, 10)
-    : searchFrom(o.since);
-  const args = prArgs(o.since, from);
+    : searchFrom(keep);
+  const args = prArgs(keep, from);
   try {
     // one retry: a big query with files now and then fails upstream and works the second time
     const got = parsePRs(await gh(args).catch(() => gh(args)));
     const byNumber = new Map((base ?? []).map((p) => [p.number, p]));
     for (const p of got) byNumber.set(p.number, p);
     const prs = [...byNumber.values()].sort((a, b) => a.mergedAt - b.mergedAt);
-    writeAtomic(path, JSON.stringify({ fetchedAt: o.now, since: o.since, prs }));
+    writeAtomic(path, JSON.stringify({ fetchedAt: o.now, since: keep, prs }));
     return { prs, note: full(got, from), stale: null, fetchedAt: o.now };
   } catch (e) {
     if (!cached)
@@ -139,7 +142,7 @@ export async function mergedPRs(
       stale: {
         newest: newestPR(cached.prs)?.number ?? null,
         fetchedAt: cached.fetchedAt,
-        why: same ? why : `${why}; the cache is for --since ${cached.since ?? '?'}`,
+        why: covers ? why : `${why}; the cache is for --since ${cached.since ?? '?'}`,
       },
     };
   }
@@ -156,7 +159,13 @@ export function cachedPRs(
       ? {
           prs: c.prs as PR[],
           fetchedAt: Number(c.fetchedAt),
-          since: typeof c.since === 'string' ? c.since : null,
+          // a since that isn't a real day reads as none (it seeds the search's lookback)
+          since:
+            typeof c.since === 'string' &&
+            /^\d{4}-\d{2}-\d{2}$/.test(c.since) &&
+            Number.isFinite(Date.parse(`${c.since}T00:00:00Z`))
+              ? c.since
+              : null,
         }
       : null;
   } catch {

@@ -182,10 +182,10 @@ post.
 
 Merged PRs come from `gh pr list --search merged:>=<since − 60 days>` (the lookback keeps a reused branch's earlier
 PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000, and the report says when
-the fetch it just made hit that; a cache hit or an incremental refetch can't tell), cached an hour per `--since` in `cache/prs.json`. A refetch (`--refresh`, or an hour on) asks only for PRs
+the fetch it just made hit that; a cache hit or an incremental refetch can't tell), cached an hour in `cache/prs.json`, which also serves any later `--since` (its own since only moves earlier, so `score` and a report never refetch in turn). A refetch (`--refresh`, or an hour on) asks only for PRs
 merged since the cache's newest less a day and keeps the rest, since a merged PR's files and counts don't change: the
 one big query (every file of every PR, two pages of 100) outgrew GitHub's 10 s GraphQL limit, which answers 502 or 504
-(docs.github.com → _Rate limits and node limits for the GraphQL API_). A new `--since`, or no cache, fetches it all;
+(docs.github.com → _Rate limits and node limits for the GraphQL API_). An earlier `--since`, or no usable cache, fetches it all;
 deleting `cache/prs.json` forces that. A failed read falls back to the cache, and `report` and `score` then open with
 **PR table stale: newest PR n, fetched when** and gh's error, never a quiet note; with no cache it fails loud. A PR's calls are its branch's from the previous PR on that branch (or the start) to its merge.
 For the last PR on a branch, the window runs 6 hours past the merge, which covers cleanup and the deploy watch. Each
@@ -280,8 +280,10 @@ The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane run
 - `--lane` needs the lane's file (`board/lanes/<branch>.json`), so a typo records nothing (exit 2), and refuses once
   the lane's own PR has merged (exit 2, nothing written): a row then would count for the next lane on the name. A
   lane's cycle is one rule (`laneCycle` in `ledger.ts`), shared by `--lane`, `--void` and the check: in `plan` it is
-  always open; past it, the lane's own PR is the one its file names, if that merged on the branch, else the newest
-  merged on the branch since its phase began; with neither it is open. A failed append
+  always open; past it, the lane's own PR is the one its file names, if that merged on the branch; else, in `merged`
+  or `cleanup` (begun after the merge), the newest merged on the branch; else the newest merged since its phase
+  began; with none it is open. A lane back in `build` for a follow-up PR whose file still names the merged one reads
+  as merged (`pnpm lanes start` clears a reused name's file). A failed append
   still prints the estimate, then `NOT RECORDED`, exit 1. A torn last line gets its newline before the next row; a
   row that won't parse is skipped and named by line number (a gap until deleted by hand), never fatal.
 - **Cycles.** A row belongs to the first PR merged after it on its branch; a cycle runs from the previous merged PR to
@@ -297,10 +299,9 @@ The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane run
   the merged PR's own lines, paths and lenses (not leave-one-out). The estimate's gap to it is input error, the rest
   model error. Over final rows: median and rms error, PRs in range and within ×1.5, totals; then the merged PRs since
   the first estimate that have none (a count, since nothing could clear it). `--lane` adds the row as one line
-  (`usage (local only, never pasted): …`) for the lane's `decisions.md`. `score` reuses the cache's `--since`
-  whenever that list reaches back to the score's table cut (the default since, or the first estimate if older), so a
-  report up to 60 days later never forces a refetch; the cut itself never follows the cache, so _at actual_ prices
-  with `estimate`'s units. With gh down and no usable `cache/prs.json` (missing or unreadable; the next good fetch
+  (`usage (local only, never pasted): …`) for the lane's `decisions.md`. `score` reads PRs for the default `--since`
+  (any cache for an earlier one serves); its table starts there, or at the first estimate if older, never at the
+  cache's since, so _at actual_ prices with `estimate`'s units. With gh down and no usable `cache/prs.json` (missing or unreadable; the next good fetch
   rewrites it) it opens with **No PR table** and exits 1. The report keeps an estimate whose PR merged on or after
   its `--since` (an unmerged one by when it was recorded) and counts the rest.
 - **`score --check`**, one line per gap, exit 1 on any, in about 0.1 s (it never loads the transcript cache, which

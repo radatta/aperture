@@ -7,15 +7,7 @@ import { cliGuard } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { doctor, formatDoctor } from './doctor.ts';
 import { parseMeter, type Manual, type MeterRow } from './meter.ts';
-import {
-  cachedPRs,
-  ghText,
-  mergedPRs,
-  searchFrom,
-  type GhText,
-  type PR,
-  type Stale,
-} from './gh.ts';
+import { cachedPRs, ghText, mergedPRs, type GhText, type PR, type Stale } from './gh.ts';
 import { estimateBasis, fitModel, reportModel } from './model.ts';
 import { DEFAULT_PRIORS, LENSES, mergePriors, predict, type Priors } from './estimate.ts';
 import { parsePhaseLog } from './phaselog.ts';
@@ -41,6 +33,7 @@ import {
   parseLedger,
   prTableBasis,
   type EstRow,
+  type Entry,
   type LedgerRow,
 } from './ledger.ts';
 import { BRANCH_RE, isProblem, parseLane, readLanes, type LaneFile } from '../board/tower/lanes.ts';
@@ -224,6 +217,17 @@ export function readEvents(board: string): JobEvent[] {
 }
 
 export const DEFAULT_SINCE = '2026-11-04';
+// the score's PR table starts at the default since, or the first estimate if older, so "at actual" prices with the
+// units `estimate` used, whatever --since the cached list was fetched for
+// what the score does with a lane's merged PR: its estimate is scored against it, or it counts as merged with none
+const mergedFate = (entries: Entry[], pr: PR) => {
+  const e = entries.find((x) => x.pr?.number === pr.number);
+  return e?.row && !e.voided
+    ? 'its estimate is scored against it'
+    : 'it has no estimate, so pnpm usage score counts it as merged with none';
+};
+export const tableCut = (rows: { at: number }[]) =>
+  Math.min(ptMidnight(DEFAULT_SINCE), ...rows.map((r) => r.at));
 
 export const readPhaseLog = (usageDir: string) =>
   parsePhaseLog(readOr(join(usageDir, 'phase-log.jsonl')) ?? '');
@@ -341,12 +345,13 @@ async function score(
       return 2;
     }
     const prs = cachedPRs(e.cache)?.prs ?? [];
-    const open = openEntry(current(readLedger(e.usageDir).rows, prs), rec.lane);
+    const entries = current(readLedger(e.usageDir).rows, prs);
+    const open = openEntry(entries, rec.lane);
     if (!open?.row || open.voided) {
-      const merged = rec.file && laneCycle(rec.file, prs).merged;
+      const merged = rec.file && laneCycle(rec.file, prs);
       out(
         merged
-          ? `--void: ${rec.lane} has no open estimate: its PR ${merged.number} merged, and the estimate is scored against it`
+          ? `--void: ${rec.lane} has no open estimate: its PR ${merged.number} merged, and ${mergedFate(entries, merged)}`
           : `--void: ${rec.lane} has no open estimate (none recorded, already voided, or its PR merged)`,
       );
       return 2;
@@ -377,17 +382,11 @@ async function score(
   let table: string;
   let failed: string | null = null;
   const ledger = readLedger(e.usageDir);
-  // the table cut never follows the cache, so "at actual" prices with the units `estimate` used
-  const cut = Math.min(ptMidnight(DEFAULT_SINCE), ...ledger.rows.map((r) => r.at));
-  // any cached --since whose list reaches back to the cut, so score and a report never refetch in turn
-  const cs = cachedPRs(e.cache)?.since;
-  const since =
-    cs && /^\d{4}-\d{2}-\d{2}$/.test(cs) && Date.parse(`${searchFrom(cs)}T00:00:00Z`) <= cut
-      ? cs
-      : DEFAULT_SINCE;
+  // the default --since: mergedPRs reuses any cache for an earlier one, and the table cut never follows the cache
+  const cut = tableCut(ledger.rows);
   try {
     const r = await mergedPRs(e.cache, {
-      since,
+      since: DEFAULT_SINCE,
       refresh: !!flags.refresh,
       now,
       gh: deps.gh,
@@ -573,10 +572,11 @@ export async function main(
         return 2;
       }
       // past the point: a row now would land in the next cycle on this name (docs/ops/USAGE-METER.md → Ledger)
-      const merged = rec?.file && laneCycle(rec.file, cachedPRs(e.cache)?.prs ?? []).merged;
+      const known = cachedPRs(e.cache)?.prs ?? [];
+      const merged = rec?.file && laneCycle(rec.file, known);
       if (rec && merged) {
         out(
-          `--lane ${rec.lane}: its PR ${merged.number} merged ${clock(merged.mergedAt)} PT, so an estimate now would count for the next lane on this name; not recorded. The PR shows under "merged since the first estimate with none" in pnpm usage score. Drop --lane for the number alone; a new lane on this name clears the old lane file first (pnpm board lane --clear).`,
+          `--lane ${rec.lane}: its PR ${merged.number} merged ${clock(merged.mergedAt)} PT, so an estimate now would count for the next lane on this name; not recorded. On PR ${merged.number}: ${mergedFate(current(readLedger(e.usageDir).rows, known), merged)}. Drop --lane for the number alone; a new lane on this name starts with pnpm lanes start, which clears the old lane file.`,
         );
         return 2;
       }
