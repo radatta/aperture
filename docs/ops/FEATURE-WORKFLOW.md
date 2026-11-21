@@ -64,10 +64,12 @@ At those same checkpoints, and at each phase change between them, it also writes
 NEEDS YOU read (`docs/ops/TOWER.md` → _Lane files_); a `[blocked]` or `[ask-maintainer]` is also `--needs` with the
 command or link.
 
-Where the lane now waits for the hub — after an `[ask-maintainer]` it holds for, and after `[pr-open]` — with the
-lane file just written, the tree clean and no background task or agent running, its last tool call may be
-`bash scripts/board/self-compact.sh request`; a refusal changes nothing. How it works and what it checks:
-`docs/ops/COMPACTION-HANDOFF.md` → _Self-compact_.
+Where the lane now waits for the hub after `[pr-open]` — with the lane file just written, the tree clean, no
+background task or agent running and its context past 150k tokens (its `tokens` in
+`/workspace/localNotes/board/ctx.json`, a row under 5 min old) — its last tool call may be
+`bash scripts/board/self-compact.sh request`; a refusal changes nothing. Not yet after an `[ask-maintainer]`: a hub
+reply that lands mid-compaction is unmeasured. How it works and what it checks: `docs/ops/COMPACTION-HANDOFF.md` →
+_Self-compact_.
 
 **The lane file carries the estimate.** Right after Plan, the lane writes its step plan with
 `pnpm board lane plan --plan <step>=<lo>-<hi>[?],… --files <n>` (minutes, `?` a guess); at every phase change after,

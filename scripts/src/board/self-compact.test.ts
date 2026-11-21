@@ -45,12 +45,17 @@ const screen = (
   ['earlier output', ...above, '', top, `❯${NBSP}${box}`, RULE, ...footer, last, ...below].join(
     '\n',
   );
-// Captured on 2.1.330 (2026-11-21): idle, two background agents running (`tmux capture-pane`, read-only).
-const LABELLED = `${'─'.repeat(3)} ${BRANCH} ${'─'.repeat(30)}`;
+// Shaped after 2.1.330 captures (2026-11-21, `tmux capture-pane`, read-only): the session name at the right end of the
+// top rule, and an idle session with two background agents (the reply text and agent rows are synthetic).
+const LABELLED = `${'─'.repeat(30)} ${BRANCH} ─`;
 const AGENTS = {
-  above: ['● Waiting on the Plan agent.', '', '✻ Waiting for 2 background agents to finish'],
+  above: [
+    '● Both agents are running in the background.',
+    '',
+    '✻ Waiting for 2 background agents to finish',
+  ],
   top: LABELLED,
-  last: '  ⏵⏵ bypass permissions on (shift+tab to cycle) · /tasks to see subagents · ↓ to manage',
+  last: '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage',
   below: [
     '',
     '  ● main',
@@ -459,7 +464,7 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(log()).toContain('sent pid=');
     });
 
-    it('reads the 2.1.330 idle shape (a labelled top rule) as empty, then sends', async () => {
+    it("reads a labelled top rule (2.1.330's) as empty, then sends (mode line 2.1.329's: no clean 2.1.330 idle capture)", async () => {
       const pid = session();
       flag(pid);
       screens(screen('', { top: LABELLED }), screen('/compact', { top: LABELLED }));
@@ -564,13 +569,8 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
         'box-busy',
       ],
       [
-        'background agents running (2.1.330, the panel below the mode line)',
+        'background agents running (2.1.330: the waiting line, ↓ to manage, the agent panel below)',
         () => screens(screen('', AGENTS)),
-        'box-busy',
-      ],
-      [
-        'background agents running, only the waiting line above the box (2.1.330)',
-        () => screens(screen('', { ...AGENTS, last: MODE, below: [] })),
         'box-busy',
       ],
     ])('sends nothing when %s', async (_n, arrange, reason) => {
