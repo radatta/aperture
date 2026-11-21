@@ -260,9 +260,9 @@ export function lensTypes(spec: string | undefined, ui: boolean): string[] | nul
   return types.every((t): t is string => !!t) ? [...new Set(types)] : null;
 }
 
-export function readLedger(usageDir: string): { rows: LedgerRow[]; bad: number } {
+export function readLedger(usageDir: string): { rows: LedgerRow[]; bad: number[] } {
   const text = readOr(join(usageDir, LEDGER));
-  return text === null ? { rows: [], bad: 0 } : parseLedger(text);
+  return text === null ? { rows: [], bad: [] } : parseLedger(text);
 }
 
 // One append per row; a torn last line (an append cut short) gets its newline first, so the new row stays whole.
@@ -313,6 +313,12 @@ async function score(
   out: (s: string) => void,
   deps: { gh: GhText },
 ): Promise<number> {
+  if (flags.check && (flags.void !== undefined || flags.lane !== undefined || flags.refresh)) {
+    out(
+      '--check takes no other flag: it reads the ledger, the lane files and cache/prs.json as they are',
+    );
+    return 2;
+  }
   if (flags.void !== undefined) {
     const rec = laneArg(flags.lane, e.board, false);
     if ('error' in rec) {
@@ -321,6 +327,15 @@ async function score(
     }
     if (flags.void === 'true' || !flags.void.trim()) {
       out('--void takes the reason the lane was abandoned');
+      return 2;
+    }
+    const open = current(readLedger(e.usageDir).rows, cachedPRs(e.cache)?.prs ?? []).find(
+      (x) => x.lane === rec.lane && !x.pr && x.row && !x.voided,
+    );
+    if (!open) {
+      out(
+        `--void: ${rec.lane} has no open estimate (none recorded, already voided, or its PR merged)`,
+      );
       return 2;
     }
     const path = appendLedger(e.usageDir, {
@@ -347,9 +362,13 @@ async function score(
   let stale: Stale | null = null;
   let fetchedAt: number | null = null;
   let table: string;
+  let failed: string | null = null;
+  // the cache's own --since when it reaches back further, so score and an older report never refetch in turn
+  const cs = cachedPRs(e.cache)?.since;
+  const since = cs && cs < DEFAULT_SINCE && /^\d{4}-\d{2}-\d{2}$/.test(cs) ? cs : DEFAULT_SINCE;
   try {
     const r = await mergedPRs(e.cache, {
-      since: DEFAULT_SINCE,
+      since,
       refresh: !!flags.refresh,
       now,
       gh: deps.gh,
@@ -359,14 +378,13 @@ async function score(
     fetchedAt = r.fetchedAt;
     table = prTableBasis(prs, r.fetchedAt, stale);
   } catch (err) {
-    table = `none: ${(err as Error).message}`;
+    failed = (err as Error).message;
+    table = `none: ${failed}`;
   }
   const loaded = loadCache(e.cache);
   const a = attribute(loaded, hubName(), readPhaseLog(e.usageDir));
   const ledger = readLedger(e.usageDir);
-  // the table reaches back to the first estimate when that is older than the default --since
-  const since = Math.min(ptMidnight(DEFAULT_SINCE), ...ledger.rows.map((r) => r.at));
-  const rows = prTable(a, prs, since);
+  const rows = prTable(a, prs, Math.min(ptMidnight(since), ...ledger.rows.map((r) => r.at)));
   const pr = readPriors(e.usageDir);
   const fit = fitModel({
     rows: readMeter(e.usageDir).rows,
@@ -388,16 +406,22 @@ async function score(
     ...ledger,
     lanes,
     problems,
-    prs: fetchedAt === null ? null : { prs, fetchedAt },
+    prs: fetchedAt === null ? null : { prs, fetchedAt, stale },
   });
   out(
     [
+      ...(failed
+        ? [
+            `**No PR table: gh failed (${failed}) and there is no cache/prs.json.** Every row below reads as so far; rerun when gh answers.`,
+            '',
+          ]
+        : []),
       ...(stale ? [staleLine(stale), ''] : []),
       ...scoreLines(s, table, flags.lane),
       ...(g.length ? ['Gaps:', ...g.map((l) => `- ${l}`)] : ['Gaps: none.']),
     ].join('\n'),
   );
-  return 0;
+  return failed ? 1 : 0;
 }
 
 export async function main(

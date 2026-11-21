@@ -107,8 +107,8 @@ hub message (the checkpoints stay).
    failure the environment caused, search it first, and add what the search found to the list. Right after Plan, the
    lane writes the step plan and its ranges to its lane status file (below), then records its **usage estimate** on
    the plan's numbers: `pnpm usage estimate --lane <branch> --lines <n> [--ui] --lenses <a,b,…>` (lines: source,
-   tests and docs together; `--ui` when the change needs a browser or device check; the lenses phase 6 will run;
-   `docs/ops/USAGE-METER.md` → _Ledger and score_). A re-plan records it again. **→ hub:** `[kickoff]` — what, areas
+   tests and docs together; `--ui` when it touches `app/` or `extension/`, as the fit counts it; the lenses phase 6
+   will run; `docs/ops/USAGE-METER.md` → _Ledger and score_). A re-plan records it again. **→ hub:** `[kickoff]` — what, areas
    touched, open questions, the Unknowns, mode, the step plan, the usage estimate (its inputs, point and range).
 3. **Questions** — collaborative: `[ask-maintainer]` with each question's options and a pick. Autonomous: answer and
    log them.
@@ -223,10 +223,10 @@ why), what the feature is, what happened (build, the review's round record and `
 user can run unaided, the devcheck report's _This feature_ lists, _You don't need to test_ and _Needs you_
 (what still needs the user, and why; "no feature rows" for a branch with no scenario of its own), key
 screenshots (relative links into `localNotes/`), and **each step's estimate against its actual**, which
-also go into `decisions.md` and the lane file, so the next plan's ranges calibrate. The usage row beside them is the
-`usage (local only, never pasted): …` line `pnpm usage score --lane <branch>` prints (estimate, range, so far, ratio):
-its numbers are real, so it is cut before any of the report goes into a PR (`docs/ops/PUBLIC-CONTENT.md`), and the
-final actual is the score's after the merge. Its text gets pasted into PRs, so it follows
+also go into `decisions.md` and the lane file, so the next plan's ranges calibrate. The usage estimate against
+its actual is not in the report: its numbers are real (`docs/ops/PUBLIC-CONTENT.md`), so the
+`usage (local only, never pasted): …` line `pnpm usage score --lane <branch>` prints goes into `decisions.md`, and
+the final actual is the score's after the merge. The report's text gets pasted into PRs, so it follows
 `docs/ops/PUBLIC-CONTENT.md` like the PR body — scan both before `open-pr`. The last message in the pane links it
 (Mac path); the `[pr-open]` points the hub at it.
 

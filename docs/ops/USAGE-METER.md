@@ -182,7 +182,7 @@ post.
 
 Merged PRs come from `gh pr list --search merged:>=<since − 60 days>` (the lookback keeps a reused branch's earlier
 PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000, and the report says when
-it hit that), cached an hour per `--since` in `cache/prs.json`. A refetch (`--refresh`, or an hour on) asks only for PRs
+the fetch it just made hit that; a cache hit or an incremental refetch can't tell), cached an hour per `--since` in `cache/prs.json`. A refetch (`--refresh`, or an hour on) asks only for PRs
 merged since the cache's newest less a day and keeps the rest, since a merged PR's files and counts don't change: the
 one big query (every file of every PR, two pages of 100) outgrew GitHub's 10 s GraphQL limit, which answers 502 or 504
 (docs.github.com → _Rate limits and node limits for the GraphQL API_). A new `--since`, or no cache, fetches it all;
@@ -279,25 +279,33 @@ The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane run
 
 - `--lane` needs the lane's file (`board/lanes/<branch>.json`), so a typo records nothing (exit 2). A failed append
   still prints the estimate, then `NOT RECORDED`, exit 1. A torn last line gets its newline before the next row; a
-  row that won't parse is counted and named, never fatal.
+  row that won't parse is skipped and named by line number (a gap until deleted by hand), never fatal.
 - **Cycles.** A row belongs to the first PR merged after it on its branch; a cycle runs from the previous merged PR to
   the next, so a reused name starts over. The newest estimate in a cycle wins (a re-plan re-estimates; the count
   shows), and a void row newer than it closes the cycle. A row recorded past `plan` is **late**, shown apart.
 - **The actual is computed, never recorded:** the PR table's QU for that PR, the same window as everywhere else.
   _So far_ before the merge (the lane's calls since the previous PR on the branch), _provisional_ until the merge's 6 h
-  post window has passed and been scanned, then _final_; a PR with a later one on its branch is final at once.
+  post window has passed and been scanned, then _final_; a PR with a later one on its branch ends at its own merge,
+  so it is final once the scan reaches that. A reused name's final actual still moves when its next PR merges: the
+  PR table then gives the old PR's post-window calls to the new one (a PR table rule, shared with the fit).
 - `pnpm usage score` (and the report's _Live estimates_): per row the estimate, its range, the merged lines and ui
   beside the estimated ones, the actual and its state, the ratio, in range or not, and **at actual**: the model now at
   the merged PR's own lines, paths and lenses (not leave-one-out). The estimate's gap to it is input error, the rest
   model error. Over final rows: median and rms error, PRs in range and within ×1.5, totals; then the merged PRs since
   the first estimate that have none (a count, since nothing could clear it). `--lane` adds the row as one line
-  (`usage (local only, never pasted): …`) for the lane's report.
+  (`usage (local only, never pasted): …`) for the lane's `decisions.md`. `score` reads PRs for the cache's own
+  `--since` when that reaches back further than the default, so it and an older report never refetch in turn; with
+  gh down and no cache at all it opens with **No PR table** and exits 1. The report scores only estimates on or
+  after its `--since` (its PRs start there) and counts the rest.
 - **`score --check`**, one line per gap, exit 1 on any, in about 0.1 s (it never loads the transcript cache, which
   takes seconds): (a) a lane file past `plan`, or in `plan` with its step plan written, with no estimate this cycle
   (`parked`, `blocked`, `merged` and `cleanup` are quiet); (b) an estimate whose lane file is gone with no merged PR
   after it: the PR table is stale (it names the newest PR and the fetch) or the lane was abandoned (`--void`); plus a
-  torn lane file or ledger row. `estimateGaps()` in `cli.ts` is the same check, for the hub's `pq-check`
-  (HUB.md → _The hub's duties_ → _Usage estimates_).
+  torn lane file or ledger row. A void or a refreshed table never silences (a): a voided lane still working is
+  asked again, and a lane file still in `local`, `dev` or `pr` after its own PR merged reads that PR's cycle (the
+  lane file names the PR, or its phase began before the merge). `--check` takes no other flag. `estimateGaps()` in
+  `cli.ts` is the same check, for the hub's `pq-check` (HUB.md → _The hub's duties_ → _Usage estimates_).
+- `--void` refuses a lane with no open estimate (exit 2), so a typo never reads as done.
 - A lane abandoned under a reused name with no PR counts into the next cycle's so far, as it does in the PR table.
 
 ## Phase log

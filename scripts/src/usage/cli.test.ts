@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { commands, usageFor, usageKeys } from '../bot/help.ts';
 import {
+  DEFAULT_SINCE,
   FLAGS,
   USAGE,
   lensTypes,
@@ -201,7 +202,7 @@ describe('since and merged PRs', () => {
     writeFileSync(join(cache, 'prs.json'), '{}');
     expect(cachedPRs(cache)).toBeNull();
     writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: 5, prs: [] }));
-    expect(cachedPRs(cache)).toEqual({ prs: [], fetchedAt: 5 });
+    expect(cachedPRs(cache)).toEqual({ prs: [], fetchedAt: 5, since: null });
   });
 
   it('falls back to the cache with a note when gh fails, and fails loud with none', async () => {
@@ -551,18 +552,30 @@ describe('usage report end to end', () => {
     expect(lines).toEqual(['usage –']);
     // the score: the same table, the lane's own paste line, and lane-q's gap
     lines.length = 0;
-    // score reads PRs for its own --since: the cache is another's, so it refetches; gh down leaves it stale
+    // score takes the cache's older --since as its own, so it never refetches it (gh would fail here)
     const down = async (): Promise<string> => {
       throw new Error('HTTP 504');
     };
     expect(await main(['score', '--no-scan', '--lane', 'lane-a'], out, { gh: down })).toBe(0);
     const sc = lines.join('\n');
-    expect(sc).toMatch(/^\*\*PR table stale: newest PR 4, .*the cache is for --since 2026-01-01\)/);
+    expect(sc).not.toContain('PR table stale');
+    expect(sc).toContain('- PR table: newest PR 4, fetched');
     expect(sc).not.toContain('| lane-q');
     expect(sc).toMatch(
       /^usage \(local only, never pasted\): estimate 2\.0 QU \(1\.0–4\.0\) at 8 lines; provisional [\d.]+ QU \(×[\d.]+\), PR 3$/m,
     );
     expect(sc).toMatch(/- lane-q: estimated .* no lane file and no merged PR after it/);
+    // a report for a later --since with gh down: the stale header, and its estimates before --since left out
+    lines.length = 0;
+    expect(await main(['report', '--no-scan', '--since', '2026-01-06'], out, { gh: down })).toBe(0);
+    const rp = lines.join('\n');
+    expect(rp).toMatch(
+      /^\*\*PR table stale: newest PR 4, fetched .* \(gh: HTTP 504; the cache is for --since 2026-01-01\)/,
+    );
+    expect(rp).toContain('- PR table: STALE: newest PR 4');
+    expect(rp).toContain(
+      "- 2 estimates before this report's --since left out: pnpm usage score has them.",
+    );
   });
 });
 
@@ -635,7 +648,9 @@ describe('the estimate ledger: estimate --lane and score', () => {
     expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
     const text = readFileSync(ledger(), 'utf8');
     expect(text.split('\n').filter((l) => l.startsWith('{') && l.endsWith('}'))).toHaveLength(2);
-    expect((await run('score', '--check')).text).toContain('estimates.jsonl: 1 unreadable row');
+    expect((await run('score', '--check')).text).toBe(
+      'gap: estimates.jsonl: unreadable row at line 2 → delete it by hand (a torn append; the rest is read)',
+    );
     rmSync(ledger());
     mkdirSync(ledger()); // a directory where the file goes: the append fails
     const bad = await run('estimate', '--lines', '300', '--lane', 'lane-a');
@@ -672,7 +687,7 @@ describe('the estimate ledger: estimate --lane and score', () => {
     mkdirSync(join(usage, 'cache'), { recursive: true });
     writeFileSync(
       join(usage, 'cache', 'prs.json'),
-      JSON.stringify({ fetchedAt: 0, since: '2026-11-04', prs: [] }),
+      JSON.stringify({ fetchedAt: 0, since: DEFAULT_SINCE, prs: [] }),
     );
     lines.length = 0;
     const gh = async (): Promise<string> => {
@@ -684,5 +699,80 @@ describe('the estimate ledger: estimate --lane and score', () => {
     );
     expect(lines.join('\n')).toContain('- PR table: STALE: newest PR none');
     expect(lines.join('\n')).toContain('No estimates recorded');
+  });
+
+  it('score with gh failing and no PR cache says so first and exits 1', async () => {
+    const gh = async (): Promise<string> => {
+      throw new Error('HTTP 502');
+    };
+    const r = await (async () => {
+      lines.length = 0;
+      const code = await main(['score', '--no-scan'], out, { gh });
+      return { code, text: lines.join('\n') };
+    })();
+    expect(r.code).toBe(1);
+    expect(r.text).toMatch(
+      /^\*\*No PR table: gh failed \(.*HTTP 502.*\) and there is no cache\/prs\.json\.\*\*/,
+    );
+    expect(r.text).toContain('- PR table: none: ');
+  });
+
+  it('refuses --check with other flags, and a void with nothing open', async () => {
+    for (const f of [['--lane', 'lane-a'], ['--refresh'], ['--void', 'x']])
+      expect((await run('score', '--check', ...f)).code).toBe(2);
+    expect(existsSync(ledger())).toBe(false);
+    const none = await run('score', '--lane', 'lane-a', '--void', 'gone');
+    expect(none).toEqual({
+      code: 2,
+      text: '--void: lane-a has no open estimate (none recorded, already voided, or its PR merged)',
+    });
+    laneFile('lane-a', 'plan');
+    await run('estimate', '--lines', '300', '--lane', 'lane-a');
+    expect((await run('score', '--lane', 'lane-a', '--void', 'gone')).code).toBe(0);
+    expect((await run('score', '--lane', 'lane-a', '--void', 'again')).code).toBe(2); // already voided
+    expect(readFileSync(ledger(), 'utf8').trimEnd().split('\n')).toHaveLength(2);
+  });
+
+  it('records a torn lane file as phase unknown, and counts re-estimates per cycle on a reused name', async () => {
+    const t0 = Date.parse('2026-01-05T10:00:00Z');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(t0);
+      mkdirSync(join(board(), 'lanes'), { recursive: true });
+      writeFileSync(join(board(), 'lanes', 'lane-a.json'), '{"v":1,"bra');
+      expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).text).toMatch(
+        /\(lane lane-a, estimate 1 this cycle\)$/,
+      );
+      expect(JSON.parse(readFileSync(ledger(), 'utf8')).phase).toBeNull();
+      // PR 9 merged on lane-a an hour later: the next estimate on the name starts the count again
+      mkdirSync(join(usage, 'cache'), { recursive: true });
+      const pr = {
+        number: 9,
+        title: 't',
+        branch: 'lane-a',
+        changedFiles: 1,
+        additions: 1,
+        deletions: 0,
+        files: [],
+      };
+      writeFileSync(
+        join(usage, 'cache', 'prs.json'),
+        JSON.stringify({
+          fetchedAt: t0,
+          since: DEFAULT_SINCE,
+          prs: [{ ...pr, mergedAt: t0 + 3_600_000 }],
+        }),
+      );
+      vi.setSystemTime(t0 + 2 * 3_600_000);
+      laneFile('lane-a', 'plan');
+      expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).text).toMatch(
+        /\(lane lane-a, estimate 1 this cycle\)$/,
+      );
+      expect((await run('estimate', '--lines', '400', '--lane', 'lane-a')).text).toMatch(
+        /\(lane lane-a, estimate 2 this cycle\)$/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

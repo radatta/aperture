@@ -366,7 +366,7 @@ export function reportModel(o: {
   now: number;
   phaseLog?: PhaseLogRow[];
   priors?: { priors: Priors; note: string };
-  ledger?: { rows: LedgerRow[]; bad: number };
+  ledger?: { rows: LedgerRow[]; bad: number[] };
   prsFetchedAt?: number | null;
   stale?: Stale | null;
 }): ReportModel {
@@ -500,12 +500,14 @@ export function reportModel(o: {
     concurrency: concurrency(a, rows, o.events, o.since),
     work,
     score: liveScore({
-      ledger: o.ledger ?? { rows: [], bad: 0 },
+      ledger: o.ledger ?? { rows: [], bad: [] },
       prs: o.prs,
       rows,
       calls: a.calls,
       units: work.units,
       lastCall: o.loaded.calls.at(-1)?.ts ?? null,
+      // the report's PRs start at --since, so an older estimate's PR isn't in it: pnpm usage score has those
+      from: o.since,
     }),
     table: prTableBasis(o.prs, o.prsFetchedAt ?? null, o.stale ?? null),
   };

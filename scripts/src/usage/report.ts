@@ -23,7 +23,7 @@ export const clock = (ms: number | null) =>
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-        hour12: false,
+        hourCycle: 'h23',
       });
 
 export function fitLines(m: FitModel): string[] {
@@ -383,7 +383,12 @@ export function scoreLines(s: LiveScore, table: string, lane?: string): string[]
     `- Final: ${st.n ? `${st.n}; median ×${f1(st.medianX, 2)}, rms ×${f1(st.rmsX, 2)}, ${st.inRange} of ${st.n} in range, ${st.within15} within ×1.5; total ${qu(st.predicted)} QU estimated for ${qu(st.actual)}; late ${st.late}` : 'none yet'}. Open: ${st.open}. Recorded: ${s.recorded}.`,
     `- Merged since the first estimate with none: ${s.unestimated.length ? `${s.unestimated.length} (PR ${s.unestimated.join(', ')})` : 'none'}.`,
     `- PR table: ${table}.`,
-    ...(s.bad ? [`- estimates.jsonl: ${s.bad} unreadable rows skipped.`] : []),
+    ...(s.bad.length
+      ? [`- estimates.jsonl: unreadable rows skipped, at line ${s.bad.join(', ')}.`]
+      : []),
+    ...(s.left
+      ? [`- ${s.left} estimates before this report's --since left out: pnpm usage score has them.`]
+      : []),
     '',
   ];
   if (!rows.length) {

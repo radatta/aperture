@@ -1,7 +1,7 @@
 // The estimate ledger, <usage dir>/estimates.jsonl: one row per `pnpm usage estimate --lane`, and a void row per
 // abandoned estimate. The actual is never recorded: it is the PR table's QU for the PR the row's cycle merged as
 // (docs/ops/USAGE-METER.md → Ledger and score). Pure: the CLI reads the files and passes them in.
-import { BRANCH_RE, type LaneFile, type LaneProblem } from '../board/tower/lanes.ts';
+import { BRANCH_RE, STEP_PHASES, type LaneFile, type LaneProblem } from '../board/tower/lanes.ts';
 import { errStat, inputsOf, predict, type Basis, type EstimateIn, type Units } from './estimate.ts';
 import { newestPR, type PR, type Stale } from './gh.ts';
 import { clock } from './report.ts';
@@ -74,11 +74,11 @@ function parseRow(x: unknown): LedgerRow | null {
   };
 }
 
-// A torn or foreign line is counted in `bad`, never fatal: two lanes can append at once.
-export function parseLedger(text: string): { rows: LedgerRow[]; bad: number } {
+// A torn or foreign line goes in `bad` (its 1-based line number), never fatal: two lanes can append at once.
+export function parseLedger(text: string): { rows: LedgerRow[]; bad: number[] } {
   const rows: LedgerRow[] = [];
-  let bad = 0;
-  for (const l of text.split('\n')) {
+  const bad: number[] = [];
+  for (const [n, l] of text.split('\n').entries()) {
     if (!l.trim()) continue;
     let r: LedgerRow | null = null;
     try {
@@ -87,7 +87,7 @@ export function parseLedger(text: string): { rows: LedgerRow[]; bad: number } {
       // torn
     }
     if (r) rows.push(r);
-    else bad++;
+    else bad.push(n + 1);
   }
   return { rows: rows.sort((a, b) => a.at - b.at), bad };
 }
@@ -201,8 +201,9 @@ export function scoreRows(o: {
       out.push({ ...base, state: 'no-calls', actual: null, ratio: null });
       continue;
     }
+    // a later PR on the branch ends this one's window at its own merge; either way the scan must have reached it
     const later = o.prs.some((p) => p.branch === pr.branch && p.mergedAt > pr.mergedAt);
-    const final = later || (o.lastCall !== null && o.lastCall >= pr.mergedAt + POST_MS);
+    const final = o.lastCall !== null && o.lastCall >= pr.mergedAt + (later ? 0 : POST_MS);
     out.push({
       ...base,
       state: final ? 'final' : 'provisional',
@@ -242,7 +243,7 @@ export function unestimated(entries: Entry[], rows: LedgerRow[], prRows: PRRow[]
 }
 
 // The phases a lane has left Plan in; parked and blocked say nothing, merged and cleanup are past the point.
-const PAST_PLAN = new Set(['build', 'gate', 'review', 'local', 'dev', 'pr']);
+const PAST_PLAN = new Set<string>(STEP_PHASES.filter((p) => p !== 'plan'));
 const when = (ms: number) => `${clock(ms)} PT`;
 
 // The fixed step's check (`pnpm usage score --check`): ledger, lane files and the cached PR list only, never the
@@ -251,20 +252,36 @@ const when = (ms: number) => `${clock(ms)} PT`;
 //   (b) an estimate with no lane file and no merged PR after it: the PR table is stale, or the lane was abandoned.
 export function gaps(o: {
   rows: LedgerRow[];
-  bad: number;
+  bad: number[];
   lanes: LaneFile[];
   problems: LaneProblem[];
-  prs: { prs: PR[]; fetchedAt: number } | null;
+  prs: { prs: PR[]; fetchedAt: number; stale?: Stale | null } | null;
 }): string[] {
   const out: string[] = [];
   const prs = o.prs?.prs ?? [];
-  if (o.bad) out.push(`${LEDGER}: ${o.bad} unreadable row${o.bad === 1 ? '' : 's'}`);
+  if (o.bad.length)
+    out.push(
+      `${LEDGER}: unreadable row${o.bad.length === 1 ? '' : 's'} at line ${o.bad.join(', ')} → delete ${o.bad.length === 1 ? 'it' : 'them'} by hand (a torn append; the rest is read)`,
+    );
   for (const p of o.problems) out.push(`lanes/${p.file}: unreadable (${p.problem}), not checked`);
   const entries = current(o.rows, prs);
-  const open = new Set(entries.filter((e) => !e.pr && e.row).map((e) => e.lane));
+  const estimated = (e: Entry | undefined) => !!e && !!e.row && !e.voided;
   for (const l of o.lanes) {
     const due = PAST_PLAN.has(l.phase) || (l.phase === 'plan' && l.plan !== null);
-    if (due && !open.has(l.branch))
+    if (!due) continue;
+    // The lane's own cycle: its PR once that merged (the lane file trails the merge, and a refreshed table moves
+    // the estimate into the merged cycle), else the open one. A reused name's new lane starts after the old merge.
+    const merged = prs
+      .filter(
+        (p) =>
+          p.branch === l.branch &&
+          (p.number === l.pr || (l.phaseSince !== null && p.mergedAt >= l.phaseSince)),
+      )
+      .sort((a, b) => a.mergedAt - b.mergedAt)[0];
+    const mine = entries.find(
+      (e) => e.lane === l.branch && (merged ? e.pr?.number === merged.number : !e.pr),
+    );
+    if (!estimated(mine))
       out.push(
         `${l.branch}: no usage estimate (phase ${l.phase}) → pnpm usage estimate --lane ${l.branch} --lines <n> [--ui] --lenses <…>`,
       );
@@ -274,8 +291,8 @@ export function gaps(o: {
     ...o.problems.map((p) => p.file.replace(/\.json$/, '')),
   ]);
   const table = o.prs
-    ? prTableBasis(prs, o.prs.fetchedAt, null)
-    : 'no PR table (cache/prs.json missing)';
+    ? prTableBasis(prs, o.prs.fetchedAt, o.prs.stale ?? null)
+    : 'no PR table (cache/prs.json missing or unreadable)';
   for (const e of entries) {
     if (!e.row || e.voided || e.pr || live.has(e.lane)) continue;
     out.push(
@@ -289,27 +306,33 @@ export type LiveScore = {
   rows: ScoreRow[];
   stat: ReturnType<typeof scoreStat>;
   unestimated: number[];
-  bad: number;
+  bad: number[];
   recorded: number; // estimate rows in the ledger
+  left: number; // estimate rows before `from`, whose PRs the caller's table doesn't reach
 };
 
 // The report's and `pnpm usage score`'s one computation: the ledger against the PR table and the lane calls.
 export function liveScore(o: {
-  ledger: { rows: LedgerRow[]; bad: number };
+  ledger: { rows: LedgerRow[]; bad: number[] };
   prs: PR[];
   rows: PRRow[];
   calls: Attributed[];
   units: Units;
   lastCall: number | null;
+  from?: number;
 }): LiveScore {
-  const entries = current(o.ledger.rows, o.prs);
+  const from = o.from ?? -Infinity;
+  const kept = o.ledger.rows.filter((r) => r.at >= from);
+  const entries = current(kept, o.prs);
   const rows = scoreRows({ ...o, entries });
+  const est = (rs: LedgerRow[]) => rs.filter((r) => !isVoid(r)).length;
   return {
     rows,
     stat: scoreStat(rows),
-    unestimated: unestimated(entries, o.ledger.rows, o.rows),
+    unestimated: unestimated(entries, kept, o.rows),
     bad: o.ledger.bad,
-    recorded: o.ledger.rows.filter((r) => !isVoid(r)).length,
+    recorded: est(kept),
+    left: est(o.ledger.rows) - est(kept),
   };
 }
 

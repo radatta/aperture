@@ -1,6 +1,6 @@
 // The estimate ledger: rows, cycles, the live score and the fixed step's gaps. Every number is invented.
 import { describe, expect, it } from 'vitest';
-import type { LaneFile } from '../board/tower/lanes.ts';
+import { PHASES, STEP_PHASES, type LaneFile } from '../board/tower/lanes.ts';
 import { fitUnits } from './estimate.ts';
 import type { PR } from './gh.ts';
 import { prRow } from './fixtures.ts';
@@ -75,8 +75,8 @@ describe('parseLedger and formatRow', () => {
     const b = voided('lane-b', 1);
     const text = `${formatRow(a)}\n${formatRow(b)}\n`;
     expect(text).toContain('"at":"2026-01-05T02:00:00.000Z"');
-    expect(parseLedger(text)).toEqual({ rows: [b, a], bad: 0 });
-    expect(parseLedger('')).toEqual({ rows: [], bad: 0 });
+    expect(parseLedger(text)).toEqual({ rows: [b, a], bad: [] });
+    expect(parseLedger('')).toEqual({ rows: [], bad: [] });
   });
 
   it('counts torn and foreign lines as bad and keeps the rest', () => {
@@ -94,7 +94,7 @@ describe('parseLedger and formatRow', () => {
     ];
     expect(parseLedger([good, ...bad].join('\n'))).toMatchObject({
       rows: [{ lane: 'lane-a' }],
-      bad: 7,
+      bad: [2, 3, 4, 5, 6, 7, 8], // line numbers, 1-based
     });
   });
 });
@@ -142,6 +142,16 @@ describe('scoreRows', () => {
       lastCall: T(12),
     });
     expect(s).toMatchObject({ state: 'so-far', actual: 4, ratio: 0.4, pr: null, inRange: null });
+    // no PR on the branch yet: every lane call counts
+    const [first] = scoreRows({
+      entries: current([est('lane-b', 1)], prs),
+      rows,
+      prs,
+      calls,
+      units,
+      lastCall: T(12),
+    });
+    expect(first).toMatchObject({ state: 'so-far', actual: 50 });
   });
 
   it('is provisional until the post window has passed and been scanned, then final', () => {
@@ -168,17 +178,20 @@ describe('scoreRows', () => {
       actualLines: 320,
       pr: 1,
     });
-    // a PR with a later one on its branch is final at once
+    // a later PR on its branch ends the window at the merge: final once the scan reaches the merge
     const two = [...prs, pr(2, 'lane-a', 11)];
-    const [s] = scoreRows({
-      entries: current([est('lane-a', 1)], two),
-      rows,
-      prs: two,
-      calls: [],
-      units,
-      lastCall: null,
-    });
-    expect(s?.state).toBe('final');
+    const later = (lastCall: number | null) =>
+      scoreRows({
+        entries: current([est('lane-a', 1)], two),
+        rows,
+        prs: two,
+        calls: [],
+        units,
+        lastCall,
+      })[0]?.state;
+    expect(later(T(10))).toBe('final');
+    expect(later(T(10) - 1)).toBe('provisional');
+    expect(later(null)).toBe('provisional');
   });
 
   it('marks range edges, no calls, void and late', () => {
@@ -228,7 +241,12 @@ describe('the live score', () => {
       prRow({ number: 2, branch: 'lane-b', mergedAt: T(10), qu: 5 }), // ×0.5
       prRow({ number: 3, branch: 'lane-c', mergedAt: T(10), qu: 10 }), // ×1
     ];
-    const ledger = { rows: ['lane-a', 'lane-b', 'lane-c', 'lane-d'].map((l) => est(l, 1)), bad: 0 };
+    const ledger = {
+      rows: ['lane-a', 'lane-b', 'lane-c', 'lane-d'].map((l) =>
+        est(l, 1, l === 'lane-c' ? { phase: 'review' } : {}),
+      ),
+      bad: [],
+    };
     const s = liveScore({ ledger, prs, rows, calls: [], units, lastCall: T(100) });
     expect(s.stat).toMatchObject({
       n: 3,
@@ -237,9 +255,14 @@ describe('the live score', () => {
       actual: 35,
       predicted: 30,
       open: 1,
+      late: 1,
     });
     expect(s.stat.medianX).toBeCloseTo(2, 6);
     expect(s.recorded).toBe(4);
+    expect(s.left).toBe(0);
+    // from: rows before it are left out and counted, never scored against a table that can't reach their PR
+    const cut = liveScore({ ledger, prs, rows, calls: [], units, lastCall: T(100), from: T(2) });
+    expect(cut).toMatchObject({ recorded: 0, left: 4, rows: [] });
   });
 
   it('counts merged PRs with no estimate only after the first one, per cycle', () => {
@@ -265,7 +288,7 @@ describe('gaps (the check)', () => {
   const steps = [
     { phase: 'build' as const, lo: 10, hi: 20, source: 'measured' as const, spentMs: 0 },
   ];
-  const none = { rows: [], bad: 0, lanes: [], problems: [], prs: { prs: [], fetchedAt: T(0) } };
+  const none = { rows: [], bad: [], lanes: [], problems: [], prs: { prs: [], fetchedAt: T(0) } };
 
   it('is quiet with nothing to say', () => expect(gaps(none)).toEqual([]));
 
@@ -280,18 +303,47 @@ describe('gaps (the check)', () => {
     );
   });
 
-  it('says nothing for a lane still planning, parked, blocked or merged', () => {
-    const lanes = (['plan', 'parked', 'blocked', 'merged', 'cleanup'] as const).map((p, i) =>
-      lane(`lane-${i}`, p),
+  it('asks every step phase past plan, and says nothing for plan, parked, blocked, merged or cleanup', () => {
+    const due = STEP_PHASES.filter((p) => p !== 'plan');
+    const quiet = PHASES.filter((p) => !due.includes(p as never));
+    expect(quiet).toEqual(['plan', 'merged', 'cleanup', 'parked', 'blocked']);
+    expect(gaps({ ...none, lanes: quiet.map((p, i) => lane(`lane-${i}`, p)) })).toEqual([]);
+    expect(gaps({ ...none, lanes: due.map((p, i) => lane(`lane-${i}`, p)) })).toHaveLength(
+      due.length,
     );
-    expect(gaps({ ...none, lanes })).toEqual([]);
+  });
+
+  it('asks again after a void while the lane is still live', () => {
+    const g = gaps({
+      ...none,
+      rows: [est('lane-a', 1), voided('lane-a', 2)],
+      lanes: [lane('lane-a', 'build')],
+    });
+    expect(g).toHaveLength(1);
+    expect(g[0]).toMatch(/^lane-a: no usage estimate \(phase build\)/);
+  });
+
+  it("stays quiet when the lane file trails its own PR's merge and the table has caught up", () => {
+    const prs = { prs: [pr(1, 'lane-a', 10)], fetchedAt: T(11) };
+    const rows = [est('lane-a', 1)]; // now in PR 1's cycle, not the open one
+    // phaseSince before the merge, or the lane file naming the PR
+    expect(
+      gaps({ ...none, rows, prs, lanes: [{ ...lane('lane-a', 'pr'), phaseSince: T(5) }] }),
+    ).toEqual([]);
+    expect(
+      gaps({ ...none, rows, prs, lanes: [{ ...lane('lane-a', 'dev'), phaseSince: T(12), pr: 1 }] }),
+    ).toEqual([]);
+    // the merged cycle had no estimate: still a gap
+    expect(
+      gaps({ ...none, prs, lanes: [{ ...lane('lane-a', 'pr'), phaseSince: T(5) }] }),
+    ).toHaveLength(1);
   });
 
   it("never lets a reused name's earlier estimate count", () => {
     const g = gaps({
       ...none,
       rows: [est('lane-a', 1)],
-      lanes: [lane('lane-a', 'build')],
+      lanes: [{ ...lane('lane-a', 'build'), phaseSince: T(11) }], // the new lane started after PR 1 merged
       prs: { prs: [pr(1, 'lane-a', 10)], fetchedAt: T(12) },
     });
     expect(g).toHaveLength(1);
@@ -308,7 +360,13 @@ describe('gaps (the check)', () => {
     expect(g[0]).toContain('newest PR 7, fetched 01/05, 10:30 PT');
     expect(g[0]).toContain('pnpm usage score --lane lane-a --void "<why>"');
     expect(gaps({ ...none, rows: [est('lane-a', 2), voided('lane-a', 3)], prs })).toEqual([]);
-    expect(gaps({ ...none, rows: [est('lane-a', 2)], prs: null })[0]).toContain('no PR table');
+    expect(gaps({ ...none, rows: [est('lane-a', 2)], prs: null })[0]).toContain(
+      'no PR table (cache/prs.json missing or unreadable)',
+    );
+    const stale = { newest: 7, fetchedAt: T(0), why: 'HTTP 502' };
+    expect(gaps({ ...none, rows: [est('lane-a', 2)], prs: { ...prs, stale } })[0]).toContain(
+      'the PR table is stale (STALE: newest PR 7, fetched 01/04, 16:00 PT (gh: HTTP 502))',
+    );
     // merged: the actual is the PR's, nothing to flag
     expect(
       gaps({ ...none, rows: [est('lane-a', 2)], prs: { ...prs, prs: [pr(8, 'lane-a', 5)] } }),
@@ -318,12 +376,12 @@ describe('gaps (the check)', () => {
   it('names a torn lane file and never reads it as a missing one; names unreadable ledger rows', () => {
     const g = gaps({
       ...none,
-      bad: 2,
+      bad: [3, 9],
       rows: [est('lane-a', 1)],
       problems: [{ file: 'lane-a.json', problem: 'not JSON' }],
     });
     expect(g).toEqual([
-      'estimates.jsonl: 2 unreadable rows',
+      'estimates.jsonl: unreadable rows at line 3, 9 → delete them by hand (a torn append; the rest is read)',
       'lanes/lane-a.json: unreadable (not JSON), not checked',
     ]);
   });

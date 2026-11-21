@@ -270,8 +270,9 @@ acting lane's pane: actions on live state, with no whole diff to show, no undo a
   into `queue.json` `asks[]` first (_Asks_ below), so the user answers by id and letter. An agent-rule patch the hub
   shows, applies and verifies itself with `pnpm claude-edit` (_Approval_ → _Agent-rule edits_).
 - **Usage estimates** (`docs/ops/USAGE-METER.md` → _Ledger and score_). Each lane records its own estimate right
-  after Plan and sends it in `[kickoff]`; the hub checks, it doesn't compute. `pq-check` runs `estimateGaps()` from
-  `scripts/src/usage/cli.ts` with every queue write, the same as `pnpm usage score --check`: a lane past plan with no
+  after Plan and sends it in `[kickoff]`; the hub checks, it doesn't compute, with `pnpm usage score --check` (exit 1 on a gap): at
+  each `[kickoff]`, and with every queue write once the hub's `pq-check` calls `estimateGaps()` from
+  `scripts/src/usage/cli.ts` (the same check; the hub adds the call, its own file). A lane past plan with no
   estimate goes back to it (or the hub runs `pnpm usage estimate --lane <branch> …` on the kickoff's numbers, recorded
   late); an estimate with no lane file and no merged PR means `pnpm usage score --refresh`, or for an abandoned lane
   `pnpm usage score --lane <branch> --void "<why>"`. At `[merged]`, `pnpm usage score --lane <branch>` gives the
