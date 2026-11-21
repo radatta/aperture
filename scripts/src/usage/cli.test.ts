@@ -17,7 +17,7 @@ import {
 import { cachedPRs, mergedPRs, PR_LIMIT } from './gh.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
 import { fitModel, hoursTo100, scheduledResets } from './model.ts';
-import { boardLine } from './report.ts';
+import { boardLine, staleLine } from './report.ts';
 import { parseMeter } from './meter.ts';
 
 let tmp: string;
@@ -217,9 +217,58 @@ describe('since and merged PRs', () => {
       now: 0,
       gh: async () => JSON.stringify([pr(1)]),
     });
-    const r = await mergedPRs(cache, { since: '2026-01-01', now: 0, refresh: true, gh: bad });
-    expect(r.note).toContain('gh failed');
+    const r = await mergedPRs(cache, { since: '2026-01-01', now: 5, refresh: true, gh: bad });
+    expect(r.stale).toEqual({ newest: 1, fetchedAt: 0, why: 'HTTP 502' });
+    expect(r.fetchedAt).toBe(0);
     expect(r.prs).toHaveLength(1);
+    // a cache for another --since still stands in, and says whose it is
+    const o = await mergedPRs(cache, { since: '2025-12-01', now: 5, gh: bad });
+    expect(o.stale?.why).toBe('HTTP 502; the cache is for --since 2026-01-01');
+    expect(staleLine(r.stale!)).toMatch(
+      /^\*\*PR table stale: newest PR 1, fetched \d\d\/\d\d, \d\d:\d\d PT\*\* \(gh: HTTP 502\)/,
+    );
+  });
+
+  it('refetches only PRs merged since the cached newest (less a day), keeping the rest', async () => {
+    const at = (n: number, iso: string) => ({ ...pr(n), mergedAt: iso });
+    const calls: string[][] = [];
+    let reply = [at(1, '2026-01-03T10:00:00Z'), at(2, '2026-01-05T01:00:00Z')];
+    const gh = async (args: string[]) => {
+      calls.push(args);
+      return JSON.stringify(reply);
+    };
+    const cache = join(tmp, 'c');
+    await mergedPRs(cache, { since: '2026-01-01', now: 0, gh });
+    expect(calls[0]).toContain('merged:>=2025-11-02'); // no cache: the whole lookback
+    reply = [
+      { ...at(2, '2026-01-05T01:00:00Z'), title: 'refetched' },
+      at(3, '2026-01-06T09:00:00Z'),
+    ];
+    const r = await mergedPRs(cache, { since: '2026-01-01', now: 10, refresh: true, gh });
+    expect(calls[1]).toContain('merged:>=2026-01-04'); // PR 2's day less one, in UTC
+    expect(r.prs.map((p) => [p.number, p.title])).toEqual([
+      [1, 't'],
+      [2, 'refetched'],
+      [3, 't'],
+    ]);
+    expect(cachedPRs(cache)).toMatchObject({
+      fetchedAt: 10,
+      prs: [{ number: 1 }, { number: 2 }, { number: 3 }],
+    });
+    // past the hour it refetches by itself, still incrementally; another --since starts over
+    await mergedPRs(cache, { since: '2026-01-01', now: 10 + 3_600_000, gh });
+    expect(calls[2]).toContain('merged:>=2026-01-05');
+    await mergedPRs(cache, { since: '2025-12-01', now: 20 + 3_600_000, gh });
+    expect(calls[3]).toContain('merged:>=2025-10-02');
+    // an incremental page at the gh limit still says so
+    reply = Array.from({ length: PR_LIMIT }, (_, i) => at(10 + i, '2026-01-07T00:00:00Z'));
+    const full = await mergedPRs(cache, {
+      since: '2025-12-01',
+      now: 30 + 3_600_000,
+      refresh: true,
+      gh,
+    });
+    expect(full.note).toContain('the gh limit');
   });
 });
 
@@ -448,8 +497,35 @@ describe('usage report end to end', () => {
         ],
       }),
     );
+    // lane-a recorded an estimate before its PR merged; lane-q's has no lane file and no PR
+    const row = (lane: string, at: string) =>
+      JSON.stringify({
+        v: 1,
+        lane,
+        at,
+        phase: 'plan',
+        inp: { lines: 8, ui: true, lenses: ['review-correctness'], fanout: 0 },
+        qu: 2,
+        lo: 1,
+        hi: 4,
+        pct: 0.2,
+        pctLo: 0.1,
+        pctHi: 0.4,
+        basis: { regime: 0, band: 'prior', k: 'prior', priors: 'placeholders' },
+      });
+    writeFileSync(
+      join(usage, 'estimates.jsonl'),
+      `${row('lane-a', ts(0))}\n${row('lane-q', ts(2))}\n`,
+    );
     expect(await main(['report', '--since', '2026-01-01'], out)).toBe(0);
     const text = lines.join('\n');
+    expect(text).toContain('## Live estimates');
+    expect(text).toMatch(
+      /\| lane-a \| [^|]+ \| 8 \(6\) \| yes \| 2\.0 \(1\.0–4\.0\) \| [\d.]+ provisional \|/,
+    );
+    expect(text).toMatch(/\| lane-q \| .* so far \|/);
+    expect(text).toContain('- PR table: newest PR 4, fetched');
+    expect(text).not.toContain('PR table stale');
     expect(text).toContain('| 3 | lane-a | small-fix | 3 | 6 | 1 |');
     expect(text).toContain('Not enough data');
     for (const h of [
@@ -473,5 +549,140 @@ describe('usage report end to end', () => {
     lines.length = 0;
     expect(await main(['line', '--no-scan'], out)).toBe(0);
     expect(lines).toEqual(['usage –']);
+    // the score: the same table, the lane's own paste line, and lane-q's gap
+    lines.length = 0;
+    // score reads PRs for its own --since: the cache is another's, so it refetches; gh down leaves it stale
+    const down = async (): Promise<string> => {
+      throw new Error('HTTP 504');
+    };
+    expect(await main(['score', '--no-scan', '--lane', 'lane-a'], out, { gh: down })).toBe(0);
+    const sc = lines.join('\n');
+    expect(sc).toMatch(/^\*\*PR table stale: newest PR 4, .*the cache is for --since 2026-01-01\)/);
+    expect(sc).not.toContain('| lane-q');
+    expect(sc).toMatch(
+      /^usage \(local only, never pasted\): estimate 2\.0 QU \(1\.0–4\.0\) at 8 lines; provisional [\d.]+ QU \(×[\d.]+\), PR 3$/m,
+    );
+    expect(sc).toMatch(/- lane-q: estimated .* no lane file and no merged PR after it/);
+  });
+});
+
+describe('the estimate ledger: estimate --lane and score', () => {
+  const board = () => join(tmp, 'board');
+  const laneFile = (branch: string, phase: string) => {
+    mkdirSync(join(board(), 'lanes'), { recursive: true });
+    writeFileSync(
+      join(board(), 'lanes', `${branch}.json`),
+      JSON.stringify({ v: 1, branch, phase, updatedAt: '2026-01-05T10:00:00Z' }),
+    );
+  };
+  const ledger = () => join(usage, 'estimates.jsonl');
+  const run = async (...argv: string[]) => {
+    lines.length = 0;
+    const code = await main(argv, out);
+    return { code, text: lines.join('\n') };
+  };
+
+  it('records an estimate for a lane with a lane file, and a re-estimate as a second row', async () => {
+    laneFile('lane-a', 'plan');
+    const a = await run(
+      'estimate',
+      '--lines',
+      '300',
+      '--lenses',
+      'correctness,shell',
+      '--lane',
+      'lane-a',
+    );
+    expect(a.code).toBe(0);
+    expect(a.text).toMatch(
+      /^estimate: 300 lines; lenses: Plan, code-reviewer, review-correctness, review-shell/,
+    );
+    expect(a.text).toMatch(/recorded: .*estimates\.jsonl \(lane lane-a, estimate 1 this cycle\)$/);
+    laneFile('lane-a', 'review');
+    const b = await run('estimate', '--lines', '500', '--lane', 'lane-a');
+    expect(b.text).toMatch(/estimate 2 this cycle, late: phase review\)$/);
+    const rows = readFileSync(ledger(), 'utf8')
+      .trimEnd()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      v: 1,
+      lane: 'lane-a',
+      phase: 'plan',
+      inp: { lines: 300, ui: false, lenses: ['review-correctness', 'review-shell'], fanout: 0 },
+      basis: { band: 'prior', k: 'prior', priors: 'placeholders' },
+    });
+    expect(rows[0].lo).toBeLessThanOrEqual(rows[0].qu);
+    expect(rows[1]).toMatchObject({ phase: 'review', inp: { lines: 500 } });
+  });
+
+  it('refuses a lane with no lane file or a bad name, writing nothing; without --lane writes nothing', async () => {
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-x')).text).toContain(
+      'no lane file at',
+    );
+    expect((await run('estimate', '--lines', '300', '--lane', 'Lane X')).code).toBe(2);
+    expect((await run('estimate', '--lines', '300', '--lane')).code).toBe(2);
+    expect((await run('estimate', '--lines', '300')).code).toBe(0);
+    expect(existsSync(ledger())).toBe(false);
+  });
+
+  it('creates a missing usage dir, mends a torn last line, and says NOT RECORDED when it cannot write', async () => {
+    laneFile('lane-a', 'plan');
+    rmSync(usage, { recursive: true });
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
+    writeFileSync(ledger(), `${readFileSync(ledger(), 'utf8')}{"v":1,"lane":"lane-a","at":"2026`);
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
+    const text = readFileSync(ledger(), 'utf8');
+    expect(text.split('\n').filter((l) => l.startsWith('{') && l.endsWith('}'))).toHaveLength(2);
+    expect((await run('score', '--check')).text).toContain('estimates.jsonl: 1 unreadable row');
+    rmSync(ledger());
+    mkdirSync(ledger()); // a directory where the file goes: the append fails
+    const bad = await run('estimate', '--lines', '300', '--lane', 'lane-a');
+    expect(bad.code).toBe(1);
+    expect(bad.text).toMatch(/^estimate: 300 lines/); // the estimate still shows
+    expect(bad.text).toMatch(/NOT RECORDED: /);
+  });
+
+  it('check: exit 1 on a lane past plan with no estimate, 0 once recorded; loads no cache', async () => {
+    laneFile('lane-a', 'build');
+    const g = await run('score', '--check');
+    expect(g).toEqual({
+      code: 1,
+      text: 'gap: lane-a: no usage estimate (phase build) → pnpm usage estimate --lane lane-a --lines <n> [--ui] --lenses <…>',
+    });
+    await run('estimate', '--lines', '300', '--lane', 'lane-a');
+    expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
+    expect(existsSync(join(usage, 'cache'))).toBe(false);
+  });
+
+  it('void closes an abandoned estimate, and wants a lane and a reason', async () => {
+    laneFile('lane-a', 'plan');
+    await run('estimate', '--lines', '300', '--lane', 'lane-a');
+    rmSync(join(board(), 'lanes', 'lane-a.json')); // lanes end, no PR
+    expect((await run('score', '--check')).code).toBe(1);
+    expect((await run('score', '--lane', 'lane-a', '--void')).code).toBe(2);
+    expect((await run('score', '--void', 'gone')).code).toBe(2);
+    const v = await run('score', '--lane', 'lane-a', '--void', 'scope moved to another lane');
+    expect(v.text).toMatch(/^voided: lane-a's open estimate \(scope moved to another lane\)/);
+    expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
+  });
+
+  it('score --refresh with gh failing heads the output with the stale table', async () => {
+    mkdirSync(join(usage, 'cache'), { recursive: true });
+    writeFileSync(
+      join(usage, 'cache', 'prs.json'),
+      JSON.stringify({ fetchedAt: 0, since: '2026-11-04', prs: [] }),
+    );
+    lines.length = 0;
+    const gh = async (): Promise<string> => {
+      throw new Error('HTTP 504 Gateway Timeout');
+    };
+    expect(await main(['score', '--no-scan', '--refresh'], out, { gh })).toBe(0);
+    expect(lines.join('\n')).toMatch(
+      /^\*\*PR table stale: newest PR none, fetched .* \(gh: HTTP 504 Gateway Timeout\)/,
+    );
+    expect(lines.join('\n')).toContain('- PR table: STALE: newest PR none');
+    expect(lines.join('\n')).toContain('No estimates recorded');
   });
 });

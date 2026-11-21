@@ -331,7 +331,7 @@ export interface Backtest {
   dropped: number; // PRs with no usable prediction (≤ 0 or NaN), left out of both scores
 }
 
-function errStat(actual: number[], pred: number[]): ErrStat {
+export function errStat(actual: number[], pred: number[]): ErrStat {
   const e = actual.map((a, i) => Math.log(a / pred[i]!));
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
   return {

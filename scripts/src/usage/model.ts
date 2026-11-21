@@ -19,7 +19,8 @@ import {
   type Manual,
   type MeterRow,
 } from './meter.ts';
-import type { PR } from './gh.ts';
+import type { PR, Stale } from './gh.ts';
+import { liveScore, prTableBasis, type LedgerRow, type LiveScore } from './ledger.ts';
 import { agreement, PHASES, type Phase } from './phases.ts';
 import {
   attribute,
@@ -246,6 +247,8 @@ export interface ReportModel {
   rounds: ReturnType<typeof reviewRounds>;
   concurrency: Concurrency;
   work: WorkModel;
+  score: LiveScore;
+  table: string; // the PR table's basis: newest PR and when it was fetched, or stale
 }
 
 // The work-units half (docs/ops/USAGE-METER.md → Work units): over lane calls since --since and the merged PRs.
@@ -363,6 +366,9 @@ export function reportModel(o: {
   now: number;
   phaseLog?: PhaseLogRow[];
   priors?: { priors: Priors; note: string };
+  ledger?: { rows: LedgerRow[]; bad: number };
+  prsFetchedAt?: number | null;
+  stale?: Stale | null;
 }): ReportModel {
   const fit = fitModel({ rows: o.rows, manual: o.manual, calls: o.loaded.calls, now: o.now });
   const log = o.phaseLog ?? [];
@@ -456,6 +462,13 @@ export function reportModel(o: {
     agreeSessions++;
   }
   const inPR = covered.reduce((x, r) => x + r.qu, 0);
+  const work = workModel(a, rows, {
+    since: o.since,
+    log,
+    oldParser: o.loaded.oldParser,
+    shards: o.loaded.sessions.length,
+    priors: o.priors,
+  });
   return {
     fit,
     rows,
@@ -485,12 +498,15 @@ export function reportModel(o: {
       : null,
     rounds: reviewRounds(a, rows, o.reports),
     concurrency: concurrency(a, rows, o.events, o.since),
-    work: workModel(a, rows, {
-      since: o.since,
-      log,
-      oldParser: o.loaded.oldParser,
-      shards: o.loaded.sessions.length,
-      priors: o.priors,
+    work,
+    score: liveScore({
+      ledger: o.ledger ?? { rows: [], bad: 0 },
+      prs: o.prs,
+      rows,
+      calls: a.calls,
+      units: work.units,
+      lastCall: o.loaded.calls.at(-1)?.ts ?? null,
     }),
+    table: prTableBasis(o.prs, o.prsFetchedAt ?? null, o.stale ?? null),
   };
 }

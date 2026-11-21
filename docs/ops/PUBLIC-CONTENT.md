@@ -13,6 +13,7 @@ The repo is public. Everything that reaches GitHub passes this one gate: code, d
 | Verbatim quotes of the maintainer | quote marks beside an attribution; first-person fragments                 | an attribution and date, then a quoted sentence    | paraphrase, keep the date: `(the maintainer, YYYY-MM-DD)` |
 | Home path, projects folder        | see IDENTIFIERS.md                                                        | —                                                  | `<mac-repo>`, `~/<other-project>`                         |
 | Real people's names               | anyone not a cited author or public figure                                | "asked a named friend to test it"                  | "a tester"; fixtures: `Alex Example`                      |
+| Usage and cost numbers            | `pnpm usage` output: QU, meter %, k, a lane's or PR's estimate or actual  | "PR <n> took <x> QU, <y>% of the week"             | "the usage estimate"; fixtures: invented numbers          |
 
 ## Write it this way
 
