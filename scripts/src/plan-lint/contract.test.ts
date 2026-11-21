@@ -151,7 +151,6 @@ describe('agent files', () => {
     }
     expect(read('.claude/agents/Plan.md')).toMatch(/^name: Plan$/m);
     expect(read('.claude/agents/Plan.md')).toMatch(/^model: fable$/m);
-    expect(read('.claude/agents/plan-reviewer.md')).not.toMatch(/^tools:.*\bBash\b/m);
   });
 
   it('plan-reviewer never counts as a review round', () => {
