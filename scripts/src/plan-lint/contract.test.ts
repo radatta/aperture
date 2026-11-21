@@ -143,14 +143,14 @@ describe('agent files', () => {
   });
 
   // Live once CLAUDE.md names the override: both files must then exist and pass.
-  const live = read('CLAUDE.md').includes('.claude/agents/Plan.md');
+  const live = read('CLAUDE.md').includes('.claude/agents/plan.md');
   it.runIf(live)('Plan.md and plan-reviewer.md are read-only at high, Plan on fable', () => {
-    for (const f of ['.claude/agents/Plan.md', '.claude/agents/plan-reviewer.md']) {
+    for (const f of ['.claude/agents/plan.md', '.claude/agents/plan-reviewer.md']) {
       expect(existsSync(join(ROOT, f)), f).toBe(true);
       expect(agentProblems(read(f)), f).toEqual([]);
     }
-    expect(read('.claude/agents/Plan.md')).toMatch(/^name: Plan$/m);
-    expect(read('.claude/agents/Plan.md')).toMatch(/^model: fable$/m);
+    expect(read('.claude/agents/plan.md')).toMatch(/^name: Plan$/m);
+    expect(read('.claude/agents/plan.md')).toMatch(/^model: fable$/m);
   });
 
   it('plan-reviewer never counts as a review round', () => {

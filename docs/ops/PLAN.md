@@ -3,7 +3,7 @@
 The shape of every lane's plan, so the plan carries its evidence and a reader can re-run it. The definitions of the
 dev-test matrix, the step plan, the Unknowns list and Operator steps live in `docs/ops/FEATURE-WORKFLOW.md` → phase
 2; this doc holds the row shapes, the light version and what runs after Plan. The `Plan` agent
-(`.claude/agents/Plan.md`) writes the plan; the lane saves it to `localNotes/plan.md`.
+(`.claude/agents/plan.md`) writes the plan; the lane saves it to `localNotes/plan.md`.
 
 Why this shape: review rounds that ran long were mostly design flaws already visible in the plan, a reader or writer
 the plan never listed, or an outside-tool fact assumed rather than checked. A model finds those when it must run
