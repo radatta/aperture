@@ -158,5 +158,13 @@ describe('Progress tab', () => {
     expect(await screen.findByRole('img', { name: /^Problems a week:/ })).toBeTruthy();
     expect(screen.getByText('2 of 3')).toBeTruthy();
     expect(screen.getByRole('img', { name: /^Re-solves clean a week:.* 1 of 1/ })).toBeTruthy();
+    // Each try against its own cap (two Easy problems: 20 new, 10 re-solve): 12 of 20, 9 of 10, 44 of 20.
+    expect(screen.getByRole('heading', { name: 'Time against the cap' })).toBeTruthy();
+    expect(screen.getByText(/inside their cap · median 12 min/)).toBeTruthy();
+    expect(
+      screen.getByRole('img', {
+        name: 'Tries by time against their own cap: ≤ ⅓ 0, ⅓–⅔ 1, ⅔–1× 1, 1–1.5× 0, 1.5–2× 0, 2×+ 1',
+      }),
+    ).toBeTruthy();
   });
 });

@@ -4,8 +4,7 @@
 
 import { CATALOGS } from './catalogs';
 import type { CatalogId } from './catalogs';
-import { COACH_PARAMS } from './coach';
-import type { CoachParams, ProblemRecord, Rate } from './coach';
+import type { ProblemRecord, Rate } from './coach';
 import { addDays, isoWeekKey, weekdayOf } from './dates';
 import { PATTERNS } from './neetcode150';
 import type { CatalogProblem, PatternId } from './neetcode150';
@@ -200,54 +199,48 @@ export function progressWeeks(
   return out;
 }
 
-// --- Time against the cap: live tries with minutes, the same `weeks` ISO weeks as progressWeeks ---
+// --- Time against the cap: live tries with minutes, the same `weeks` ISO weeks as progressWeeks. Each try against
+// the cap it ran under (ProblemTry.capMin), so the bins are shares of the cap. One place to swap the read (coach.md →
+// Caps): the card renders whatever bins this gives. ---
 export interface CapBin {
   label: string;
   n: number;
   over: boolean; // past the cap
 }
 export interface CapTimes {
-  capMin: number;
   timed: number;
-  inside: number; // at or under the cap
+  inside: number; // at or under its own cap
   medianMin: number | null;
   bins: CapBin[];
 }
-export function capTimes(
-  records: readonly ProblemRecord[],
-  today: string,
-  weeks = 12,
-  params: CoachParams = COACH_PARAMS,
-): CapTimes {
-  const cap = params.capMin;
+// Edges in sixths of the cap, so a try on an edge compares whole numbers (6·minutes against sixths·cap).
+const CAP_SHARES: [string, number, number, boolean][] = [
+  ['≤ ⅓', 0, 2, false],
+  ['⅓–⅔', 2, 4, false],
+  ['⅔–1×', 4, 6, false],
+  ['1–1.5×', 6, 9, true],
+  ['1.5–2×', 9, 12, true],
+  ['2×+', 12, Infinity, true],
+];
+export function capTimes(records: readonly ProblemRecord[], today: string, weeks = 12): CapTimes {
   const from = addDays(mondayOf(today), -7 * (weeks - 1));
-  const mins = records
-    .flatMap((r) =>
-      r.tries.filter((t) => !t.historical && t.minutes !== null && t.day >= from && t.day <= today),
-    )
-    .map((t) => t.minutes!)
-    .sort((a, b) => a - b);
-  const edges: [string, number, number, boolean][] = [
-    [`≤ ${Math.round(cap / 3)} min`, 0, cap / 3, false],
-    [`${Math.round(cap / 3)}–${Math.round((2 * cap) / 3)}`, cap / 3, (2 * cap) / 3, false],
-    [`${Math.round((2 * cap) / 3)}–${cap}`, (2 * cap) / 3, cap, false],
-    [`${cap}–${Math.round(cap * 1.5)}`, cap, cap * 1.5, true],
-    [`${Math.round(cap * 1.5)}–${cap * 2}`, cap * 1.5, cap * 2, true],
-    [`${cap * 2}+`, cap * 2, Infinity, true],
-  ];
+  const timed = records.flatMap((r) =>
+    r.tries.filter((t) => !t.historical && t.minutes !== null && t.day >= from && t.day <= today),
+  );
+  const mins = timed.map((t) => t.minutes!).sort((a, b) => a - b);
+  const at = timed.map((t) => ({ m: 6 * t.minutes!, cap: t.capMin }));
   const mid = mins.length >> 1;
   return {
-    capMin: cap,
     timed: mins.length,
-    inside: mins.filter((m) => m <= cap).length,
+    inside: at.filter((x) => x.m <= 6 * x.cap).length,
     medianMin: mins.length
       ? mins.length % 2
         ? mins[mid]!
         : Math.round((mins[mid - 1]! + mins[mid]!) / 2)
       : null,
-    bins: edges.map(([label, lo, hi, over]) => ({
+    bins: CAP_SHARES.map(([label, lo, hi, over]) => ({
       label,
-      n: mins.filter((m) => (lo === 0 ? m <= hi : m > lo && m <= hi)).length,
+      n: at.filter((x) => (lo === 0 || x.m > lo * x.cap) && x.m <= hi * x.cap).length,
       over,
     })),
   };

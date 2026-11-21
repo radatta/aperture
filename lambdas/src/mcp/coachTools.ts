@@ -165,7 +165,7 @@ export const todayOrNull = (ctx: ToolContext): Promise<CoachToday | null> =>
 // What live_sitting adds about the open sitting's place in the plan.
 export function slotOfSitting(
   today: CoachToday | null,
-  sitting: SittingClock & Pick<Sitting, 'problemSlug'>, // its clock in full: pauses and idle gaps come out of the cap
+  sitting: SittingClock & Pick<Sitting, 'problemSlug' | 'capMin'>, // its clock in full: pauses and idle gaps come out of the cap
   at: number,
 ) {
   if (!today) return null;
@@ -173,7 +173,8 @@ export function slotOfSitting(
   const slot = today.slots.find((s) => s.slug === sitting.problemSlug);
   const floor = today.floor?.slug === sitting.problemSlug ? today.floor : null;
   const kind = slot?.kind ?? floor?.kind ?? 'off-plan';
-  const capMin = slot?.capMin ?? COACH_PARAMS.capMin;
+  // The cap it runs under: stored at Start; a sitting from before per-slot caps ran under the old one.
+  const capMin = sitting.capMin ?? COACH_PARAMS.capLegacyMin;
   return {
     kind,
     floor: !slot && !!floor,
@@ -352,7 +353,7 @@ export const COACH_TOOLS: Tool[] = [
   {
     name: 'leetcode_today',
     description: [
-      'The LeetCode coach’s plan for today — open every practice conversation with it ("what’s today?", "continue"). Up to 4 slots in order (carry-over, new in the focus pattern, re-solve due, stretch), each with its reason, 30-minute cap, status (open / in-progress / done / skipped) and easier alternatives; the focus pattern and its day of 3 with why; the floor (one problem that counts as showing up); sittings off the plan; the re-solves due and due in the next 48 h; momentum (active days of the last 7); ended sittings with no cause tag yet (`unreviewed`) and with no Claude’s notes yet (`unnoted`); the plan mode (`planMode`: the setting, today’s mix, the due count and a one-line summary).',
+      'The LeetCode coach’s plan for today — open every practice conversation with it ("what’s today?", "continue"). Up to 4 slots in order (carry-over, new in the focus pattern, re-solve due, stretch), each with its reason, its cap in minutes (`capMin`: by kind and difficulty, or the AI pick’s), status (open / in-progress / done / skipped) and easier alternatives; the focus pattern and its day of 3 with why; the floor (one problem that counts as showing up); sittings off the plan; the re-solves due and due in the next 48 h; momentum (active days of the last 7); ended sittings with no cause tag yet (`unreviewed`) and with no Claude’s notes yet (`unnoted`); the plan mode (`planMode`: the setting, today’s mix, the due count and a one-line summary).',
       'Recomputed on every call from their sittings, so a new conversation picks up exactly where the last left off. `rules` says how to coach each slot kind; `note` how to talk about it.',
       '`ai`: with their AI pick setting on, the FIRST call of the day starts that day’s AI pick — a write: it claims the day, spends the day’s one Opus call (picking the slots from the rules’ candidates, with a `why` each and an optional day `note`) and may move the focus — then waits up to ~8 s for it. `ai.status` pending: slots are empty, call again shortly. `ai.notice`: the pick failed and the slots are the rules’.',
       'Otherwise read-only.',

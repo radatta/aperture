@@ -19,6 +19,8 @@ const ctx: CoachPickContext = {
       difficulty: 'Easy',
       kind: 're-solve',
       ifFocus: null,
+      capMin: 10,
+      capRange: [5, 15],
       rule: 'Re-solve today',
       history: {
         tries: 1,
@@ -35,6 +37,8 @@ const ctx: CoachPickContext = {
       difficulty: 'Easy',
       kind: 'new',
       ifFocus: 'stack',
+      capMin: 20,
+      capRange: [10, 30],
       rule: 'New in Stack',
       history: null,
     },
@@ -77,6 +81,34 @@ describe('coachPickOutputSchema', () => {
     expect(s.required).toEqual(['picks', 'note', 'focus']);
     expect(s.properties.picks.items.properties.slug.enum).toEqual(['two-sum', 'valid-parentheses']);
     expect(s.properties.focus.anyOf[0].properties.to.enum).toEqual(['stack', 'two-pointers']);
+  });
+  it('each pick carries a required nullable integer cap; bounds stay in code', () => {
+    const items = (
+      coachPickOutputSchema(ctx) as {
+        properties: { picks: { items: { required: string[]; properties: Record<string, unknown> } } };
+      }
+    ).properties.picks.items;
+    expect(items.required).toEqual(['slug', 'why', 'capMin']);
+    expect(items.properties.capMin).toEqual({ anyOf: [{ type: 'integer' }, { type: 'null' }] });
+  });
+  // Structured outputs cap a request at 16 union-typed and 24 optional parameters (platform docs → Structured
+  // outputs → Schema complexity limits); every object here lists all its properties as required.
+  it('stays inside the structured-output limits: few unions, no optional parameters', () => {
+    let unions = 0;
+    let optional = 0;
+    const walk = (n: unknown): void => {
+      if (!n || typeof n !== 'object') return;
+      const o = n as Record<string, unknown>;
+      if (Array.isArray(o.anyOf) || Array.isArray(o.type)) unions += 1;
+      if (o.properties && typeof o.properties === 'object') {
+        const req = new Set((o.required as string[] | undefined) ?? []);
+        optional += Object.keys(o.properties).filter((k) => !req.has(k)).length;
+      }
+      for (const v of Object.values(o)) (Array.isArray(v) ? v : [v]).forEach(walk);
+    };
+    walk(coachPickOutputSchema(ctx));
+    expect(unions).toBe(3); // note, focus, a pick's capMin
+    expect(optional).toBe(0);
   });
   it('offers no focus change while a pick is held', () => {
     const held = { ...ctx, focus: { ...ctx.focus, locked: true } };

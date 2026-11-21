@@ -13,7 +13,7 @@ const freshApi = () => createStubClient({ seed: false, storageKey: `problem-${Ma
 const ago = (n: number) => addDays(todayKey(4, Date.now()), -n);
 
 describe('Problem page', () => {
-  it('every try newest first: minutes over the cap, cause, the note, a history-only one', async () => {
+  it('every try newest first: minutes over its own cap, cause, the note, a history-only one', async () => {
     const api = freshApi();
     await api.logCoachAttempts([
       {
@@ -47,7 +47,9 @@ describe('Problem page', () => {
       screen.getByRole('region', { name: '3 tries, newest first' }),
     ).getAllByRole('listitem');
     expect(tries).toHaveLength(3);
-    expect(within(tries[0]!).getByText('34 min, over the 30 min cap')).toBeTruthy();
+    // Logged tries take the table by difficulty: the first live one as new (Easy 20), a later one as a re-solve (10).
+    expect(within(tries[0]!).getByText('34 min, over the 10 min cap')).toBeTruthy();
+    expect(within(tries[1]!).getByText('41 min, over the 20 min cap')).toBeTruthy();
     expect(within(tries[0]!).getByText(/a hint · Boundary/)).toBeTruthy();
     expect(within(tries[1]!).getByText('Peeked')).toBeTruthy();
     expect(within(tries[2]!).getByText('Before the coach')).toBeTruthy();

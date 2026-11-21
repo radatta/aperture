@@ -16,6 +16,7 @@ interface T {
   help?: HelpLevel;
   accepted?: boolean;
   minutes?: number | null;
+  cap?: number;
   historical?: boolean;
 }
 const tryOf = (t: T): ProblemTry => ({
@@ -25,6 +26,7 @@ const tryOf = (t: T): ProblemTry => ({
   cause: null,
   accepted: t.accepted ?? t.outcome !== 'failed',
   minutes: t.minutes ?? null,
+  capMin: t.cap ?? 30,
   note: null,
   historical: t.historical ?? false,
   sittingIds: [],
@@ -226,7 +228,7 @@ describe('progressWeeks', () => {
 });
 
 describe('capTimes', () => {
-  it('bins live minutes around the cap; history, untimed and pre-window tries stay out', () => {
+  it('bins live minutes by share of the cap; history, untimed and pre-window tries stay out', () => {
     const c = capTimes(
       [
         rec('two-sum', [
@@ -243,9 +245,38 @@ describe('capTimes', () => {
       ],
       TODAY,
     );
-    expect(c).toMatchObject({ capMin: 30, timed: 4, inside: 2, medianMin: 31 });
+    expect(c).toMatchObject({ timed: 4, inside: 2, medianMin: 31 });
+    expect(c.bins.map((b) => b.label)).toEqual(['≤ ⅓', '⅓–⅔', '⅔–1×', '1–1.5×', '1.5–2×', '2×+']);
     expect(c.bins.map((b) => b.n)).toEqual([1, 0, 1, 1, 0, 1]);
     expect(c.bins.map((b) => b.over)).toEqual([false, false, false, true, true, true]);
+  });
+  it('each try against its own cap; a try on an edge falls in the lower bin', () => {
+    const c = capTimes(
+      [
+        rec('two-sum', [
+          { on: day(-6), outcome: 'clean', minutes: 15, cap: 45 }, // exactly ⅓
+          { on: day(-5), outcome: 'clean', minutes: 16, cap: 45 },
+          { on: day(-4), outcome: 'solved', minutes: 20, cap: 20 }, // exactly the cap: inside
+          { on: day(-3), outcome: 'solved', minutes: 21, cap: 20 },
+          { on: day(-2), outcome: 'failed', minutes: 60, cap: 30 }, // exactly 2×
+          { on: day(-1), outcome: 'failed', minutes: 61, cap: 30 },
+        ]),
+      ],
+      TODAY,
+    );
+    expect(c).toMatchObject({ timed: 6, inside: 3, medianMin: 21 });
+    expect(c.bins.map((b) => b.n)).toEqual([1, 1, 1, 1, 1, 1]);
+  });
+  it('a 45-minute try reads inside a Medium cap and twice over an Easy re-solve', () => {
+    const c = capTimes(
+      [
+        rec('two-sum', [{ on: day(-2), outcome: 'solved', minutes: 45, cap: 45 }]),
+        rec('valid-anagram', [{ on: day(-1), outcome: 'solved', minutes: 45, cap: 10 }]),
+      ],
+      TODAY,
+    );
+    expect(c.inside).toBe(1);
+    expect(c.bins.map((b) => b.n)).toEqual([0, 0, 1, 0, 0, 1]);
   });
   it('nothing timed: no median', () => {
     expect(capTimes([], TODAY)).toMatchObject({ timed: 0, inside: 0, medianMin: null });

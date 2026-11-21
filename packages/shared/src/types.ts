@@ -508,6 +508,9 @@ export interface Sitting extends BaseEntity {
   // The extension build that opened it (its manifest version, x.y.z), set at creation only — Settings → LeetCode
   // compares the newest with the app's (extension/README.md → Versions). Absent on sittings before 2.2.0.
   extensionVersion?: string | null;
+  // The slot cap it runs under, in whole minutes (coach.ts startCapMin), set at creation only: a reopen or resume
+  // keeps it. Absent on sittings from before per-slot caps, which ran under COACH_PARAMS.capLegacyMin.
+  capMin?: number;
   // When the new sitting's rep was fully shaped (titled, noted, planned, started). Until then a repeat Start
   // shapes it fully — a Start that died after making the rep still finishes; after, a resume only starts it.
   shapedAt: number | null;
@@ -634,6 +637,9 @@ export interface CoachAiPick {
   slug: string;
   kind: SlotKind; // the candidate's kind, so the slot's coaching rules are the engine's
   why: string; // the model's one line, cut to AI_WHY_MAX
+  // The model's cap for this slot, whole minutes inside its candidate's capRange (validateCoachPick repairs anything
+  // else to absent); absent = the table's (coach.ts slotCapMin). Absent on picks from before per-slot caps.
+  capMin?: number;
 }
 // One claim, one call, one result a day (docs/areas/recruiting/coach.md → The AI pick). `claimId` fences the
 // worker's writes to the claim that invoked it; a `pending` older than AI_PICK_STALE_MS reads as a timeout.

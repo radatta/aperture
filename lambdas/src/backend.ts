@@ -117,6 +117,8 @@ import {
   patchReview,
   normalizeReviewPatch,
   planDay,
+  startCapFallback,
+  startCapMin,
   aiPickPending,
   AI_PICK_BUSY_ERROR,
   claimAiRow,
@@ -956,6 +958,7 @@ export class BackendClient implements ApiClient {
       now,
       { consistent: true },
     );
+    const capMin = await this.startCap(n);
     const sitting: Sitting = {
       ...this.baseAt(now),
       id: n.clientSittingId,
@@ -977,6 +980,7 @@ export class BackendClient implements ApiClient {
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
       extensionVersion: n.extensionVersion, // set here only: a resume never rewrites it
+      capMin, // set here only, like extensionVersion
       shapedAt: null,
       summary: emptySummary(),
     };
@@ -1001,6 +1005,18 @@ export class BackendClient implements ApiClient {
   }
   // A resume: an open sitting whose shaping never finished (a Start that died after its head) is shaped fully,
   // with its own roll; a shaped one only has its rep started.
+  // The new sitting's cap (coach.ts startCapMin), from the plan as the server reads it now — after the Start ended
+  // any stale sitting, before the new head exists. A failed read takes the fallback: Start never fails over a cap.
+  private async startCap(n: { problemSlug: string; difficulty: string | null }): Promise<number> {
+    try {
+      return startCapMin(await this.coachInput(undefined, true), n.problemSlug, n.difficulty);
+    } catch (e) {
+      console.log(
+        JSON.stringify({ event: 'lc_start_cap_fallback', error: e instanceof Error ? e.name : 'unknown' }),
+      );
+      return startCapFallback(n.problemSlug, n.difficulty);
+    }
+  }
   private async resumeShape(s: Sitting, linked: Roll): Promise<Sitting> {
     if (s.status !== 'active') return s;
     const roll = s.rollId === linked.id ? linked : ((await this.repo.getRoll(s.rollId)) ?? linked);

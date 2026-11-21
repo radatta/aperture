@@ -196,7 +196,7 @@ function CapChart({ c }: { c: CapTimes }) {
   const firstOver = c.bins.findIndex((b) => b.over);
   const yOf = (i: number) => 4 + i * rowH + (i >= firstOver ? 10 : 0);
   const ruleY = yOf(firstOver) - 5;
-  const label = `Minutes a try against the ${c.capMin} minute cap: ${c.bins.map((b) => `${b.label} ${b.n}`).join(', ')}`;
+  const label = `Tries by time against their own cap: ${c.bins.map((b) => `${b.label} ${b.n}`).join(', ')}`;
   return (
     <svg
       viewBox={`0 0 ${W} ${yOf(c.bins.length - 1) + rowH + 4}`}
@@ -239,7 +239,7 @@ function CapChart({ c }: { c: CapTimes }) {
         className="stroke-ink-muted"
       />
       <text x={W} y={ruleY - 4} textAnchor="end" className="fill-ink text-[11px] font-semibold">
-        {c.capMin} min cap
+        cap
       </text>
     </svg>
   );
@@ -318,14 +318,14 @@ export function ProgressTrends({
           )}
         </ChartCard>
         <ChartCard
-          title={`Time against the ${cap.capMin} min cap`}
+          title="Time against the cap"
           note={
             cap.timed ? (
               <>
                 <span className="font-semibold text-ink">
                   {cap.inside} of {cap.timed}
                 </span>{' '}
-                inside {cap.capMin} min · median {cap.medianMin} min
+                inside their cap · median {cap.medianMin} min
               </>
             ) : undefined
           }

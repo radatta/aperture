@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_PICK_NOTICE, AI_PICK_STALE_MS, applySlotChange, planDay } from './coach';
+import { AI_PICK_NOTICE, AI_PICK_STALE_MS, applySlotChange, planDay, startCapMin } from './coach';
 import type { CoachInput } from './coach';
 import {
   claimAiRow,
@@ -145,7 +145,8 @@ describe('the candidates and the context', () => {
       'contains-duplicate',
       'group-anagrams',
     ]);
-    expect(ctx.recent[0]).toMatchObject({ minutes: 40, capMin: 30, notes: 'missed the hash map' });
+    // A logged first try on an Easy: the table's new cap.
+    expect(ctx.recent[0]).toMatchObject({ minutes: 40, capMin: 20, notes: 'missed the hash map' });
     expect(ctx.recent[1]).toMatchObject({ cause: 'boundary', minutes: null });
     expect(JSON.stringify(ctx)).not.toMatch(/01J/);
     expect(ctx.rates.length).toBeGreaterThan(0);
@@ -334,6 +335,92 @@ describe('the guardrails', () => {
     const v = validateCoachPick(answer, ctx);
     expect(v.ok).toBe(true);
     if (v.ok) expect(v.picks[0]!.slug).toBe('group-anagrams');
+  });
+});
+
+describe('per-slot caps in the pick', () => {
+  const ctx = ctxOf();
+  const cand = (slug: string) => ctx.candidates.find((c) => c.slug === slug)!;
+
+  it('gives each candidate its table cap and the range the pick may set', () => {
+    // group-anagrams: a Medium carry-over (the new row); two-sum: an Easy re-solve.
+    expect(cand('group-anagrams')).toMatchObject({ kind: 'carry-over', capMin: 45, capRange: [23, 67] });
+    expect(cand('two-sum')).toMatchObject({ kind: 're-solve', capMin: 10, capRange: [5, 15] });
+  });
+
+  it('keeps a whole-minute cap inside the range, edges included', () => {
+    const v = validateCoachPick(
+      {
+        picks: [
+          { slug: 'group-anagrams', why: 'x', capMin: 67 },
+          { slug: 'two-sum', why: 'y', capMin: 5 },
+        ],
+        note: null,
+        focus: null,
+      },
+      ctx,
+    );
+    expect(v).toMatchObject({ ok: true, capRepaired: 0 });
+    if (!v.ok) return;
+    expect(v.picks.slice(0, 2).map((p) => p.capMin)).toEqual([67, 5]);
+  });
+
+  it('repairs a cap out of range, fractional or the wrong type to the table, and keeps the pick', () => {
+    const bad: unknown[] = [68, 22, 45.5, '45', -1, 0];
+    for (const capMin of bad) {
+      const v = validateCoachPick(
+        { picks: [{ slug: 'group-anagrams', why: 'x', capMin }], note: null, focus: null },
+        ctx,
+      );
+      expect(v, String(capMin)).toMatchObject({ ok: true, capRepaired: 1 });
+      if (v.ok) expect(v.picks[0]).not.toHaveProperty('capMin');
+    }
+  });
+
+  it('a null or missing cap is the table, not a repair; the filled slots carry none', () => {
+    const v = validateCoachPick(
+      {
+        picks: [
+          { slug: 'group-anagrams', why: 'x', capMin: null },
+          { slug: 'two-sum', why: 'y' },
+        ],
+        note: null,
+        focus: null,
+      },
+      ctx,
+    );
+    expect(v).toMatchObject({ ok: true, capRepaired: 0 });
+    if (v.ok) expect(v.picks.every((p) => p.capMin === undefined)).toBe(true);
+  });
+
+  it('a stored pick’s cap sets its slot; one with none takes the table; a swap takes the table', () => {
+    const picks = [
+      { slug: 'group-anagrams', kind: 'carry-over' as const, why: 'a', capMin: 50 },
+      { slug: 'two-sum', kind: 're-solve' as const, why: 'b' },
+    ];
+    const row = dayRow(TODAY, ai({ picks }));
+    const t = planDay(input({ days: [row] }));
+    expect(t.slots.map((s) => [s.slug, s.capMin])).toEqual([
+      ['group-anagrams', 50],
+      ['two-sum', 10],
+    ]);
+    expect(startCapMin(input({ days: [row] }), 'group-anagrams', 'Medium')).toBe(50); // what a Start stores
+    const changes = applySlotChange(
+      t,
+      [],
+      { slug: 'group-anagrams', action: 'swap', toSlug: 'valid-anagram' },
+      () => true,
+      new Set(),
+      NOW,
+    );
+    const swapped = planDay(input({ days: [{ ...row, changes }] }));
+    // valid-anagram was tried before: an Easy re-solve, from the table (the pick's 50 stays with group-anagrams).
+    expect(swapped.slots[0]).toMatchObject({ slug: 'valid-anagram', kind: 're-solve', capMin: 10 });
+  });
+
+  it('the stand-in pick sends no cap', () => {
+    const picks = standInCoachPick(ctx).picks as Record<string, unknown>[];
+    expect(picks.every((p) => !('capMin' in p))).toBe(true);
   });
 });
 

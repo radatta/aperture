@@ -9,8 +9,11 @@ import {
   coachPools,
   coachScope,
   coachStats,
+  inCapRange,
   pickable,
   planDay,
+  slotCapMin,
+  slotCapRange,
 } from './coach';
 import { catalogProblem } from './catalogs';
 import type { CoachInput, CoachParams, CoachToday } from './coach';
@@ -52,6 +55,8 @@ export interface CoachAiCandidate {
   difficulty: Difficulty | null;
   kind: SlotKind;
   ifFocus: PatternId | null; // only with a focus change to this pattern
+  capMin: number; // the table's cap for its kind and difficulty (slotCapMin)
+  capRange: [number, number]; // whole minutes the pick may set its cap in (slotCapRange)
   rule: string; // the rules' own reason for it
   history: {
     tries: number;
@@ -71,7 +76,7 @@ export interface CoachAiRecent {
   cause: CauseTag | null;
   lastError: string | null;
   minutes: number | null;
-  capMin: number;
+  capMin: number; // the cap that try ran under (Attempt.capMin)
   notes: string | null;
   claudeNotes: string | null; // Claude's own notes on the day's sittings (set_claude_notes), cut
 }
@@ -129,13 +134,16 @@ export function coachPickContext(
     if (out.has(slug)) return;
     const cat = catalogProblem(slug);
     const rec = records.find((r) => r.slug === slug);
+    const difficulty = cat?.difficulty ?? rec?.difficulty ?? null;
     out.set(slug, {
       slug,
       title: cat?.title ?? rec?.title ?? slug,
       pattern: cat?.pattern ?? rec?.pattern ?? 'other',
-      difficulty: cat?.difficulty ?? rec?.difficulty ?? null,
+      difficulty,
       kind,
       ifFocus,
+      capMin: slotCapMin(kind, difficulty, params),
+      capRange: slotCapRange(kind, difficulty, params),
       rule,
       history: rec
         ? {
@@ -203,7 +211,7 @@ export function coachPickContext(
         cause: a.cause,
         lastError: a.lastError ? (a.lastError.statusMsg ?? a.lastError.verdict) : null,
         minutes,
-        capMin: params.capMin,
+        capMin: a.capMin,
         notes: words.length ? cut(words.join(' · '), NOTE_MAX) : null,
         claudeNotes: claude.length ? cut(claude.join(' · '), CLAUDE_NOTES_SENT_MAX) : null,
       };
@@ -238,6 +246,7 @@ export type CoachPickAnswer =
       note: string | null;
       focus: { from: PatternId; to: PatternId; why: string } | null;
       filled: number; // slots the rules filled after a short answer (fillToFull)
+      capRepaired: number; // picks whose cap was set but not a whole minute inside its range: they take the table's
     }
   | { ok: false; code: string };
 
@@ -251,18 +260,23 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
   if (r.picks.length < 1 || r.picks.length > AI_PICK_MAX) return fail('count');
   const byslug = new Map(ctx.candidates.map((c) => [c.slug, c]));
   const picks: CoachAiPick[] = [];
+  let capRepaired = 0;
   for (const p of r.picks as unknown[]) {
     if (!p || typeof p !== 'object') return fail('shape');
-    const { slug, why } = p as Record<string, unknown>;
+    const { slug, why, capMin } = p as Record<string, unknown>;
     if (typeof slug !== 'string' || (why !== undefined && why !== null && typeof why !== 'string'))
       return fail('shape');
     const c = byslug.get(slug);
     if (!c) return fail('not-candidate');
     if (picks.some((x) => x.slug === slug)) return fail('duplicate');
+    // A cap is repaired, never fatal: outside its range (or not a whole minute) the slot takes the table's.
+    const cap = inCapRange(capMin, c.capRange) ? capMin : undefined;
+    if (capMin !== undefined && capMin !== null && cap === undefined) capRepaired += 1;
     picks.push({
       slug,
       kind: c.kind,
       why: cut(typeof why === 'string' && why.trim() ? why : c.rule, AI_WHY_MAX),
+      ...(cap === undefined ? {} : { capMin: cap }),
     });
   }
   if (ctx.mustInclude && !picks.some((p) => p.slug === ctx.mustInclude))
@@ -299,7 +313,7 @@ export function validateCoachPick(raw: unknown, ctx: CoachPickContext): CoachPic
     )
       return fail('mix');
   }
-  return { ok: true, picks: full, note, focus, filled: full.length - picks.length };
+  return { ok: true, picks: full, note, focus, filled: full.length - picks.length, capRepaired };
 }
 
 // The day is four problems (fewer only when fewer may be picked): a short answer keeps the model's picks in its order
@@ -389,6 +403,7 @@ export type CoachPickResult =
       note: string | null;
       focus: CoachDayAi['focus'];
       filled?: number; // slots the rules filled (logged, not stored)
+      capRepaired?: number; // picks whose cap was repaired to the table (logged, not stored)
       mode?: CoachPickContext['planMode']['mode']; // the mix it kept, stored on the day
       oldestDue: string | null;
       model: string | null;
@@ -458,6 +473,7 @@ export function pickResultOf(
         note: v.note,
         focus: v.focus,
         filled: v.filled,
+        capRepaired: v.capRepaired,
         mode: ctx.planMode.mode,
         ...meta,
         oldestDue: ctx.oldestDue,

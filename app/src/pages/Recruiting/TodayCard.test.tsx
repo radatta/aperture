@@ -36,7 +36,10 @@ describe('the Today card', () => {
     ]);
     const list = await slots();
     expect(within(list).getAllByText(/^New · /)).toHaveLength(2);
-    expect(within(list).getByText('Re-solve · Easy · 30 min')).toBeTruthy();
+    // Each slot its own cap: by kind and difficulty.
+    expect(within(list).getByText('Re-solve · Easy · 10 min')).toBeTruthy();
+    expect(within(list).getByText('New · Easy · 20 min')).toBeTruthy();
+    expect(within(list).getByText('New · Medium · 45 min')).toBeTruthy();
     expect(within(list).getByText(/^Re-solve today: blank editor, no hints/)).toBeTruthy();
     const link = within(list).getByRole('link', { name: 'Two Sum' });
     expect(link.getAttribute('href')).toBe('https://leetcode.com/problems/two-sum/');
