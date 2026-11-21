@@ -658,6 +658,12 @@ describe('timer pauses', () => {
     const flip = [read(2 * S, 2 * S), read(5 * M + 3 * S, 3 * S, { mode: 'forward', endMs: null })];
     expect(summarizeHeadRows(flip).pauses).toEqual([]);
   });
+  it('a read stored before endMs was kept still pairs with the next one (a sitting open across the deploy)', () => {
+    const old = read(1 * M, 1 * M);
+    delete (old.timer as { endMs?: number | null }).endMs;
+    const rows = [old, read(2 * M + S, 2 * M, { status: 'pause' }), read(6 * M, 2 * M)];
+    expect(summarizeHeadRows(rows)).toMatchObject({ pauses: [[2 * M, 6 * M]], pauseFrom: null });
+  });
   it('paused both times, counted between: an unseen resume and re-pause ends one pause and opens the next', () => {
     // Paused at 2:00; resumed and paused again unseen (a hidden tab), 3 more minutes counted; read at 10:00.
     const rows = [

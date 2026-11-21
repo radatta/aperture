@@ -2,7 +2,7 @@
 // sitting's minutes — derived on read from the timer reads the extension already sends, so nothing here is new on the
 // wire. Driven through the JWT as lc-sittings is, with LeetCode's state shapes (debug-log 1). The fold's edges are
 // exact in the stored spans, so they need no wait; the minutes need a real one (dev can't backdate the server's
-// clock): one sitting paused ~3.6 min, then counting ~1.6 min — slow, run when the branch touches this file or
+// clock): one sitting paused ~3.6 min, then counting ~3.2 min — slow, run when the branch touches this file or
 // --feature names it. Slugs and titles carry the run's nonce; every row is ledgered from a response.
 import { PHONE } from '../browser';
 import type { DevSitting, DevSittingEvent, DevSittingStart } from '../api';
@@ -492,7 +492,7 @@ export const lcTimerPauses: Scenario = {
       entry: 'api',
       cost: 'slow',
       proves: ['pause-resume'],
-      title: 'Resumed: one span stored, to the ms; then 1.6 min counted',
+      title: 'Resumed: one span stored, to the ms; then 3.2 min counted',
       async run(ctx) {
         if (!state.a) throw new Error('no sitting — the pause step failed');
         state.aResumeAt = Date.now();
@@ -555,7 +555,8 @@ export const lcTimerPauses: Scenario = {
         });
         await row.waitFor({ timeout: 15_000 });
         const text = (await row.textContent()) ?? '';
-        if (![soFar, soFar + 1].some((n) => new RegExp(`(^|\\D)${n}m(\\b|$)`).test(text)))
+        // Its text runs on ("· 3mno submit yet"), so only the digit before is a boundary: 3m, never 13m.
+        if (![soFar, soFar + 1].some((n) => new RegExp(`(^|\\D)${n}m`).test(text)))
           throw new Error(`list row: ${text} (So far ${soFar}m)`);
         // Done starts on the paused-out minutes; Cancel leaves it open.
         await ctx.ui.goto(`/recruiting/sittings/${a.id}`);

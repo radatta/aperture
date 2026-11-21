@@ -485,13 +485,13 @@ export function foldTimer(
   const ea = a?.elapsedMs ?? null;
   const eb = b.elapsedMs;
   // One run: the same mode and duration (a reset to another countdown is a new one, however young the last read), and
-  // the elapsed never dropped.
+  // the elapsed never dropped. A row stored before endMs was kept has none: its duration matches any (review pauses-2).
   const sameRun =
     ea !== null &&
     eb !== null &&
     eb >= ea - PAUSE_SLACK_MS &&
     (a?.mode ?? null) === (b.mode ?? null) &&
-    (a?.endMs ?? null) === (b.endMs ?? null);
+    (a?.endMs === undefined || (a.endMs ?? null) === (b.endMs ?? null));
   const counted = sameRun ? eb! - ea! : 0;
   const out = (p: Partial<Pick<SittingSummary, 'pauses' | 'pauseFrom'>>) => ({
     pauses,

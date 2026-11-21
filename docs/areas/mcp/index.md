@@ -248,7 +248,7 @@ countedUsd, buckets, period}`) and `linkedChargeId` = its largest part; the over
   live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
   `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final
   code, the user's review — and `list_sittings` lists heads with `reviewed` and the user's tags; both only read, and
-  both give `minutes` without LeetCode's timer pauses and `pausedMin` ([recruiting](../recruiting/index.md) → _Timer pauses_). The
+  both give `minutes` without LeetCode's timer pauses and `pausedMin` (the timeline's `minute` is on the same clock) ([recruiting](../recruiting/index.md) → _Timer pauses_). The
   review's words stay the user's, typed in the app; the coach writes only its cause tag and the peek
   (`set_cause_tag`, `mark_peeked`), and `live_sitting` carries the open sitting's `slot` in today's plan
   ([recruiting/coach](../recruiting/coach.md) → _Over MCP_).
