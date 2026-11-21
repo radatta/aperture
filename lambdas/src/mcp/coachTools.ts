@@ -48,6 +48,7 @@ import type {
   ResolveState,
   Rate,
   Sitting,
+  SittingClock,
   Story,
 } from '@aperture/shared';
 import { RpcParamError } from './types';
@@ -164,7 +165,7 @@ export const todayOrNull = (ctx: ToolContext): Promise<CoachToday | null> =>
 // What live_sitting adds about the open sitting's place in the plan.
 export function slotOfSitting(
   today: CoachToday | null,
-  sitting: Pick<Sitting, 'problemSlug' | 'startedAt' | 'endedAt'>,
+  sitting: SittingClock & Pick<Sitting, 'problemSlug'>, // its clock in full: pauses and idle gaps come out of the cap
   at: number,
 ) {
   if (!today) return null;

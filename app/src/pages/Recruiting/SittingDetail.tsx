@@ -8,6 +8,7 @@ import {
   ROLL_PLAN_FALLBACK_MIN,
   sittingMetrics,
   sittingMinutes,
+  sittingPause,
   sittingProblemUrl,
 } from '@aperture/shared';
 import type { Sitting, SittingDetail as Detail } from '@aperture/shared';
@@ -101,6 +102,9 @@ function Loaded({
   const idleOpen = isIdleClosed(sitting) && sitting.status === 'abandoned' && !superseded;
   const outcome = sittingOutcome(sitting, now);
   const m = sittingMetrics(sitting);
+  // LeetCode's timer pauses, already out of Took (sittingPause): a muted line under it, never a warning.
+  const pause = sittingPause(sitting, now);
+  const pausedMin = msToMin(pause.pausedMs);
   const companies = problemCompanies(problem);
   const open = isSittingOpen(sitting, now);
   // Closed by idle, the boxed notice below says so: no "Dropped" here, and no empty line.
@@ -155,7 +159,16 @@ function Loaded({
             ? '—'
             : `after ${fmtDuration(Math.max(1, msToMin(m.timeToFirstSubmitMs)))}`}
         </Metric>
-        <Metric label={open ? 'So far' : 'Took'}>
+        <Metric
+          label={open ? 'So far' : 'Took'}
+          note={
+            open && pause.pausedNow
+              ? `paused on LeetCode${pausedMin > 0 ? ` · ${fmtDuration(pausedMin)} so far` : ''}`
+              : pausedMin > 0
+                ? `${fmtDuration(pausedMin)} paused`
+                : null
+          }
+        >
           {fmtDuration(sittingMinutes(sitting, now))}
         </Metric>
         <Metric label="Runs · submits">
@@ -311,7 +324,15 @@ function VoidControl({ sitting }: { sitting: Sitting }) {
   );
 }
 
-function Metric({ label, children }: { label: string; children: React.ReactNode }) {
+function Metric({
+  label,
+  note = null,
+  children,
+}: {
+  label: string;
+  note?: string | null;
+  children: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col">
       <dt>
@@ -319,8 +340,13 @@ function Metric({ label, children }: { label: string; children: React.ReactNode 
           {label}
         </Text>
       </dt>
-      <dd>
+      <dd className="flex flex-col">
         <Text tabular>{children}</Text>
+        {note && (
+          <Text size="xs" tone="muted" tabular>
+            {note}
+          </Text>
+        )}
       </dd>
     </div>
   );

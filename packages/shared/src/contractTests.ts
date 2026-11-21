@@ -63,6 +63,7 @@ import {
   SITTING_REOPEN_REP_ERROR,
   sittingMinutes,
   sittingMetrics,
+  sittingPause,
   DRAFT_LINES_MAX,
   REVIEW_LINE_MAX,
 } from './sittings';
@@ -130,6 +131,17 @@ const lcJudged = (
   payload: {
     request: { lang: 'python3', typed_code: 'print("x")' },
     result: { status_code: status, status_msg: msg, total_correct: passed, total_testcases: total },
+  },
+});
+// LeetCode's timer state as the extension reads it: running keeps startTimestamp, a pause keeps the elapsed.
+const lcTimer = (at: number, elapsed: number, running: boolean): SittingEventInput => ({
+  id: ulid(),
+  type: 'timer',
+  at,
+  payload: {
+    state: running
+      ? { mode: 'forward', status: 'running', startTimestamp: at - elapsed, pauseMs: null }
+      : { mode: 'forward', status: 'pause', startTimestamp: null, pauseMs: elapsed },
   },
 });
 // A roll linked as the LeetCode roll, then a Start — the common opening.
@@ -4652,6 +4664,62 @@ export function runApiContract(
           closedBy: 'idle',
         });
         await expect(api.reopenSitting(next.sitting.id)).rejects.toThrow(SITTING_REOPEN_REP_ERROR);
+      });
+
+      // Timer pauses (docs/areas/recruiting → Timer pauses): derived from the stored timer reads.
+      it('a pause on LeetCode’s timer comes out of the minutes; a repeat changes nothing; reads write nothing', async () => {
+        const { sitting } = await startSitting(api, { startedAt: clock });
+        const t0 = clock;
+        const send = async (e: SittingEventInput) => {
+          clock = e.at;
+          return api.lcSittingEvents({ sittingId: sitting.id, events: [e] });
+        };
+        await send(lcTimer(t0 + 4 * M, 4 * M, true));
+        const paused = lcTimer(t0 + 6 * M, 5 * M, false);
+        await send(paused);
+        advance(4 * M); // 10 min in, paused since 5:00
+        const open = (await api.getSitting(sitting.id)).sitting;
+        expect(sittingMinutes(open, clock)).toBe(5);
+        expect(sittingPause(open, clock)).toMatchObject({ pausedNow: true, timerSeen: true });
+        await send(lcTimer(t0 + 15 * M, 5 * M, true));
+        expect(
+          await api.lcSittingEvents({ sittingId: sitting.id, events: [paused] }),
+        ).toMatchObject({
+          accepted: 0,
+        });
+        advance(5 * M); // 20 min in, 10 of them paused
+        const { sitting: s } = await api.getSitting(sitting.id);
+        expect(sittingMinutes(s, clock)).toBe(10);
+        expect(sittingPause(s, clock)).toEqual({
+          pausedMs: 10 * M,
+          pausedNow: false,
+          timerSeen: true,
+        });
+        expect((await api.getSitting(sitting.id)).sitting).toEqual(s);
+        expect((await api.listSittings())[0]).toEqual(s);
+      });
+
+      it('a pause that runs into the idle close and a reopen is counted once', async () => {
+        const { sitting } = await startSitting(api, { startedAt: clock });
+        const t0 = clock;
+        const send = (e: SittingEventInput) => {
+          clock = e.at;
+          return api.lcSittingEvents({ sittingId: sitting.id, events: [e] });
+        };
+        await send(lcTimer(t0 + 4 * M, 4 * M, true));
+        await send(lcTimer(t0 + 12 * M, 12 * M, false)); // paused at 12:00, then away
+        advance(SITTING_IDLE_MS + 1);
+        expect((await api.listSittings())[0]).toMatchObject({
+          closedBy: 'idle',
+          endedAt: t0 + 12 * M + SITTING_IDLE_TAIL_MS,
+        });
+        // Back three hours in: the resume reopens it.
+        expect(await send(lcTimer(t0 + 180 * M, 12 * M, true))).toMatchObject({ status: 'active' });
+        advance(20 * M);
+        const { sitting: s } = await api.getSitting(sitting.id);
+        expect(s.idleGaps).toEqual([[t0 + 17 * M, t0 + 180 * M]]);
+        expect(sittingMinutes(s, clock)).toBe(32); // 12 before, 20 after
+        expect(sittingPause(s, clock).pausedMs).toBe(5 * M); // the pause outside the idle gap
       });
     });
 
