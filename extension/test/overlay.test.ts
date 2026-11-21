@@ -1785,11 +1785,11 @@ describe('the debug log’s submit probe', () => {
           'keyMs',
           'keys',
           'mod',
-          'n', // the page's entry sequence (every entry)
           'note',
           'open',
           'pg', // the page's random id (every entry)
           'repeat',
+          'sq', // the page's entry sequence (every entry)
           't',
           'type',
         ].sort(),

@@ -46,7 +46,8 @@
   const clip = (s, n) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
   let seq = 0;
   function log(type, data) {
-    const e = { t: Date.now(), type, pg: PAGE, n: seq++, ...(data || {}) };
+    // The page and its sequence last, so no entry's own fields (doc.keep's `n`) overwrite them.
+    const e = { t: Date.now(), type, ...(data || {}), pg: PAGE, sq: seq++ };
     if (!known) {
       if (early.length < 200) early.push(e);
     } else if (enabled) fresh.push(e);
@@ -60,7 +61,7 @@
     const all = (Array.isArray(got.debugLog) ? got.debugLog : [])
       .concat(...tails.map((k) => (Array.isArray(got[k]) ? got[k] : [])), batch)
       .filter((e) => {
-        const id = e && e.pg != null ? `${e.pg}.${e.n}` : null; // a tail folded twice (a page left mid-write)
+        const id = e && e.pg != null && e.sq != null ? `${e.pg}.${e.sq}` : null; // a tail folded twice
         if (id === null) return true;
         if (seen.has(id)) return false;
         seen.add(id);
