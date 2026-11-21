@@ -181,8 +181,7 @@ post.
 ## PR table and types
 
 Merged PRs come from `gh pr list --search merged:>=<since − 60 days>` (the lookback keeps a reused branch's earlier
-PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000, and the report says when
-the fetch it just made hit that; a cache hit or an incremental refetch can't tell), cached an hour in `cache/prs.json`, which also serves any later `--since` (its own since only moves earlier, so `score` and a report never refetch in turn). A refetch (`--refresh`, or an hour on) asks only for PRs
+PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000; a fetch that hits that is remembered in the cache, so every read from it says so), cached an hour in `cache/prs.json`, which also serves any later `--since` (its own since only moves earlier, so `score` and a report never refetch in turn). A refetch (`--refresh`, or an hour on) asks only for PRs
 merged since the cache's newest less a day and keeps the rest, since a merged PR's files and counts don't change: the
 one big query (every file of every PR, two pages of 100) outgrew GitHub's 10 s GraphQL limit, which answers 502 or 504
 (docs.github.com → _Rate limits and node limits for the GraphQL API_). An earlier `--since`, or no usable cache, fetches it all;
@@ -280,9 +279,7 @@ The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane run
 - `--lane` needs the lane's file (`board/lanes/<branch>.json`), so a typo records nothing (exit 2), and refuses once
   the lane's own PR has merged (exit 2, nothing written): a row then would count for the next lane on the name. A
   lane's cycle is one rule (`laneCycle` in `ledger.ts`), shared by `--lane`, `--void` and the check: in `plan` it is
-  always open; past it, the lane's own PR is the one its file names, if that merged on the branch; else, in `merged`
-  or `cleanup` (begun after the merge), the newest merged on the branch; else the newest merged since its phase
-  began; with none it is open. A lane back in `build` for a follow-up PR whose file still names the merged one reads
+  always open; past it, the lane's own PR is the one its file names, if that merged on the branch, else the newest merged since its phase began; with none it is open. In `merged`, `cleanup`, `parked` or `blocked` `--lane` refuses on the phase alone, never on the PR cache, which can predate the merge. A lane back in `build` for a follow-up PR whose file still names the merged one reads
   as merged (`pnpm lanes start` clears a reused name's file). A failed append
   still prints the estimate, then `NOT RECORDED`, exit 1. A torn last line gets its newline before the next row; a
   row that won't parse is skipped and named by line number (a gap until deleted by hand), never fatal.

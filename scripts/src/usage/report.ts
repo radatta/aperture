@@ -396,7 +396,7 @@ export function scoreLines(s: LiveScore, table: string, lane?: string): string[]
   if (!rows.length) {
     out.push(
       lane
-        ? `No estimate recorded for ${lane}. Before its PR merges: pnpm usage estimate --lane ${lane} --lines <n> [--ui] --lenses <…>; after, the PR counts under merged-with-none.`
+        ? `No estimate recorded for ${lane}. Before its PR merges: pnpm usage estimate --lane ${lane} --lines <n> [--ui] --lenses <…>; after, the PR counts under merged-with-none (with lane calls after the first estimate).`
         : 'No estimates recorded: a lane records one with pnpm usage estimate --lane <branch> … after Plan.',
       '',
     );

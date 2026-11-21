@@ -102,16 +102,22 @@ export async function mergedPRs(
   const path = join(cache, 'prs.json');
   // an unreadable file is no cache: the full fetch below rewrites it
   const cached = cachedPRs(cache);
-  const full = (got: PR[], from: string) =>
-    got.length >= PR_LIMIT
-      ? `${PR_LIMIT} merged PRs since ${from}, the gh limit: older ones may be missing`
+  // a fetch that hit the gh limit is remembered in the cache, so every later read from it says so too
+  const full = (limited: string | null | undefined) =>
+    limited
+      ? `${PR_LIMIT} merged PRs since ${limited}, the gh limit: older ones may be missing`
       : null;
   // a cache for an earlier --since holds every PR this one asks for: reuse it and keep its since, so a report and
   // score never refetch in turn (the cache's since only moves earlier)
   const covers = !!cached?.since && cached.since <= o.since;
   const keep = covers ? cached!.since! : o.since;
   if (cached && covers && o.now - cached.fetchedAt < 3_600_000 && !o.refresh)
-    return { prs: cached.prs, note: null, stale: null, fetchedAt: cached.fetchedAt };
+    return {
+      prs: cached.prs,
+      note: full(cached.limited),
+      stale: null,
+      fetchedAt: cached.fetchedAt,
+    };
   const gh = o.gh ?? ghText;
   // the cache's newest merge less a day (the search reads a bare date in its own zone), else the whole lookback
   const base = cached && covers && cached.prs.length ? cached.prs : null;
@@ -126,8 +132,9 @@ export async function mergedPRs(
     const byNumber = new Map((base ?? []).map((p) => [p.number, p]));
     for (const p of got) byNumber.set(p.number, p);
     const prs = [...byNumber.values()].sort((a, b) => a.mergedAt - b.mergedAt);
-    writeAtomic(path, JSON.stringify({ fetchedAt: o.now, since: keep, prs }));
-    return { prs, note: full(got, from), stale: null, fetchedAt: o.now };
+    const limited = (base && cached?.limited) || (got.length >= PR_LIMIT ? from : null);
+    writeAtomic(path, JSON.stringify({ fetchedAt: o.now, since: keep, prs, limited }));
+    return { prs, note: full(limited), stale: null, fetchedAt: o.now };
   } catch (e) {
     if (!cached)
       throw new Error(
@@ -137,7 +144,7 @@ export async function mergedPRs(
     const why = (e as Error).message.split('\n')[0]!;
     return {
       prs: cached.prs,
-      note: null,
+      note: full(cached.limited),
       fetchedAt: cached.fetchedAt,
       stale: {
         newest: newestPR(cached.prs)?.number ?? null,
@@ -152,7 +159,7 @@ export async function mergedPRs(
 // unreadable one.
 export function cachedPRs(
   cache: string,
-): { prs: PR[]; fetchedAt: number; since: string | null } | null {
+): { prs: PR[]; fetchedAt: number; since: string | null; limited: string | null } | null {
   try {
     const c = JSON.parse(readFileSync(join(cache, 'prs.json'), 'utf8'));
     return Array.isArray(c?.prs) && Number.isFinite(c.fetchedAt)
@@ -166,6 +173,7 @@ export function cachedPRs(
             Number.isFinite(Date.parse(`${c.since}T00:00:00Z`))
               ? c.since
               : null,
+          limited: typeof c.limited === 'string' ? c.limited : null,
         }
       : null;
   } catch {

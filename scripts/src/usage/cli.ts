@@ -26,6 +26,7 @@ import {
   LEDGER,
   current,
   laneCycle,
+  NO_ESTIMATE,
   openEntry,
   formatRow,
   gaps,
@@ -217,15 +218,15 @@ export function readEvents(board: string): JobEvent[] {
 }
 
 export const DEFAULT_SINCE = '2026-11-04';
-// the score's PR table starts at the default since, or the first estimate if older, so "at actual" prices with the
-// units `estimate` used, whatever --since the cached list was fetched for
-// what the score does with a lane's merged PR: its estimate is scored against it, or it counts as merged with none
+// what the score does with a lane's merged PR, by the same tests as scoreRows and unestimated
 const mergedFate = (entries: Entry[], pr: PR) => {
   const e = entries.find((x) => x.pr?.number === pr.number);
-  return e?.row && !e.voided
-    ? 'its estimate is scored against it'
-    : 'it has no estimate, so pnpm usage score counts it as merged with none';
+  if (e?.row && e.voided) return 'its estimate was voided, so the score shows it as void';
+  if (e?.row) return 'its estimate is scored against it';
+  return 'it has no estimate: pnpm usage score counts it as merged with none if it had lane calls after the first estimate';
 };
+// the score's PR table starts at the default since, or the first estimate if older, so "at actual" prices with the
+// units `estimate` used, whatever --since the cached list was fetched for
 export const tableCut = (rows: { at: number }[]) =>
   Math.min(ptMidnight(DEFAULT_SINCE), ...rows.map((r) => r.at));
 
@@ -572,6 +573,12 @@ export async function main(
         return 2;
       }
       // past the point: a row now would land in the next cycle on this name (docs/ops/USAGE-METER.md → Ledger)
+      if (rec?.file && NO_ESTIMATE.has(rec.file.phase)) {
+        out(
+          `--lane ${rec.lane}: its lane file says ${rec.file.phase}, so the lane can't record now; not recorded. Record it back in a working phase; a merged lane's PR is the score's (an estimate now would count for the next lane on this name). Drop --lane for the number alone.`,
+        );
+        return 2;
+      }
       const known = cachedPRs(e.cache)?.prs ?? [];
       const merged = rec?.file && laneCycle(rec.file, known);
       if (rec && merged) {

@@ -203,7 +203,7 @@ describe('since and merged PRs', () => {
     writeFileSync(join(cache, 'prs.json'), '{}');
     expect(cachedPRs(cache)).toBeNull();
     writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: 5, prs: [] }));
-    expect(cachedPRs(cache)).toEqual({ prs: [], fetchedAt: 5, since: null });
+    expect(cachedPRs(cache)).toEqual({ prs: [], fetchedAt: 5, since: null, limited: null });
     writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: '5', prs: [] }));
     expect(cachedPRs(cache)).toBeNull();
     writeFileSync(join(cache, 'prs.json'), JSON.stringify({ fetchedAt: 5, prs: {} }));
@@ -288,6 +288,13 @@ describe('since and merged PRs', () => {
       gh,
     });
     expect(full.note).toContain('the gh limit');
+    // the limit is remembered: a cache hit and a later incremental refetch from that list still say so
+    expect(
+      (await mergedPRs(cache, { since: '2026-01-15', now: 31 + 3_600_000, gh })).note,
+    ).toContain('the gh limit');
+    reply = [];
+    const later = await mergedPRs(cache, { since: '2025-12-01', now: 40 + 7_200_000, gh });
+    expect(later.note).toContain('the gh limit');
   });
 });
 
@@ -780,9 +787,18 @@ describe('the estimate ledger: estimate --lane and score', () => {
         join(board(), 'lanes', 'lane-a.json'),
         JSON.stringify({ v: 1, branch: 'lane-a', phase, updatedAt: '2026-01-05T10:00:00Z', ...o }),
       );
-    // the file never named the PR, and its merged phase began after the merge
-    file('merged', { pr: null, phaseSince: '2026-01-05T10:00:00Z' });
-    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(2);
+    // past the point by phase alone: no PR named, and a cache with no PRs at all (fetched before the merge)
+    writeFileSync(join(usage, 'cache', 'prs.json'), JSON.stringify({ ...prs(9), prs: [] }));
+    for (const phase of ['merged', 'cleanup', 'parked', 'blocked']) {
+      file(phase, { pr: null, phaseSince: '2026-01-05T10:00:00Z' });
+      const p = await run('estimate', '--lines', '300', '--lane', 'lane-a');
+      expect(p.code).toBe(2);
+      expect(p.text).toMatch(
+        new RegExp(`^--lane lane-a: its lane file says ${phase}, so the lane can't record now`),
+      );
+    }
+    expect(existsSync(ledger())).toBe(false);
+    writeFileSync(join(usage, 'cache', 'prs.json'), JSON.stringify(prs(9)));
     file('pr');
     const r = await run('estimate', '--lines', '300', '--lane', 'lane-a');
     expect(r.code).toBe(2);
@@ -792,7 +808,7 @@ describe('the estimate ledger: estimate --lane and score', () => {
     expect(existsSync(ledger())).toBe(false);
     expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
     expect((await run('score', '--lane', 'lane-a', '--void', 'gone')).text).toBe(
-      '--void: lane-a has no open estimate: its PR 9 merged, and it has no estimate, so pnpm usage score counts it as merged with none',
+      '--void: lane-a has no open estimate: its PR 9 merged, and it has no estimate: pnpm usage score counts it as merged with none if it had lane calls after the first estimate',
     );
     file('plan'); // a new cycle on the name starts in plan
     expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
@@ -845,6 +861,21 @@ describe('the estimate ledger: estimate --lane and score', () => {
     const r = await run('estimate', '--lines', '300', '--lane', 'lane-a');
     expect(r.code).toBe(2);
     expect(r.text).toContain('On PR 9: its estimate is scored against it.');
+    // voided before the merge: the score shows it as void, and the refusal says that
+    writeFileSync(
+      ledger(),
+      readFileSync(ledger(), 'utf8') +
+        JSON.stringify({
+          v: 1,
+          lane: 'lane-a',
+          at: new Date(merged - 30_000).toISOString(),
+          void: 'dropped',
+        }) +
+        '\n',
+    );
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).text).toContain(
+      'On PR 9: its estimate was voided, so the score shows it as void.',
+    );
   });
 
   it("score reuses a cache for the default since or earlier, and refetches past a later one's", async () => {
@@ -864,7 +895,7 @@ describe('the estimate ledger: estimate --lane and score', () => {
     expect(await main(['score', '--no-scan'], out, { gh })).toBe(0);
     expect(gh).not.toHaveBeenCalled();
     expect(lines.join('\n')).not.toContain('PR table stale');
-    // a report's later --since leaves too short a lookback before the cut: score refetches (here gh is down)
+    // a cache for a later --since than the default can't serve score: it refetches (here gh is down)
     write(day(10));
     lines.length = 0;
     expect(await main(['score', '--no-scan'], out, { gh })).toBe(0);

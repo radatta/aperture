@@ -321,11 +321,6 @@ describe('laneCycle', () => {
     // known: a lane back in build for a follow-up PR, its file still naming the merged one, reads as merged
     expect(at({ pr: 2, phaseSince: T(21) })).toBe(2);
   });
-  it('in merged or cleanup, a phase begun after the merge, takes the newest merged on the branch', () => {
-    expect(at({ phase: 'merged', pr: null, phaseSince: T(21) })).toBe(2);
-    expect(at({ phase: 'cleanup', pr: null, phaseSince: T(30) })).toBe(2);
-    expect(at({ phase: 'merged', pr: null, phaseSince: T(21) }, [])).toBe(null);
-  });
   it('is open after the newest merge otherwise, and always open in plan', () => {
     expect(at({ pr: null, phaseSince: T(21) })).toBe(null);
     expect(at({ pr: null, phaseSince: null })).toBe(null);
