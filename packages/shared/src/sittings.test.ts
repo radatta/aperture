@@ -493,7 +493,7 @@ describe('timer pauses', () => {
     expect(sittingPause(s, 99 * H)).toEqual({ pausedMs: 5 * M, pausedNow: false, timerSeen: true });
   });
   it('the rows fold the same in any order they arrive', () => {
-    const shuffled = [example1[4], example1[1], example1[5], example1[0], example1[3], example1[2]];
+    const shuffled = [4, 1, 5, 0, 3, 2].map((i) => example1[i]!);
     expect(summarizeHeadRows(shuffled)).toEqual(summarizeHeadRows(example1));
   });
   it('an open pause freezes the minutes, and an end while paused stops it there', () => {
@@ -651,7 +651,7 @@ describe('timer pauses', () => {
     const p = summarizeHeadRows(rows).pauses!;
     expect(p).toHaveLength(SITTING_PAUSES_MAX);
     expect(Math.min(...p.map(([a, b]) => b - a))).toBe(22 * S); // the 20 shortest (2 s … 21 s) dropped
-    expect(p.every(([a], i) => i === 0 || a > p[i - 1][0])).toBe(true);
+    expect(p.every(([a], i) => i === 0 || a > p[i - 1]![0])).toBe(true);
   });
 });
 
