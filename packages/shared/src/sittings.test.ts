@@ -1111,7 +1111,11 @@ describe('reading a sitting back', () => {
       t.map((x) => (x.kind === 'judged' ? `${x.type}${x.n}:${x.verdict.verdict}` : `×${x.count}`)),
     ).toEqual(['×1', 'run1:runtime_error', '×2', 'submit1:wrong_answer', 'submit2:accepted', '×1']);
     expect(t[3]).toMatchObject({ offsetMs: 350, detail: { input: '[1]' } });
-    expect(timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [e('01A', 'submit', 1, {})])[0]).toMatchObject({
+    expect(
+      timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [
+        e('01A', 'submit', 1, {}),
+      ])[0],
+    ).toMatchObject({
       verdict: { verdict: 'other' },
     });
     expect(timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [])).toEqual([]);
@@ -1126,7 +1130,9 @@ describe('reading a sitting back', () => {
         total_testcases: 3,
       },
     };
-    expect(timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [e('01A', 'run', 1, run)])[0]).toMatchObject({
+    expect(
+      timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [e('01A', 'run', 1, run)])[0],
+    ).toMatchObject({
       verdict: { verdict: 'wrong_answer', statusMsg: 'Wrong Answer', passed: 0, total: 3 },
     });
   });
