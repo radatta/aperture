@@ -29,17 +29,40 @@ const PANE = '%7';
 const AT = '2026-11-19T10:00:00Z';
 const RULE = '─'.repeat(40);
 const NBSP = String.fromCharCode(0xa0); // the box pads the prompt glyph with one
-const screen = (box: string, { above = [] as string[], footer = ['  status line'] } = {}) =>
-  [
-    'earlier output',
-    ...above,
+const MODE = '  ⏵⏵ bypass permissions on (shift+tab to cycle)';
+// `top` is the rule above the box (2.1.330 labels it with the session name), `last` the mode line, `below` anything
+// after it (2.1.330's background-agent panel).
+const screen = (
+  box: string,
+  {
+    above = [] as string[],
+    footer = ['  status line'],
+    top = RULE,
+    last = MODE,
+    below = [] as string[],
+  } = {},
+) =>
+  ['earlier output', ...above, '', top, `❯${NBSP}${box}`, RULE, ...footer, last, ...below].join(
+    '\n',
+  );
+// Shaped after 2.1.330 captures (2026-11-21, `tmux capture-pane`, read-only): the session name at the right end of the
+// top rule, and an idle session with two background agents (the reply text and agent rows are synthetic).
+const LABELLED = `${'─'.repeat(30)} ${BRANCH} ─`;
+const AGENTS = {
+  above: [
+    '● Both agents are running in the background.',
     '',
-    RULE,
-    `❯${NBSP}${box}`,
-    RULE,
-    ...footer,
-    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
-  ].join('\n');
+    '✻ Waiting for 2 background agents to finish',
+  ],
+  top: LABELLED,
+  last: '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ↓ to manage',
+  below: [
+    '',
+    '  ● main',
+    '  ◯ Plan               Plan the switch flip   25s',
+    '  ◯ search-specialist  Search hook facts   12s',
+  ],
+};
 const EMPTY = screen('');
 const TYPED = screen('/compact');
 
@@ -284,6 +307,13 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect((await request()).code).toBe(0);
     });
 
+    it('succeeds with the 2.1.330 background-agent panel below the mode line (the box is still found)', async () => {
+      screens(screen('', AGENTS));
+      expect((await request()).code).toBe(0);
+      screens(screen('draft', AGENTS));
+      expect((await request()).out).toBe('self-compact: refused (box-other)\n');
+    });
+
     it("succeeds when the pane's process is claude's parent (the shell that started it)", async () => {
       expect((await request({ pane: 'parent' })).out).toBe(
         'self-compact: requested; end the turn now\n',
@@ -434,6 +464,15 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       expect(log()).toContain('sent pid=');
     });
 
+    it("reads a labelled top rule (2.1.330's) as empty, then sends (mode line 2.1.329's: no clean 2.1.330 idle capture)", async () => {
+      const pid = session();
+      flag(pid);
+      screens(screen('', { top: LABELLED }), screen('/compact', { top: LABELLED }));
+      stop(pid);
+      await settle(finished);
+      expect(log()).toContain('sent pid=');
+    });
+
     it('uses the last box: an earlier ❯ line in scrollback is ignored', async () => {
       screens(`${screen('old text')}\n\n${EMPTY}`);
       expect((await request()).code).toBe(0);
@@ -522,6 +561,16 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
       [
         'a subagent list (to manage)',
         () => screens(screen('', { footer: ['  ↓ to manage'] })),
+        'box-busy',
+      ],
+      [
+        'a background shell running (2.1.330 mode line)',
+        () => screens(screen('', { last: '  ⏵⏵ bypass permissions on · 1 shell · ↓ to manage' })),
+        'box-busy',
+      ],
+      [
+        'background agents running (2.1.330: the waiting line, ↓ to manage, the agent panel below)',
+        () => screens(screen('', AGENTS)),
         'box-busy',
       ],
     ])('sends nothing when %s', async (_n, arrange, reason) => {
@@ -704,8 +753,8 @@ describe.skipIf(!existsSync('/proc/self/stat'))('self-compact.sh', () => {
     },
   );
 
-  it('the tracked limits.json ships the switch off', () => {
+  it('the tracked limits.json ships the switch on', () => {
     const l = JSON.parse(readFileSync(join(boardSrc, 'limits.json'), 'utf8'));
-    expect(l.lanes.selfCompact).toBe(false);
+    expect(l.lanes.selfCompact).toBe(true);
   });
 });

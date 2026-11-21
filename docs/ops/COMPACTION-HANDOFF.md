@@ -118,22 +118,29 @@ from outside, each checked: the branch, the phase (one of the board's phase word
 path (`[A-Za-z0-9_./-]` only). No free text from the lane file reaches the summary. The block is inline in the hook,
 not a `scripts/board/` helper: a helper would run the branch's own copy, and its text feeds the summary.
 
-## Self-compact (lanes, off)
+## Self-compact (lanes)
 
 A lane can compact itself at a point where it waits anyway, so the next stretch starts from a short context: cost per
 turn rises with context (the 2026-11-19 work-units analysis). The lane's last tool call is
 `bash scripts/board/self-compact.sh request`; the Stop hook then types `/compact` into the lane's own empty input box.
-It is the second constant exception to the pane rule (`docs/ops/HUB.md` → _Approval_), never a go.
+It is the second constant exception to the pane rule (`docs/ops/HUB.md` → _Approval_), never a go. The context floor
+in the workflow sentence (150k tokens, half the lanes' 300k autocompact window) is there because a fork reads 1–2.6M
+cache tokens (_Cost and measurements_): cutting a 150k+ context to a summary repays that in roughly 10–20 turns
+(inference).
 
 **Off unless** main's committed `scripts/board/limits.json` says `lanes.selfCompact: true` (read with `git cat-file blob HEAD:`,
-never the working copy or a branch's), and `<board>/self-compact/off` is absent: any session can create that file to stop
-it at once. It ships `false`.
+never the working copy or a branch's), and `<board>/self-compact/off` is absent. Any session stops it at once with
+`mkdir -p /workspace/localNotes/board/self-compact && touch /workspace/localNotes/board/self-compact/off` (the dir
+exists only after a first accepted `request`; on the Mac,
+`cd <mac-repo> && mkdir -p localNotes/board/self-compact && touch localNotes/board/self-compact/off`); removing the
+file turns it back on. It shipped `false` (PR 247); F379 turned it on (2026-11).
 
 - **`request`** refuses, with one line and exit 1, unless: not the handoff fork; the switch is on; a `claude` ancestor
   has a board record for that process with a `lastPromptAt`; `TMUX_PANE` is `%<n>` and is that session's own pane
   (`board.sh` `me_ident`'s rule); the toplevel is `<main>/.claude/worktrees/<name>` with a lane-shaped branch, a lane
   file written in the last 10 min and a clean tree; not the hub (branch, worktree or record name); the box is on
-  screen and empty. It runs mid-turn, under the working footer, so it reads no busy markers: `send` does. Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
+  screen and empty. It runs mid-turn, under the working footer, so it reads no busy markers: `send` does, so a background task or agent
+  running isn't refused here but skipped there (`box-busy`). Then it writes `<board>/self-compact/<pid>.req`: `1 <start tick> <epoch> <lastPromptAt>`.
 - **The hand-off** (`.claude/hooks/board-heartbeat.sh idle`, after the board write): only with a flag for this
   session's pid, and only when the payload's `stop_hook_active` is literally `false` (a Stop a stop hook continued, a
   missing field or an unreadable payload skips; after a continued Stop the request lapses, since the next Stop follows a new
@@ -153,11 +160,17 @@ it at once. It ships `false`.
   `send-keys -l /compact`; 0.5 s, the guard again, and `Enter` only if the box shows exactly `/compact` (else no
   further key, so a guard failing in that 0.5 s leaves `/compact` unsent in the box for the user to see). Run by hand
   it skips `stop`'s lane and hub checks: it gains nothing over a raw `tmux send-keys`.
-- **The box** (measured on 2.1.329, 2026-11-19, `tmux capture-pane`): the `❯` line directly above the bottom-most
-  `─` rule; anything else there (a dialog, a multi-line draft) reads as no box, so an older box in the scrollback
-  never stands in. Busy: `esc to interrupt` (a foreground turn), `background agent` or `to manage` (a background agent
-  running: no `esc to interrupt` then), read only below the box and in the 5 lines above it, so a quoted marker in the
-  conversation doesn't count.
+- **The box** (measured on 2.1.329, 2026-11-19, and unmoved on 2.1.330, 2026-11-21, `tmux capture-pane`): the `❯` line
+  directly above the bottom-most `─` rule; anything else there (a dialog, a multi-line draft) reads as no box, so an
+  older box in the scrollback never stands in. The rule above the box carries the session's name at its right end
+  (`──── <name> ─`) and is never the anchor. Busy: `esc to interrupt` (a foreground turn), `background agent` or `to manage` (a background
+  agent or shell running: no `esc to interrupt` then), read only below the box and in the 5 lines above it, so a
+  quoted marker in the conversation doesn't count. On 2.1.330 an idle session with background agents shows
+  `✻ Waiting for <n> background agents to finish` 3 lines above the box, `↓ to manage` on the mode line and an agent
+  panel (`● main`, `◯ <agent> …`) below it; one with a background shell shows `· 1 shell · ↓ to manage`. A clean idle
+  2.1.330 screen (nothing running) isn't captured yet. A moved box reads `none` and types nothing, but a new busy
+  indicator without the three markers reads `empty` and `/compact` is typed (only ever `/compact`, then Enter): after
+  a Claude Code upgrade, re-capture these (read-only `tmux capture-pane` of a lane's own pane) before relying on it.
 - **Log**: `<board>/self-compact.log`, one line per event — `request`, `refuse`, `claim`, `spawn`, `sent`, `skip` —
   `<time> <event> pid=<n> branch=<b> reason=<word>`.
 
@@ -165,24 +178,52 @@ Measured upstream on 2.1.329 (a peer project's trials, 2026-11-19), unmeasured h
 and neither does UserPromptSubmit; a peer message does fire it and wakes the compacted session. So a compacted lane
 waits for its next message: `request` belongs only where the lane waits for the hub anyway.
 
-Unmeasured anywhere, run-only at the switch flip: a Stop another Stop hook blocks still runs the hand-off (the
+Unmeasured anywhere, run-only until the first live run: a Stop another Stop hook blocks still runs the hand-off (the
 heartbeat can't see a peer hook's block on the same Stop; only `send`'s 2 s wait and busy check cover it, and no
 blocking Stop hook is registered today); that an ordinary Stop payload carries `stop_hook_active: false` (the hooks
-reference shows the field, not that a plain Stop sends it as `false`; without it nothing fires, and the log shows a `request` with no `claim`); whether UserPromptSubmit fires for a message queued mid-turn and for
+reference shows the field, not that a plain Stop sends it as `false`, though the 2.1.330 binary's state defaults
+it to false (read from the minified source, 2026-11-21); without it nothing fires, and the log shows a `request` with no `claim`); whether UserPromptSubmit fires for a message queued mid-turn and for
 a turn a finished background task starts (if not, `lastPromptAt` misses it and the dirty-tree and busy checks are the
-only cover); the box with the slash menu open after typing.
+only cover); the box with the slash menu open after typing, and that Enter then runs `/compact` itself (issues report
+Enter running a highlighted menu row instead); a peer message delivered while `/compact` runs (the fork alone can take
+480 s): queued for a turn after, folded into the summary, or dropped — why the wait point is `[pr-open]` only, where
+the hub's next message is usually far off (a `[rebase]` after another merge, a `[hold]` or a fast `[merged]` can still
+land; a lost one is bounded: the hub can end a merged lane, and a stale head shows at the merge line), and not yet an
+`[ask-maintainer]`, which the hub often answers in seconds.
 
 Accepted residuals: the heartbeat already runs the branch's own `scripts/board/lib.sh` and `board.sh` (the hand-off adds
 no branch code: main's script re-derives everything); any session can write the board dir, so a forged flag reaches
 main's `stop`, which re-checks it all; the busy markers are screen text; "main's committed" means main's `HEAD`, not
 `origin/main`, so a `/workspace` left on another commit runs that commit's script and switch.
 
-**Turning it on**, one PR: re-measure the box and busy shapes on the installed version; `selfCompact: true`; add to
-`docs/ops/FEATURE-WORKFLOW.md` → _Lane status and checkpoints_: "Where the lane now waits for the hub — after an
-`[ask-maintainer]` it holds for, and after `[pr-open]` — with the lane file just written, the tree clean and no
-background task or agent running, its last tool call may be `bash scripts/board/self-compact.sh request`; a refusal
-changes nothing." Then watch the first run: `request`, `claim`, `spawn`, `sent` once; the summary carries the block; a
-hub message wakes the lane.
+Where a lane calls `request`: `docs/ops/FEATURE-WORKFLOW.md` → _Lane status and checkpoints_.
+
+**First live run** (the first lane whose `[pr-open]` ends "self-compact next" after F379 merged; the hub watches at
+once, before its other `[pr-open]` duties, from a `[followup]`; a missed window waits for the next such lane):
+
+1. `/workspace` at or after the merge commit; this prints `true`:
+   `git -C /workspace cat-file blob HEAD:scripts/board/limits.json | jq .lanes.selfCompact`
+2. `<board>/self-compact.log`: `request`, `claim`, `spawn`, `sent` once for one pid, `sent` a few seconds after the
+   lane's turn ends.
+3. Between `sent` and the lane's `compact-*.md` file, the hub sends the lane one `[info] … Reply with: ack` on
+   purpose: the mid-compaction delivery check.
+4. Within 10 min of `sent` (the fork alone can take 480 s): a `trigger=manual rc=0` line in the lane's
+   `localNotes/handoffs/precompact.log`, and its `compact-*.md` summary carries the lane block's facts (branch, phase,
+   lane file, next step, open asks word for word).
+5. Within 5 min of `compact-*.md`, the lane takes a turn for the `[info]` (its `ack`; its board record's
+   `lastPromptAt` moves past `sent`) and re-reads `FEATURE-WORKFLOW.md`.
+
+Nothing is typed before `spawn`, so every `refuse` but `box-compact`, and every `skip` logged by `stop`, is benign,
+as is `send`'s `skip` with `prompted`, `box-busy`, `box-none`, `box-other` or `late`. After `spawn`, a `skip` with
+`guard` or `tmux` (the log can't tell the first guard from the one after typing), `box-changed`, and a later `refuse
+box-compact` may mean `/compact` was left in the box: read the lane's pane (read-only `capture-pane`), and text left
+there is the user's to clear (`[ask-maintainer]`). A failure — a `request` with no `claim` (a plain Stop's
+`stop_hook_active` not `false`, `/workspace`'s `self-compact.sh` or `lib.sh` differing on disk from `HEAD`, the `off`
+file, or another of the hand-off's or `stop`'s early exits, which log nothing), `/compact` left in a box, no
+`precompact.log` line 10 min after `sent`, no `ack`, a lane that doesn't wake — takes the stop line above first, then is
+filed. When the mid-compaction check
+passes, the `[ask-maintainer]` wait point (never a go only the lane's pane can give) can join the workflow sentence;
+the results move the run-only facts above into _measured here_.
 
 ## Log
 
@@ -235,7 +276,8 @@ write compaction would have paid anyway, and compaction reads it.
 - `python3 .claude/hooks/testdata/run-fixtures.py` — the compaction suite runs the hook against a stub
   `claude` (no network, no cost), the lane block's stdout checked exactly; the hand-off suite runs the heartbeat
   against a stub `self-compact.sh` (hangs, failures, main's copy dirty or missing).
-- `scripts/src/board/self-compact.test.ts` — `request`, `stop` and `send` against a temp main, board and tmux shim.
+- `scripts/src/board/self-compact.test.ts` — `request`, `stop` and `send` against a temp main, board and tmux shim,
+  with the 2.1.329 and 2.1.330 screen shapes.
 - Live: a session must be **started from the directory whose `.claude/settings.json` has the hooks** —
   `${CLAUDE_PROJECT_DIR}` is the launch directory, so a session started at `/workspace` doesn't see a
   worktree's unmerged hooks. Run `/compact`, then check the log line (`rc=0`, `denials=0`, `file=`), the
