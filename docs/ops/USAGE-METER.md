@@ -277,7 +277,11 @@ The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane run
 {"v":1,"lane":"<branch>","at":"<ISO>","void":"<reason>"}
 ```
 
-- `--lane` needs the lane's file (`board/lanes/<branch>.json`), so a typo records nothing (exit 2). A failed append
+- `--lane` needs the lane's file (`board/lanes/<branch>.json`), so a typo records nothing (exit 2), and refuses once
+  the lane's own PR has merged (exit 2, nothing written): a row then would count for the next lane on the name. A
+  lane's cycle is one rule (`laneCycle` in `ledger.ts`), shared by `--lane`, `--void` and the check: in `plan` it is
+  always open; past it, the lane's own PR is the one its file names, if that merged on the branch, else the newest
+  merged on the branch since its phase began; with neither it is open. A failed append
   still prints the estimate, then `NOT RECORDED`, exit 1. A torn last line gets its newline before the next row; a
   row that won't parse is skipped and named by line number (a gap until deleted by hand), never fatal.
 - **Cycles.** A row belongs to the first PR merged after it on its branch; a cycle runs from the previous merged PR to
@@ -293,19 +297,22 @@ The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane run
   the merged PR's own lines, paths and lenses (not leave-one-out). The estimate's gap to it is input error, the rest
   model error. Over final rows: median and rms error, PRs in range and within ×1.5, totals; then the merged PRs since
   the first estimate that have none (a count, since nothing could clear it). `--lane` adds the row as one line
-  (`usage (local only, never pasted): …`) for the lane's `decisions.md`. `score` reads PRs for the cache's own
-  `--since` when that reaches back further than the default, so it and an older report never refetch in turn; with
-  gh down and no cache at all it opens with **No PR table** and exits 1. The report scores only estimates on or
-  after its `--since` (its PRs start there) and counts the rest.
+  (`usage (local only, never pasted): …`) for the lane's `decisions.md`. `score` reuses the cache's `--since`
+  whenever that list reaches back to the score's table cut (the default since, or the first estimate if older), so a
+  report up to 60 days later never forces a refetch; the cut itself never follows the cache, so _at actual_ prices
+  with `estimate`'s units. With gh down and no usable `cache/prs.json` (missing or unreadable; the next good fetch
+  rewrites it) it opens with **No PR table** and exits 1. The report keeps an estimate whose PR merged on or after
+  its `--since` (an unmerged one by when it was recorded) and counts the rest.
 - **`score --check`**, one line per gap, exit 1 on any, in about 0.1 s (it never loads the transcript cache, which
-  takes seconds): (a) a lane file past `plan`, or in `plan` with its step plan written, with no estimate this cycle
-  (`parked`, `blocked`, `merged` and `cleanup` are quiet); (b) an estimate whose lane file is gone with no merged PR
+  takes seconds): (a) a lane file past `plan`, or in `plan` with its step plan written, with no merged PR of its own
+  and no estimate in the open cycle (`parked`, `blocked`, `merged` and `cleanup` are quiet); (b) an estimate whose lane file is gone with no merged PR
   after it: the PR table is stale (it names the newest PR and the fetch) or the lane was abandoned (`--void`); plus a
-  torn lane file or ledger row. A void or a refreshed table never silences (a): a voided lane still working is
-  asked again, and a lane file still in `local`, `dev` or `pr` after its own PR merged reads that PR's cycle (the
-  lane file names the PR, or its phase began before the merge). `--check` takes no other flag. `estimateGaps()` in
+  torn lane file or ledger row. A void never silences (a): a voided lane still working is asked again. A lane whose
+  own PR has merged is past the point like `merged`: a missing estimate shows in the score's merged-with-none count,
+  never as a gap no command could clear. `--check` takes no other flag. `estimateGaps()` in
   `cli.ts` is the same check, for the hub's `pq-check` (HUB.md → _The hub's duties_ → _Usage estimates_).
-- `--void` refuses a lane with no open estimate (exit 2), so a typo never reads as done.
+- `--void` refuses a lane with no open estimate (exit 2), so a typo never reads as done. It closes the open cycle
+  only; a merged PR's estimate stays scored.
 - A lane abandoned under a reused name with no PR counts into the next cycle's so far, as it does in the PR table.
 
 ## Phase log

@@ -132,6 +132,29 @@ export function current(rows: LedgerRow[], prs: PR[]): Entry[] {
   return [...by.values()].map((e) => ({ ...e, reestimates: Math.max(0, e.reestimates) }));
 }
 
+// A lane's cycle, the one judgment the check, `estimate --lane` and `--void` share: `merged` once the lane's own PR
+// merged in this life (past the point, like the merged phase: its estimate, or its absence, is the score's), else
+// the open cycle after the branch's newest merge. In plan it is always open (plan starts a cycle). Its own PR is the
+// one the lane file names, when that merged on this branch; else the newest merged on the branch since its phase began.
+export type LaneCycle = { merged: PR; prev?: never } | { merged: null; prev: PR | null };
+export function laneCycle(
+  l: Pick<LaneFile, 'branch' | 'phase' | 'pr' | 'phaseSince'>,
+  prs: PR[],
+): LaneCycle {
+  const mine = prs.filter((p) => p.branch === l.branch).sort((a, b) => a.mergedAt - b.mergedAt);
+  const open = { merged: null, prev: mine.at(-1) ?? null };
+  if (l.phase === 'plan') return open;
+  const named = l.pr === null ? undefined : mine.find((p) => p.number === l.pr);
+  if (named) return { merged: named };
+  const since = l.phaseSince;
+  const after = since === null ? undefined : mine.filter((p) => p.mergedAt >= since).at(-1);
+  return after ? { merged: after } : open;
+}
+
+// The open cycle's entry for a lane: where a row recorded now lands.
+export const openEntry = (entries: Entry[], lane: string) =>
+  entries.find((e) => e.lane === lane && !e.pr);
+
 export type ScoreState = 'so-far' | 'provisional' | 'final' | 'no-calls' | 'void';
 export interface ScoreRow {
   lane: string;
@@ -248,7 +271,8 @@ const when = (ms: number) => `${clock(ms)} PT`;
 
 // The fixed step's check (`pnpm usage score --check`): ledger, lane files and the cached PR list only, never the
 // transcript cache, so it can run on every queue write. One line per gap; [] when there are none.
-//   (a) a lane file past plan (or in plan with its step plan written) with no estimate this cycle;
+//   (a) a lane file past plan (or in plan with its step plan written), with no merged PR of its own and no
+//       estimate in the open cycle;
 //   (b) an estimate with no lane file and no merged PR after it: the PR table is stale, or the lane was abandoned.
 export function gaps(o: {
   rows: LedgerRow[];
@@ -268,20 +292,8 @@ export function gaps(o: {
   const estimated = (e: Entry | undefined) => !!e && !!e.row && !e.voided;
   for (const l of o.lanes) {
     const due = PAST_PLAN.has(l.phase) || (l.phase === 'plan' && l.plan !== null);
-    if (!due) continue;
-    // The lane's own cycle: its PR once that merged (the lane file trails the merge, and a refreshed table moves
-    // the estimate into the merged cycle), else the open one. A reused name's new lane starts after the old merge.
-    const merged = prs
-      .filter(
-        (p) =>
-          p.branch === l.branch &&
-          (p.number === l.pr || (l.phaseSince !== null && p.mergedAt >= l.phaseSince)),
-      )
-      .sort((a, b) => a.mergedAt - b.mergedAt)[0];
-    const mine = entries.find(
-      (e) => e.lane === l.branch && (merged ? e.pr?.number === merged.number : !e.pr),
-    );
-    if (!estimated(mine))
+    if (!due || laneCycle(l, prs).merged) continue;
+    if (!estimated(openEntry(entries, l.branch)))
       out.push(
         `${l.branch}: no usage estimate (phase ${l.phase}) → pnpm usage estimate --lane ${l.branch} --lines <n> [--ui] --lenses <…>`,
       );
@@ -322,17 +334,18 @@ export function liveScore(o: {
   from?: number;
 }): LiveScore {
   const from = o.from ?? -Infinity;
-  const kept = o.ledger.rows.filter((r) => r.at >= from);
-  const entries = current(kept, o.prs);
-  const rows = scoreRows({ ...o, entries });
-  const est = (rs: LedgerRow[]) => rs.filter((r) => !isVoid(r)).length;
+  const all = current(o.ledger.rows, o.prs);
+  // by merge time, as the PR table cuts; an unmerged one by when it was recorded
+  const kept = all.filter((e) => (e.pr ? e.pr.mergedAt >= from : (e.row?.at ?? -Infinity) >= from));
+  const rows = scoreRows({ ...o, entries: kept });
+  const recorded = kept.reduce((s, e) => s + (e.row ? e.reestimates + 1 : 0), 0);
   return {
     rows,
     stat: scoreStat(rows),
-    unestimated: unestimated(entries, kept, o.rows),
+    unestimated: unestimated(all, o.ledger.rows, o.rows),
     bad: o.ledger.bad,
-    recorded: est(kept),
-    left: est(o.ledger.rows) - est(kept),
+    recorded,
+    left: o.ledger.rows.filter((r) => !isVoid(r)).length - recorded,
   };
 }
 

@@ -7,7 +7,15 @@ import { cliGuard } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { doctor, formatDoctor } from './doctor.ts';
 import { parseMeter, type Manual, type MeterRow } from './meter.ts';
-import { cachedPRs, ghText, mergedPRs, type GhText, type PR, type Stale } from './gh.ts';
+import {
+  cachedPRs,
+  ghText,
+  mergedPRs,
+  searchFrom,
+  type GhText,
+  type PR,
+  type Stale,
+} from './gh.ts';
 import { estimateBasis, fitModel, reportModel } from './model.ts';
 import { DEFAULT_PRIORS, LENSES, mergePriors, predict, type Priors } from './estimate.ts';
 import { parsePhaseLog } from './phaselog.ts';
@@ -17,6 +25,7 @@ import {
   boardLine,
   estimateLines,
   fitLines,
+  clock,
   reportLines,
   scoreLines,
   staleLine,
@@ -24,6 +33,8 @@ import {
 import {
   LEDGER,
   current,
+  laneCycle,
+  openEntry,
   formatRow,
   gaps,
   liveScore,
@@ -32,7 +43,7 @@ import {
   type EstRow,
   type LedgerRow,
 } from './ledger.ts';
-import { BRANCH_RE, isProblem, parseLane, readLanes } from '../board/tower/lanes.ts';
+import { BRANCH_RE, isProblem, parseLane, readLanes, type LaneFile } from '../board/tower/lanes.ts';
 import { burnLines } from './burn.ts';
 import { stopAt } from '../board/away.ts';
 import { anonBytes, scan } from './scan.ts';
@@ -48,7 +59,7 @@ export const USAGE = `pnpm usage <command>   (-h / --help on any command: its us
   burn [--at <HH:MM>] [--no-scan]
                                 usage now and where it lands at the reset (and at HH:MM), low–high (the hub's /burn)
   estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--lane <branch>] [--scan]
-                                a task's QU and meter %, low–high, from its diff lines, a browser/device check (--ui),
+                                a task's QU and meter %, low–high, from its diff lines, whether it touches app/ or extension/ (--ui),
                                 its review lenses (rules correctness tests shell infra ui extension; Plan and rules always;
                                 default correctness,tests, plus ui with --ui) and fan-out agents; offline from the cache;
                                 --lane records it in <usage dir>/estimates.jsonl (the lane's fixed step after Plan)
@@ -283,7 +294,7 @@ export function estimateGaps(e: ReturnType<typeof env> = env()): string[] {
 }
 
 // --lane: a branch name with a lane file (a typo would record an estimate no lane ever clears).
-type LaneArg = { error: string } | { lane: string; phase: string | null };
+type LaneArg = { error: string } | { lane: string; phase: string | null; file: LaneFile | null };
 function laneArg(lane: string | undefined, board: string, needFile: boolean): LaneArg {
   if (lane === undefined || !BRANCH_RE.test(lane))
     return { error: '--lane takes a lane branch name' };
@@ -292,9 +303,9 @@ function laneArg(lane: string | undefined, board: string, needFile: boolean): La
   if (text === null)
     return needFile
       ? { error: `--lane ${lane}: no lane file at ${p} (the lane writes it with pnpm board lane)` }
-      : { lane, phase: null };
+      : { lane, phase: null, file: null };
   const f = parseLane(text, `${lane}.json`);
-  return { lane, phase: isProblem(f) ? null : f.phase };
+  return isProblem(f) ? { lane, phase: null, file: null } : { lane, phase: f.phase, file: f };
 }
 
 async function scanQuiet(e: ReturnType<typeof env>, out: (s: string) => void) {
@@ -329,12 +340,14 @@ async function score(
       out('--void takes the reason the lane was abandoned');
       return 2;
     }
-    const open = current(readLedger(e.usageDir).rows, cachedPRs(e.cache)?.prs ?? []).find(
-      (x) => x.lane === rec.lane && !x.pr && x.row && !x.voided,
-    );
-    if (!open) {
+    const prs = cachedPRs(e.cache)?.prs ?? [];
+    const open = openEntry(current(readLedger(e.usageDir).rows, prs), rec.lane);
+    if (!open?.row || open.voided) {
+      const merged = rec.file && laneCycle(rec.file, prs).merged;
       out(
-        `--void: ${rec.lane} has no open estimate (none recorded, already voided, or its PR merged)`,
+        merged
+          ? `--void: ${rec.lane} has no open estimate: its PR ${merged.number} merged, and the estimate is scored against it`
+          : `--void: ${rec.lane} has no open estimate (none recorded, already voided, or its PR merged)`,
       );
       return 2;
     }
@@ -363,9 +376,15 @@ async function score(
   let fetchedAt: number | null = null;
   let table: string;
   let failed: string | null = null;
-  // the cache's own --since when it reaches back further, so score and an older report never refetch in turn
+  const ledger = readLedger(e.usageDir);
+  // the table cut never follows the cache, so "at actual" prices with the units `estimate` used
+  const cut = Math.min(ptMidnight(DEFAULT_SINCE), ...ledger.rows.map((r) => r.at));
+  // any cached --since whose list reaches back to the cut, so score and a report never refetch in turn
   const cs = cachedPRs(e.cache)?.since;
-  const since = cs && cs < DEFAULT_SINCE && /^\d{4}-\d{2}-\d{2}$/.test(cs) ? cs : DEFAULT_SINCE;
+  const since =
+    cs && /^\d{4}-\d{2}-\d{2}$/.test(cs) && Date.parse(`${searchFrom(cs)}T00:00:00Z`) <= cut
+      ? cs
+      : DEFAULT_SINCE;
   try {
     const r = await mergedPRs(e.cache, {
       since,
@@ -383,8 +402,7 @@ async function score(
   }
   const loaded = loadCache(e.cache);
   const a = attribute(loaded, hubName(), readPhaseLog(e.usageDir));
-  const ledger = readLedger(e.usageDir);
-  const rows = prTable(a, prs, Math.min(ptMidnight(since), ...ledger.rows.map((r) => r.at)));
+  const rows = prTable(a, prs, cut);
   const pr = readPriors(e.usageDir);
   const fit = fitModel({
     rows: readMeter(e.usageDir).rows,
@@ -412,7 +430,7 @@ async function score(
     [
       ...(failed
         ? [
-            `**No PR table: gh failed (${failed}) and there is no cache/prs.json.** Every row below reads as so far; rerun when gh answers.`,
+            `**No PR table: ${failed}.** Every row below reads as so far; rerun when gh answers.`,
             '',
           ]
         : []),
@@ -554,6 +572,14 @@ export async function main(
         out(rec.error);
         return 2;
       }
+      // past the point: a row now would land in the next cycle on this name (docs/ops/USAGE-METER.md → Ledger)
+      const merged = rec?.file && laneCycle(rec.file, cachedPRs(e.cache)?.prs ?? []).merged;
+      if (rec && merged) {
+        out(
+          `--lane ${rec.lane}: its PR ${merged.number} merged ${clock(merged.mergedAt)} PT, so an estimate now would count for the next lane on this name; not recorded. The PR shows under "merged since the first estimate with none" in pnpm usage score. Drop --lane for the number alone; a new lane on this name clears the old lane file first (pnpm board lane --clear).`,
+        );
+        return 2;
+      }
       if (flags.scan) await scanQuiet(e, out);
       const now = Date.now();
       const cached = cachedPRs(e.cache);
@@ -610,9 +636,7 @@ export async function main(
         out(`NOT RECORDED: ${(err as Error).message}`);
         return 1;
       }
-      const cycle = current(readLedger(e.usageDir).rows, prs).find(
-        (x) => x.lane === rec.lane && !x.pr,
-      );
+      const cycle = openEntry(current(readLedger(e.usageDir).rows, prs), rec.lane);
       out(
         `recorded: ${path} (lane ${rec.lane}, estimate ${(cycle?.reestimates ?? 0) + 1} this cycle${row.phase && row.phase !== 'plan' ? `, late: phase ${row.phase}` : ''})`,
       );

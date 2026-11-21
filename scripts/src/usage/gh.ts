@@ -100,9 +100,8 @@ export async function mergedPRs(
   o: { since: string; refresh?: boolean; now: number; gh?: GhText },
 ): Promise<{ prs: PR[]; note: string | null; stale: Stale | null; fetchedAt: number }> {
   const path = join(cache, 'prs.json');
-  const cached = existsSync(path)
-    ? (JSON.parse(readFileSync(path, 'utf8')) as { fetchedAt: number; since?: string; prs: PR[] })
-    : null;
+  // an unreadable file is no cache: the full fetch below rewrites it
+  const cached = cachedPRs(cache);
   const full = (got: PR[], from: string) =>
     got.length >= PR_LIMIT
       ? `${PR_LIMIT} merged PRs since ${from}, the gh limit: older ones may be missing`
@@ -128,7 +127,10 @@ export async function mergedPRs(
     return { prs, note: full(got, from), stale: null, fetchedAt: o.now };
   } catch (e) {
     if (!cached)
-      throw new Error(`gh pr list failed and no cached PRs: ${(e as Error).message}`, { cause: e });
+      throw new Error(
+        `gh failed (${(e as Error).message.split('\n')[0]}) and ${existsSync(path) ? 'cache/prs.json is unreadable' : 'there is no cache/prs.json'}`,
+        { cause: e },
+      );
     const why = (e as Error).message.split('\n')[0]!;
     return {
       prs: cached.prs,
@@ -143,13 +145,14 @@ export async function mergedPRs(
   }
 }
 
-// The cached PR list as it is, never refetched (`pnpm usage estimate` stays offline); null with no cache.
+// The cached PR list as it is, never refetched (`pnpm usage estimate` stays offline); null with no cache or an
+// unreadable one.
 export function cachedPRs(
   cache: string,
 ): { prs: PR[]; fetchedAt: number; since: string | null } | null {
   try {
     const c = JSON.parse(readFileSync(join(cache, 'prs.json'), 'utf8'));
-    return Array.isArray(c?.prs)
+    return Array.isArray(c?.prs) && Number.isFinite(c.fetchedAt)
       ? {
           prs: c.prs as PR[],
           fetchedAt: Number(c.fetchedAt),

@@ -147,7 +147,7 @@ export function prType(pr: Pick<PR, 'files' | 'changedFiles'>, workflowShare = 0
 
 export const POST_MS = 6 * 3_600_000;
 
-// The paths whose change needs a browser or device check: the analysis's strongest predictor after diff size.
+// The paths whose change counts as ui (a browser or device check): the analysis's strongest predictor after diff size.
 export const UI_PATHS = /^(app|extension)\//;
 // A review round's start: the old review marker, or any review lens's spawn (code-reviewer, review-*, the fix
 // recheck review-fixes included — it carries no review marker of its own).

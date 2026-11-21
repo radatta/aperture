@@ -506,7 +506,7 @@ export function reportModel(o: {
       calls: a.calls,
       units: work.units,
       lastCall: o.loaded.calls.at(-1)?.ts ?? null,
-      // the report's PRs start at --since, so an older estimate's PR isn't in it: pnpm usage score has those
+      // cut by merge time, as the report's PR table: an older estimate's PR isn't in it (pnpm usage score has those)
       from: o.since,
     }),
     table: prTableBasis(o.prs, o.prsFetchedAt ?? null, o.stale ?? null),

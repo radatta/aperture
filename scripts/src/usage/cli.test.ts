@@ -18,7 +18,7 @@ import {
 import { cachedPRs, mergedPRs, PR_LIMIT } from './gh.ts';
 import { SID, assistantRow, bash, agent, meterRow } from './fixtures.ts';
 import { fitModel, hoursTo100, scheduledResets } from './model.ts';
-import { boardLine, staleLine } from './report.ts';
+import { boardLine, clock, staleLine } from './report.ts';
 import { parseMeter } from './meter.ts';
 
 let tmp: string;
@@ -733,6 +733,111 @@ describe('the estimate ledger: estimate --lane and score', () => {
     expect(readFileSync(ledger(), 'utf8').trimEnd().split('\n')).toHaveLength(2);
   });
 
+  it("refuses --lane once the lane's own PR merged, and the check stays quiet", async () => {
+    const merged = Date.parse('2026-01-05T09:00:00Z');
+    const prs = (n: number) => ({
+      fetchedAt: merged,
+      since: DEFAULT_SINCE,
+      prs: [
+        {
+          number: n,
+          title: 't',
+          branch: 'lane-a',
+          mergedAt: merged,
+          changedFiles: 1,
+          additions: 1,
+          deletions: 0,
+          files: [],
+        },
+      ],
+    });
+    mkdirSync(join(usage, 'cache'), { recursive: true });
+    writeFileSync(join(usage, 'cache', 'prs.json'), JSON.stringify(prs(9)));
+    mkdirSync(join(board(), 'lanes'), { recursive: true });
+    const file = (phase: string) =>
+      writeFileSync(
+        join(board(), 'lanes', 'lane-a.json'),
+        JSON.stringify({ v: 1, branch: 'lane-a', phase, pr: 9, updatedAt: '2026-01-05T10:00:00Z' }),
+      );
+    file('pr');
+    const r = await run('estimate', '--lines', '300', '--lane', 'lane-a');
+    expect(r.code).toBe(2);
+    expect(r.text).toMatch(
+      /^--lane lane-a: its PR 9 merged 01\/05, 01:00 PT, so an estimate now would count/,
+    );
+    expect(existsSync(ledger())).toBe(false);
+    expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
+    expect((await run('score', '--lane', 'lane-a', '--void', 'gone')).text).toBe(
+      '--void: lane-a has no open estimate: its PR 9 merged, and the estimate is scored against it',
+    );
+    file('plan'); // a new cycle on the name starts in plan
+    expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
+  });
+
+  it("score reuses a cache whose list reaches back to its cut, and never cuts its table by the cache's since", async () => {
+    const t = Date.parse(`${DEFAULT_SINCE}T12:00:00Z`);
+    const gh = vi.fn(async (): Promise<string> => {
+      throw new Error('HTTP 504');
+    });
+    const write = (since: string, mergedAt: number) => {
+      mkdirSync(join(usage, 'cache'), { recursive: true });
+      writeFileSync(
+        join(usage, 'cache', 'prs.json'),
+        JSON.stringify({
+          fetchedAt: Date.now(),
+          since,
+          prs: [
+            {
+              number: 5,
+              title: 't',
+              branch: 'lane-b',
+              mergedAt,
+              changedFiles: 1,
+              additions: 9,
+              deletions: 0,
+              files: [],
+            },
+          ],
+        }),
+      );
+    };
+    const later = new Date(t + 10 * 86_400_000).toISOString().slice(0, 10);
+    write(later, t + 86_400_000);
+    expect(await main(['score', '--no-scan'], out, { gh })).toBe(0);
+    expect(gh).not.toHaveBeenCalled();
+    expect(JSON.parse(readFileSync(join(usage, 'cache', 'prs.json'), 'utf8')).since).toBe(later);
+    // an older since is reused too, but a PR merged before the default since stays out of the score's table
+    const older = new Date(t - 20 * 86_400_000).toISOString().slice(0, 10);
+    write(older, t - 5 * 86_400_000);
+    lines.length = 0;
+    expect(await main(['score', '--no-scan'], out, { gh })).toBe(0);
+    expect(gh).not.toHaveBeenCalled();
+    expect(lines.join('\n')).toContain('Merged since the first estimate with none: none.');
+    expect(lines.join('\n')).not.toContain('PR table stale');
+  });
+
+  it('treats an unreadable prs.json as no cache: a good fetch rewrites it, a failed one says so', async () => {
+    mkdirSync(join(usage, 'cache'), { recursive: true });
+    const path = join(usage, 'cache', 'prs.json');
+    writeFileSync(path, '{"fetchedAt":');
+    const down = async (): Promise<string> => {
+      throw new Error('HTTP 502');
+    };
+    await expect(
+      mergedPRs(join(usage, 'cache'), { since: '2026-01-01', now: 1, gh: down }),
+    ).rejects.toThrow('gh failed (HTTP 502) and cache/prs.json is unreadable');
+    lines.length = 0;
+    expect(await main(['score', '--no-scan'], out, { gh: down })).toBe(1);
+    expect(lines.join('\n')).toMatch(
+      /^\*\*No PR table: gh failed \(HTTP 502\) and cache\/prs\.json is unreadable\.\*\*/,
+    );
+    const up = async (): Promise<string> => '[]';
+    expect(
+      (await mergedPRs(join(usage, 'cache'), { since: '2026-01-01', now: 1, gh: up })).prs,
+    ).toEqual([]);
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toMatchObject({ since: '2026-01-01', prs: [] });
+  });
+
   it('records a torn lane file as phase unknown, and counts re-estimates per cycle on a reused name', async () => {
     const t0 = Date.parse('2026-01-05T10:00:00Z');
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -774,5 +879,16 @@ describe('the estimate ledger: estimate --lane and score', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('small things', () => {
+  it('defines --ui by the paths the fit counts', () => {
+    expect(USAGE).toContain('whether it touches app/ or extension/ (--ui)');
+    expect(USAGE).not.toContain('browser');
+  });
+  it('prints the hour after midnight PT as 00, never 24', () => {
+    expect(clock(Date.parse('2026-01-05T08:00:00Z'))).toBe('01/05, 00:00');
+    expect(clock(Date.parse('2026-01-05T08:30:00Z'))).toBe('01/05, 00:30');
   });
 });

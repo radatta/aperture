@@ -9,6 +9,7 @@ import {
   cycleOf,
   formatRow,
   gaps,
+  laneCycle,
   liveScore,
   parseLedger,
   scoreRows,
@@ -260,9 +261,21 @@ describe('the live score', () => {
     expect(s.stat.medianX).toBeCloseTo(2, 6);
     expect(s.recorded).toBe(4);
     expect(s.left).toBe(0);
-    // from: rows before it are left out and counted, never scored against a table that can't reach their PR
-    const cut = liveScore({ ledger, prs, rows, calls: [], units, lastCall: T(100), from: T(2) });
-    expect(cut).toMatchObject({ recorded: 0, left: 4, rows: [] });
+  });
+
+  it('cuts by merge time: a PR merged on or after from keeps its estimate, however early it was recorded', () => {
+    const prs = [pr(1, 'lane-a', 10), pr(2, 'lane-b', 1.5)];
+    const rows = prs.map((p) =>
+      prRow({ number: p.number, branch: p.branch, mergedAt: p.mergedAt, qu: 8 }),
+    );
+    const ledger = {
+      rows: [est('lane-a', 1), est('lane-a', 1.2), est('lane-b', 1), est('lane-c', 1)],
+      bad: [],
+    };
+    const s = liveScore({ ledger, prs, rows, calls: [], units, lastCall: T(100), from: T(2) });
+    // lane-a: kept (merged at 10, re-estimated: 2 rows); lane-b: merged before from; lane-c: open, recorded before
+    expect(s.rows.map((r) => [r.lane, r.reestimates])).toEqual([['lane-a', 1]]);
+    expect(s).toMatchObject({ recorded: 2, left: 2, unestimated: [] });
   });
 
   it('counts merged PRs with no estimate only after the first one, per cycle', () => {
@@ -281,6 +294,32 @@ describe('the live score', () => {
         rows.map((r) => ({ ...r, turns: 0 })),
       ),
     ).toEqual([]);
+  });
+});
+
+describe('laneCycle', () => {
+  const two = [pr(1, 'lane-a', 10), pr(2, 'lane-a', 20), pr(7, 'lane-z', 15)];
+  const at = (o: Partial<LaneFile>, prs = two) =>
+    laneCycle({ ...lane('lane-a', 'build'), ...o }, prs);
+  it('prefers the PR the lane file names, else the newest merged since its phase began', () => {
+    expect(at({ pr: 1, phaseSince: T(5) }).merged?.number).toBe(1);
+    expect(at({ pr: 2, phaseSince: T(5) }).merged?.number).toBe(2);
+    expect(at({ pr: null, phaseSince: T(5) }).merged?.number).toBe(2);
+    expect(at({ pr: 1, phaseSince: null }).merged?.number).toBe(1);
+  });
+  it('is open after the newest merge otherwise, and always open in plan', () => {
+    expect(at({ pr: null, phaseSince: T(21) })).toMatchObject({
+      merged: null,
+      prev: { number: 2 },
+    });
+    expect(at({ pr: null, phaseSince: null })).toMatchObject({ merged: null, prev: { number: 2 } });
+    expect(at({ pr: 7, phaseSince: T(21) })).toMatchObject({ merged: null }); // another branch's PR
+    expect(at({ pr: 9, phaseSince: null })).toMatchObject({ merged: null }); // unmerged or unknown
+    expect(at({ phase: 'plan', pr: 1, phaseSince: T(5) })).toMatchObject({
+      merged: null,
+      prev: { number: 2 },
+    });
+    expect(at({}, [])).toEqual({ merged: null, prev: null });
   });
 });
 
@@ -333,10 +372,26 @@ describe('gaps (the check)', () => {
     expect(
       gaps({ ...none, rows, prs, lanes: [{ ...lane('lane-a', 'dev'), phaseSince: T(12), pr: 1 }] }),
     ).toEqual([]);
-    // the merged cycle had no estimate: still a gap
+    // past the point: the score's merged-with-none count has it, and estimate --lane refuses
+    expect(gaps({ ...none, prs, lanes: [{ ...lane('lane-a', 'pr'), phaseSince: T(5) }] })).toEqual(
+      [],
+    );
+    // an open row recorded after the merge (a stale table at the time) stays quiet while the lane file exists
     expect(
-      gaps({ ...none, prs, lanes: [{ ...lane('lane-a', 'pr'), phaseSince: T(5) }] }),
-    ).toHaveLength(1);
+      gaps({
+        ...none,
+        rows: [est('lane-a', 12)],
+        prs,
+        lanes: [{ ...lane('lane-a', 'pr'), pr: 1 }],
+      }),
+    ).toEqual([]);
+  });
+
+  it('asks a plan lane with a step plan even when its file still names a merged PR', () => {
+    const prs = { prs: [pr(1, 'lane-a', 10)], fetchedAt: T(11) };
+    const l = { ...lane('lane-a', 'plan', steps), pr: 1, phaseSince: T(5) };
+    expect(gaps({ ...none, prs, lanes: [l] })).toHaveLength(1);
+    expect(gaps({ ...none, prs, lanes: [l], rows: [est('lane-a', 11)] })).toEqual([]);
   });
 
   it("never lets a reused name's earlier estimate count", () => {
