@@ -7,7 +7,7 @@ import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
 import { InMemoryPush } from './push/gateway';
 import { handlePushTick, parseTickEvent, TICK_SAFETY_MS, tickDeadline } from './pushDispatch';
-import { SEND_TIMEOUT_MS } from './push/livePush';
+import { BODY_READ_MS, SEND_TIMEOUT_MS } from './push/livePush';
 
 const NOW = userDueEpoch('2026-11-04', '14:00');
 const APP = 'https://app.example';
@@ -93,7 +93,7 @@ describe('push dispatch Lambda edge', () => {
     expect(tickDeadline(undefined, 1_000)).toBeUndefined();
     // A send started at the deadline still ends, stamps written, before the 20 s timeout; and 8 s are
     // left to start sends in.
-    expect(TICK_SAFETY_MS).toBeGreaterThanOrEqual(SEND_TIMEOUT_MS + 2_000);
+    expect(TICK_SAFETY_MS).toBeGreaterThanOrEqual(SEND_TIMEOUT_MS + BODY_READ_MS + 1_500);
     expect(20_000 - TICK_SAFETY_MS).toBeGreaterThanOrEqual(8_000);
   });
 });

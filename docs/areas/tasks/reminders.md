@@ -173,12 +173,13 @@ EventBridge Scheduler, once a minute ──▶ aperture-push-dispatch-<stage>
 - Send headers: `TTL: 3600`, `Urgency: high`, `Topic: <wireTopic(tag)>` — the tag's sha256, base64url, its
   first 24 characters (D25). The tag itself stays the notification's `tag`, the retry rows' key and the `n=`
   param; the same tag gives the same Topic, so a retry still replaces an undelivered first copy.
-- **A refusal's reason** (D26, `livePush.ts`): a non-2xx body is read, at most 2 KB within 500 ms (past either:
+- **A refusal's reason** (D26, `livePush.ts`): a 4xx/5xx body is read, at most 2 KB within 500 ms (past either:
   no reason), and parsed in this order — Apple's `{"reason"}` (served as `text/plain`), Mozilla autopush's
-  `errno` + `message`, Google's `error.status` or `error.message`, a string `error`, else the plain text (an
-  HTML page or an empty body says nothing). It's untrusted, so it is cut to 80 characters of
-  `[A-Za-z0-9 _.:,/'-]`, everything else a space: it can't forge the error text's `(…)`, the health line's
-  `·` or a log line. A 2xx body is never read.
+  `errno` + `message`, Google's `error.status` or `error.message`, a string `error`, else the plain text (a
+  body with markup or an empty one says nothing). It's untrusted, so it is cut to 80 characters of
+  `[A-Za-z0-9 _.:,'-]`, everything else a space: it can't forge the error text's `(…)`, the health line's
+  `·` or a log line; one that holds `://` or a 40-character token (an endpoint, a path, a key) says
+  nothing. A 2xx or 3xx body is never read.
 
 ## 4. Visible health
 
@@ -217,7 +218,8 @@ proves the whole chain. The BFF never holds the private key.
 
 - **SSRF:** `subscribePush` admits only https endpoints on `PUSH_ENDPOINT_HOSTS` (Apple, FCM, Mozilla, WNS)
   with no credentials or port. The poller POSTs only to stored endpoints, with a 10 s timeout (FCM asks for at
-  least 10 s) and no redirects; no send starts in a tick's last 12 s (`TICK_SAFETY_MS`).
+  least 10 s), a refusal's body read capped at 0.5 s, and no redirects; no send starts in a tick's last 12 s
+  (`TICK_SAFETY_MS`).
 - **Credentials:**
   - A subscription's endpoint, `p256dh` and `auth` let anyone push to the device. They are never in
     `exportData`, `getPushStatus`, logs or the dev-check ledger.
@@ -320,4 +322,6 @@ Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full lo
   that landed (`test`, `ritualNight`, a task id: 4, 11, 26) don't, and Apple documents a `BadWebPushTopic`
   reason. **Inference, not yet confirmed by an Apple send:** Apple checks the token before the headers (a POST
   to a never-issued endpoint answers `BadWebPushToken` whatever the Topic), so only a real subscription can
-  show it. D25 and D26 ship together: if a refusal remains, its reason is in Settings and the log.
+  show it. D25 and D26 ship together: if a refusal remains, its reason is in Settings and the log. A retry
+  in flight across the deploy goes out under the new Topic and so can't replace a first copy the service
+  took under the old one: at most one duplicate (iOS doesn't replace by `tag`, §3), and only for a timed-out or 5xx send in the minutes before the deploy.

@@ -13,42 +13,47 @@ import { encryptAes128Gcm, publicKeyOf, PushKeysError, vapidAuthorization } from
 // the allowlisted host or nowhere.
 
 export const SEND_TIMEOUT_MS = 10_000;
-// A refusal's body is read for its reason (D26) up to this many bytes and this long: past either, no
-// detail. 10 s for the answer plus this stays inside the tick's 12 s send margin (TICK_SAFETY_MS).
+// A refusal's (4xx/5xx) body is read for its reason (D26) up to this many bytes and this long: past either,
+// no detail. The answer's 10 s plus this stays inside the tick's send margin (TICK_SAFETY_MS, pinned).
 export const BODY_CAP = 2048;
 export const BODY_READ_MS = 500;
 const DETAIL_MAX = 80;
 
 // The Topic header for a logical tag (D25): base64url(sha256(tag)), its first 24 characters — 18 octets
 // with no leftover bits, inside RFC 8030's 32, the same for the same tag, so a retry still replaces an
-// undelivered first copy. Apple refused raw tags whose length is 1 more than a multiple of 4
+// undelivered first copy (a change to it across a deploy breaks that for retries then in flight). Apple refused raw tags whose length is 1 more than a multiple of 4
 // (`ritualMorning`, `b<minute>`), which no base64url decoder can decode (inference: 2026-11-21).
 export const wireTopic = (tag: string): string =>
   createHash('sha256').update(tag).digest('base64url').slice(0, 24);
 
 // Untrusted text bound for a log line and Settings: a short ASCII phrase. Anything else is a space, so it
-// can't forge the error text's `(…)` wrapper, the health line's ` · ` or a newline.
-const clean = (s: string): string | undefined =>
-  s
-    .replace(/[^A-Za-z0-9 _.:,/'-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, DETAIL_MAX)
-    .trim() || undefined;
+// can't forge the error text's `(…)` wrapper, the health line's ` · ` or a newline. Text that looks like a
+// URL or carries a long token (an endpoint, a path, a key) says nothing: those never reach a log (§5).
+const TOKENISH = /[A-Za-z0-9_-]{40,}/;
+const clean = (s: string): string | undefined => {
+  if (s.includes('://') || TOKENISH.test(s)) return undefined;
+  return (
+    s
+      .replace(/[^A-Za-z0-9 _.:,'-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, DETAIL_MAX)
+      .trim() || undefined
+  );
+};
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v : undefined);
 
 // The reason a push service gave, from its error body: Apple `{"reason"}` (served as text/plain), Mozilla
 // autopush `{code, errno, error, message}`, Google `{"error": {status, message}}` or a string `error`, or
-// plain text. An HTML page or an empty body says nothing.
+// plain text. Markup or an empty body says nothing.
 export function serviceDetail(text: string | null): string | undefined {
   if (text === null) return undefined;
   let json: unknown;
   try {
     json = JSON.parse(text);
   } catch {
-    const t = text.trim();
-    return t && !t.startsWith('<') ? clean(t) : undefined;
+    return text.includes('<') ? undefined : clean(text); // markup (an error page, BOM or not) says nothing
   }
   if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined;
   const o = json as Record<string, unknown>;
@@ -176,8 +181,8 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
       } catch (err) {
         return { status: 0, reason: isTimeout(err) ? 'timeout' : 'network' };
       }
-      if (res.ok) {
-        await res.body?.cancel().catch(() => {}); // delivered: the status is the answer
+      if (res.status < 400) {
+        await res.body?.cancel().catch(() => {}); // delivered (or a 3xx, never followed): no reason to read
         return { status: res.status };
       }
       const detail = serviceDetail(await readCapped(res));

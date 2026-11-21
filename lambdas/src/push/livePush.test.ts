@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SSMClient } from '@aws-sdk/client-ssm';
 import { catchUpTag, reminderTag } from '@aperture/shared';
-import { BODY_CAP, createLivePush, readCapped, serviceDetail, wireTopic } from './livePush';
+import {
+  BODY_CAP,
+  BODY_READ_MS,
+  createLivePush,
+  readCapped,
+  serviceDetail,
+  wireTopic,
+} from './livePush';
 import { createPublicKeyReader } from './publicKey';
 import { publicKeyOf } from './webpush';
 
@@ -209,10 +216,11 @@ describe('wire Topic', () => {
     for (const tag of tags) expect(wireTopic(tag)).toMatch(/^[A-Za-z0-9_-]{24}$/);
   });
 
-  it('is the same for the same tag (a retry still replaces its first copy) and distinct across tags', () => {
-    expect(tags.map(wireTopic)).toEqual(tags.map(wireTopic));
+  it('is pinned per tag (a retry still replaces its first copy) and distinct across tags', () => {
     expect(new Set(tags.map(wireTopic)).size).toBe(tags.length);
-    expect(wireTopic('test')).toBe('n4bQgYhMfWWaL-qgxVrQFaO_'); // pinned: a change would orphan nothing, but say so
+    // Pinned: a change across a deploy means a retry then in flight no longer replaces its first copy.
+    expect(wireTopic('test')).toBe('n4bQgYhMfWWaL-qgxVrQFaO_');
+    expect(wireTopic('ritualMorning')).toBe('-X1D8eW5CMq8JdkwxLihA3Ln');
   });
 });
 
@@ -251,8 +259,9 @@ describe('push service reason', () => {
     expect(await refused(502, () => '<html><body>Bad Gateway</body></html>')).toEqual({
       status: 502,
     });
-    const big = JSON.stringify({ reason: 'BadWebPushTopic', pad: 'x'.repeat(BODY_CAP) });
-    expect(await refused(400, () => big)).toEqual({ status: 400 });
+    expect(await refused(502, () => '\uFEFF<!doctype html><title>Bad</title>')).toEqual({
+      status: 502,
+    });
     for (const body of [
       '[]',
       'null',
@@ -269,10 +278,40 @@ describe('push service reason', () => {
   it("is sanitised: it can't forge the error text's wrapper, the health separator or a log line", () => {
     const hostile = 'Bad")\n{"event":"push_sent"} · — 🎉\u0000(x)';
     const d = serviceDetail(JSON.stringify({ reason: hostile }))!;
-    expect(d).toMatch(/^[A-Za-z0-9 _.:,/'-]+$/);
-    expect(d).not.toMatch(/[()"\n·—]/);
-    expect(serviceDetail(JSON.stringify({ reason: 'A'.repeat(500) }))).toHaveLength(80);
+    expect(d).toMatch(/^[A-Za-z0-9 _.:,'-]+$/);
+    expect(d).not.toMatch(/[()"\n·—/]/);
+    expect(serviceDetail(JSON.stringify({ reason: 'Ab,'.repeat(200) }))).toHaveLength(80);
     expect(serviceDetail(JSON.stringify({ reason: '🎉 · —' }))).toBeUndefined();
+  });
+
+  it('says nothing when the text could carry an endpoint, a path or a key (never in a log, §5)', () => {
+    const token = 'QG' + 'aB3_x-'.repeat(10);
+    for (const text of [
+      `No subscription at https://web.push.apple.com/${token}`,
+      `Unknown token ${token}`,
+      JSON.stringify({ reason: `Gone: ${token}` }),
+      JSON.stringify({ message: 'see https://example.com/help', errno: 102 }),
+    ])
+      expect(serviceDetail(text)).toBeUndefined();
+    expect(serviceDetail('Bad path /v1/push')).toBe('Bad path v1 push');
+  });
+
+  it('reads up to BODY_CAP bytes across chunks, and gives up one byte past it', async () => {
+    const chunked = (n: number) => () => {
+      const json = '{"reason":"BadWebPushTopic","pad":"';
+      const bytes = new TextEncoder().encode(json + 'x'.repeat(n - json.length - 2) + '"}');
+      return new ReadableStream({
+        start(c) {
+          for (let i = 0; i < bytes.length; i += 500) c.enqueue(bytes.subarray(i, i + 500));
+          c.close();
+        },
+      });
+    };
+    expect(await refused(400, chunked(BODY_CAP))).toEqual({
+      status: 400,
+      detail: 'BadWebPushTopic',
+    });
+    expect(await refused(400, chunked(BODY_CAP + 1))).toEqual({ status: 400 });
   });
 
   it('a body that errors mid-read or never ends gives the status alone, never a throw', async () => {
@@ -297,12 +336,49 @@ describe('push service reason', () => {
     expect(cancelled).toBe(true);
   });
 
+  it('a send whose refusal body never ends answers within BODY_READ_MS, the stream cancelled', async () => {
+    let cancelled = false;
+    const endless = () =>
+      new ReadableStream({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('{"reason":"BadWebPushTopic"'));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+    const started = Date.now();
+    expect(await refused(400, endless)).toEqual({ status: 400 });
+    expect(Date.now() - started).toBeLessThan(BODY_READ_MS + 400);
+    expect(cancelled).toBe(true);
+  });
+
   it('a 403 with a reason still drops the cached key; a 2xx body is never read', async () => {
     const { gw, ssmCalls } = live({ status: 403, body: () => '{"reason":"BadJwtToken"}' });
     expect(await gw.send(target, '{}', opts)).toEqual({ status: 403, detail: 'BadJwtToken' });
     await gw.send(target, '{}', opts);
     expect(ssmCalls).toHaveLength(2);
-    expect(await refused(201, () => '{"reason":"BadWebPushTopic"}')).toEqual({ status: 201 });
+    // A 2xx (and a 3xx, never followed) is cancelled unread: the connection is freed, no reason parsed.
+    for (const status of [201, 302]) {
+      let pulled = false;
+      let cancelled = false;
+      const body = () =>
+        new ReadableStream(
+          {
+            pull(c) {
+              pulled = true;
+              c.enqueue(new TextEncoder().encode('{"reason":"BadWebPushTopic"}'));
+              c.close();
+            },
+            cancel() {
+              cancelled = true;
+            },
+          },
+          { highWaterMark: 0 },
+        );
+      expect(await refused(status, body)).toEqual({ status });
+      expect({ pulled, cancelled }).toEqual({ pulled: false, cancelled: true });
+    }
   });
 });
 
