@@ -11,21 +11,25 @@ status line ─► statusline-log.sh ─► meter-<day>.jsonl ─► k (fit)
 ~/.claude/projects/**.jsonl ─► scan ─► cache/shards ─► phases ─► PR table
 board/lanes/*.json ─► phase-log.sh ─► phase-log.jsonl ─► phases
 PR table ─► per PR type · work units ─► estimate + backtest · k turns QU into %
+estimate --lane ─► estimates.jsonl ─► score (vs the PR table's actual) · score --check
 ```
 
 ## Commands
 
-| Command                                                                             | Does                                                                                                                                                                                                                          |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm usage report [--since YYYY-MM-DD] [--refresh]`                                | Scans, then prints the full model and writes `localNotes/usage/report-<day>.md`. `--since` defaults to 2026-11-04; `--refresh` refetches merged PRs.                                                                          |
-| `pnpm usage fit`                                                                    | Only k, its interval, the holdout and the burn rate.                                                                                                                                                                          |
-| `pnpm usage line`                                                                   | One line: `usage <n>% · <r>%/h · ~<h> h to 100%`. Not wired into the status line or tower yet (a follow-up).                                                                                                                  |
-| `pnpm usage burn [--at <HH:MM>]`                                                    | The hub's `/burn`: usage now, and where it lands at the weekly reset and at HH:MM, low–high: k's 80% interval × the last hour's QU (+ λ), widened to hold the meter's tick rate (`burn.ts`). Scans first, unless `--no-scan`. |
-| `pnpm usage estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--scan]` | A task's QU and meter %, low–high, from what is known before the work (_Estimate_). Offline: the cache and `cache/prs.json` as they are; `--scan` scans first.                                                                |
-| `pnpm usage scan [--rate <MB/s>]`                                                   | Only the transcript scan (default 40, at most 60).                                                                                                                                                                            |
-| `pnpm usage doctor`                                                                 | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                                                                                           |
+| Command                                                                                               | Does                                                                                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm usage report [--since YYYY-MM-DD] [--refresh]`                                                  | Scans, then prints the full model and writes `localNotes/usage/report-<day>.md`. `--since` defaults to 2026-11-04; `--refresh` refetches the PRs merged since the cache's newest.                                             |
+| `pnpm usage fit`                                                                                      | Only k, its interval, the holdout and the burn rate.                                                                                                                                                                          |
+| `pnpm usage line`                                                                                     | One line: `usage <n>% · <r>%/h · ~<h> h to 100%`. Not wired into the status line or tower yet (a follow-up).                                                                                                                  |
+| `pnpm usage burn [--at <HH:MM>]`                                                                      | The hub's `/burn`: usage now, and where it lands at the weekly reset and at HH:MM, low–high: k's 80% interval × the last hour's QU (+ λ), widened to hold the meter's tick rate (`burn.ts`). Scans first, unless `--no-scan`. |
+| `pnpm usage estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--lane <branch>] [--scan]` | A task's QU and meter %, low–high, from what is known before the work (_Estimate_). Offline: the cache and `cache/prs.json` as they are; `--scan` scans first. `--lane` also records it in the ledger (_Ledger and score_).   |
+| `pnpm usage score [--lane <branch>] [--refresh] [--no-scan]`                                          | The recorded estimates against their PRs' actual QU, and the gaps (_Ledger and score_). Scans first, unless `--no-scan`.                                                                                                      |
+| `pnpm usage score --check`                                                                            | The fixed step's gaps only, from the ledger, the lane files and `cache/prs.json`: no scan, no fetch, no transcript cache. Exit 1 on any.                                                                                      |
+| `pnpm usage score --lane <branch> --void <reason>`                                                    | Close an abandoned lane's open estimate.                                                                                                                                                                                      |
+| `pnpm usage scan [--rate <MB/s>]`                                                                     | Only the transcript scan (default 40, at most 60).                                                                                                                                                                            |
+| `pnpm usage doctor`                                                                                   | Is the logger installed and writing? Exit 1 with the fix otherwise.                                                                                                                                                           |
 
-`--no-scan` on report, fit and line skips the scan. `-h` on any command prints its usage and runs nothing. `--since`
+`--no-scan` on report, fit, line and score skips the scan. `-h` on any command prints its usage and runs nothing. `--since`
 is midnight Pacific on that day, in its own offset.
 
 Paths come from the environment, defaults in brackets: `APERTURE_USAGE_DIR` (`/workspace/localNotes/usage`),
@@ -177,8 +181,12 @@ post.
 ## PR table and types
 
 Merged PRs come from `gh pr list --search merged:>=<since − 60 days>` (the lookback keeps a reused branch's earlier
-PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000, and the report says when
-it hit that), cached an hour per `--since` in `cache/prs.json`; a failed read falls back to the cache and says so. A PR's calls are its branch's from the previous PR on that branch (or the start) to its merge.
+PR, so it still bounds the next one's window; the table starts at `--since`) (read-only token, at most 1000; a fetch that hits that is remembered in the cache, so `report` and `score` say so on every read from it), cached an hour in `cache/prs.json`, which also serves any later `--since` (its own since only moves earlier, so `score` and a report never refetch in turn). A refetch (`--refresh`, or an hour on) asks only for PRs
+merged since the cache's newest less a day and keeps the rest, since a merged PR's files and counts don't change: the
+one big query (every file of every PR, two pages of 100) outgrew GitHub's 10 s GraphQL limit, which answers 502 or 504
+(docs.github.com → _Rate limits and node limits for the GraphQL API_). An earlier `--since`, or no usable cache, fetches it all;
+deleting `cache/prs.json` forces that. A failed read falls back to the cache, and `report` and `score` then open with
+**PR table stale: newest PR n, fetched when** and gh's error, never a quiet note; with no cache it fails loud. A PR's calls are its branch's from the previous PR on that branch (or the start) to its merge.
 For the last PR on a branch, the window runs 6 hours past the merge, which covers cleanup and the deploy watch. Each
 row lists:
 
@@ -256,6 +264,54 @@ QU     = main + agents;  meter % = k · QU
   PR-type median of the others (the forecast this replaces): rms and median error, PRs within ×1.5, totals, and the
   newest 30 PRs. The merged diff and the lens set as run are known only afterwards, so a live estimate carries more
   error than the backtest shows.
+
+## Ledger and score
+
+The fixed step (FEATURE-WORKFLOW.md → phase 2): right after Plan, the lane runs `pnpm usage estimate --lane <branch>
+…` on its plan's numbers, and the estimate is appended to `<usage dir>/estimates.jsonl`, gitignored with the rest:
+
+```
+{"v":1,"lane":"<branch>","at":"<ISO>","phase":"<lane file's phase>","inp":{"lines":n,"ui":b,"lenses":[…],"fanout":n},
+ "qu":n,"lo":n,"hi":n,"pct":n,"pctLo":n,"pctHi":n,"basis":{"regime":n,"band":"fitted|prior","k":"fitted|prior","priors":"file|placeholders"}}
+{"v":1,"lane":"<branch>","at":"<ISO>","void":"<reason>"}
+```
+
+- `--lane` needs the lane's file (`board/lanes/<branch>.json`), so a typo records nothing (exit 2), and refuses once
+  the lane's own PR has merged (exit 2, nothing written): a row then would count for the next lane on the name. A
+  lane's cycle is one rule (`laneCycle` in `ledger.ts`), shared by `--lane`, `--void` and the check: in `plan` it is
+  always open; past it, the lane's own PR is the one its file names, if that merged on the branch, else the newest merged since its phase began; with none it is open. In `merged`, `cleanup`, `parked` or `blocked` `--lane` refuses on the phase alone, never on the PR cache, which can predate the merge (a parked or blocked lane records once it resumes); `--void` refuses in `merged` and `cleanup` the same way. Left open by choice: a lane still in `pr` or `dev` after an unfetched merge reads as open. A lane back in `build` for a follow-up PR whose file still names the merged one reads
+  as merged (`pnpm lanes start` clears a reused name's file). A failed append
+  still prints the estimate, then `NOT RECORDED`, exit 1. A torn last line gets its newline before the next row; a
+  row that won't parse is skipped and named by line number (a gap until deleted by hand), never fatal.
+- **Cycles.** A row belongs to the first PR merged after it on its branch; a cycle runs from the previous merged PR to
+  the next, so a reused name starts over. The newest estimate in a cycle wins (a re-plan re-estimates; the count
+  shows), and a void row newer than it closes the cycle. A row recorded past `plan` is **late**, shown apart.
+- **The actual is computed, never recorded:** the PR table's QU for that PR, the same window as everywhere else.
+  _So far_ before the merge (the lane's calls since the previous PR on the branch), _provisional_ until the merge's 6 h
+  post window has passed and been scanned, then _final_; a PR with a later one on its branch ends at its own merge,
+  so it is final once the scan reaches that. A reused name's final actual still moves when its next PR merges: the
+  PR table then gives the old PR's post-window calls to the new one (a PR table rule, shared with the fit).
+- `pnpm usage score` (and the report's _Live estimates_): per row the estimate, its range, the merged lines and ui
+  beside the estimated ones, the actual and its state, the ratio, in range or not, and **at actual**: the model now at
+  the merged PR's own lines, paths and lenses (not leave-one-out). The estimate's gap to it is input error, the rest
+  model error. Over final rows: median and rms error, PRs in range and within ×1.5, totals; then the merged PRs since
+  the first estimate that have none (a count, since nothing could clear it). `--lane` adds the row as one line
+  (`usage (local only, never pasted): …`) for the lane's `decisions.md`. `score` reads PRs for the default `--since`
+  (any cache for an earlier one serves); its table starts there, or at the first estimate if older, never at the
+  cache's since, so _at actual_ prices with `estimate`'s units. With gh down and no usable `cache/prs.json` (missing or unreadable; the next good fetch
+  rewrites it) it opens with **No PR table** and exits 1. The report keeps an estimate whose PR merged on or after
+  its `--since` (an unmerged one by when it was recorded) and counts the rest.
+- **`score --check`**, one line per gap, exit 1 on any, in about 0.1 s (it never loads the transcript cache, which
+  takes seconds): (a) a lane file past `plan`, or in `plan` with its step plan written, with no merged PR of its own
+  and no estimate in the open cycle (`parked`, `blocked`, `merged` and `cleanup` are quiet); (b) an estimate whose lane file is gone with no merged PR
+  after it: the PR table is stale (it names the newest PR and the fetch) or the lane was abandoned (`--void`); plus a
+  torn lane file or ledger row. A void never silences (a): a voided lane still working is asked again. A lane whose
+  own PR has merged is past the point like `merged`: a missing estimate shows in the score's merged-with-none count,
+  never as a gap no command could clear. `--check` takes no other flag. `estimateGaps()` in
+  `cli.ts` is the same check, for the hub's `pq-check` (HUB.md → _The hub's duties_ → _Usage estimates_).
+- `--void` refuses a lane with no open estimate (exit 2), so a typo never reads as done. It closes the open cycle
+  only; a merged PR's estimate stays scored.
+- A lane abandoned under a reused name with no PR counts into the next cycle's so far, as it does in the PR table.
 
 ## Phase log
 

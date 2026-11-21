@@ -1,4 +1,4 @@
-// Estimate a task's QU from what is known before the work: diff lines, whether it needs a browser or device check,
+// Estimate a task's QU from what is known before the work: diff lines, whether it touches app/ or extension/,
 // the review lenses its paths call for, and the fan-out agents its plan names (docs/ops/USAGE-METER.md → Estimate).
 //   turns  T = exp(a + b·ln lines + c·ui) · smear
 //   main   = a + b·T + c·ctxSumM, with the average context ≈ g0 + g1·T, so ctxSumM = T·(g0 + g1·T) / 1e6
@@ -331,7 +331,7 @@ export interface Backtest {
   dropped: number; // PRs with no usable prediction (≤ 0 or NaN), left out of both scores
 }
 
-function errStat(actual: number[], pred: number[]): ErrStat {
+export function errStat(actual: number[], pred: number[]): ErrStat {
   const e = actual.map((a, i) => Math.log(a / pred[i]!));
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
   return {

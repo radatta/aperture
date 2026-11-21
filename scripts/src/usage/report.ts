@@ -7,12 +7,14 @@ import {
   type Range,
   type Units,
 } from './estimate.ts';
+import type { Stale } from './gh.ts';
+import type { LiveScore, ScoreRow } from './ledger.ts';
 import type { FitModel, ReportModel, WorkModel } from './model.ts';
 
 export const f1 = (x: number | null | undefined, d = 1) =>
   x === null || x === undefined || !Number.isFinite(x) ? '–' : x.toFixed(d);
 const perPt = (k: number | null | undefined) => (k && k > 0 ? 1 / k : null);
-const clock = (ms: number | null) =>
+export const clock = (ms: number | null) =>
   ms === null
     ? '–'
     : new Date(ms).toLocaleString('en-US', {
@@ -21,7 +23,7 @@ const clock = (ms: number | null) =>
         day: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-        hour12: false,
+        hourCycle: 'h23',
       });
 
 export function fitLines(m: FitModel): string[] {
@@ -128,6 +130,7 @@ export function reportLines(m: ReportModel, now: number): string[] {
   out.push('');
 
   out.push(...workLines(m.work));
+  out.push(...scoreLines(m.score, m.table));
 
   out.push('## Cost drivers', '', "Spearman rank correlation with a PR's QU:", '');
   for (const d of m.drivers) out.push(`- ${d.what}: ρ = ${f1(d.rho, 2)}`);
@@ -351,4 +354,63 @@ export function estimateLines(o: {
     `  basis: ${units.regime} lens-regime PRs${o.cache ? ` of ${o.cache.prs} cached, calls to ${clock(o.cache.to)} PT` : ', no usage cache: every constant is a prior'}${e.agents.some((a) => a.basis === 'prior') ? '; * = a prior price' : ''}${o.hubPerPR !== null ? `; the hub adds ~${qu(o.hubPerPR)} QU per merged PR on top` : ''}`,
     `  ${o.priorsNote}`,
   ];
+}
+
+// A failed PR fetch, loud: the first thing the report or the score prints (never a one-line note).
+export const staleLine = (s: Stale) =>
+  `**PR table stale: newest PR ${s.newest ?? 'none'}, fetched ${clock(s.fetchedAt)} PT** (gh: ${s.why}). PRs merged since are missing from every table below; rerun with --refresh.`;
+
+const STATE: Record<ScoreRow['state'], string> = {
+  'so-far': 'so far',
+  provisional: 'provisional',
+  final: 'final',
+  'no-calls': 'no calls',
+  void: 'void',
+};
+
+// One lane's row as the lane report's usage line (local only: usage numbers never go into a PR or a tracked file).
+export const scoreRowLine = (r: ScoreRow) =>
+  `usage (local only, never pasted): estimate ${qu(r.qu)} QU (${qu(r.lo)}–${qu(r.hi)}) at ${r.inp.lines} lines${r.late ? ', late' : ''}; ${STATE[r.state]}${r.actual === null ? '' : ` ${qu(r.actual)} QU (×${f1(r.ratio, 2)}${r.inRange === null ? '' : r.inRange ? ', in range' : ', out of range'})`}${r.pr !== null ? `, PR ${r.pr}` : ''}`;
+
+export function scoreLines(s: LiveScore, table: string, lane?: string): string[] {
+  const rows = lane ? s.rows.filter((r) => r.lane === lane) : s.rows;
+  const st = s.stat;
+  const out = [
+    '## Live estimates',
+    '',
+    "Each `pnpm usage estimate --lane` row (estimates.jsonl) against the QU of the PR its cycle merged as: final once merged, its 6 h post window passed and scanned; provisional before that; so far while unmerged. At actual = the model now at the merged PR's own lines, paths and lenses (not leave-one-out): the estimate's gap to it is input error, the rest model error. Late = recorded past plan.",
+    '',
+    `- Final: ${st.n ? `${st.n}; median ×${f1(st.medianX, 2)}, rms ×${f1(st.rmsX, 2)}, ${st.inRange} of ${st.n} in range, ${st.within15} within ×1.5; total ${qu(st.predicted)} QU estimated for ${qu(st.actual)}; late ${st.late}` : 'none yet'}. Open: ${st.open}. Recorded: ${s.recorded}.`,
+    `- Merged since the first estimate with none: ${s.unestimated.length ? `${s.unestimated.length} (PR ${s.unestimated.join(', ')})` : 'none'}.`,
+    `- PR table: ${table}.`,
+    ...(s.bad.length
+      ? [`- estimates.jsonl: unreadable rows skipped, at line ${s.bad.join(', ')}.`]
+      : []),
+    ...(s.left
+      ? [
+          `- ${s.left} estimates left out, their PR merged before this report's --since (or, unmerged, recorded before it): pnpm usage score has them.`,
+        ]
+      : []),
+    '',
+  ];
+  if (!rows.length) {
+    out.push(
+      lane
+        ? `No estimate recorded for ${lane}. Before its PR merges: pnpm usage estimate --lane ${lane} --lines <n> [--ui] --lenses <…>; after, the PR counts under merged-with-none (when it merged after the first estimate and had lane calls).`
+        : 'No estimates recorded: a lane records one with pnpm usage estimate --lane <branch> … after Plan.',
+      '',
+    );
+    return out;
+  }
+  out.push(
+    '| Lane | Estimated | Lines (merged) | UI | Estimate QU | Actual QU | × | In range | At actual | PR |',
+    '|---|---|---|---|---|---|---|---|---|---|',
+  );
+  for (const r of rows)
+    out.push(
+      `| ${r.lane}${r.reestimates ? ` (re ×${r.reestimates})` : ''} | ${clock(r.at)}${r.late ? ' late' : ''} | ${r.inp.lines}${r.actualLines === null ? '' : ` (${r.actualLines})`} | ${r.inp.ui ? 'yes' : ''}${r.actualUi === null || r.actualUi === r.inp.ui ? '' : ` (${r.actualUi ? 'yes' : 'no'})`} | ${qu(r.qu)} (${qu(r.lo)}–${qu(r.hi)}) | ${r.actual === null ? '–' : qu(r.actual)} ${STATE[r.state]} | ${r.ratio === null ? '–' : `×${f1(r.ratio, 2)}`} | ${r.inRange === null ? '–' : r.inRange ? 'yes' : 'no'} | ${r.atActual === null ? '–' : qu(r.atActual)} | ${r.pr ?? '–'} |`,
+    );
+  out.push('');
+  if (lane) for (const r of rows) out.push(scoreRowLine(r));
+  return out;
 }

@@ -59,7 +59,7 @@ A feature session sends one short `SendMessage` to the hub at each of these.
 
 | When                                                  | Message                                                                                                                                                                                                                                                                                                     |
 | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Unknowns: <n searched, n probed, n run-only \| none>. Mode: collab\|auto. Steps: <step plan with ETA ranges>.`                                                                                                   |
+| End of phase 2 (plan in hand, questions open)         | `[kickoff] <branch> — <what, one line>. Touches: <areas/files>. Open: <questions \| none>. Unknowns: <n searched, n probed, n run-only \| none>. Mode: collab\|auto. Steps: <step plan with ETA ranges>. Usage: <n> lines[, ui], lenses <…> → <point> QU (<lo>–<hi>).`                                      |
 | Phase 8, after `deploy-dev`                           | `[lock] <branch> — taken until <HH:MM>, ETA <n> min.`                                                                                                                                                                                                                                                       |
 | Phase 8, another branch holds it                      | `[lock] <branch> — queued behind <branch> (<session>); lock wait next.` (the refusal prints it ready to send)                                                                                                                                                                                               |
 | Phase 10, `pnpm bot lock release`                     | `[lock] <branch> — released.`                                                                                                                                                                                                                                                                               |
@@ -269,6 +269,16 @@ acting lane's pane: actions on live state, with no whole diff to show, no undo a
   `[relay]`, verbatim, plus what it means for the lane. Every ask put to the user — a lane's or the hub's own — goes
   into `queue.json` `asks[]` first (_Asks_ below), so the user answers by id and letter. An agent-rule patch the hub
   shows, applies and verifies itself with `pnpm claude-edit` (_Approval_ → _Agent-rule edits_).
+- **Usage estimates** (`docs/ops/USAGE-METER.md` → _Ledger and score_). Each lane records its own estimate right
+  after Plan and sends it in `[kickoff]`; the hub checks, it doesn't compute, with `pnpm usage score --check` (exit 1 on a gap): at
+  each `[kickoff]`, and with every queue write once the hub's `pq-check` calls `estimateGaps()` from
+  `scripts/src/usage/cli.ts` (the same check; the hub adds the call, its own file). A lane past plan with no
+  estimate goes back to it (or the hub runs `pnpm usage estimate --lane <branch> …` on the kickoff's numbers, recorded
+  late, before its PR merges and never while its file says `parked` or `blocked`: after the merge the check stops asking and `estimate --lane` refuses,
+  USAGE-METER.md → _Ledger and score_); an estimate with no lane file and no merged PR means `pnpm usage score --refresh`, or for an abandoned lane
+  `pnpm usage score --lane <branch> --void "<why>"`. At `[merged]`, `pnpm usage score --lane <branch>` gives the
+  actual beside the estimate: provisional until the merge's 6 h window has passed, then final. The numbers stay in
+  the hub's own notes and messages, never in a PR or tracked text (`docs/ops/PUBLIC-CONTENT.md`).
 - **Lens gaps.** The hub alone writes `/workspace/localNotes/review-gaps.md` from the `lens-gap:` lines lanes send
   in `[pr-open]`; a second gap of the same lens and kind becomes a `followups[]` entry to widen that lens — an
   `.claude/agents/` edit, so the lane that takes it sends a patch the hub applies on the user's go (_Approval_ →

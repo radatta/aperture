@@ -1,19 +1,44 @@
 // `pnpm usage <command>`: the usage cost model (docs/ops/USAGE-METER.md). Data lives in the gitignored usage dir;
 // nothing here writes a tracked file. Plain `node` (Node 22 strips types): erasable syntax, node: builtins only.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { cliGuard } from '../bot/help.ts';
 import type { Spec } from '../bot/help.ts';
 import { doctor, formatDoctor } from './doctor.ts';
 import { parseMeter, type Manual, type MeterRow } from './meter.ts';
-import { cachedPRs, mergedPRs } from './gh.ts';
+import { cachedPRs, ghText, mergedPRs, type GhText, type PR, type Stale } from './gh.ts';
 import { estimateBasis, fitModel, reportModel } from './model.ts';
 import { DEFAULT_PRIORS, LENSES, mergePriors, predict, type Priors } from './estimate.ts';
 import { parsePhaseLog } from './phaselog.ts';
 import { attribute, overhead, prTable } from './prs.ts';
 import type { JobEvent } from './questions.ts';
-import { boardLine, estimateLines, fitLines, reportLines } from './report.ts';
+import {
+  boardLine,
+  estimateLines,
+  fitLines,
+  clock,
+  reportLines,
+  scoreLines,
+  staleLine,
+} from './report.ts';
+import {
+  LEDGER,
+  current,
+  laneCycle,
+  NO_ESTIMATE,
+  PAST_MERGE,
+  openEntry,
+  formatRow,
+  gaps,
+  liveScore,
+  parseLedger,
+  prTableBasis,
+  type EstRow,
+  type Entry,
+  type LedgerRow,
+} from './ledger.ts';
+import { BRANCH_RE, isProblem, parseLane, readLanes, type LaneFile } from '../board/tower/lanes.ts';
 import { burnLines } from './burn.ts';
 import { stopAt } from '../board/away.ts';
 import { anonBytes, scan } from './scan.ts';
@@ -28,10 +53,16 @@ export const USAGE = `pnpm usage <command>   (-h / --help on any command: its us
   line [--no-scan]              one line: usage % · %/h · hours to 100
   burn [--at <HH:MM>] [--no-scan]
                                 usage now and where it lands at the reset (and at HH:MM), low–high (the hub's /burn)
-  estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--scan]
-                                a task's QU and meter %, low–high, from its diff lines, a browser/device check (--ui),
+  estimate --lines <n> [--ui] [--lenses <a,b,…>] [--fanout <n>] [--lane <branch>] [--scan]
+                                a task's QU and meter %, low–high, from its diff lines, whether it touches app/ or extension/ (--ui),
                                 its review lenses (rules correctness tests shell infra ui extension; Plan and rules always;
-                                default correctness,tests, plus ui with --ui) and fan-out agents; offline from the cache
+                                default correctness,tests, plus ui with --ui) and fan-out agents; offline from the cache;
+                                --lane records it in <usage dir>/estimates.jsonl (the lane's fixed step after Plan)
+  score [--lane <branch>] [--refresh] [--no-scan]
+                                the recorded estimates against their PRs' actual QU: the live score
+  score --check                 the fixed step's gaps, from the ledger, lane files and cached PRs only; exit 1 on any
+  score --lane <branch> --void <reason>
+                                close an abandoned lane's estimate
   doctor                        is the meter logger installed and writing?`;
 
 export const FLAGS: Record<string, Spec> = {
@@ -40,7 +71,8 @@ export const FLAGS: Record<string, Spec> = {
   fit: { bare: ['no-scan'] },
   line: { bare: ['no-scan'] },
   burn: { flags: ['at'], bare: ['no-scan'] },
-  estimate: { flags: ['lines', 'lenses', 'fanout'], bare: ['ui', 'scan'] },
+  estimate: { flags: ['lines', 'lenses', 'fanout', 'lane'], bare: ['ui', 'scan'] },
+  score: { flags: ['lane', 'void'], bare: ['check', 'refresh', 'no-scan'] },
   doctor: {},
 };
 
@@ -187,19 +219,31 @@ export function readEvents(board: string): JobEvent[] {
 }
 
 export const DEFAULT_SINCE = '2026-11-04';
+// what the score does with a lane's merged PR, by the same tests as scoreRows and unestimated
+const mergedFate = (entries: Entry[], pr: PR) => {
+  const e = entries.find((x) => x.pr?.number === pr.number);
+  if (e?.row && e.voided) return 'its estimate was voided, so the score shows it as void';
+  if (e?.row) return 'its estimate is scored against it';
+  return 'it has no estimate: pnpm usage score counts it as merged with none if it merged after the first estimate and had lane calls';
+};
+// the score's PR table starts at the default since, or the first estimate if older, so "at actual" prices with the
+// units `estimate` used, whatever --since the cached list was fetched for
+export const tableCut = (rows: { at: number }[]) =>
+  Math.min(ptMidnight(DEFAULT_SINCE), ...rows.map((r) => r.at));
 
 export const readPhaseLog = (usageDir: string) =>
   parsePhaseLog(readOr(join(usageDir, 'phase-log.jsonl')) ?? '');
 
 // The usage dir's priors.json over the placeholder defaults (estimate.ts → DEFAULT_PRIORS), and a note saying which
 // it used: the placeholders aren't a fit, so their estimate is never shown as one.
-export function readPriors(usageDir: string): { priors: Priors; note: string } {
+export function readPriors(usageDir: string): { priors: Priors; note: string; fromFile: boolean } {
   const path = join(usageDir, 'priors.json');
   const text = readOr(path);
   if (text === null)
     return {
       priors: DEFAULT_PRIORS,
       note: `priors: placeholders (no ${path}); a [prior] number is invented, not a fit`,
+      fromFile: false,
     };
   let raw: unknown;
   try {
@@ -208,11 +252,13 @@ export function readPriors(usageDir: string): { priors: Priors; note: string } {
     return {
       priors: DEFAULT_PRIORS,
       note: `priors: ${path} isn't JSON, so placeholders; a [prior] number is invented, not a fit`,
+      fromFile: false,
     };
   }
   const { priors, bad, placeholders } = mergePriors(raw);
   return {
     priors,
+    fromFile: true,
     note: [
       `priors: ${path}`,
       ...(bad.length ? [`ignored: ${bad.join(', ')}`] : []),
@@ -231,6 +277,43 @@ export function lensTypes(spec: string | undefined, ui: boolean): string[] | nul
   return types.every((t): t is string => !!t) ? [...new Set(types)] : null;
 }
 
+export function readLedger(usageDir: string): { rows: LedgerRow[]; bad: number[] } {
+  const text = readOr(join(usageDir, LEDGER));
+  return text === null ? { rows: [], bad: [] } : parseLedger(text);
+}
+
+// One append per row; a torn last line (an append cut short) gets its newline first, so the new row stays whole.
+export function appendLedger(usageDir: string, row: LedgerRow): string {
+  const path = join(usageDir, LEDGER);
+  mkdirSync(usageDir, { recursive: true });
+  const prev = readOr(path);
+  appendFileSync(path, `${prev && !prev.endsWith('\n') ? '\n' : ''}${formatRow(row)}\n`);
+  return path;
+}
+
+// The fixed step's check, for `score --check` and the hub's pq-check (docs/ops/HUB.md → Usage estimates): never
+// loads the transcript cache, never fetches.
+export function estimateGaps(e: ReturnType<typeof env> = env()): string[] {
+  const { rows, bad } = readLedger(e.usageDir);
+  const { lanes, problems } = readLanes(e.board);
+  return gaps({ rows, bad, lanes, problems, prs: cachedPRs(e.cache) });
+}
+
+// --lane: a branch name with a lane file (a typo would record an estimate no lane ever clears).
+type LaneArg = { error: string } | { lane: string; phase: string | null; file: LaneFile | null };
+function laneArg(lane: string | undefined, board: string, needFile: boolean): LaneArg {
+  if (lane === undefined || !BRANCH_RE.test(lane))
+    return { error: '--lane takes a lane branch name' };
+  const p = join(board, 'lanes', `${lane}.json`);
+  const text = readOr(p);
+  if (text === null)
+    return needFile
+      ? { error: `--lane ${lane}: no lane file at ${p} (the lane writes it with pnpm board lane)` }
+      : { lane, phase: null, file: null };
+  const f = parseLane(text, `${lane}.json`);
+  return isProblem(f) ? { lane, phase: null, file: null } : { lane, phase: f.phase, file: f };
+}
+
 async function scanQuiet(e: ReturnType<typeof env>, out: (s: string) => void) {
   await scan({
     root: e.projects,
@@ -241,7 +324,140 @@ async function scanQuiet(e: ReturnType<typeof env>, out: (s: string) => void) {
   });
 }
 
-export async function main(argv: string[], out = (s: string) => console.log(s)): Promise<number> {
+async function score(
+  flags: Record<string, string>,
+  e: ReturnType<typeof env>,
+  out: (s: string) => void,
+  deps: { gh: GhText },
+): Promise<number> {
+  if (flags.check && (flags.void !== undefined || flags.lane !== undefined || flags.refresh)) {
+    out(
+      '--check takes no other flag: it reads the ledger, the lane files and cache/prs.json as they are',
+    );
+    return 2;
+  }
+  if (flags.void !== undefined) {
+    const rec = laneArg(flags.lane, e.board, false);
+    if ('error' in rec) {
+      out(rec.error);
+      return 2;
+    }
+    if (flags.void === 'true' || !flags.void.trim()) {
+      out('--void takes the reason the lane was abandoned');
+      return 2;
+    }
+    // past the merge, an open-looking row may be the merged PR's under a cache that predates it: never void on that
+    if (rec.file && PAST_MERGE.has(rec.file.phase)) {
+      out(
+        `--void: ${rec.lane}'s lane file says ${rec.file.phase}: its estimate, or its absence, is the merged PR's in pnpm usage score; nothing voided`,
+      );
+      return 2;
+    }
+    const prs = cachedPRs(e.cache)?.prs ?? [];
+    const entries = current(readLedger(e.usageDir).rows, prs);
+    const open = openEntry(entries, rec.lane);
+    if (!open?.row || open.voided) {
+      const merged = rec.file && laneCycle(rec.file, prs);
+      out(
+        merged
+          ? `--void: ${rec.lane} has no open estimate: its PR ${merged.number} merged, and ${mergedFate(entries, merged)}`
+          : `--void: ${rec.lane} has no open estimate (none recorded, already voided, or its PR merged)`,
+      );
+      return 2;
+    }
+    const path = appendLedger(e.usageDir, {
+      v: 1,
+      lane: rec.lane,
+      at: Date.now(),
+      void: flags.void,
+    });
+    out(`voided: ${rec.lane}'s open estimate (${flags.void}) in ${path}`);
+    return 0;
+  }
+  if (flags.check) {
+    const g = estimateGaps(e);
+    out(g.length ? g.map((l) => `gap: ${l}`).join('\n') : 'estimates: no gaps');
+    return g.length ? 1 : 0;
+  }
+  if (flags.lane !== undefined && !BRANCH_RE.test(flags.lane)) {
+    out('--lane takes a lane branch name');
+    return 2;
+  }
+  if (!flags['no-scan']) await scanQuiet(e, () => {});
+  const now = Date.now();
+  let prs: PR[] = [];
+  let stale: Stale | null = null;
+  let fetchedAt: number | null = null;
+  let table: string;
+  let failed: string | null = null;
+  let note: string | null = null;
+  const ledger = readLedger(e.usageDir);
+  // the default --since: mergedPRs reuses any cache for an earlier one, and the table cut never follows the cache
+  const cut = tableCut(ledger.rows);
+  try {
+    const r = await mergedPRs(e.cache, {
+      since: DEFAULT_SINCE,
+      refresh: !!flags.refresh,
+      now,
+      gh: deps.gh,
+    });
+    prs = r.prs;
+    stale = r.stale;
+    note = r.note;
+    fetchedAt = r.fetchedAt;
+    table = prTableBasis(prs, r.fetchedAt, stale);
+  } catch (err) {
+    failed = (err as Error).message;
+    table = `none: ${failed}`;
+  }
+  const loaded = loadCache(e.cache);
+  const a = attribute(loaded, hubName(), readPhaseLog(e.usageDir));
+  const rows = prTable(a, prs, cut);
+  const pr = readPriors(e.usageDir);
+  const fit = fitModel({
+    rows: readMeter(e.usageDir).rows,
+    manual: readManual(e.usageDir),
+    calls: loaded.calls,
+    now,
+  });
+  const { units } = estimateBasis(rows, fit, pr.priors);
+  const s = liveScore({
+    ledger,
+    prs,
+    rows,
+    calls: a.calls,
+    units,
+    lastCall: loaded.calls.at(-1)?.ts ?? null,
+  });
+  const { lanes, problems } = readLanes(e.board);
+  const g = gaps({
+    ...ledger,
+    lanes,
+    problems,
+    prs: fetchedAt === null ? null : { prs, fetchedAt, stale },
+  });
+  out(
+    [
+      ...(failed
+        ? [
+            `**No PR table: ${failed}.** Every row below reads as so far; rerun when gh answers.`,
+            '',
+          ]
+        : []),
+      ...(stale ? [staleLine(stale), ''] : []),
+      ...(note ? [`> ${note}`, ''] : []),
+      ...scoreLines(s, table, flags.lane),
+      ...(g.length ? ['Gaps:', ...g.map((l) => `- ${l}`)] : ['Gaps: none.']),
+    ].join('\n'),
+  );
+  return failed ? 1 : 0;
+}
+
+export async function main(
+  argv: string[],
+  out = (s: string) => console.log(s),
+  deps: { gh: GhText } = { gh: ghText },
+): Promise<number> {
   const verdict = cliGuard(argv, USAGE, FLAGS, parseArgs);
   if (verdict) {
     out(verdict.out);
@@ -278,10 +494,11 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
       }
       if (!flags['no-scan']) await scanQuiet(e, out);
       const now = Date.now();
-      const { prs, note } = await mergedPRs(e.cache, {
+      const { prs, note, stale, fetchedAt } = await mergedPRs(e.cache, {
         since: sinceDay,
         refresh: !!flags.refresh,
         now,
+        gh: deps.gh,
       });
       const m = reportModel({
         rows: readMeter(e.usageDir).rows,
@@ -295,8 +512,15 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
         now,
         phaseLog: readPhaseLog(e.usageDir),
         priors: readPriors(e.usageDir),
+        ledger: readLedger(e.usageDir),
+        prsFetchedAt: fetchedAt,
+        stale,
       });
-      const text = [...(note ? [`> ${note}`, ''] : []), ...reportLines(m, now)].join('\n');
+      const text = [
+        ...(stale ? [staleLine(stale), ''] : []),
+        ...(note ? [`> ${note}`, ''] : []),
+        ...reportLines(m, now),
+      ].join('\n');
       const day = new Date(now).toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
       const path = join(e.usageDir, `report-${day}.md`);
       writeAtomic(path, `${text}\n`);
@@ -354,6 +578,30 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
         out(`--lenses takes a comma list of ${Object.keys(LENSES).join(', ')}`);
         return 2;
       }
+      const rec = flags.lane === undefined ? null : laneArg(flags.lane, e.board, true);
+      if (rec && 'error' in rec) {
+        out(rec.error);
+        return 2;
+      }
+      // not a working phase: merged and cleanup are past the point (a row would land in the next cycle on this
+      // name), parked and blocked record once the lane resumes (docs/ops/USAGE-METER.md → Ledger and score)
+      if (rec?.file && NO_ESTIMATE.has(rec.file.phase)) {
+        const why = PAST_MERGE.has(rec.file.phase)
+          ? "its PR is the score's, and an estimate now would count for the next lane on this name"
+          : 'record it once the lane resumes';
+        out(
+          `--lane ${rec.lane}: its lane file says ${rec.file.phase}, not a working phase: ${why}; not recorded. Drop --lane for the number alone.`,
+        );
+        return 2;
+      }
+      const known = cachedPRs(e.cache)?.prs ?? [];
+      const merged = rec?.file && laneCycle(rec.file, known);
+      if (rec && merged) {
+        out(
+          `--lane ${rec.lane}: its PR ${merged.number} merged ${clock(merged.mergedAt)} PT, so an estimate now would count for the next lane on this name; not recorded. On PR ${merged.number}: ${mergedFate(current(readLedger(e.usageDir).rows, known), merged)}. Drop --lane for the number alone; a new lane on this name starts with pnpm lanes start, which clears the old lane file.`,
+        );
+        return 2;
+      }
       if (flags.scan) await scanQuiet(e, out);
       const now = Date.now();
       const cached = cachedPRs(e.cache);
@@ -370,10 +618,11 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
       });
       const { units, band, k } = estimateBasis(rows, fit, pr.priors);
       const inp = { lines, ui, lenses, fanout };
+      const est = predict(units, inp, band, k);
       out(
         estimateLines({
           inp,
-          e: predict(units, inp, band, k),
+          e: est,
           units,
           band,
           k,
@@ -382,8 +631,41 @@ export async function main(argv: string[], out = (s: string) => console.log(s)):
           priorsNote: pr.note,
         }).join('\n'),
       );
+      if (!rec) return 0;
+      const row: EstRow = {
+        v: 1,
+        lane: rec.lane,
+        at: now,
+        phase: rec.phase,
+        inp,
+        qu: est.qu,
+        lo: est.quRange.lo,
+        hi: est.quRange.hi,
+        pct: est.pct,
+        pctLo: est.pctRange.lo,
+        pctHi: est.pctRange.hi,
+        basis: {
+          regime: units.regime,
+          band: band.basis,
+          k: k.basis,
+          priors: pr.fromFile ? 'file' : 'placeholders',
+        },
+      };
+      let path: string;
+      try {
+        path = appendLedger(e.usageDir, row);
+      } catch (err) {
+        out(`NOT RECORDED: ${(err as Error).message}`);
+        return 1;
+      }
+      const cycle = openEntry(current(readLedger(e.usageDir).rows, prs), rec.lane);
+      out(
+        `recorded: ${path} (lane ${rec.lane}, estimate ${(cycle?.reestimates ?? 0) + 1} this cycle${row.phase && row.phase !== 'plan' ? `, late: phase ${row.phase}` : ''})`,
+      );
       return 0;
     }
+    case 'score':
+      return score(flags, e, out, deps);
     case 'doctor': {
       const settings = readOr(join(e.claudeDir, 'settings.json'));
       const script = statuslineScript(settings, homedir());
