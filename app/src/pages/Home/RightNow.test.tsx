@@ -421,6 +421,56 @@ describe('Right now — a LeetCode sitting', () => {
     );
   });
 
+  it('a hero rep whose LeetCode timer is paused: its minutes hold still and say paused', async () => {
+    const user = userEvent.setup();
+    const M = 60_000;
+    let shift = -30 * M; // started 30 minutes ago
+    const api = createStubClient({
+      seed: false,
+      storageKey: `rn-${Math.random()}`,
+      now: () => Date.now() + shift,
+    });
+    const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+    await api.updateSettings({ leetcodeRollId: roll.id });
+    const t0 = Date.now() + shift;
+    const { sitting } = await api.lcSittingStart({
+      clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZT',
+      problemSlug: 'rotting-oranges',
+      problemTitle: 'Rotting Oranges',
+      lang: 'python3',
+      startedAt: t0,
+      tzOffsetMinutes: new Date().getTimezoneOffset(),
+    });
+    // LeetCode's state: running at 4:00, then paused at 5:00 and still paused.
+    const state = (elapsed: number, at: number, running: boolean) =>
+      running
+        ? { mode: 'forward', status: 'running', startTimestamp: at - elapsed, pauseMs: null }
+        : { mode: 'forward', status: 'pause', startTimestamp: null, pauseMs: elapsed };
+    shift = -24 * M;
+    await api.lcSittingEvents({
+      sittingId: sitting.id,
+      events: [
+        {
+          id: '01HZZZZZZZZZZZZZZZZZZZZZZS',
+          type: 'timer',
+          at: t0 + 4 * M,
+          payload: { state: state(4 * M, t0 + 4 * M, true) },
+        },
+        {
+          id: '01HZZZZZZZZZZZZZZZZZZZZZZR',
+          type: 'timer',
+          at: t0 + 6 * M,
+          payload: { state: state(5 * M, t0 + 6 * M, false) },
+        },
+      ],
+    });
+    shift = 0;
+    renderApp({ api, path: '/' });
+    await user.click(screen.getByRole('button', { name: 'Daytime' }));
+    await screen.findByRole('link', { name: 'End the LeetCode sitting →' });
+    expect(await screen.findByText(/^5m of ~45m · paused$/)).toBeTruthy();
+  });
+
   it('a rep row under another hero shows its sitting’s minutes and the link', async () => {
     const user = userEvent.setup();
     let shift = -22 * 60_000;
