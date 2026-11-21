@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,7 @@ none
 
 | ID | State | Writers | Readers | Searches → hits | Change |
 | --- | --- | --- | --- | --- | --- |
-| C1 | a phrase | \`docs/a.md:2\` | none | \`grep -rn -e phrase docs\` → 1 | reworded |
+| C1 | a phrase | \`docs/a.md:2\` | none | \`rg -n -e phrase docs\` → 1 | reworded |
 
 ## Unknowns
 
@@ -54,10 +54,21 @@ none
 `;
 
 let root: string;
+const here = () => fileURLToPath(new URL('.', import.meta.url));
+// a child run that isn't `pnpm plan-lint`, whatever ran vitest
+const noInit = Object.fromEntries(
+  Object.entries(process.env).filter(([k]) => k !== 'INIT_CWD' && k !== 'npm_lifecycle_event'),
+);
+const dirs: string[] = [];
+const temp = (name: string) => {
+  const d = mkdtempSync(join(tmpdir(), name));
+  dirs.push(d);
+  return d;
+};
 let out: string[];
 const log = (s: string) => void out.push(s);
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'plan-lint-'));
+  root = temp('plan-lint-');
   writeFileSync(join(root, '.git'), 'gitdir: elsewhere\n'); // a worktree's .git is a file
   mkdirSync(join(root, 'docs'));
   mkdirSync(join(root, 'localNotes'));
@@ -65,7 +76,9 @@ beforeEach(() => {
   writeFileSync(join(root, 'localNotes/plan.md'), CLEAN);
   out = [];
 });
-afterEach(() => (out = []));
+afterEach(() => {
+  for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+});
 
 describe('plan-lint cli', () => {
   it('--help prints usage, exit 0, and reads nothing', () => {
@@ -80,7 +93,7 @@ describe('plan-lint cli', () => {
 
   it('problems: exit 1, one file:line: check: message line each, sorted, then the summary', () => {
     const bad = CLEAN.replace('`docs/a.md:2`', '`docs/a.md:9`')
-      .replace('Template: light', 'Template: light')
+
       .replace(
         '| 1 | edit | build | 5–10 | no history |',
         '| 1 | edit | build | soon | no history |',
@@ -95,7 +108,7 @@ describe('plan-lint cli', () => {
   });
 
   it('--root resolves paths against another tree', () => {
-    const other = mkdtempSync(join(tmpdir(), 'plan-lint-other-'));
+    const other = temp('plan-lint-other-');
     mkdirSync(join(other, 'docs'));
     writeFileSync(join(other, 'docs/a.md'), 'only one line\n');
     expect(main([join(root, 'localNotes/plan.md'), '--root', other], log, root)).toBe(1);
@@ -108,9 +121,12 @@ describe('plan-lint cli', () => {
     expect(main(['--root'], log, root)).toBe(2);
     expect(main(['missing.md'], log, root)).toBe(2);
     expect(out.at(-1)).toMatch(/^plan-lint — can't read .*missing\.md/);
-    const loose = mkdtempSync(join(tmpdir(), 'plan-lint-loose-'));
-    expect(findRoot(loose)).toBeUndefined();
-    expect(main([], log, loose)).toBe(2);
+    // no checkout above it: holds wherever the temp dir is outside one (CI, the Mac, the container)
+    const loose = temp('plan-lint-loose-');
+    if (findRoot(tmpdir()) === undefined) {
+      expect(findRoot(loose)).toBeUndefined();
+      expect(main([], log, loose)).toBe(2);
+    }
   });
 
   it('findRoot walks up to the nearest .git; fsTree counts lines and lists the top level', () => {
@@ -121,6 +137,23 @@ describe('plan-lint cli', () => {
     expect(t.lineCount('docs')).toBeUndefined();
     expect(t.lineCount('docs/none.md')).toBeUndefined();
     expect(t.exists('docs/a.md')).toBe(true);
+    expect(t.exists('./docs/a.md')).toBe(true);
+    expect(t.exists('docs/')).toBe(true);
+    // exact case even on a case-insensitive file system, and never outside the root
+    expect(t.exists('docs/A.md')).toBe(false);
+    expect(t.exists('Docs/a.md')).toBe(false);
+    expect(t.exists('docs/../docs/a.md')).toBe(false);
+  });
+
+  it('under pnpm plan-lint, a relative file is relative to where it was typed', () => {
+    mkdirSync(join(root, 'sub'));
+    writeFileSync(join(root, 'sub/q.md'), CLEAN);
+    const env = { ...noInit, npm_lifecycle_event: 'plan-lint', INIT_CWD: join(root, 'sub') };
+    const out = execFileSync(process.execPath, [join(here(), 'cli.ts'), 'q.md', '--root', '..'], {
+      cwd: root,
+      env,
+    }).toString();
+    expect(out).toContain('plan-lint: 0 problems (light)');
   });
 
   it('runs as a script, and never spawns or runs what a plan names', () => {
@@ -133,15 +166,19 @@ describe('plan-lint cli', () => {
     const marker = join(root, 'ran-marker');
     writeFileSync(
       join(root, 'p.md'),
-      CLEAN.replace('`grep -rn -e phrase docs`', `\`grep -rn -e phrase docs; touch ${marker}\``),
+      CLEAN.replace('`rg -n -e phrase docs`', `\`rg -n -e phrase docs; touch ${marker}\``),
     );
     let code = 0;
     try {
-      execFileSync(process.execPath, [join(here, 'cli.ts'), 'p.md'], { cwd: root, stdio: 'pipe' });
+      execFileSync(process.execPath, [join(here, 'cli.ts'), 'p.md'], {
+        cwd: root,
+        stdio: 'pipe',
+        env: noInit,
+      });
     } catch (err) {
       code = (err as { status: number }).status;
     }
-    expect(code).toBe(1); // the extra command has no count: a problem, and nothing ran
+    expect(code).toBe(1); // the chained command is a census problem, and nothing ran
     expect(() => readFileSync(marker)).toThrow();
     const help = execFileSync(process.execPath, [join(here, 'cli.ts'), '--help'], {
       cwd: root,

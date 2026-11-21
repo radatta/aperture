@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cells, lint, pathClaims, searches, unfence, type Tree } from './lint.ts';
+import { cells, lint, pathClaims, searches, searchProblem, unfence, type Tree } from './lint.ts';
 
 // A synthetic repo: these files exist, with these line counts.
 const FILES: Record<string, number> = {
@@ -7,6 +7,7 @@ const FILES: Record<string, number> = {
   'packages/x/src/list.ts': 40,
   'packages/x/src/list.test.ts': 30,
   'docs/x.md': 50,
+  'tools/y.sh': 10,
   'CLAUDE.md': 199,
 };
 const tree: Tree = {
@@ -25,7 +26,7 @@ const SECTIONS: Record<string, string> = {
 | 2 | \`packages/x/src/new.ts\` (new) | commit |`,
   'Change census': `| ID | State / contract | Writers | Readers | Searches → hits | Change |
 | --- | --- | --- | --- | --- | --- |
-| C1 | \`doneAt\` | \`packages/x/src/write.ts:40\` | \`packages/x/src/list.ts:12\` | \`git grep -n -e doneAt -- packages docs\` → 9; \`grep -rn -e "'doneAt'" -e done_at packages tools\` → 0 | optional |`,
+| C1 | \`doneAt\` | \`packages/x/src/write.ts:40\` | \`packages/x/src/list.ts:12\` | \`git grep -n -e doneAt -- packages docs\` → 9; \`rg -n -e "'doneAt'" -e done_at packages tools\` → 0 | optional |`,
   Unknowns: `| ID | Claim | Version | Evidence |
 | --- | --- | --- | --- |
 | U1 | a key over 1 KB is refused | tool 3.2 | searched: https://example.com/docs/limits |
@@ -133,7 +134,7 @@ describe('census', () => {
   const row = (searches: string, writers = '`packages/x/src/write.ts:40`', readers = 'none') =>
     `| ID | State | Writers | Readers | Searches → hits | Change |\n| --- | --- | --- | --- | --- | --- |\n| C1 | x | ${writers} | ${readers} | ${searches} | y |`;
   const g1 = '`git grep -n -e doneAt -- packages`';
-  const g2 = '`grep -rn -e done_at tools`';
+  const g2 = '`rg -n -e done_at tools`';
 
   it('full needs two counted searches, light one', () => {
     expect(checks(plan('full', { 'Change census': row(`${g1} → 3`) }))).toEqual([
@@ -153,26 +154,113 @@ describe('census', () => {
   it('accepts a 0 count and an ASCII arrow; rejects a missing count', () => {
     expect(checks(plan('full', { 'Change census': row(`${g1} → 0; ${g2} -> 12`) }))).toEqual([]);
     expect(checks(plan('full', { 'Change census': row(`${g1} → 3; ${g2}`) }))).toContain(
-      'census: no hit count after "grep -rn -e done_at tools"',
+      'census: no hit count after "rg -n -e done_at tools"',
     );
   });
 
-  it('rejects a non-search, a pipe, the whole root and an unscoped command', () => {
-    const c = (s: string) => checks(plan('full', { 'Change census': row(`${s} → 2; ${g2} → 1`) }));
-    expect(c('`find packages -name x`')[0]).toMatch(/^census: not a search/);
-    expect(c('`grep -rn doneAt packages \\| wc -l`')).toContain(
-      'census: a pipe in a search hides its count: one command, one -e per form',
-    );
-    expect(c('`grep -rn doneAt .`')).toContain(
-      'census: a search of the whole root: name the directories',
-    );
-    expect(c('`git grep -n doneAt`')).toContain(
-      'census: no repo directory named in "git grep -n doneAt"',
-    );
-    expect(c('`grep -rn -e packages doneAt`')).toContain(
-      'census: no repo directory named in "grep -rn -e packages doneAt"',
-    );
+  it('the census row reports what searchProblem finds', () => {
+    expect(
+      checks(plan('full', { 'Change census': row(`\`find packages -name x\` → 2; ${g2} → 1`) })),
+    ).toEqual(['census: not a census search: "find packages -name x" (git grep or rg)']);
   });
+});
+
+// The allowlist: the plan reviewer re-runs these, so anything but one plain scoped search is refused.
+describe('searchProblem', () => {
+  const p = (cmd: string) => searchProblem(cmd, tree);
+
+  it('passes the shapes real plans use', () => {
+    for (const cmd of [
+      'git grep -n -e doneAt -- packages docs',
+      "git grep -n -i -e retry-after -e 'Retry After' -- packages tools CLAUDE.md",
+      "git grep -n -e '--autocompact' -e '?.lanes' -- packages docs",
+      'git grep -n doneAt -- docs packages',
+      'git grep -n --regexp=doneAt docs',
+      'git grep -nw -C 2 -e doneAt docs/x.md',
+      'rg -n doneAt docs',
+      "rg -n -g '*.ts' -t ts -e doneAt packages/x/src/",
+      'rg -n "done at" ./docs',
+      'rg -nA3 doneAt docs',
+    ])
+      expect(p(cmd), cmd).toBeUndefined();
+  });
+
+  it('takes only git grep and rg', () => {
+    expect(p('grep -rn doneAt docs')).toBe(
+      'not a census search: "grep -rn doneAt docs" (git grep or rg)',
+    );
+    expect(p('find packages -name x')).toMatch(/^not a census search/);
+  });
+
+  it('refuses shell syntax outside single quotes', () => {
+    expect(p('git grep -n doneAt docs | wc -l')).toBe(
+      'a pipe in a search hides its count: one command, one -e per form',
+    );
+    expect(p('rg -n x docs|sh')).toMatch(/^a pipe/);
+    for (const cmd of [
+      'rg -n x docs > localNotes/decisions.md',
+      'rg -n x docs ;sh',
+      'rg -n x docs&&sh',
+      'rg -n x docs &',
+      'rg -f <(sh) docs',
+      'rg -n $(id) docs',
+      'rg -n `id` docs',
+      'rg -n x docs/*.md',
+      'rg -n x ~/docs',
+    ])
+      expect(p(cmd), cmd).toMatch(/^shell syntax outside quotes/);
+    expect(p('rg -n "$(id)" docs')).toMatch(/inside double quotes/);
+    expect(p("rg -n 'x docs")).toBe('an unclosed quote');
+    // inside single quotes nothing is shell syntax
+    expect(p("rg -n -e 'a|b;$(c)' docs")).toBeUndefined();
+  });
+
+  it('refuses flags off the list, spelled any way', () => {
+    for (const cmd of [
+      'git grep -O -e x docs',
+      'git grep -Ovim -e x docs',
+      'git grep -nOsh -e x docs',
+      'git grep --open-files-in-pager=vim -e x docs',
+      'git grep --open -e x docs',
+      'git grep --no-index -e x docs',
+      'rg --pre ./run.sh x docs',
+      'rg --pre-glob=x x docs',
+      'rg -z x docs',
+      'rg -uu x docs',
+      'rg --no-ignore x docs',
+      'rg --hidden x docs',
+      'rg -L x docs',
+      'rg -f patterns docs',
+    ])
+      expect(p(cmd), cmd).toMatch(/is not on the census list/);
+    expect(p('rg -A x docs')).toBe('A takes a number');
+    expect(p('rg -t "a b" x docs')).toBe('t takes a type name');
+    expect(p('rg -n -e')).toBe('e needs a value');
+  });
+
+  it('the first operand is the pattern unless -e gave one', () => {
+    // these search the whole root: `docs` is the pattern
+    expect(p('rg -n docs')).toBe('no repo path named in "rg -n docs"');
+    expect(p('git grep -n packages')).toBe('no repo path named in "git grep -n packages"');
+    expect(p('git grep -n -e packages doneAt')).toBe('"doneAt" is not in the checkout');
+    expect(p('git grep -n')).toBe('no pattern');
+  });
+
+  it('every path is a plain existing repo path', () => {
+    expect(p('rg -n x .')).toBe('a search of the whole root: name the directories');
+    expect(p('rg -n x ./')).toBe('a search of the whole root: name the directories');
+    expect(p('rg -n x docs/typodir')).toBe('"docs/typodir" is not in the checkout');
+    expect(p('rg -n x docs packages/nope')).toBe('"packages/nope" is not in the checkout');
+    for (const op of ['docs/..', '/workspace', '/etc', 'docs/../..', ':/docs', 'cdk/.secrets'])
+      expect(p(`git grep -n -e x -- ${op}`), op).toMatch(/is not a plain repo path/);
+  });
+});
+
+describe('census writers and readers', () => {
+  const row = (searches: string, writers = '`packages/x/src/write.ts:40`', readers = 'none') =>
+    `| ID | State | Writers | Readers | Searches → hits | Change |\n| --- | --- | --- | --- | --- | --- |\n| C1 | x | ${writers} | ${readers} | ${searches} | y |`;
+  const g1 = '`git grep -n -e doneAt -- packages`';
+  const g2 = '`rg -n -e done_at tools`';
 
   it('needs path:line or none for writers and readers', () => {
     expect(
@@ -190,10 +278,6 @@ describe('unknowns', () => {
   const u = (evidence: string, version = '1.0') =>
     plan('full', {
       Unknowns: `| ID | Claim | Version | Evidence |\n| --- | --- | --- | --- |\n| U1 | a claim | ${version} | ${evidence} |`,
-      'Pre-mortem': SECTIONS['Pre-mortem']!.replace('| U1 |', '| C1 |').replace(
-        'assumed | U1',
-        'assumed | C1',
-      ),
     });
 
   it.each([
@@ -248,8 +332,56 @@ describe('invariants, ordering, pre-mortem, matrix, steps', () => {
     ]);
     const none = SECTIONS.Invariants!.replace('| T1 |', '| the toggle test |');
     expect(checks(plan('full', { Invariants: none }))).toEqual([
-      'invariant: Failing test: no row id (C1, U1, I1, O1, P1 or T1)',
+      'invariant: Failing test: no row id (T1)',
     ]);
+  });
+
+  it('an invariant points at a test, not at itself or another kind of row', () => {
+    for (const id of ['I1', 'C1', 'U1'])
+      expect(
+        checks(plan('full', { Invariants: SECTIONS.Invariants!.replace('| T1 |', `| ${id} |`) })),
+        id,
+      ).toEqual([`invariant: Failing test: ${id} is not a T row`]);
+    // a test file only counts backticked, as a real path
+    const later = SECTIONS.Invariants!.replace('| T1 |', '| none yet, foo.test.ts later |');
+    expect(checks(plan('full', { Invariants: later }))).toEqual([
+      'invariant: Failing test: no row id (T1)',
+    ]);
+  });
+
+  it('a pre-mortem row never points at a pre-mortem row', () => {
+    expect(
+      checks(
+        plan('full', {
+          'Pre-mortem': SECTIONS['Pre-mortem']!.replace('rollback | I1, I2', 'rollback | P6'),
+        }),
+      ),
+    ).toEqual(['premortem: Covered by: P6 is not a C/U/I/O/T row']);
+  });
+
+  it('columns are read by header, not position', () => {
+    const extra = SECTIONS.Invariants!.replace('| Failing test |', '| Failing test | Notes |')
+      .replace('| --- | --- | --- |', '| --- | --- | --- | --- |')
+      .replace('| T1 |', '| the toggle | T1 |');
+    expect(checks(plan('full', { Invariants: extra }))).toContain(
+      'invariant: Failing test: no row id (T1)',
+    );
+  });
+
+  it('fails when: needs a real mutation; minutes run low to high', () => {
+    expect(
+      checks(
+        plan('full', {
+          'Test matrix': SECTIONS['Test matrix']!.replace(
+            'fails when: the toggle write is dropped',
+            'fails when: never',
+          ),
+        }),
+      ),
+    ).toEqual(['matrix: no `fails when: <mutation>`']);
+    expect(
+      checks(plan('full', { 'Step plan': SECTIONS['Step plan']!.replace('20–40', '90–5') })),
+    ).toEqual(['steps: 90–5: low before high']);
   });
 
   it('ordering: bare N/A fails, N/A with a reason passes', () => {
@@ -310,6 +442,90 @@ describe('invariants, ordering, pre-mortem, matrix, steps', () => {
   it('an id range defines every id in it', () => {
     const u = SECTIONS.Unknowns!.replace('| U1 |', '| U1–U2 |').replace(/\n\| U2 .*$/m, '');
     expect(checks(plan('full', { Unknowns: u }))).toEqual([]);
+  });
+});
+
+describe('round-1 review cases', () => {
+  const pm = (from: string, to: string) => SECTIONS['Pre-mortem']!.replace(from, to);
+
+  it('Unknowns may be none as the whole section', () => {
+    // P2 points at U1, so repoint it when the section goes
+    const r = checks(
+      plan('full', { Unknowns: 'none', 'Pre-mortem': pm('assumed | U1', 'assumed | C1') }),
+    );
+    expect(r).toEqual([]);
+  });
+
+  it('an empty ordering section fails in full', () => {
+    expect(
+      checks(
+        plan('full', {
+          'Ordering and races': '',
+          'Pre-mortem': pm('two writers | O1', 'two writers | C1'),
+        }),
+      ),
+    ).toContain('section: "Ordering and races" needs a table');
+  });
+
+  it('a pre-mortem row with no pointer fails', () => {
+    expect(
+      checks(plan('full', { 'Pre-mortem': pm('rollback | I1, I2', 'rollback | the docs') })),
+    ).toContain('premortem: Covered by: no row id (C1, U1, I1, O1 or T1)');
+  });
+
+  it('a reversed range and line 0 are not ranges', () => {
+    expect(checks(plan('full', {}, 'See `docs/x.md:40-30`.'))).toEqual([
+      'path: `docs/x.md:40-30`: not a line range (lines start at 1, low to high)',
+    ]);
+    expect(checks(plan('full', {}, 'See `docs/x.md:0`.'))).toEqual([
+      'path: `docs/x.md:0`: not a line range (lines start at 1, low to high)',
+    ]);
+  });
+});
+
+describe('round-1 correctness cases', () => {
+  it('a ./ path and an en-dash range are checked, not skipped', () => {
+    expect(checks(plan('full', {}, 'See `./docs/nope.md`.'))).toEqual([
+      'path: `./docs/nope.md` does not exist (a file the change adds: `path` (new))',
+    ]);
+    expect(checks(plan('full', {}, 'See `docs/x.md:10–20000`.'))).toEqual([
+      'path: `docs/x.md:10–20000`: docs/x.md has 50 lines',
+    ]);
+  });
+
+  it('(new) on a file that exists is flagged', () => {
+    expect(checks(plan('full', {}, 'Adds `docs/x.md` (new).'))).toEqual([
+      'path: `docs/x.md` (new) already exists: the plan misread the repo, or drop (new)',
+    ]);
+  });
+
+  it('writers and readers need a backticked path:line', () => {
+    const c = (w: string) =>
+      checks(
+        plan('full', {
+          'Change census': SECTIONS['Change census']!.replace('`packages/x/src/write.ts:40`', w),
+        }),
+      );
+    expect(c('see notes:1')).toEqual(['census: Writers: a `path:line` or `none`']);
+    expect(c('`none` (runtime)')).toEqual([]);
+  });
+
+  it('a backticked none counts as none', () => {
+    expect(checks(plan('full', { 'Open questions': '`none`' }))).toEqual([]);
+  });
+
+  it('placeholders: capital markers only, quoted text is a mention', () => {
+    expect(checks(plan('full', {}, 'A list for todo apps.'))).toEqual([]);
+    expect(checks(plan('full', {}, 'The ledger marks TODO(scale) items.'))).toEqual([]);
+    expect(checks(plan('full', {}, 'The doc says "to be decided" there.'))).toEqual([]);
+    expect(checks(plan('full', {}, 'TODO: write this.'))).toEqual(['placeholder: "TODO" left in']);
+  });
+
+  it('a table ends at a blank line; any GFM separator is skipped', () => {
+    const files = '| # | File | Via |\n|--|--|--|\n| 1 | `docs/x.md` | commit |\n\n| a | b | c |';
+    expect(
+      checks(plan('light', { 'Ordering and races': null, 'Pre-mortem': null, Files: files })),
+    ).toEqual([]);
   });
 });
 

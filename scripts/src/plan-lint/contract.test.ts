@@ -1,7 +1,7 @@
 // The template doc and the two agent files against the lint: the doc's section names, light drops, pre-mortem
 // classes and evidence prefixes are the lint's own lists, and the doc's example rows pass the lint; the agent files
-// are read-only and pinned at `high`.
-import { existsSync, readFileSync } from 'node:fs';
+// have no file-write tool, their exact tool sets, and `high`.
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -107,7 +107,7 @@ describe('docs/ops/PLAN.md matches the lint', () => {
   });
 });
 
-// An agent file's frontmatter: read-only tools, effort pinned at high.
+// An agent file's frontmatter: no file-write or MCP tool, effort pinned at high.
 const WRITE_TOOLS = /^(Edit|Write|NotebookEdit|Agent|Task)$|^mcp__/;
 function agentProblems(text: string): string[] {
   const fm = /^---\n([\s\S]*?)\n---\n/.exec(text)?.[1];
@@ -126,7 +126,7 @@ function agentProblems(text: string): string[] {
 describe('agent files', () => {
   const good = '---\nname: x\ntools: Read, Grep, Glob\nmodel: opus\neffort: high\n---\n\nbody\n';
 
-  it('the checker passes a read-only file and rejects the rest', () => {
+  it('the checker passes a file with no write tool and rejects the rest', () => {
     expect(agentProblems(good)).toEqual([]);
     expect(agentProblems(good.replace('tools: Read, Grep, Glob\n', ''))[0]).toMatch(/^no tools:/);
     expect(agentProblems(good.replace('Glob', 'Glob, Write'))).toEqual(['write tool Write']);
@@ -142,20 +142,32 @@ describe('agent files', () => {
     expect(agentProblems('no frontmatter')).toEqual(['no frontmatter']);
   });
 
-  // Live once CLAUDE.md names the override: both files must then exist and pass.
-  const live = read('CLAUDE.md').includes('.claude/agents/plan.md');
-  it.runIf(live)('Plan.md and plan-reviewer.md are read-only at high, Plan on fable', () => {
-    for (const f of ['.claude/agents/plan.md', '.claude/agents/plan-reviewer.md']) {
-      expect(existsSync(join(ROOT, f)), f).toBe(true);
-      expect(agentProblems(read(f)), f).toEqual([]);
+  // Exact-case: the /workspace mount is case-insensitive, CI's Linux isn't.
+  const agentFiles = existsSync(join(ROOT, '.claude/agents'))
+    ? readdirSync(join(ROOT, '.claude/agents'))
+    : [];
+  const names = read('CLAUDE.md').includes('.claude/agents/plan.md');
+  const has = agentFiles.includes('plan.md') || agentFiles.includes('plan-reviewer.md');
+  // Tools pinned exactly, so a widening is a red test. Bash is read-only by instruction only.
+  const TOOLS: Record<string, string> = {
+    'plan.md': 'Read, Grep, Glob, Bash, WebFetch, WebSearch',
+    'plan-reviewer.md': 'Read, Grep, Glob, Bash, WebFetch',
+  };
+
+  it.runIf(names || has)('plan.md and plan-reviewer.md: exact tools, high, Plan on fable', () => {
+    for (const [f, tools] of Object.entries(TOOLS)) {
+      expect(agentFiles, `${f}, exact case`).toContain(f);
+      const text = read(`.claude/agents/${f}`);
+      expect(agentProblems(text), f).toEqual([]);
+      expect(text, f).toMatch(new RegExp(`^tools: ${tools}$`, 'm'));
     }
+    expect(names, 'CLAUDE.md names .claude/agents/plan.md').toBe(true);
     expect(read('.claude/agents/plan.md')).toMatch(/^name: Plan$/m);
     expect(read('.claude/agents/plan.md')).toMatch(/^model: fable$/m);
+    expect(read('.claude/agents/plan-reviewer.md')).toMatch(/^name: plan-reviewer$/m);
   });
 
   it('plan-reviewer never counts as a review round', () => {
     expect(isReviewLens('plan-reviewer')).toBe(false);
-    if (existsSync(join(ROOT, '.claude/agents/plan-reviewer.md')))
-      expect(read('.claude/agents/plan-reviewer.md')).toMatch(/^name: plan-reviewer$/m);
   });
 });

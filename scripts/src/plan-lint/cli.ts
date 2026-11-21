@@ -23,10 +23,26 @@ export function findRoot(from: string): string | undefined {
 
 export function fsTree(root: string): Tree {
   const lines = new Map<string, number | undefined>();
+  const dirs = new Map<string, string[]>();
+  const list = (d: string) => {
+    if (!dirs.has(d))
+      try {
+        dirs.set(d, readdirSync(join(root, d)));
+      } catch {
+        dirs.set(d, []);
+      }
+    return dirs.get(d)!;
+  };
+  // Exact case at every segment: the Mac mount is case-insensitive, CI's Linux isn't.
+  const exists = (p: string) => {
+    const segs = p.split('/').filter((s) => s && s !== '.');
+    if (!segs.length || segs.includes('..') || segs.includes('.secrets')) return false;
+    return segs.every((s, i) => list(segs.slice(0, i).join('/')).includes(s));
+  };
   return {
     root,
     topLevel: new Set(readdirSync(root)),
-    exists: (p) => existsSync(join(root, p)),
+    exists,
     lineCount(p) {
       if (!lines.has(p))
         try {
@@ -45,7 +61,11 @@ export function fsTree(root: string): Tree {
   };
 }
 
-export function main(argv: string[], log = console.log, cwd = process.cwd()): number {
+// `pnpm plan-lint` runs from the root; INIT_CWD is where it was typed, so a relative <file> means what it says.
+const typedIn = () =>
+  (process.env.npm_lifecycle_event === 'plan-lint' && process.env.INIT_CWD) || process.cwd();
+
+export function main(argv: string[], log = console.log, cwd = typedIn()): number {
   if (argv.some((a) => a === '-h' || a === '--help')) return (log(USAGE), 0);
   let file: string | undefined;
   let root: string | undefined;

@@ -104,7 +104,7 @@ function sections(lines: string[]): Section[] {
   return out.filter((s) => s.name);
 }
 
-// The section's first table: header, separator, rows (until the first non-table line).
+// The section's first table: header, separator, rows (until the first non-table, blank or fenced line).
 function table(s: Section): Table | undefined {
   const i = s.body.findIndex((b) => b.text.trimStart().startsWith('|'));
   if (i < 0) return undefined;
@@ -112,16 +112,17 @@ function table(s: Section): Table | undefined {
   const header = cells(s.body[i]!.text);
   for (let j = i + 1; j < s.body.length; j++) {
     const b = s.body[j]!;
-    if (!b.text.trimStart().startsWith('|')) break;
-    if (j === i + 1 && /^\|?\s*:?-{3,}/.test(b.text.trim())) continue;
+    if (!b.text.trimStart().startsWith('|') || b.line !== s.body[j - 1]!.line + 1) break;
+    if (j === i + 1 && /^\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?$/.test(b.text.trim())) continue;
     rows.push({ line: b.line, cells: cells(b.text) });
   }
   return { header, rows };
 }
 
 const col = (t: Table, re: RegExp) => t.header.findIndex((h) => re.test(h));
-const isNone = (s: Section) => /^none\b/i.test(s.body[0]?.text.trim() ?? '') && !table(s);
 const stripCode = (s: string) => s.replace(/`([^`]*)`/g, '$1');
+const isNone = (s: Section) =>
+  /^none\b/i.test(stripCode(s.body[0]?.text.trim() ?? '')) && !table(s);
 
 // `git grep … → 9; grep -rn … → 0`: each search with its hit count.
 export interface Search {
@@ -140,26 +141,173 @@ export function searches(cell: string): Search[] {
     .filter((s) => s.command);
 }
 
-// The repo paths a search command names: tokens that aren't flags or patterns and start with a top-level entry.
-function scopedPaths(command: string, tree: Tree): string[] {
-  const toks = command.split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, ''));
+// A census search is re-run by the plan reviewer, so it is held to an allowlist, never a denylist: one `git grep` or
+// `rg` (tracked or non-ignored files only, so never `.secrets/`), flags from the lists below, and operands that are
+// plain repo paths. Anything else is refused.
+export const SEARCH_FLAGS = {
+  git: {
+    bare: 'nilLwFEPcIhHovx',
+    value: 'eABCm',
+    long: [
+      'count',
+      'line-number',
+      'ignore-case',
+      'word-regexp',
+      'fixed-strings',
+      'extended-regexp',
+      'perl-regexp',
+      'files-with-matches',
+      'files-without-match',
+      'invert-match',
+      'only-matching',
+      'line-regexp',
+      'untracked',
+    ],
+    longValue: ['regexp', 'after-context', 'before-context', 'context', 'max-count'],
+  },
+  rg: {
+    bare: 'nilwFPcIHovxS',
+    value: 'eABCmgtT',
+    long: [
+      'count',
+      'line-number',
+      'ignore-case',
+      'smart-case',
+      'word-regexp',
+      'fixed-strings',
+      'pcre2',
+      'files-with-matches',
+      'files-without-match',
+      'invert-match',
+      'only-matching',
+      'line-regexp',
+    ],
+    longValue: [
+      'regexp',
+      'after-context',
+      'before-context',
+      'context',
+      'max-count',
+      'glob',
+      'type',
+      'type-not',
+    ],
+  },
+} as const;
+const NUMERIC = new Set([
+  'A',
+  'B',
+  'C',
+  'm',
+  'after-context',
+  'before-context',
+  'context',
+  'max-count',
+]);
+
+// A command's words as the shell would split them, or why it isn't one plain command. Single quotes are literal;
+// double quotes only around text with nothing the shell expands.
+export function shellWords(command: string): string[] | string {
   const out: string[] = [];
-  let skip = false;
-  for (let i = toks[0] === 'git' ? 2 : 1; i < toks.length; i++) {
-    const t = toks[i]!;
-    if (skip) {
-      skip = false;
-      continue;
-    }
-    if (/^-(e|f|-regexp|-file)$/.test(t)) skip = true;
-    if (t.startsWith('-')) continue;
-    const first = t.replace(/^\.\//, '').split('/')[0]!;
-    if (tree.topLevel.has(first)) out.push(t);
+  let cur: string | undefined;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (ch === "'" || ch === '"') {
+      const end = command.indexOf(ch, i + 1);
+      if (end < 0) return 'an unclosed quote';
+      const inner = command.slice(i + 1, end);
+      if (ch === '"' && /[$`\\!]/.test(inner))
+        return 'a $, `, \\ or ! inside double quotes: use single quotes';
+      cur = (cur ?? '') + inner;
+      i = end;
+    } else if (/\s/.test(ch)) {
+      if (cur !== undefined) out.push(cur);
+      cur = undefined;
+    } else if (ch === '|')
+      return 'a pipe in a search hides its count: one command, one -e per form';
+    else if (/[;&<>()$`\\*?[\]{}~#!]/.test(ch))
+      return `shell syntax outside quotes (${ch}): one plain command, the pattern in single quotes`;
+    else cur = (cur ?? '') + ch;
   }
+  if (cur !== undefined) out.push(cur);
   return out;
 }
 
-const ROOT_WIDE = /(^|\s)(\.|\.\/|\/workspace\/?|\*)(\s|$)/;
+const PLAIN_PATH = /^[A-Za-z0-9_.\-/@+]+$/;
+// Why an operand isn't a plain repo path in the checkout, or undefined when it is one.
+export function pathProblem(op: string, tree: Tree): string | undefined {
+  const segs = op.split('/').filter((s) => s && s !== '.');
+  if (!segs.length) return 'a search of the whole root: name the directories';
+  if (
+    !PLAIN_PATH.test(op) ||
+    op.startsWith('/') ||
+    segs.includes('..') ||
+    segs.includes('.secrets')
+  )
+    return `"${op}" is not a plain repo path (no leading /, .., ~, pathspec magic or .secrets)`;
+  if (!tree.exists(segs.join('/'))) return `"${op}" is not in the checkout`;
+  return undefined;
+}
+
+// Why a census search breaks the allowlist, or undefined when it is one plain, scoped search.
+export function searchProblem(command: string, tree: Tree): string | undefined {
+  const toks = shellWords(command);
+  if (typeof toks === 'string') return toks;
+  const tool =
+    toks[0] === 'git' && toks[1] === 'grep' ? 'git' : toks[0] === 'rg' ? 'rg' : undefined;
+  if (!tool) return `not a census search: "${command.slice(0, 40)}" (git grep or rg)`;
+  const f = SEARCH_FLAGS[tool];
+  const operands: string[] = [];
+  let pattern = false;
+  let rest = false;
+  const value = (name: string, v: string | undefined) => {
+    if (v === undefined) return `${name} needs a value`;
+    if (NUMERIC.has(name) && !/^\d+$/.test(v)) return `${name} takes a number`;
+    if (/^(t|T|type|type-not)$/.test(name) && !/^[a-z0-9]+$/.test(v))
+      return `${name} takes a type name`;
+    if (name === 'e' || name === 'regexp') pattern = true;
+    return undefined;
+  };
+  for (let i = tool === 'git' ? 2 : 1; i < toks.length; i++) {
+    const t = toks[i]!;
+    if (rest || !t.startsWith('-') || t === '-') {
+      operands.push(t);
+      continue;
+    }
+    if (t === '--') {
+      rest = true;
+      continue;
+    }
+    if (t.startsWith('--')) {
+      const eq = t.indexOf('=');
+      const name = eq < 0 ? t.slice(2) : t.slice(2, eq);
+      if ((f.long as readonly string[]).includes(name) && eq < 0) continue;
+      if (!(f.longValue as readonly string[]).includes(name))
+        return `flag --${name} is not on the census list (docs/ops/PLAN.md → Change census)`;
+      const why = value(name, eq < 0 ? toks[++i] : t.slice(eq + 1));
+      if (why) return why;
+      continue;
+    }
+    for (let j = 1; j < t.length; j++) {
+      const c = t[j]!;
+      if (f.bare.includes(c)) continue;
+      if (!f.value.includes(c))
+        return `flag -${c} is not on the census list (docs/ops/PLAN.md → Change census)`;
+      const why = value(c, j + 1 < t.length ? t.slice(j + 1) : toks[++i]);
+      if (why) return why;
+      break;
+    }
+  }
+  // with no -e/--regexp, the first operand before `--` is the pattern
+  if (!pattern && !operands.length) return 'no pattern';
+  const paths = pattern ? operands : operands.slice(1);
+  if (!paths.length) return `no repo path named in "${command.slice(0, 40)}"`;
+  for (const p of paths) {
+    const why = pathProblem(p, tree);
+    if (why) return why;
+  }
+  return undefined;
+}
 
 const PATH_CHARS = /^[A-Za-z0-9_.\-/@+]+(:\d+(-\d+)?)?$/;
 
@@ -173,7 +321,11 @@ export interface PathClaim {
   to?: number;
 }
 const relative = (token: string, tree: Tree) => {
-  const tok = token.replace(/#.*$/, '').replace(/[.,;]$/, '');
+  const tok = token
+    .replace(/#.*$/, '')
+    .replace(/[.,;]$/, '')
+    .replace(/^(\.\/)+/, '')
+    .replace(/:(\d+)–(\d+)$/, ':$1-$2');
   return tree.root && tok.startsWith(tree.root + '/') ? tok.slice(tree.root.length + 1) : tok;
 };
 export function pathClaims(line: string, tree: Tree): PathClaim[] {
@@ -196,7 +348,8 @@ export function pathClaims(line: string, tree: Tree): PathClaim[] {
   return out;
 }
 
-const PLACEHOLDER = /\b(TODO|TBD|FIXME|XXX)\b|\?\?\?|\bto be (decided|determined)\b/i;
+// The markers in capitals only ("todo apps" is product prose); quoted text is a mention, not a gap.
+const PLACEHOLDER = /\b(TODO|TBD|FIXME|XXX)\b(?!\()|\?\?\?|\b[Tt]o be (decided|determined)\b/;
 
 export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem[] } {
   const problems: Problem[] = [];
@@ -236,12 +389,21 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
       else if (/^[A-Z]\d+$/.test(id)) ids.add(id);
     }
   const refs = (cell: string) => [...cell.matchAll(/\b([CUIOPT]\d+)\b/g)].map((m) => m[1]!);
-  const checkRefs = (line: number, check: string, cell: string, what: string) => {
+  // `kinds`: the row letters this column may point at.
+  const checkRefs = (line: number, check: string, cell: string, what: string, kinds: string) => {
     const rs = refs(cell);
-    if (!rs.length)
-      return (add(line, check, `${what}: no row id (C1, U1, I1, O1, P1 or T1)`), false);
-    for (const r of rs) if (!ids.has(r)) add(line, 'ref', `${r} is not a row in this plan`);
-    return true;
+    for (const r of rs)
+      if (!kinds.includes(r[0]!))
+        add(line, check, `${what}: ${r} is not a ${[...kinds].join('/')} row`);
+      else if (!ids.has(r)) add(line, 'ref', `${r} is not a row in this plan`);
+    if (!rs.length) {
+      const list = [...kinds].map((k) => `${k}1`).join(', ');
+      add(line, check, `${what}: no row id (${list.replace(/, (\w+)$/, ' or $1')})`);
+    }
+  };
+  const cell = (t: Table, r: Table['rows'][number], re: RegExp) => {
+    const c = col(t, re);
+    return r.cells[c < 0 ? r.cells.length - 1 : c] ?? '';
   };
 
   // A section that is a table, or `none` where allowed.
@@ -285,7 +447,8 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
           [cR, 'Readers'],
         ] as const) {
           const v = r.cells[c] ?? '';
-          if (!/\S+:\d+/.test(v) && !/^(none|n\/a)\b/i.test(v))
+          const claimed = pathClaims(v, tree).some((p) => p.from !== undefined);
+          if (!claimed && !/^(none|n\/a)\b/i.test(stripCode(v)))
             add(r.line, 'census', `${what}: a \`path:line\` or \`none\``);
         }
         const ss = searches(r.cells[cS] ?? '');
@@ -298,26 +461,11 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
             `${min} search${min > 1 ? 'es' : ''} with a hit count (\`<command>\` → <n>) needed, found ${counted.length}`,
           );
         for (const s of ss) {
-          if (!/^(git grep|grep|rg)\b/.test(s.command))
-            add(
-              r.line,
-              'census',
-              `not a search: "${s.command.slice(0, 40)}" (git grep, grep or rg)`,
-            );
-          else if (s.hits === undefined)
-            add(r.line, 'census', `no hit count after "${s.command.slice(0, 40)}"`);
-          else if (/\s\|\s/.test(s.command))
-            add(
-              r.line,
-              'census',
-              'a pipe in a search hides its count: one command, one -e per form',
-            );
-          else if (/\s(;|&&|\|\|)\s|;\s|\$\(|`/.test(s.command))
-            add(r.line, 'census', 'one command per search: no ;, &&, || or $(…)');
-          else if (ROOT_WIDE.test(s.command))
-            add(r.line, 'census', 'a search of the whole root: name the directories');
-          else if (!scopedPaths(s.command, tree).length)
-            add(r.line, 'census', `no repo directory named in "${s.command.slice(0, 40)}"`);
+          const why =
+            s.hits === undefined
+              ? `no hit count after "${s.command.slice(0, 40)}"`
+              : searchProblem(s.command, tree);
+          if (why) add(r.line, 'census', why);
         }
       }
   }
@@ -336,6 +484,10 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
         const bad = (why: string) => add(r.line, 'unknown', why);
         if (/^searched:/i.test(e)) {
           if (!/https?:\/\/\S+/.test(e)) bad('searched: needs the URL it came from');
+          else if (/https?:\/\/[^/\s]*:\d/.test(e))
+            bad(
+              'searched: a URL with an explicit port (8080 pauses the container): link the public page',
+            );
         } else if (/^probed:/i.test(e)) {
           if (!/`[^`]+`\s*(?:→|->)\s*\S/.test(e)) bad('probed: needs `<command>` → <output>');
         } else if (/^run-only:/i.test(e)) {
@@ -351,7 +503,13 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
   const matrix = need('Test matrix');
   if (matrix)
     for (const r of matrix.rows)
-      if (!r.cells.some((c) => /fails when:\s*\S.{2,}/i.test(c)))
+      if (
+        !r.cells.some(
+          (c) =>
+            /fails when:\s*\S.{2,}/i.test(c) &&
+            !/fails when:\s*(n\/a|never|nothing|none|-)\b/i.test(c),
+        )
+      )
         add(r.line, 'matrix', 'no `fails when: <mutation>`');
 
   const invariants = need('Invariants');
@@ -365,9 +523,11 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
         `${mode ?? 'full'} takes ${lo}–${hi} invariants, found ${n}`,
       );
     for (const r of invariants.rows) {
-      const last = r.cells[r.cells.length - 1] ?? '';
-      if (/\.test\.tsx?\b/.test(last)) continue; // a named test file is a pointer too
-      checkRefs(r.line, 'invariant', last, 'Failing test');
+      const c = cell(invariants, r, /^failing/i);
+      // a backticked test file is a pointer too
+      if (pathClaims(c, tree).some((p) => /\.test\.[cm]?[jt]sx?$/.test(p.path)) && !refs(c).length)
+        continue;
+      checkRefs(r.line, 'invariant', c, 'Failing test', 'T');
     }
   }
 
@@ -400,16 +560,17 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
       for (const c of CLASSES)
         if (!seen.has(c)) add(byName.get('Pre-mortem')!.line, 'premortem', `no "${c}" row`);
       for (const r of pm.rows)
-        checkRefs(r.line, 'premortem', r.cells[r.cells.length - 1] ?? '', 'Covered by');
+        checkRefs(r.line, 'premortem', cell(pm, r, /^covered/i), 'Covered by', 'CUIOT');
     }
   }
 
   const steps = need('Step plan');
   if (steps)
     for (const r of steps.rows) {
-      if (!r.cells.some((c) => /^\d+\s*[–-]\s*\d+\??$/.test(c)))
-        add(r.line, 'steps', 'no `<lo>–<hi>` minutes');
-      if (!r.cells[r.cells.length - 1])
+      const m = r.cells.map((c) => /^(\d+)\s*[–-]\s*(\d+)\??$/.exec(c)).find(Boolean);
+      if (!m) add(r.line, 'steps', 'no `<lo>–<hi>` minutes');
+      else if (Number(m[1]) > Number(m[2])) add(r.line, 'steps', `${m[0]}: low before high`);
+      if (!cell(steps, r, /^from/i))
         add(r.line, 'steps', 'From is empty (the record it came from, or `no history`)');
     }
 
@@ -423,14 +584,23 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
   );
   lines.forEach((l, i) => {
     if (!l.trim()) return;
-    const prose = l.replace(/`[^`]*`/g, '``');
+    const prose = l.replace(/`[^`]*`/g, '``').replace(/"[^"]*"/g, '""');
     if (PLACEHOLDER.test(prose))
       add(i + 1, 'placeholder', `"${PLACEHOLDER.exec(prose)![0]}" left in`);
     if (l.trimStart().startsWith('|') && cells(l).some((c) => /^<[^<>]+>$/.test(c)))
       add(i + 1, 'placeholder', 'a cell that is only a `<…>` placeholder');
     for (const p of pathClaims(l, tree)) {
-      if (added.has(p.path)) continue;
-      if (!tree.exists(p.path))
+      const segs = p.path.split('/');
+      if (segs.includes('..') || segs.includes('.secrets'))
+        add(i + 1, 'path', `\`${p.token}\`: not a plain repo path (no .. or .secrets)`);
+      else if (p.isNew && tree.exists(p.path))
+        add(
+          i + 1,
+          'path',
+          `\`${p.token}\` (new) already exists: the plan misread the repo, or drop (new)`,
+        );
+      else if (added.has(p.path)) continue;
+      else if (!tree.exists(p.path))
         add(
           i + 1,
           'path',
@@ -440,8 +610,9 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
         const n = tree.lineCount(p.path);
         const last = p.to ?? p.from;
         if (n === undefined) add(i + 1, 'path', `\`${p.token}\`: not a readable file`);
-        else if (p.from < 1 || last > n || (p.to !== undefined && p.to < p.from))
-          add(i + 1, 'path', `\`${p.token}\`: ${p.path} has ${n} lines`);
+        else if (p.from < 1 || last < p.from)
+          add(i + 1, 'path', `\`${p.token}\`: not a line range (lines start at 1, low to high)`);
+        else if (last > n) add(i + 1, 'path', `\`${p.token}\`: ${p.path} has ${n} lines`);
       }
     }
   });

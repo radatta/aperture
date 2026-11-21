@@ -49,9 +49,12 @@ flag, a name another file matches on.
 | C1  | `doneAt` on a task item | `packages/x/src/write.ts:40` | `packages/x/src/list.ts:12`, `docs/x.md:30` | `git grep -n -e doneAt -- packages docs tools` → 9; `git grep -n -e "'doneAt'" -e done_at -- packages tools` → 2 | becomes optional |
 
 - Writers and Readers are `path:line`, or start with `none` (a runtime writer: `none (the Agent tool's launches)`).
-- A search is the exact command in backticks and its count of matching lines, `0` included: it starts with
-  `git grep`, `grep` or `rg`, names the directories it searched (never the root as a whole), and has no pipe (one
-  `-e` per form). Searches in one cell are separated by `;`.
+- A search is the exact command in backticks and its count of matching lines, `0` included. The plan reviewer
+  re-runs it, so it is held to an allowlist: one `git grep` or `rg` (tracked or non-ignored files only — never
+  `grep -r`, which reads ignored ones), flags from `SEARCH_FLAGS` in `scripts/src/plan-lint/lint.ts`, patterns in
+  single quotes when they hold anything the shell reads, and the repo paths it searched — each one existing,
+  relative, with no `..` (never the root as a whole). No pipe (one `-e` per form), `;`, `&`, redirection or `$`
+  outside quotes. Searches in one cell are separated by `;`.
 - Full takes two searches per row: the identifier, and its other form (a string literal, snake or kebab case, the
   wire name). Between them they cover docs, shell, infra, tests and the extension wherever the name can occur.
 
@@ -63,7 +66,8 @@ flag, a name another file matches on.
 | U2  | the flag exists in the installed build      | 3.2.1    | probed: `tool --help` → lists `--dry-run`   |
 | U3  | the store's behaviour under a real throttle | n/a      | run-only: only the deployed stage throttles |
 
-Evidence starts with `searched:` and the URL it came from, `probed:` with `` `<command>` → <output> ``, or
+Evidence starts with `searched:` and the URL it came from (the public page, with no explicit port: the reviewer
+fetches it, and a remote `:8080` pauses the container), `probed:` with `` `<command>` → <output> ``, or
 `run-only:` with why no search or probe can settle it. Anything else is not evidence, "from memory" included: write
 `open: <question>`, which fails the lint until the lane settles it (`search-specialist` on `sonnet`, or a probe).
 
