@@ -12,16 +12,22 @@ export interface PushTarget {
 }
 
 export interface PushSendOpts {
-  topic: string; // the Topic header: a later message with the same topic replaces an undelivered one
+  // The logical tag (reminderTag, catchUpTag): the payload's notification.tag and the retry rows' key. A
+  // later message under the same tag replaces an undelivered one; the live gateway puts its wireTopic on
+  // the Topic header (reminders.md → D25).
+  topic: string;
   ttlSeconds: number;
   urgency: 'high' | 'normal';
 }
 
 // The push service's HTTP status — 201 is delivered to the service; 404/410 the subscription is gone; 0 is
-// a timeout or a network failure (`reason` says which). Never a throw for a push-service answer.
+// a timeout or a network failure (`reason` says which). Never a throw for a push-service answer. `detail`
+// is a refusal's own reason as the service gave it (Apple's `BadWebPushTopic`, say), sanitised by the
+// gateway to a short ASCII phrase that can't forge the error text's `(…)` or ` · ` (reminders.md → D26).
 export interface PushResult {
   status: number;
   reason?: 'timeout' | 'network' | 'keys';
+  detail?: string;
 }
 
 // Whether this stage can send at all: it knows its app URL, the VAPID `sub` (`no-app-url` otherwise), and its

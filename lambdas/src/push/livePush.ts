@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { GetParameterCommand, SSMClient } from '@aws-sdk/client-ssm';
 import { pushEndpointOk } from '@aperture/shared';
 import type { PushGateway, PushReadiness, PushResult, PushSendOpts, PushTarget } from './gateway';
@@ -12,6 +13,90 @@ import { encryptAes128Gcm, publicKeyOf, PushKeysError, vapidAuthorization } from
 // the allowlisted host or nowhere.
 
 export const SEND_TIMEOUT_MS = 10_000;
+// A refusal's (4xx/5xx) body is read for its reason (D26) up to this many bytes and this long: past either,
+// no detail. The answer's 10 s plus this stays inside the tick's send margin (TICK_SAFETY_MS, pinned).
+export const BODY_CAP = 2048;
+export const BODY_READ_MS = 500;
+const DETAIL_MAX = 80;
+
+// The Topic header for a logical tag (D25): base64url(sha256(tag)), its first 24 characters — 18 octets
+// with no leftover bits, inside RFC 8030's 32, the same for the same tag, so a retry still replaces an
+// undelivered first copy (a change to it across a deploy breaks that for retries then in flight). Apple refused raw tags whose length is 1 more than a multiple of 4
+// (`ritualMorning`, `b<minute>`), which no base64url decoder can decode (inference: 2026-11-21).
+export const wireTopic = (tag: string): string =>
+  createHash('sha256').update(tag).digest('base64url').slice(0, 24);
+
+// Untrusted text bound for a log line and Settings: a short ASCII phrase. Anything else is a space, so it
+// can't forge the error text's `(…)` wrapper, the health line's ` · ` or a newline. Text that looks like a
+// URL or carries a long token (an endpoint, a path, a key) says nothing: those never reach a log (§5).
+const TOKENISH = /[A-Za-z0-9_-]{40,}/;
+const clean = (s: string): string | undefined => {
+  if (s.includes('://') || TOKENISH.test(s)) return undefined;
+  return (
+    s
+      .replace(/[^A-Za-z0-9 _.:,'-]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, DETAIL_MAX)
+      .trim() || undefined
+  );
+};
+
+const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v : undefined);
+
+// The reason a push service gave, from its error body: Apple `{"reason"}` (served as text/plain), Mozilla
+// autopush `{code, errno, error, message}`, Google `{"error": {status, message}}` or a string `error`, or
+// plain text. Markup or an empty body says nothing.
+export function serviceDetail(text: string | null): string | undefined {
+  if (text === null) return undefined;
+  let json: unknown;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    return text.includes('<') ? undefined : clean(text); // markup (an error page, BOM or not) says nothing
+  }
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return undefined;
+  const o = json as Record<string, unknown>;
+  const reason = str(o.reason) ?? mozilla(o) ?? google(o.error) ?? str(o.error);
+  return reason === undefined ? undefined : clean(reason);
+}
+function mozilla(o: Record<string, unknown>): string | undefined {
+  const message = str(o.message);
+  if (!message) return undefined;
+  return typeof o.errno === 'number' ? `errno ${o.errno} ${message}` : message;
+}
+function google(e: unknown): string | undefined {
+  if (!e || typeof e !== 'object') return undefined;
+  const o = e as Record<string, unknown>;
+  return str(o.status) ?? str(o.message);
+}
+
+// The body as text, at most BODY_CAP bytes within BODY_READ_MS; null past either, or on any failure.
+// Cancelled either way, so the connection is freed.
+export async function readCapped(res: Response, ms = BODY_READ_MS): Promise<string | null> {
+  const reader = res.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<'late'>((resolve) => (timer = setTimeout(() => resolve('late'), ms)));
+  try {
+    for (;;) {
+      const next = await Promise.race([reader.read(), late]);
+      if (next === 'late') return null;
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > BODY_CAP) return null;
+      chunks.push(next.value);
+    }
+    return new TextDecoder('utf-8', { fatal: false }).decode(Buffer.concat(chunks));
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    reader.cancel().catch(() => {});
+  }
+}
 
 type SsmLike = Pick<SSMClient, 'send'>;
 
@@ -87,7 +172,7 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
             'content-type': 'application/octet-stream',
             ttl: String(opts.ttlSeconds),
             urgency: opts.urgency,
-            topic: opts.topic,
+            topic: wireTopic(opts.topic),
           },
           body,
           redirect: 'manual',
@@ -96,10 +181,14 @@ export function createLivePush(cfg: LivePushConfig): PushGateway {
       } catch (err) {
         return { status: 0, reason: isTimeout(err) ? 'timeout' : 'network' };
       }
-      await res.body?.cancel().catch(() => {}); // the answer is the status; free the connection
+      if (res.status < 400) {
+        await res.body?.cancel().catch(() => {}); // delivered (or a 3xx, never followed): no reason to read
+        return { status: res.status };
+      }
+      const detail = serviceDetail(await readCapped(res));
       // A rotated or revoked key: re-read SSM on the next send, not a recycle away.
       if (res.status === 403) key = null;
-      return { status: res.status };
+      return { status: res.status, ...(detail ? { detail } : {}) };
     },
   };
 }

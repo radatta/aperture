@@ -35,10 +35,13 @@ const status = ({ poller, ...over }: Over): DevPushStatus => ({
   ...over,
   poller: { lastRunAt: SINCE, lastSentAt: null, lastError: null, lastErrorAt: null, ...poller },
 });
-const goneError = (code: number) =>
-  `${LABEL} stopped accepting reminders (push service answered ${code}) — turn them on again on that device`;
-const keptError = (code: number) =>
-  `Last reminder didn't reach this device (push service answered ${code})`;
+// `reason` is the push service's own, as livePush.ts reads and sanitises it (no parens, no ` · `).
+const answered = (code: number, reason?: string) =>
+  `push service answered ${code}${reason ? `: ${reason}` : ''}`;
+const goneError = (code: number, reason?: string) =>
+  `${LABEL} stopped accepting reminders (${answered(code, reason)}) — turn them on again on that device`;
+const keptError = (code: number, reason?: string) =>
+  `Last reminder didn't reach this device (${answered(code, reason)})`;
 
 const C = 'Devcheck C n0nce';
 const cDropped = `${C} stopped accepting reminders (its keys are invalid) — turn them on again on that device`;
@@ -66,25 +69,57 @@ describe('e2eOutcome', () => {
         ).toEqual({ ok: true, how: `Apple answered ${code}: the poller deleted the device` });
   });
 
-  it('400 and 403: the device stays, carrying the error — a pass', () => {
-    for (const code of [400, 403])
-      expect(
-        e2eOutcome(
-          status({
-            devices: [device({ lastError: keptError(code), lastErrorAt: AT })],
-            poller: { lastError: `${LABEL}: ${keptError(code)}`, lastErrorAt: AT },
-          }),
-          'A',
-          LABEL,
-          SINCE,
-        ),
-      ).toEqual({ ok: true, how: `Apple answered ${code}: the device carries the error` });
+  it('404 and 410 with a reason: still a pass, the reason named', () => {
+    expect(
+      e2eOutcome(
+        status({ poller: { lastError: goneError(410, 'Unregistered'), lastErrorAt: AT } }),
+        'A',
+        LABEL,
+        SINCE,
+      ),
+    ).toEqual({
+      ok: true,
+      how: 'Apple answered 410 (Unregistered): the poller deleted the device',
+    });
+  });
+
+  const kept = (lastError: string) =>
+    e2eOutcome(
+      status({
+        devices: [device({ lastError, lastErrorAt: AT })],
+        poller: { lastError: `${LABEL}: ${lastError}`, lastErrorAt: AT },
+      }),
+      'A',
+      LABEL,
+      SINCE,
+    );
+  it('400 with its reason, and 403 with or without one: the device stays, carrying the error — a pass', () => {
+    expect(kept(keptError(400, 'BadWebPushToken'))).toEqual({
+      ok: true,
+      how: 'Apple answered 400 (BadWebPushToken): the device carries the error',
+    });
+    expect(kept(keptError(403, 'BadJwtToken'))).toEqual({
+      ok: true,
+      how: 'Apple answered 403 (BadJwtToken): the device carries the error',
+    });
+    expect(kept(keptError(403))).toEqual({
+      ok: true,
+      how: 'Apple answered 403: the device carries the error',
+    });
+  });
+
+  it("a 400 without Apple's reason fails: the reason capture is what this row proves", () => {
+    expect(kept(keptError(400))).toEqual({
+      ok: false,
+      why: `Apple's 400 came without its reason: ${keptError(400)}`,
+    });
   });
 
   it('anything else a send can produce is a named failure', () => {
     const tick = { lastErrorAt: AT };
     for (const lastError of [
       "Last reminder didn't reach this device (push service answered 503)",
+      "Last reminder didn't reach this device (push service answered 503: ServiceUnavailable)",
       "Last reminder didn't reach this device (timed out)",
       "Last reminder didn't reach this device (network error)",
       "Last reminder didn't reach this device (couldn't send: RangeError)",

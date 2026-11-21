@@ -47,9 +47,15 @@ export function outcomeOf(res: SendResult): Outcome {
   return TRANSIENT.has(res.status) ? 'retry' : 'final';
 }
 
-export const whyFailed = (res: { status: number; reason?: string; name?: string }): string =>
+// A refusal names the service's own reason when it gave one (D26): "push service answered 400: BadWebPushTopic".
+export const whyFailed = (res: {
+  status: number;
+  reason?: string;
+  name?: string;
+  detail?: string;
+}): string =>
   res.status > 0
-    ? `push service answered ${res.status}`
+    ? `push service answered ${res.status}${res.detail ? `: ${res.detail}` : ''}`
     : res.reason === 'timeout'
       ? 'timed out'
       : res.reason === 'keys'
@@ -318,8 +324,11 @@ export class Deliverer {
       status: res.status,
       reason: res.reason,
       ...('name' in res ? { name: res.name } : {}),
+      ...('detail' in res && res.detail ? { detail: res.detail } : {}),
       sub: subRef(sub),
       tasks,
+      // A failure names its notification by tag (a ritual or a batch has no task ids); never the title.
+      ...(outcome === 'ok' ? {} : { topic }),
       ...(outcome === 'retry' && pending === 'retrying' ? { retry: true } : {}),
     };
     const updatedAt = Math.max(this.d.now, sub.updatedAt + 1);
