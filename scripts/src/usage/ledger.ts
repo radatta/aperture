@@ -135,9 +135,11 @@ export function current(rows: LedgerRow[], prs: PR[]): Entry[] {
 // A lane's cycle, the one judgment the check, `estimate --lane` and `--void` share: the lane's own merged PR once it
 // merged in this life (past the point: its estimate, or its absence, is the score's), else null for the open cycle.
 // In plan it is always open (plan starts a cycle). Its own PR is the one the lane file names, when that merged on
-// this branch; else the newest merged on the branch since its phase began. A phase in NO_ESTIMATE never asks.
-// Phases where `estimate --lane` refuses on the phase alone, never on the PR cache (which can predate the merge).
-export const NO_ESTIMATE = new Set(['merged', 'cleanup', 'parked', 'blocked']);
+// this branch; else the newest merged on the branch since its phase began. `estimate --lane` never reaches it in a
+// NO_ESTIMATE phase, nor `--void` in a PAST_MERGE one: those refuse on the phase alone, never on the PR cache (which
+// can predate the merge).
+export const PAST_MERGE = new Set(['merged', 'cleanup']);
+export const NO_ESTIMATE = new Set([...PAST_MERGE, 'parked', 'blocked']);
 export function laneCycle(
   l: Pick<LaneFile, 'branch' | 'phase' | 'pr' | 'phaseSince'>,
   prs: PR[],

@@ -27,6 +27,7 @@ import {
   current,
   laneCycle,
   NO_ESTIMATE,
+  PAST_MERGE,
   openEntry,
   formatRow,
   gaps,
@@ -223,7 +224,7 @@ const mergedFate = (entries: Entry[], pr: PR) => {
   const e = entries.find((x) => x.pr?.number === pr.number);
   if (e?.row && e.voided) return 'its estimate was voided, so the score shows it as void';
   if (e?.row) return 'its estimate is scored against it';
-  return 'it has no estimate: pnpm usage score counts it as merged with none if it had lane calls after the first estimate';
+  return 'it has no estimate: pnpm usage score counts it as merged with none if it merged after the first estimate and had lane calls';
 };
 // the score's PR table starts at the default since, or the first estimate if older, so "at actual" prices with the
 // units `estimate` used, whatever --since the cached list was fetched for
@@ -345,6 +346,13 @@ async function score(
       out('--void takes the reason the lane was abandoned');
       return 2;
     }
+    // past the merge, an open-looking row may be the merged PR's under a cache that predates it: never void on that
+    if (rec.file && PAST_MERGE.has(rec.file.phase)) {
+      out(
+        `--void: ${rec.lane}'s lane file says ${rec.file.phase}: its estimate, or its absence, is the merged PR's in pnpm usage score; nothing voided`,
+      );
+      return 2;
+    }
     const prs = cachedPRs(e.cache)?.prs ?? [];
     const entries = current(readLedger(e.usageDir).rows, prs);
     const open = openEntry(entries, rec.lane);
@@ -382,6 +390,7 @@ async function score(
   let fetchedAt: number | null = null;
   let table: string;
   let failed: string | null = null;
+  let note: string | null = null;
   const ledger = readLedger(e.usageDir);
   // the default --since: mergedPRs reuses any cache for an earlier one, and the table cut never follows the cache
   const cut = tableCut(ledger.rows);
@@ -394,6 +403,7 @@ async function score(
     });
     prs = r.prs;
     stale = r.stale;
+    note = r.note;
     fetchedAt = r.fetchedAt;
     table = prTableBasis(prs, r.fetchedAt, stale);
   } catch (err) {
@@ -435,6 +445,7 @@ async function score(
           ]
         : []),
       ...(stale ? [staleLine(stale), ''] : []),
+      ...(note ? [`> ${note}`, ''] : []),
       ...scoreLines(s, table, flags.lane),
       ...(g.length ? ['Gaps:', ...g.map((l) => `- ${l}`)] : ['Gaps: none.']),
     ].join('\n'),
@@ -572,10 +583,14 @@ export async function main(
         out(rec.error);
         return 2;
       }
-      // past the point: a row now would land in the next cycle on this name (docs/ops/USAGE-METER.md → Ledger)
+      // not a working phase: merged and cleanup are past the point (a row would land in the next cycle on this
+      // name), parked and blocked record once the lane resumes (docs/ops/USAGE-METER.md → Ledger and score)
       if (rec?.file && NO_ESTIMATE.has(rec.file.phase)) {
+        const why = PAST_MERGE.has(rec.file.phase)
+          ? "its PR is the score's, and an estimate now would count for the next lane on this name"
+          : 'record it once the lane resumes';
         out(
-          `--lane ${rec.lane}: its lane file says ${rec.file.phase}, so the lane can't record now; not recorded. Record it back in a working phase; a merged lane's PR is the score's (an estimate now would count for the next lane on this name). Drop --lane for the number alone.`,
+          `--lane ${rec.lane}: its lane file says ${rec.file.phase}, not a working phase: ${why}; not recorded. Drop --lane for the number alone.`,
         );
         return 2;
       }

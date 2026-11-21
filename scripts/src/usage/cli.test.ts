@@ -295,6 +295,21 @@ describe('since and merged PRs', () => {
     reply = [];
     const later = await mergedPRs(cache, { since: '2025-12-01', now: 40 + 7_200_000, gh });
     expect(later.note).toContain('the gh limit');
+    const down = async (): Promise<string> => {
+      throw new Error('HTTP 502');
+    };
+    const stale = await mergedPRs(cache, {
+      since: '2025-12-01',
+      now: 50 + 7_200_000,
+      refresh: true,
+      gh: down,
+    });
+    expect(stale.note).toContain('the gh limit');
+    // a full refetch for an earlier --since starts a fresh list, and the limit with it
+    expect(
+      (await mergedPRs(cache, { since: '2025-11-01', now: 60 + 7_200_000, gh })).note,
+    ).toBeNull();
+    expect(cachedPRs(cache)?.limited).toBeNull();
   });
 });
 
@@ -794,9 +809,18 @@ describe('the estimate ledger: estimate --lane and score', () => {
       const p = await run('estimate', '--lines', '300', '--lane', 'lane-a');
       expect(p.code).toBe(2);
       expect(p.text).toMatch(
-        new RegExp(`^--lane lane-a: its lane file says ${phase}, so the lane can't record now`),
+        new RegExp(`^--lane lane-a: its lane file says ${phase}, not a working phase: `),
       );
     }
+    // --void in merged or cleanup refuses on the phase too; parked stays voidable (an abandoned lane)
+    expect((await run('score', '--lane', 'lane-a', '--void', 'gone')).text).toBe(
+      '--void: lane-a has no open estimate (none recorded, already voided, or its PR merged)',
+    ); // blocked: judged on the ledger, not refused on the phase
+    file('merged', { pr: null });
+    expect(await run('score', '--lane', 'lane-a', '--void', 'gone')).toEqual({
+      code: 2,
+      text: "--void: lane-a's lane file says merged: its estimate, or its absence, is the merged PR's in pnpm usage score; nothing voided",
+    });
     expect(existsSync(ledger())).toBe(false);
     writeFileSync(join(usage, 'cache', 'prs.json'), JSON.stringify(prs(9)));
     file('pr');
@@ -808,7 +832,7 @@ describe('the estimate ledger: estimate --lane and score', () => {
     expect(existsSync(ledger())).toBe(false);
     expect(await run('score', '--check')).toEqual({ code: 0, text: 'estimates: no gaps' });
     expect((await run('score', '--lane', 'lane-a', '--void', 'gone')).text).toBe(
-      '--void: lane-a has no open estimate: its PR 9 merged, and it has no estimate: pnpm usage score counts it as merged with none if it had lane calls after the first estimate',
+      '--void: lane-a has no open estimate: its PR 9 merged, and it has no estimate: pnpm usage score counts it as merged with none if it merged after the first estimate and had lane calls',
     );
     file('plan'); // a new cycle on the name starts in plan
     expect((await run('estimate', '--lines', '300', '--lane', 'lane-a')).code).toBe(0);
