@@ -131,8 +131,9 @@ cache tokens (_Cost and measurements_): cutting a 150k+ context to a summary rep
 **Off unless** main's committed `scripts/board/limits.json` says `lanes.selfCompact: true` (read with `git cat-file blob HEAD:`,
 never the working copy or a branch's), and `<board>/self-compact/off` is absent. Any session stops it at once with
 `mkdir -p /workspace/localNotes/board/self-compact && touch /workspace/localNotes/board/self-compact/off` (the dir
-exists only after a first accepted `request`; on the Mac, the same from `<mac-repo>`); removing the file turns it back
-on. It shipped `false` (PR 247); F379 turned it on (2026-11).
+exists only after a first accepted `request`; on the Mac,
+`cd <mac-repo> && mkdir -p localNotes/board/self-compact && touch localNotes/board/self-compact/off`); removing the
+file turns it back on. It shipped `false` (PR 247); F379 turned it on (2026-11).
 
 - **`request`** refuses, with one line and exit 1, unless: not the handoff fork; the switch is on; a `claude` ancestor
   has a board record for that process with a `lastPromptAt`; `TMUX_PANE` is `%<n>` and is that session's own pane
@@ -167,9 +168,9 @@ on. It shipped `false` (PR 247); F379 turned it on (2026-11).
   quoted marker in the conversation doesn't count. On 2.1.330 an idle session with background agents shows
   `✻ Waiting for <n> background agents to finish` 3 lines above the box, `↓ to manage` on the mode line and an agent
   panel (`● main`, `◯ <agent> …`) below it; one with a background shell shows `· 1 shell · ↓ to manage`. A clean idle
-  2.1.330 screen (nothing running) isn't captured yet; a moved mode line there reads busy or no box, so nothing is
-  typed. After a Claude Code upgrade, re-capture these (read-only `tmux capture-pane` of a lane's own pane): a moved
-  shape fails to `none` or `busy`, never to a wrong key.
+  2.1.330 screen (nothing running) isn't captured yet. A moved box reads `none` and types nothing, but a new busy
+  indicator without the three markers reads `empty` and `/compact` is typed (only ever `/compact`, then Enter): after
+  a Claude Code upgrade, re-capture these (read-only `tmux capture-pane` of a lane's own pane) before relying on it.
 - **Log**: `<board>/self-compact.log`, one line per event — `request`, `refuse`, `claim`, `spawn`, `sent`, `skip` —
   `<time> <event> pid=<n> branch=<b> reason=<word>`.
 
@@ -186,7 +187,9 @@ a turn a finished background task starts (if not, `lastPromptAt` misses it and t
 only cover); the box with the slash menu open after typing, and that Enter then runs `/compact` itself (issues report
 Enter running a highlighted menu row instead); a peer message delivered while `/compact` runs (the fork alone can take
 480 s): queued for a turn after, folded into the summary, or dropped — why the wait point is `[pr-open]` only, where
-the hub's next message is far off, and not yet an `[ask-maintainer]`, which the hub often answers in seconds.
+the hub's next message is usually far off (a `[rebase]` after another merge, a `[hold]` or a fast `[merged]` can still
+land; a lost one is bounded: the hub can end a merged lane, and a stale head shows at the merge line), and not yet an
+`[ask-maintainer]`, which the hub often answers in seconds.
 
 Accepted residuals: the heartbeat already runs the branch's own `scripts/board/lib.sh` and `board.sh` (the hand-off adds
 no branch code: main's script re-derives everything); any session can write the board dir, so a forged flag reaches
@@ -195,25 +198,30 @@ main's `stop`, which re-checks it all; the busy markers are screen text; "main's
 
 Where a lane calls `request`: `docs/ops/FEATURE-WORKFLOW.md` → _Lane status and checkpoints_.
 
-**First live run** (the first lane past 150k tokens at `[pr-open]` after F379 merged; the hub watches, from a
-`[followup]`):
+**First live run** (the first lane whose `[pr-open]` ends "self-compact next" after F379 merged; the hub watches at
+once, before its other `[pr-open]` duties, from a `[followup]`; a missed window waits for the next such lane):
 
 1. `/workspace` at or after the merge commit; this prints `true`:
    `git -C /workspace cat-file blob HEAD:scripts/board/limits.json | jq .lanes.selfCompact`
 2. `<board>/self-compact.log`: `request`, `claim`, `spawn`, `sent` once for one pid, `sent` a few seconds after the
    lane's turn ends.
-3. Between `sent` and the lane's `precompact.log` line, the hub sends the lane one `[info]` on purpose: the
-   mid-compaction delivery check.
+3. Between `sent` and the lane's `compact-*.md` file, the hub sends the lane one `[info] … Reply with: ack` on
+   purpose: the mid-compaction delivery check.
 4. Within 10 min of `sent` (the fork alone can take 480 s): a `trigger=manual rc=0` line in the lane's
    `localNotes/handoffs/precompact.log`, and its `compact-*.md` summary carries the lane block's facts (branch, phase,
    lane file, next step, open asks word for word).
-5. The lane takes a turn for the `[info]`, or for the hub's next message, and re-reads `FEATURE-WORKFLOW.md`.
+5. Within 5 min of `compact-*.md`, the lane takes a turn for the `[info]` (its `ack`; its board record's
+   `lastPromptAt` moves past `sent`) and re-reads `FEATURE-WORKFLOW.md`.
 
-Benign, nothing typed: any `refuse`; `skip` with `prompted`, `box-busy`, `guard`, `late` or `tmux`. A failure — a
-`request` with no `claim` (a plain Stop's `stop_hook_active` not `false`, `/workspace`'s `self-compact.sh` or `lib.sh`
-differing on disk from `HEAD`, the `off` file, or another of the hand-off's or `stop`'s early exits, which log
-nothing), `box-changed` (`/compact` left in the box: clear it), no `precompact.log` line 10 min after `sent`, the
-`[info]` lost, a lane that doesn't wake — takes the stop line above first, then is filed. When the mid-compaction check
+Nothing is typed before `spawn`, so every `refuse` but `box-compact`, and every `skip` logged by `stop`, is benign,
+as is `send`'s `skip` with `prompted`, `box-busy`, `box-none`, `box-other` or `late`. After `spawn`, a `skip` with
+`guard` or `tmux` (the log can't tell the first guard from the one after typing), `box-changed`, and a later `refuse
+box-compact` may mean `/compact` was left in the box: read the lane's pane (read-only `capture-pane`), and text left
+there is the user's to clear (`[ask-maintainer]`). A failure — a `request` with no `claim` (a plain Stop's
+`stop_hook_active` not `false`, `/workspace`'s `self-compact.sh` or `lib.sh` differing on disk from `HEAD`, the `off`
+file, or another of the hand-off's or `stop`'s early exits, which log nothing), `/compact` left in a box, no
+`precompact.log` line 10 min after `sent`, no `ack`, a lane that doesn't wake — takes the stop line above first, then is
+filed. When the mid-compaction check
 passes, the `[ask-maintainer]` wait point (never a go only the lane's pane can give) can join the workflow sentence;
 the results move the run-only facts above into _measured here_.
 

@@ -65,10 +65,11 @@ NEEDS YOU read (`docs/ops/TOWER.md` → _Lane files_); a `[blocked]` or `[ask-ma
 command or link.
 
 Where the lane now waits for the hub after `[pr-open]` — with the lane file just written, the tree clean, no
-background task or agent running and its context past 150k tokens (its `tokens` in
-`/workspace/localNotes/board/ctx.json`, a row under 5 min old) — its last tool call may be
-`bash scripts/board/self-compact.sh request`; a refusal changes nothing. Not yet after an `[ask-maintainer]`: a hub
-reply that lands mid-compaction is unmeasured. How it works and what it checks: `docs/ops/COMPACTION-HANDOFF.md` →
+background task or agent running, no ask of its own still open, no dev lock held, and its context past 150k tokens
+(its `tokens` in `/workspace/localNotes/board/ctx.json`, a file modified in the last 10 min; stale or missing, no
+request) — its `[pr-open]` ends "self-compact next" and its last tool call may be
+`bash scripts/board/self-compact.sh request`; a refusal changes nothing. Not yet after an `[ask-maintainer]`, nor at
+a later wait: a hub reply that lands mid-compaction is unmeasured. How it works and what it checks: `docs/ops/COMPACTION-HANDOFF.md` →
 _Self-compact_.
 
 **The lane file carries the estimate.** Right after Plan, the lane writes its step plan with
