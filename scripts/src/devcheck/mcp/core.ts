@@ -26,6 +26,9 @@ export interface DevLiveSitting {
     problem: { slug: string };
     elapsedMin: number;
     liveReads: number;
+    pausedMin?: number; // lc-timer-pauses
+    paused?: boolean;
+    timerSeen?: boolean;
   };
   code?: { version: number; text: string | null; lang: string | null };
   unchangedSinceVersion?: boolean;
@@ -110,9 +113,10 @@ export interface DevProblemRead {
     historical?: boolean;
     sittingIds: string[];
     attemptIds: string[];
+    minutes?: number | null; // a try's minutes: to the first accept, timer pauses and idle gaps out
     claudeNotes?: string[]; // coach-fixes: Claude's notes on that day's sittings
   }[];
-  sittings?: { id: string; claudeNotes?: string | null }[];
+  sittings?: { id: string; minutes?: number; claudeNotes?: string | null }[];
 }
 // What set_void and set_claude_notes answer (coach-fixes) — the fields the scenario reads.
 export interface DevVoided {
@@ -210,6 +214,7 @@ export interface DevSittingRead {
     status: string;
     closedBy?: 'idle' | null;
     minutes?: number;
+    pausedMin?: number; // lc-timer-pauses
     endedAt?: string | null;
     submitCount: number;
     liveReads: number;
@@ -237,6 +242,8 @@ export interface DevSittingRow {
   id: string;
   status: string;
   closedBy?: 'idle' | null;
+  minutes?: number;
+  pausedMin?: number; // lc-timer-pauses
   reviewed: boolean;
   tags: string[];
 }

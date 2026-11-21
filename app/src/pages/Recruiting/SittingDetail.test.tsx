@@ -73,6 +73,11 @@ describe('a sitting’s page', () => {
     expect(await screen.findByRole('heading', { name: 'Add Two Numbers' })).toBeTruthy();
     // Reviewed in the seed: its one-liner is in the form.
     expect(screen.getByLabelText<HTMLInputElement>('One-liner').value).toMatch(/^Carry handled/);
+    // Paused 7 minutes on LeetCode's timer in the seed: out of the first submit too.
+    expect(screen.getByText('7m paused')).toBeTruthy();
+    expect(screen.getByText('after 24m')).toBeTruthy();
+    // The timeline counts on the same clock: its submit is 24 minutes in, not the wall clock's 31.
+    expect(screen.getByText('· +24m')).toBeTruthy();
   });
 });
 
@@ -317,6 +322,90 @@ describe('End sitting', () => {
       expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Review' })),
     );
     expect(screen.getByText('No runs or submits.')).toBeTruthy(); // ended: no "yet"
+  });
+});
+
+// LeetCode's timer, read as the extension sends it: running keeps startTimestamp, a pause keeps the elapsed.
+const timerRead = (id: string, at: number, elapsed: number, status: 'running' | 'pause') => ({
+  id,
+  type: 'timer' as const,
+  at,
+  payload: {
+    state:
+      status === 'running'
+        ? {
+            mode: 'reverse',
+            status,
+            endMs: 45 * 60_000,
+            startTimestamp: at - elapsed,
+            pauseMs: null,
+          }
+        : { mode: 'reverse', status, endMs: 45 * 60_000, startTimestamp: null, pauseMs: elapsed },
+  },
+});
+// Started 30 minutes ago on a clock the test moves; the page's own clock stays real.
+async function withTimerSitting(reads: (t0: number) => ReturnType<typeof timerRead>[]) {
+  const clock = { t: Date.now() - 30 * 60_000 };
+  const api = createStubClient({
+    seed: false,
+    storageKey: `sit-${Math.random()}`,
+    now: () => clock.t,
+  });
+  const roll = await api.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
+  await api.updateSettings({ leetcodeRollId: roll.id });
+  const { sitting } = await api.lcSittingStart({
+    clientSittingId: '01HZZZZZZZZZZZZZZZZZZZZZZV',
+    problemSlug: 'rotting-oranges',
+    problemTitle: 'Rotting Oranges',
+    difficulty: 'Medium',
+    lang: 'python3',
+    startedAt: clock.t,
+    tzOffsetMinutes: new Date().getTimezoneOffset(),
+  });
+  const events = reads(clock.t);
+  if (events.length) {
+    clock.t = Math.max(...events.map((e) => e.at));
+    await api.lcSittingEvents({ sittingId: sitting.id, events });
+  }
+  clock.t = Date.now();
+  return { api, sitting };
+}
+
+describe('LeetCode’s timer paused', () => {
+  const M = 60_000;
+  it('leaves the pause out of So far and the Done prefill, and says how long, muted', async () => {
+    const user = userEvent.setup();
+    // Paused at 5:00, resumed at 15:00, running since: 30 minutes in, 20 counted.
+    const { api, sitting } = await withTimerSitting((t0) => [
+      timerRead('01HZZZZZZZZZZZZZZZZZZZZZZ1', t0 + 4 * M, 4 * M, 'running'),
+      timerRead('01HZZZZZZZZZZZZZZZZZZZZZZ2', t0 + 6 * M, 5 * M, 'pause'),
+      timerRead('01HZZZZZZZZZZZZZZZZZZZZZZ3', t0 + 15 * M, 5 * M, 'running'),
+    ]);
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText('20m')).toBeTruthy();
+    const note = screen.getByText('10m paused');
+    expect(note.classList.contains('text-ink-muted')).toBe(true); // a fact in the muted tone, never a warning
+    const end = await screen.findByRole('button', { name: 'End sitting' });
+    await waitFor(() => expect(end.getAttribute('aria-disabled')).toBeNull());
+    await user.click(end);
+    expect(screen.getByLabelText<HTMLInputElement>('Actual (min)').value).toBe('20');
+  });
+
+  it('paused now: So far holds still and says so', async () => {
+    const { api, sitting } = await withTimerSitting((t0) => [
+      timerRead('01HZZZZZZZZZZZZZZZZZZZZZZ4', t0 + 4 * M, 4 * M, 'running'),
+      timerRead('01HZZZZZZZZZZZZZZZZZZZZZZ5', t0 + 6 * M, 5 * M, 'pause'),
+    ]);
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText('5m')).toBeTruthy();
+    expect(screen.getByText('paused on LeetCode · 25m so far')).toBeTruthy();
+  });
+
+  it('a sitting with no timer reads shows no paused line', async () => {
+    const { api, sitting } = await withTimerSitting(() => []);
+    renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
+    expect(await screen.findByText('30m')).toBeTruthy();
+    expect(screen.queryByText(/paused/)).toBeNull();
   });
 });
 

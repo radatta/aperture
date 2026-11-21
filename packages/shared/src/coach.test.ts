@@ -195,6 +195,12 @@ describe('outcomes', () => {
     // An idle gap a reopen bridged isn't practice: 25 minutes on the clock, 23 of them away.
     const away = sit({ slug: 'two-sum', on: day(-1), minutes: 25 });
     expect(countsAsPractice({ ...away, idleMs: 23 * 60_000 }, NOW)).toBe(false);
+    // So isn't a stretch LeetCode's timer was paused: 25 on the clock, 23 paused, 2 practised.
+    const paused = {
+      ...away.summary,
+      pauses: [[away.startedAt + 60_000, away.startedAt + 24 * 60_000]],
+    };
+    expect(countsAsPractice({ ...away, summary: paused } as typeof away, NOW)).toBe(false);
     expect(
       attemptsOf(
         [sit({ slug: 'two-sum', on: day(-1), test: true, submits: ['accepted'] })],
@@ -1430,6 +1436,29 @@ describe('minutes on a try', () => {
       ),
     ).toBe(42);
     expect(sittingTryMinutes(sit({ slug: 'two-sum', on: day(-1), open: true }))).toBeNull();
+  });
+  it('leaves out LeetCode’s timer pauses and a reopen’s idle gap, to the accept or the end', () => {
+    const M = 60_000;
+    const base = sit({ slug: 'two-sum', on: day(-1), submits: ['wrong_answer'], minutes: 90 });
+    const s = {
+      ...base,
+      idleGaps: [[base.startedAt + 20 * M, base.startedAt + 60 * M]] as [number, number][],
+      idleMs: 40 * M,
+      summary: {
+        ...base.summary,
+        pauses: [[base.clientStartedAt + 5 * M, base.clientStartedAt + 10 * M]] as [
+          number,
+          number,
+        ][],
+      },
+    };
+    expect(sittingTryMinutes(s)).toBe(45); // 90 − 40 idle − 5 paused
+    // Accepted at 70 min: before it, 5 paused and 40 idle.
+    const accepted = {
+      ...s,
+      summary: { ...s.summary, firstAcceptedAt: s.clientStartedAt + 70 * M },
+    };
+    expect(sittingTryMinutes(accepted)).toBe(25);
   });
   it('a day’s pieces sum; a logged try keeps its minutes and note', () => {
     const logged = {

@@ -404,7 +404,7 @@ describe('live_sitting slot', () => {
   async function start(slug: string) {
     const roll = await backend.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 45 });
     await backend.updateSettings({ leetcodeRollId: roll.id });
-    await backend.lcSittingStart({
+    const { sitting } = await backend.lcSittingStart({
       clientSittingId: ulid(),
       problemSlug: slug,
       problemTitle: slug,
@@ -414,6 +414,7 @@ describe('live_sitting slot', () => {
       startedAt: T0,
       tzOffsetMinutes: 480,
     });
+    return sitting;
   }
   it('names the open sitting’s slot, its cap and the rules', async () => {
     await start('contains-duplicate');
@@ -422,6 +423,29 @@ describe('live_sitting slot', () => {
     expect(out.slot).toMatchObject({ kind: 'new', capMin: 30, overCap: true });
     expect(out.trace).toBeNull(); // no coach event from the extension yet
     expect(out.slot.rules).toMatch(/hint ladder/);
+  });
+  it('over the cap on the wall clock but not on the sitting’s own: a timer pause keeps it under', async () => {
+    const s = await start('contains-duplicate');
+    const M = 60_000;
+    const state = (status: 'running' | 'pause') => ({
+      mode: 'forward',
+      status,
+      startTimestamp: status === 'running' ? T0 : null,
+      pauseMs: status === 'pause' ? 2 * M : null,
+    });
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [
+        { id: ulid(), type: 'timer', at: T0 + M, payload: { state: state('running') } },
+        { id: ulid(), type: 'timer', at: T0 + 2 * M, payload: { state: state('pause') } },
+      ] as never,
+    });
+    t = T0 + 31 * 60_000; // 31 on the clock, 29 of them paused
+    expect((await call('live_sitting')).slot).toMatchObject({
+      kind: 'new',
+      capMin: 30,
+      overCap: false,
+    });
   });
   it('a failed coach read never fails the live pull: slot is null', async () => {
     await start('contains-duplicate');

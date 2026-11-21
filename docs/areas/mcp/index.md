@@ -241,12 +241,14 @@ countedUsd, buckets, period}`) and `linkedChargeId` = its largest part; the over
   project instructions are its standing approval; in Claude Code it is an ordinary write.
 - **LeetCode: three tools, and a live pull counts** (`lambdas/src/mcp/leetcodeTools.ts`). `live_sitting` returns
   the sitting open right now: its code in full, the newest Run and Submit with the failing case, counts,
-  LeetCode's timer, editing facts — or, with nothing open, `lastSitting`. Code is at most ~30 s behind (one
+  LeetCode's timer (`pausedMin`, `paused` while it's paused now, `timerSeen`), editing facts — or, with nothing open,
+  `lastSitting`. Code is at most ~30 s behind (one
   snapshot per 30 s, plus one right before each Run or Submit), and a Run or Submit judged after the maintainer leaves
   the page still lands in its sitting. Its one write is the pull's own count on that sitting ("Claude watched
   live"); a pull with nothing open writes nothing. `sinceVersion` that isn't a whole number ≥ 0 is a param error.
   `get_sitting` (no id: the newest) reads one back whole — the statement, the timeline with each case, the final
-  code, the user's review — and `list_sittings` lists heads with `reviewed` and the user's tags; both only read. The
+  code, the user's review — and `list_sittings` lists heads with `reviewed` and the user's tags; both only read, and
+  both give `minutes` without LeetCode's timer pauses and `pausedMin` (the timeline's `minute` is on the same clock) ([recruiting](../recruiting/index.md) → _Timer pauses_). The
   review's words stay the user's, typed in the app; the coach writes only its cause tag and the peek
   (`set_cause_tag`, `mark_peeked`), and `live_sitting` carries the open sitting's `slot` in today's plan
   ([recruiting/coach](../recruiting/coach.md) → _Over MCP_).

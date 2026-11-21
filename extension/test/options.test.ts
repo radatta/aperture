@@ -120,15 +120,30 @@ describe('the Options page', () => {
 
   it('Copy JSON leads the log with the version that wrote it; an empty log still says it', async () => {
     const ext = fakeExtension();
-    await ext.local.set({ debugLog: [{ t: 1, type: 'nav', slug: 'two-sum' }] });
+    // A tail a page wrote as it left (debug.js) is folded in, in time order, and cleared with the log.
+    await ext.local.set({
+      debugLog: [
+        { t: 1, type: 'nav', slug: 'two-sum' },
+        { t: 2, type: 'press', pg: 'abc', sq: 4 },
+      ],
+      // Its in-flight batch too, already in the log (it left mid-write): kept once.
+      'debugTail.abc.0': [
+        { t: 0, type: 'vis', ev: 'pagehide' },
+        { t: 2, type: 'press', pg: 'abc', sq: 4 },
+      ],
+    });
     const o = await loaded(ext);
     o.click('copyLog');
     await until(() => o.copied.length === 1);
     const log = JSON.parse(o.copied[0]!) as Array<Record<string, unknown>>;
     expect(log[0]).toEqual({ t: expect.any(Number), type: 'export', version: manifest.version });
-    expect(log.slice(1)).toEqual([{ t: 1, type: 'nav', slug: 'two-sum' }]);
+    expect(log.slice(1)).toEqual([
+      { t: 0, type: 'vis', ev: 'pagehide' },
+      { t: 1, type: 'nav', slug: 'two-sum' },
+      { t: 2, type: 'press', pg: 'abc', sq: 4 },
+    ]);
     o.click('clearLog');
-    await until(() => !('debugLog' in ext.local.data));
+    await until(() => !('debugLog' in ext.local.data) && !('debugTail.abc.0' in ext.local.data));
     o.click('copyLog');
     await until(() => o.copied.length === 2);
     expect(JSON.parse(o.copied[1]!)).toEqual([

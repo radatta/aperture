@@ -113,6 +113,41 @@ by the next read, never by a scheduled job ($0, no new resource).
   the rep's Done on its page; Home links a rep to its newest sitting closed by idle however old (the rep is still in
   progress, and its minutes are that sitting's).
 
+### Timer pauses
+
+A stretch LeetCode's own timer wasn't counting comes out of the sitting's minutes, as an idle gap does (F392). It's
+derived from the timer reads the extension already sends — `QD_TIMER_STATE`, polled every 2 s while a sitting is
+open and posted when it changes — so nothing on the wire or in the extension is new.
+
+- **The fold** (`foldTimer`, on every head row in `summarizeHeadRows`, so any order folds the same): a read carries
+  the elapsed to the ms, so between two reads of one run (same mode and countdown, the elapsed never drops by more
+  than 1 s) the
+  shortfall, Δat − Δelapsed, is exactly what LeetCode didn't count. Running then paused opens `pauseFrom` where it
+  stopped; paused then running closes it where it resumed; running both times with a shortfall of 1 s or more
+  (`PAUSE_SLACK_MS`) is a pause between them (the page away: LeetCode pauses itself); paused both times with
+  counting between is an unseen resume and re-pause, which ends the one pause and opens the next. Stored on the head's
+  `summary` as `pauses` (the extension's clock, merged, the 100 longest kept — `SITTING_PAUSES_MAX`), `pauseFrom`
+  and `timerSeen` (it was seen counting).
+- **What isn't a pause:** a paused read before any counting one (a timer left from an earlier solve); a paused read
+  after a Run or Submit (they close an open pause at their time: back at it); a reset or an idle read (it closes
+  the pause there and disarms until the timer runs again); a countdown at or within 2 s of 0 (`EXPIRED_SLACK_MS`: time after 0 is wall clock,
+  whatever LeetCode writes); and a payload that isn't LeetCode's state.
+- **On read** (`sittingAwaySpans`): the pauses move onto the server clock (`startedAt − clientStartedAt`), an open
+  one runs to now or the end, and they're unioned with the reopens' idle gaps (`idleGaps`, server clock) and
+  clipped to the sitting — a stretch both paused and idle counts once, and a future-stamped read takes nothing
+  not lived. `sittingElapsedMs` and so `sittingMinutes` (the page, Home, the Done prefill, the MCP reads, the
+  coach's try minutes and over-cap) leave it all out; `sittingPause` is the paused part alone, less idle.
+- **Shown** as a muted line under So far / Took — "N paused", or "paused on LeetCode · N so far" while it is — and
+  "· paused" on Home's hero rep; `live_sitting` gives `pausedMin`, `paused` and `timerSeen`, `get_sitting` and
+  `list_sittings` `pausedMin`. Never a warning: pausing is allowed.
+- **A pause never closes a sitting.** Idle is the server's activity clock (_Idle close_), and a paused timer posts
+  nothing; a pause running into an idle close and its reopen counts once.
+- **The timeline's offsets** (`timelineOf`, "Run 2 · +12m") count on the same clock, `sittingActiveMsAt`: pauses
+  and idle out, so they agree with First submit's "after Nm".
+- **Old heads:** a summary folded before this has no pauses, and the head is refolded only when a row arrives, so a
+  sitting open across the deploy picks its pauses up at its next Run, Submit or timer change; until then it reads
+  wall-clock minutes, as before.
+
 ### What's stored, what's derived
 
 All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda share them):
@@ -122,7 +157,7 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
   creation only — a resume or a same-day reopen keeps it — absent before 2.2.0; Settings → LeetCode compares the newest with the app's own —
   `extension/README.md` → Versions), the user's review
   (`review`, _Review and the Claude draft_ below) and the `summary` — runs, submits, first/last verdicts (status message trimmed to 200), `submitsBeforeAccepted`,
-  runs before the first submit, LeetCode's timer state, and `headEvents`, how many rows it folds.
+  runs before the first submit, LeetCode's timer state and its pauses (_Timer pauses_ above), and `headEvents`, how many rows it folds.
   **Recomputed, never incremented:** any events call carrying a head event — fresh or a repeat — rebuilds it
   from every head row (`summarizeHeadRows`), and writes it only when it folds more rows than the stored one, so
   a lost write, a retry or a slower parallel call can't skew or roll back the headline.
@@ -147,7 +182,7 @@ All rules are in `packages/shared/src/sittings.ts` (the stub and the Lambda shar
 - **Live-pull count** (`lcs#<id>#reads`): how many times Claude pulled the sitting live (_Claude watches live_,
   below), `liveReads` on `getSitting`.
 - **Derived, never stored:** `sittingMetrics` — first submit accepted (headline), submits before accepted,
-  time to first submit — and the elapsed time.
+  time to first submit — and the elapsed time, less idle gaps and timer pauses.
 
 ### Coach events
 

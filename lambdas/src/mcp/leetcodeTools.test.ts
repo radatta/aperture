@@ -87,6 +87,7 @@ describe('live_sitting', () => {
     expect(d).toMatch(/30 s/);
     expect(d).toMatch(/never paste their code back/);
     expect(d).toMatch(/after they leave the page/);
+    expect(d).toMatch(/pausedMin/);
   });
 
   it('with nothing ever open: inactive, no last sitting', async () => {
@@ -320,6 +321,90 @@ describe('live_sitting', () => {
     expect(await run()).toMatchObject({ active: true, sitting: { id: s.id } });
     t = T0 + 85 * 60_000;
     expect(await run()).toMatchObject({ active: true, sitting: { id: s.id, elapsedMin: 85 } });
+  });
+
+  it('a pause on LeetCode’s timer holds the minutes still and says so; get_sitting and list_sittings agree', async () => {
+    const M = 60_000;
+    // LeetCode's state as it writes it: running keeps startTimestamp, a pause keeps the elapsed in pauseMs.
+    const timer = (at: number, elapsed: number, status: 'running' | 'pause') => ({
+      id: ulid(),
+      type: 'timer',
+      at,
+      payload: {
+        state:
+          status === 'running'
+            ? {
+                mode: 'reverse',
+                status,
+                endMs: 30 * M,
+                startTimestamp: at - elapsed,
+                pauseMs: null,
+              }
+            : { mode: 'reverse', status, endMs: 30 * M, startTimestamp: null, pauseMs: elapsed },
+      },
+    });
+    const s = await open();
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [timer(T0 + 4 * M, 4 * M, 'running'), timer(T0 + 6 * M, 5 * M, 'pause')] as never,
+    });
+    t = T0 + 14 * M; // paused at 5:00, still paused
+    expect(await run()).toMatchObject({
+      sitting: { elapsedMin: 5, pausedMin: 9, paused: true, timerSeen: true },
+    });
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [timer(T0 + 15 * M, 5 * M, 'running')] as never, // resumed at 15:00
+    });
+    t = T0 + 20 * M;
+    expect(await run()).toMatchObject({
+      sitting: { elapsedMin: 10, pausedMin: 10, paused: false },
+    });
+    expect(await call('get_sitting')).toMatchObject({ sitting: { minutes: 10, pausedMin: 10 } });
+    expect((await call('list_sittings')).sittings[0]).toMatchObject({ minutes: 10, pausedMin: 10 });
+  });
+
+  it('a sitting left paused until the idle close: lastSitting and get_sitting read the pause to its end', async () => {
+    const M = 60_000;
+    const s = await open();
+    const state = (at: number, status: 'running' | 'pause') => ({
+      mode: 'forward',
+      status,
+      startTimestamp: status === 'running' ? at - 4 * M : null,
+      pauseMs: status === 'pause' ? 5 * M : null,
+    });
+    t = T0 + 6 * M; // the server hears both reads at 6:00, its last activity
+    await backend.lcSittingEvents({
+      sittingId: s.id,
+      events: [
+        {
+          id: ulid(),
+          type: 'timer',
+          at: T0 + 4 * M,
+          payload: { state: state(T0 + 4 * M, 'running') },
+        },
+        {
+          id: ulid(),
+          type: 'timer',
+          at: T0 + 6 * M,
+          payload: { state: state(T0 + 6 * M, 'pause') },
+        },
+      ] as never,
+    });
+    t = T0 + 3 * 60 * M; // closed by idle at 11:00 (6:00 + 5), still paused then
+    const out = await run();
+    expect(out.active).toBe(false);
+    // Paused at 5:00 until the close at 11:00: 5 minutes on the clock, 6 paused.
+    expect(out.lastSitting).toMatchObject({ id: s.id, closedBy: 'idle', minutes: 5, pausedMin: 6 });
+    expect(await call('get_sitting')).toMatchObject({ sitting: { minutes: 5, pausedMin: 6 } });
+  });
+
+  it('with no timer reads: wall-clock minutes, nothing paused, the timer unseen', async () => {
+    await open();
+    t = T0 + 7 * 60_000;
+    expect(await run()).toMatchObject({
+      sitting: { elapsedMin: 7, pausedMin: 0, paused: false, timerSeen: false },
+    });
   });
 
   it('refuses a sinceVersion that is not a whole number ≥ 0, counting nothing', async () => {

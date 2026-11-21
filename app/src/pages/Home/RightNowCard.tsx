@@ -11,6 +11,7 @@ import {
   placedByTime,
   ROLL_PLAN_FALLBACK_MIN,
   sittingMinutes,
+  sittingPause,
   todayKey,
 } from '@aperture/shared';
 import type { DueUrgency, Sitting, Task } from '@aperture/shared';
@@ -225,6 +226,8 @@ export function RightNowCard() {
               <Text size="sm" tone="muted" tabular>
                 {fmtDuration(heroMin)}
                 {estimateOf(hero) != null ? ` of ~${fmtDuration(estimateOf(hero)!)}` : ' logged'}
+                {/* LeetCode's timer paused: the minutes hold still, so say why. */}
+                {heroSitting && sittingPause(heroSitting, now).pausedNow ? ' · paused' : ''}
               </Text>
               {hero.startedAt != null && (
                 <Text size="xs" tone="subtle">

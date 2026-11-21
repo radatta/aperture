@@ -1141,7 +1141,9 @@
   } catch {}
   debug.log('oc.reg', { pageId, readyState: document.readyState, v: loadedVersion });
   api.storage.onChanged.addListener((changes, area) => {
-    const keys = Object.keys(changes || {}).filter((k) => k !== 'debugLog');
+    const keys = Object.keys(changes || {}).filter(
+      (k) => k !== 'debugLog' && !k.startsWith('debugTail.'),
+    );
     if (!keys.length) return void ownLogChanges++;
     debug.log('oc', { pageId, area: String(area), keys: keys.slice(0, 8), ownLogChanges });
   });

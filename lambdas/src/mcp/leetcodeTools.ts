@@ -10,6 +10,7 @@ import {
   lcLangName,
   sittingMetrics,
   sittingMinutes,
+  sittingPause,
   sittingProblemUrl,
   verdictOf,
   isSittingOpen,
@@ -94,6 +95,7 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
       lang: s.lang,
       startedAt: iso(s.startedAt),
       elapsedMin: sittingMinutes(s, now),
+      ...pausedOf(s, now),
       status: s.status,
       prepTarget: s.prepTarget,
       liveReads: pull.liveReads,
@@ -153,6 +155,7 @@ function inactive(pull: LiveSittingPull, now: number) {
           expired,
           endedAt: iso(s.endedAt),
           minutes: sittingMinutes(s, expired ? s.startedAt + SITTING_INGEST_WINDOW_MS : now),
+          pausedMin: pausedOf(s, now).pausedMin,
           submitCount: s.summary.submits,
           outcome: outcomeOf(s),
           liveReads: pull.liveReads,
@@ -170,6 +173,11 @@ const cap = (s: string | null) =>
 const expiredAt = (s: Sitting, now: number) => s.status === 'active' && !isSittingOpen(s, now);
 const minutesOf = (s: Sitting, now: number) =>
   sittingMinutes(s, expiredAt(s, now) ? s.startedAt + SITTING_INGEST_WINDOW_MS : now);
+// LeetCode's timer pauses, already out of its minutes (sittings.ts sittingPause): whole minutes, and whether paused now.
+function pausedOf(s: Sitting, now: number) {
+  const p = sittingPause(s, expiredAt(s, now) ? s.startedAt + SITTING_INGEST_WINDOW_MS : now);
+  return { pausedMin: msToMin(p.pausedMs), paused: p.pausedNow, timerSeen: p.timerSeen };
+}
 
 function sittingRow(s: Sitting, now: number) {
   return {
@@ -180,6 +188,7 @@ function sittingRow(s: Sitting, now: number) {
     closedBy: s.closedBy ?? null,
     expired: expiredAt(s, now),
     minutes: minutesOf(s, now),
+    pausedMin: pausedOf(s, now).pausedMin,
     submitCount: s.summary.submits,
     outcome: outcomeOf(s),
     prepTarget: s.prepTarget,
@@ -212,6 +221,7 @@ function sittingRead(d: SittingDetail, now: number) {
       startedAt: iso(s.startedAt),
       endedAt: iso(s.endedAt),
       minutes: minutesOf(s, now),
+      pausedMin: pausedOf(s, now).pausedMin,
       prepTarget: s.prepTarget,
       liveReads: d.liveReads,
       runCount: s.summary.runs,
@@ -267,6 +277,7 @@ export const LEETCODE_TOOLS: Tool[] = [
     description: [
       "The LeetCode sitting the user has open right now, captured by Aperture's Safari extension: the problem, minutes since Start, their current code in full, the newest Run and Submit with verdict, failing input, expected vs output and the error head, run/submit counts, LeetCode's own timer, and editing facts.",
       FRESHNESS,
+      'Minutes leave out the stretches LeetCode’s own timer was paused (the pause button, or LeetCode pausing itself when they leave the page): `pausedMin` is how much, `paused` whether it is paused now (its minutes then hold still), and `timerSeen` whether its timer was seen running this sitting — without that, minutes are wall clock.',
       'So `code.ageSec` can read up to about 30, and a pull a minute later may show more; `extensionSeenAgoSec` says when the extension last reached the server. Code, Run and Submit times are their Mac’s clock, so their ages can be off by its skew.',
       'Pass `sinceVersion` (the last `code.version` you saw for this `sitting.id`) to get `unchangedSinceVersion`. Pull at most once per turn, and never paste their code back at them — point at a line, a name or a case.',
       '`slot` says where the open sitting sits in today’s plan (leetcode_today): its kind (re-solve, carry-over, new, stretch, or off-plan), reason, the 30-minute cap and whether it is past it, and the coaching `rules` for that kind — follow them.',
@@ -317,9 +328,10 @@ export const LEETCODE_TOOLS: Tool[] = [
     name: 'get_sitting',
     description: [
       'One LeetCode sitting, read back whole — for talking it through afterwards ("how did that sitting go?"). With no `id`, the most recent sitting.',
-      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, their final code in full, editing facts, the trace before the first judged event (`trace`), their review (their own words — never rewrite them back to them as yours), and your own notes on it (`claudeNotes`, set_claude_notes).',
+      'Returns the problem (and its statement as text, plus the companies that asked it lately), minutes, run/submit counts and the outcome, the timeline of every Run and Submit in order (its `minute` on the sitting’s clock, pauses and idle out) with verdict, passed/total and its failing input, expected vs output or error (each capped), "codeChanged" markers counting the snapshots between them, their final code in full, editing facts, the trace before the first judged event (`trace`), their review (their own words — never rewrite them back to them as yours), and your own notes on it (`claudeNotes`, set_claude_notes).',
       'Talk from this data, not from memory, and never paste their code back at them — point at a line, a name or a case.',
       '`closedBy: "idle"` means Aperture closed it after 45 minutes with no activity, at the last activity + 5 minutes (its rep left in progress).',
+      '`minutes` leaves out the stretches LeetCode’s timer was paused; `pausedMin` says how much.',
       'Read-only.',
     ].join(' '),
     inputSchema: {

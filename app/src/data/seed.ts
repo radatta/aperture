@@ -639,6 +639,8 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     judged: Judged[],
     code: string,
     snapMins: number[] = [4], // snapshots between the judged events read as "code changed ×N"
+    // LeetCode's timer reads, as the extension sends them: [minute, elapsed minutes, running?].
+    timer: [min: number, elapsed: number, running: boolean][] = [],
   ) => {
     task.title = sittingRepTitle(title);
     const startedAt = task.startedAt!;
@@ -652,6 +654,20 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
           at: startedAt + m * 60_000,
           payload: { code, lang: 11 },
         })),
+        ...timer.map(([min, elapsed, running]) => {
+          const at = startedAt + min * 60_000;
+          const ms = elapsed * 60_000;
+          return {
+            id: ulid(),
+            type: 'timer' as const,
+            at,
+            payload: {
+              state: running
+                ? { mode: 'forward', status: 'running', startTimestamp: at - ms, pauseMs: null }
+                : { mode: 'forward', status: 'pause', startTimestamp: null, pauseMs: ms },
+            },
+          };
+        }),
         ...judged.map(([type, status, msg, min, ok, all, detail, input]) => ({
           id: ulid(),
           type,
@@ -785,6 +801,13 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     ['Linked List', 'Math'],
     [['submit', 10, 'Accepted', 31, 1568, 1568]],
     'class Solution:\n    def addTwoNumbers(self, l1, l2):\n        ...',
+    [4],
+    // Paused on LeetCode's timer from 10 to 17: the page reads "7m paused", the first submit after 24.
+    [
+      [8, 8, true],
+      [12, 10, false],
+      [17, 10, true],
+    ],
   );
   // Reviewed (setSittingReview's shape — the user's words, no draft).
   addTwo.review = {

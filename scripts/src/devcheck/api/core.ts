@@ -346,10 +346,12 @@ export interface DevSitting {
   problemTitle: string;
   prepTarget: string;
   startedAt: number;
+  clientStartedAt?: number; // the extension's clock at Start: timer pauses are on it
   endedAt: number | null;
   closedBy?: 'idle' | null; // idle close — absent on heads from before it
   reopenedAt?: number | null;
   idleMs?: number;
+  idleGaps?: [number, number][]; // lc-timer-pauses: each reopen's bridged gap, server clock
   review?: (DevSittingReview & { cause?: string | null; test?: boolean }) | null; // PR C — absent on heads from before reviews; `test` is the void
   summary: {
     runs: number;
@@ -364,6 +366,10 @@ export interface DevSitting {
     // lc-coach C0 — absent until a coach event folds; the resubmit note's switch and count (the card is retired)
     coach?: { config: { nudge: boolean } | null; nudges: number };
     commentTrace?: 'traced' | 'none'; // coach-fixes: the trace comment before the first judged event
+    // lc-timer-pauses: LeetCode's timer pauses (extension clock), the open one's start, whether it was seen counting
+    pauses?: [number, number][];
+    pauseFrom?: number | null;
+    timerSeen?: boolean;
   };
   claudeNotes?: { text: string; updatedAt: number } | null; // coach-fixes: Claude's notes, beside the review
 }

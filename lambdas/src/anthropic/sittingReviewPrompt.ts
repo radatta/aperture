@@ -22,7 +22,7 @@ const DRAFT_TEXT_MAX = 400; // each case field sent
 export interface DraftJudged {
   type: 'run' | 'submit';
   n: number;
-  minute: number; // since Start
+  minute: number; // since Start, on the sitting's clock: pauses and idle gaps out
   verdict: string;
   passed: number | null;
   total: number | null;
