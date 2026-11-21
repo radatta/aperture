@@ -141,58 +141,28 @@ export function searches(cell: string): Search[] {
     .filter((s) => s.command);
 }
 
-// A census search is re-run by the plan reviewer, so it is held to an allowlist, never a denylist: one `git grep` or
-// `rg` (tracked or non-ignored files only, so never `.secrets/`), flags from the lists below, and operands that are
-// plain repo paths. Anything else is refused.
+// A census search is re-run by the plan reviewer, so it is held to an allowlist, never a denylist: one `git grep`
+// (tracked files, plus untracked non-ignored ones with --untracked; never an ignored file, whatever path is named),
+// flags from this list (each probed on git 2.55), and operands that are plain repo paths. Anything else is refused.
+// Not rg: a `-g` glob or an ignored path named outright makes it read ignored files.
 export const SEARCH_FLAGS = {
-  git: {
-    bare: 'nilLwFEPcIhHovx',
-    value: 'eABCm',
-    long: [
-      'count',
-      'line-number',
-      'ignore-case',
-      'word-regexp',
-      'fixed-strings',
-      'extended-regexp',
-      'perl-regexp',
-      'files-with-matches',
-      'files-without-match',
-      'invert-match',
-      'only-matching',
-      'line-regexp',
-      'untracked',
-    ],
-    longValue: ['regexp', 'after-context', 'before-context', 'context', 'max-count'],
-  },
-  rg: {
-    bare: 'nilwFPcIHovxS',
-    value: 'eABCmgtT',
-    long: [
-      'count',
-      'line-number',
-      'ignore-case',
-      'smart-case',
-      'word-regexp',
-      'fixed-strings',
-      'pcre2',
-      'files-with-matches',
-      'files-without-match',
-      'invert-match',
-      'only-matching',
-      'line-regexp',
-    ],
-    longValue: [
-      'regexp',
-      'after-context',
-      'before-context',
-      'context',
-      'max-count',
-      'glob',
-      'type',
-      'type-not',
-    ],
-  },
+  bare: 'nilLwFEPcIhHov',
+  value: 'eABCm',
+  long: [
+    'count',
+    'line-number',
+    'ignore-case',
+    'word-regexp',
+    'fixed-strings',
+    'extended-regexp',
+    'perl-regexp',
+    'files-with-matches',
+    'files-without-match',
+    'invert-match',
+    'only-matching',
+    'untracked',
+  ],
+  longValue: ['after-context', 'before-context', 'context', 'max-count'],
 } as const;
 const NUMERIC = new Set([
   'A',
@@ -253,22 +223,19 @@ export function pathProblem(op: string, tree: Tree): string | undefined {
 export function searchProblem(command: string, tree: Tree): string | undefined {
   const toks = shellWords(command);
   if (typeof toks === 'string') return toks;
-  const tool =
-    toks[0] === 'git' && toks[1] === 'grep' ? 'git' : toks[0] === 'rg' ? 'rg' : undefined;
-  if (!tool) return `not a census search: "${command.slice(0, 40)}" (git grep or rg)`;
-  const f = SEARCH_FLAGS[tool];
+  if (toks[0] !== 'git' || toks[1] !== 'grep')
+    return `not a census search: "${command.slice(0, 40)}" (git grep)`;
+  const f = SEARCH_FLAGS;
   const operands: string[] = [];
   let pattern = false;
   let rest = false;
   const value = (name: string, v: string | undefined) => {
     if (v === undefined) return `${name} needs a value`;
     if (NUMERIC.has(name) && !/^\d+$/.test(v)) return `${name} takes a number`;
-    if (/^(t|T|type|type-not)$/.test(name) && !/^[a-z0-9]+$/.test(v))
-      return `${name} takes a type name`;
-    if (name === 'e' || name === 'regexp') pattern = true;
+    if (name === 'e') pattern = true;
     return undefined;
   };
-  for (let i = tool === 'git' ? 2 : 1; i < toks.length; i++) {
+  for (let i = 2; i < toks.length; i++) {
     const t = toks[i]!;
     if (rest || !t.startsWith('-') || t === '-') {
       operands.push(t);
@@ -298,7 +265,7 @@ export function searchProblem(command: string, tree: Tree): string | undefined {
       break;
     }
   }
-  // with no -e/--regexp, the first operand before `--` is the pattern
+  // with no -e, the first operand before `--` is the pattern
   if (!pattern && !operands.length) return 'no pattern';
   const paths = pattern ? operands : operands.slice(1);
   if (!paths.length) return `no repo path named in "${command.slice(0, 40)}"`;
@@ -507,7 +474,7 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
         !r.cells.some(
           (c) =>
             /fails when:\s*\S.{2,}/i.test(c) &&
-            !/fails when:\s*(n\/a|never|nothing|none|-)\b/i.test(c),
+            !/fails when:\s*(n\/a|never|nothing|none|-)\s*$/i.test(c),
         )
       )
         add(r.line, 'matrix', 'no `fails when: <mutation>`');

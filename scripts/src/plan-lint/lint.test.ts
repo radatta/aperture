@@ -26,7 +26,7 @@ const SECTIONS: Record<string, string> = {
 | 2 | \`packages/x/src/new.ts\` (new) | commit |`,
   'Change census': `| ID | State / contract | Writers | Readers | Searches → hits | Change |
 | --- | --- | --- | --- | --- | --- |
-| C1 | \`doneAt\` | \`packages/x/src/write.ts:40\` | \`packages/x/src/list.ts:12\` | \`git grep -n -e doneAt -- packages docs\` → 9; \`rg -n -e "'doneAt'" -e done_at packages tools\` → 0 | optional |`,
+| C1 | \`doneAt\` | \`packages/x/src/write.ts:40\` | \`packages/x/src/list.ts:12\` | \`git grep -n -e doneAt -- packages docs\` → 9; \`git grep -n -e "'doneAt'" -e done_at -- packages tools\` → 0 | optional |`,
   Unknowns: `| ID | Claim | Version | Evidence |
 | --- | --- | --- | --- |
 | U1 | a key over 1 KB is refused | tool 3.2 | searched: https://example.com/docs/limits |
@@ -134,7 +134,7 @@ describe('census', () => {
   const row = (searches: string, writers = '`packages/x/src/write.ts:40`', readers = 'none') =>
     `| ID | State | Writers | Readers | Searches → hits | Change |\n| --- | --- | --- | --- | --- | --- |\n| C1 | x | ${writers} | ${readers} | ${searches} | y |`;
   const g1 = '`git grep -n -e doneAt -- packages`';
-  const g2 = '`rg -n -e done_at tools`';
+  const g2 = '`git grep -n -e done_at -- tools`';
 
   it('full needs two counted searches, light one', () => {
     expect(checks(plan('full', { 'Change census': row(`${g1} → 3`) }))).toEqual([
@@ -154,14 +154,14 @@ describe('census', () => {
   it('accepts a 0 count and an ASCII arrow; rejects a missing count', () => {
     expect(checks(plan('full', { 'Change census': row(`${g1} → 0; ${g2} -> 12`) }))).toEqual([]);
     expect(checks(plan('full', { 'Change census': row(`${g1} → 3; ${g2}`) }))).toContain(
-      'census: no hit count after "rg -n -e done_at tools"',
+      'census: no hit count after "git grep -n -e done_at -- tools"',
     );
   });
 
   it('the census row reports what searchProblem finds', () => {
     expect(
       checks(plan('full', { 'Change census': row(`\`find packages -name x\` → 2; ${g2} → 1`) })),
-    ).toEqual(['census: not a census search: "find packages -name x" (git grep or rg)']);
+    ).toEqual(['census: not a census search: "find packages -name x" (git grep)']);
   });
 });
 
@@ -175,20 +175,22 @@ describe('searchProblem', () => {
       "git grep -n -i -e retry-after -e 'Retry After' -- packages tools CLAUDE.md",
       "git grep -n -e '--autocompact' -e '?.lanes' -- packages docs",
       'git grep -n doneAt -- docs packages',
-      'git grep -n --regexp=doneAt docs',
       'git grep -nw -C 2 -e doneAt docs/x.md',
-      'rg -n doneAt docs',
-      "rg -n -g '*.ts' -t ts -e doneAt packages/x/src/",
-      'rg -n "done at" ./docs',
-      'rg -nA3 doneAt docs',
+      'git grep -n --untracked -e doneAt -- packages/x/src/',
+      'git grep -n "done at" ./docs',
+      'git grep -nA3 doneAt docs',
+      'git grep -n --max-count=2 -e doneAt docs',
     ])
       expect(p(cmd), cmd).toBeUndefined();
   });
 
-  it('takes only git grep and rg', () => {
+  it('takes only git grep: grep -r and rg read ignored files', () => {
     expect(p('grep -rn doneAt docs')).toBe(
-      'not a census search: "grep -rn doneAt docs" (git grep or rg)',
+      'not a census search: "grep -rn doneAt docs" (git grep)',
     );
+    // rg's -g glob, or an ignored path named outright, overrides .gitignore
+    expect(p("rg -n -e key -g '*' docs")).toMatch(/^not a census search/);
+    expect(p('rg -n x localNotes')).toMatch(/^not a census search/);
     expect(p('find packages -name x')).toMatch(/^not a census search/);
   });
 
@@ -196,23 +198,23 @@ describe('searchProblem', () => {
     expect(p('git grep -n doneAt docs | wc -l')).toBe(
       'a pipe in a search hides its count: one command, one -e per form',
     );
-    expect(p('rg -n x docs|sh')).toMatch(/^a pipe/);
+    expect(p('git grep -n x docs|sh')).toMatch(/^a pipe/);
     for (const cmd of [
-      'rg -n x docs > localNotes/decisions.md',
-      'rg -n x docs ;sh',
-      'rg -n x docs&&sh',
-      'rg -n x docs &',
-      'rg -f <(sh) docs',
-      'rg -n $(id) docs',
-      'rg -n `id` docs',
-      'rg -n x docs/*.md',
-      'rg -n x ~/docs',
+      'git grep -n x docs > localNotes/decisions.md',
+      'git grep -n x docs ;sh',
+      'git grep -n x docs&&sh',
+      'git grep -n x docs &',
+      'git grep -n -e x <(sh) docs',
+      'git grep -n $(id) docs',
+      'git grep -n `id` docs',
+      'git grep -n x docs/*.md',
+      'git grep -n x ~/docs',
     ])
       expect(p(cmd), cmd).toMatch(/^shell syntax outside quotes/);
-    expect(p('rg -n "$(id)" docs')).toMatch(/inside double quotes/);
-    expect(p("rg -n 'x docs")).toBe('an unclosed quote');
+    expect(p('git grep -n "$(id)" docs')).toMatch(/inside double quotes/);
+    expect(p("git grep -n 'x docs")).toBe('an unclosed quote');
     // inside single quotes nothing is shell syntax
-    expect(p("rg -n -e 'a|b;$(c)' docs")).toBeUndefined();
+    expect(p("git grep -n -e 'a|b;$(c)' docs")).toBeUndefined();
   });
 
   it('refuses flags off the list, spelled any way', () => {
@@ -223,36 +225,62 @@ describe('searchProblem', () => {
       'git grep --open-files-in-pager=vim -e x docs',
       'git grep --open -e x docs',
       'git grep --no-index -e x docs',
-      'rg --pre ./run.sh x docs',
-      'rg --pre-glob=x x docs',
-      'rg -z x docs',
-      'rg -uu x docs',
-      'rg --no-ignore x docs',
-      'rg --hidden x docs',
-      'rg -L x docs',
-      'rg -f patterns docs',
+      'git grep --no-exclude-standard --untracked -e x docs',
+      'git grep --recurse-submodules -e x docs',
+      'git grep -f patterns docs',
+      // not git grep options at all (git 2.55 exits 129), so a count beside them is invented
+      'git grep --regexp=x docs',
+      'git grep -x -e x docs',
+      'git grep --line-regexp -e x docs',
     ])
       expect(p(cmd), cmd).toMatch(/is not on the census list/);
-    expect(p('rg -A x docs')).toBe('A takes a number');
-    expect(p('rg -t "a b" x docs')).toBe('t takes a type name');
-    expect(p('rg -n -e')).toBe('e needs a value');
+    expect(p('git grep -A x docs')).toBe('A takes a number');
+    expect(p('git grep -n -e')).toBe('e needs a value');
   });
 
   it('the first operand is the pattern unless -e gave one', () => {
     // these search the whole root: `docs` is the pattern
-    expect(p('rg -n docs')).toBe('no repo path named in "rg -n docs"');
-    expect(p('git grep -n packages')).toBe('no repo path named in "git grep -n packages"');
+    expect(p('git grep -n docs')).toBe('no repo path named in "git grep -n docs"');
     expect(p('git grep -n -e packages doneAt')).toBe('"doneAt" is not in the checkout');
     expect(p('git grep -n')).toBe('no pattern');
   });
 
   it('every path is a plain existing repo path', () => {
-    expect(p('rg -n x .')).toBe('a search of the whole root: name the directories');
-    expect(p('rg -n x ./')).toBe('a search of the whole root: name the directories');
-    expect(p('rg -n x docs/typodir')).toBe('"docs/typodir" is not in the checkout');
-    expect(p('rg -n x docs packages/nope')).toBe('"packages/nope" is not in the checkout');
+    expect(p('git grep -n x .')).toBe('a search of the whole root: name the directories');
+    expect(p('git grep -n x ./')).toBe('a search of the whole root: name the directories');
+    expect(p('git grep -n x docs/typodir')).toBe('"docs/typodir" is not in the checkout');
+    expect(p('git grep -n x docs packages/nope')).toBe('"packages/nope" is not in the checkout');
     for (const op of ['docs/..', '/workspace', '/etc', 'docs/../..', ':/docs', 'cdk/.secrets'])
       expect(p(`git grep -n -e x -- ${op}`), op).toMatch(/is not a plain repo path/);
+  });
+});
+
+describe('secrets and ports', () => {
+  const secret = ['cdk', '.secrets', 'stage.json'].join('/');
+
+  it('a path claim through a secrets dir is refused before anything reads it', () => {
+    const read: string[] = [];
+    const spy: Tree = {
+      ...tree,
+      topLevel: new Set([...tree.topLevel, 'cdk']),
+      exists: () => true,
+      lineCount: (q) => (read.push(q), 10),
+    };
+    const problems = lint(plan('full', {}, `See \`${secret}:1\`.`), spy).problems.map(
+      (x) => x.message,
+    );
+    expect(problems).toContain(`\`${secret}:1\`: not a plain repo path (no .. or .secrets)`);
+    expect(read).not.toContain(secret);
+  });
+
+  it('a searched: URL with an explicit port is refused', () => {
+    const port = SECTIONS.Unknowns!.replace(
+      'https://example.com/docs/limits',
+      'https://example.com:9000/a',
+    );
+    expect(checks(plan('full', { Unknowns: port }))).toEqual([
+      'unknown: searched: a URL with an explicit port (8080 pauses the container): link the public page',
+    ]);
   });
 });
 
@@ -260,7 +288,7 @@ describe('census writers and readers', () => {
   const row = (searches: string, writers = '`packages/x/src/write.ts:40`', readers = 'none') =>
     `| ID | State | Writers | Readers | Searches → hits | Change |\n| --- | --- | --- | --- | --- | --- |\n| C1 | x | ${writers} | ${readers} | ${searches} | y |`;
   const g1 = '`git grep -n -e doneAt -- packages`';
-  const g2 = '`rg -n -e done_at tools`';
+  const g2 = '`git grep -n -e done_at -- tools`';
 
   it('needs path:line or none for writers and readers', () => {
     expect(

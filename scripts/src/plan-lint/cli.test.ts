@@ -24,7 +24,7 @@ none
 
 | ID | State | Writers | Readers | Searches → hits | Change |
 | --- | --- | --- | --- | --- | --- |
-| C1 | a phrase | \`docs/a.md:2\` | none | \`rg -n -e phrase docs\` → 1 | reworded |
+| C1 | a phrase | \`docs/a.md:2\` | none | \`git grep -n -e phrase -- docs\` → 1 | reworded |
 
 ## Unknowns
 
@@ -92,12 +92,10 @@ describe('plan-lint cli', () => {
   });
 
   it('problems: exit 1, one file:line: check: message line each, sorted, then the summary', () => {
-    const bad = CLEAN.replace('`docs/a.md:2`', '`docs/a.md:9`')
-
-      .replace(
-        '| 1 | edit | build | 5–10 | no history |',
-        '| 1 | edit | build | soon | no history |',
-      );
+    const bad = CLEAN.replace('`docs/a.md:2`', '`docs/a.md:9`').replace(
+      '| 1 | edit | build | 5–10 | no history |',
+      '| 1 | edit | build | soon | no history |',
+    );
     writeFileSync(join(root, 'p.md'), bad);
     expect(main(['p.md'], log, root)).toBe(1);
     expect(out).toEqual([
@@ -143,6 +141,10 @@ describe('plan-lint cli', () => {
     expect(t.exists('docs/A.md')).toBe(false);
     expect(t.exists('Docs/a.md')).toBe(false);
     expect(t.exists('docs/../docs/a.md')).toBe(false);
+    // a secrets dir never exists to the lint, so nothing counts its lines
+    mkdirSync(join(root, 'docs/.secrets'));
+    writeFileSync(join(root, 'docs/.secrets/k'), 'x\n');
+    expect(t.exists('docs/.secrets/k')).toBe(false);
   });
 
   it('under pnpm plan-lint, a relative file is relative to where it was typed', () => {
@@ -166,7 +168,10 @@ describe('plan-lint cli', () => {
     const marker = join(root, 'ran-marker');
     writeFileSync(
       join(root, 'p.md'),
-      CLEAN.replace('`rg -n -e phrase docs`', `\`rg -n -e phrase docs; touch ${marker}\``),
+      CLEAN.replace(
+        '`git grep -n -e phrase -- docs`',
+        `\`git grep -n -e phrase -- docs; touch ${marker}\``,
+      ),
     );
     let code = 0;
     try {

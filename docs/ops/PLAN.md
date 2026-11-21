@@ -50,8 +50,9 @@ flag, a name another file matches on.
 
 - Writers and Readers are `path:line`, or start with `none` (a runtime writer: `none (the Agent tool's launches)`).
 - A search is the exact command in backticks and its count of matching lines, `0` included. The plan reviewer
-  re-runs it, so it is held to an allowlist: one `git grep` or `rg` (tracked or non-ignored files only — never
-  `grep -r`, which reads ignored ones), flags from `SEARCH_FLAGS` in `scripts/src/plan-lint/lint.ts`, patterns in
+  re-runs it, so it is held to an allowlist: one `git grep` (tracked files, or `--untracked` for non-ignored new
+  ones — never `grep -r` or `rg`, which read ignored files through `-g` or a named path), flags from
+  `SEARCH_FLAGS` in `scripts/src/plan-lint/lint.ts`, patterns in
   single quotes when they hold anything the shell reads, and the repo paths it searched — each one existing,
   relative, with no `..` (never the root as a whole). No pipe (one `-e` per form), `;`, `&`, redirection or `$`
   outside quotes. Searches in one cell are separated by `;`.
