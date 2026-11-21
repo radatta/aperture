@@ -29,6 +29,7 @@
     "mailroom": "node scripts/src/mailroom/cli.ts",
     "lanes": "node scripts/src/lane/cli.ts",
     "usage": "node scripts/src/usage/cli.ts",
+    "plan-lint": "node scripts/src/plan-lint/cli.ts",
     "vapid-keys": "node scripts/src/vapid-keys.ts"
   },
   "devDependencies": {

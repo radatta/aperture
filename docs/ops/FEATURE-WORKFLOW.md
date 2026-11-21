@@ -86,7 +86,7 @@ hub message (the checkpoints stay).
    it can't run).
 2. **Plan** — the `Plan` agent; collaborative: `[ask-maintainer]` for the model, with `fable` as the pick;
    autonomous: `fable` unless named. **One Plan per lane**, plus one per re-plan (`docs/ops/REVIEW.md` → _The pick_,
-   _Stop and ask_): a review fix pass, a dev fix or a rebase runs under the lane's plan, whatever its file count. The plan drafts the feature's **dev-test matrix**: rows of entry point (UI, API,
+   _Stop and ask_): a review fix pass, a dev fix or a rebase runs under the lane's plan, whatever its file count. The plan takes `docs/ops/PLAN.md`'s shape (full or light), passes `pnpm plan-lint` and gets one `plan-reviewer` pass before `[kickoff]` (_After Plan_ there). The plan drafts the feature's **dev-test matrix**: rows of entry point (UI, API,
    MCP, iOS, …) × case, nominal and edge, walked through the edge-case checklist (empty/max/invalid, cancel, repeat,
    survives reload, neighbour unaffected, ownership). Each row is proven on dev through its own entry point (`ios`
    rows on the Simulator, `docs/ops/IOS-CHECK.md`), covered off dev by a named test (only a failure dev can't produce,
