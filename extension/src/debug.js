@@ -22,7 +22,11 @@
     'button,[role=button],[role=tab],[role=tabpanel],[role=switch],[role=checkbox],[role=radio],[role=spinbutton],[role=option],[role=menuitem],input,select,[contenteditable],[tabindex]';
   const KEYS = /^([0-9]|Arrow(Up|Down|Left|Right)|Tab|Enter|Backspace|Delete|Escape)$/;
   const LIVE = '[role=alert],[role=status],[aria-live]';
-  const EDITOR = '.monaco-editor,.monaco-aria-container,[contenteditable]';
+  // Where typed text lives: the code editor, an editable region, a textarea. Never described, nor any text holding one.
+  const EDITOR =
+    '.monaco-editor,.monaco-aria-container,[contenteditable]:not([contenteditable=false]),textarea';
+  const FIELDS = `input,select,${EDITOR}`;
+  const holds = (el, q) => !!(el.matches && (el.matches(q) || el.querySelector(q)));
   // The keys whose values are kept: LeetCode's timer (its heartbeat aside: it changes every second, and `vis` carries
   // it), its solve sessions and the language. Any other key logs its length alone — it could hold a code draft.
   const valued = (k) =>
@@ -40,8 +44,9 @@
   let recording = false;
 
   const clip = (s, n) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
+  let seq = 0;
   function log(type, data) {
-    const e = { t: Date.now(), type, pg: PAGE, ...(data || {}) };
+    const e = { t: Date.now(), type, pg: PAGE, n: seq++, ...(data || {}) };
     if (!known) {
       if (early.length < 200) early.push(e);
     } else if (enabled) fresh.push(e);
@@ -51,28 +56,45 @@
   async function write(batch) {
     const got = await api.storage.local.get(null);
     const tails = Object.keys(got).filter((k) => k.startsWith(TAIL));
+    const seen = new Set();
     const all = (Array.isArray(got.debugLog) ? got.debugLog : [])
       .concat(...tails.map((k) => (Array.isArray(got[k]) ? got[k] : [])), batch)
+      .filter((e) => {
+        const id = e && e.pg != null ? `${e.pg}.${e.n}` : null; // a tail folded twice (a page left mid-write)
+        if (id === null) return true;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      })
       .sort((a, b) => a.t - b.t);
     await api.storage.local.set({ debugLog: all.slice(-MAX) });
     if (tails.length) await api.storage.local.remove(tails);
   }
+  // The batch in flight stays in `pending` until written, so a page leaving mid-write still saves it (flushTail).
+  let pending = [];
   setInterval(async () => {
-    if (!fresh.length) return;
-    const batch = fresh;
+    if (!fresh.length || pending.length) return;
+    pending = fresh;
     fresh = [];
+    const batch = pending;
     try {
       const locks = globalThis.navigator && navigator.locks;
       if (locks) await locks.request('aperture-debug-log', () => write(batch));
       else await write(batch);
-    } catch {}
+    } catch {
+      // A lock refused (an isolated-world quirk) writes unlocked rather than dropping the batch.
+      try {
+        await write(batch);
+      } catch {}
+    }
+    pending = [];
   }, 2000);
   // Leaving (a reload, a close): one write with no read first, to its own key, which the next write folds in — the page
   // may be gone before a read comes back.
   let tails = 0;
   function flushTail() {
-    if (!fresh.length) return;
-    const batch = fresh;
+    if (!fresh.length && !pending.length) return;
+    const batch = pending.concat(fresh);
     fresh = [];
     try {
       api.storage.local.set({ [`${TAIL}${PAGE}.${tails++}`]: batch }).catch(() => {});
@@ -104,9 +126,10 @@
         attrs[a.name] = clip(a.value, 120);
     // An icon button's own text is empty and its <svg> falls past the outerHTML cut: name the icon.
     const svg = el.querySelector && el.querySelector('svg');
+    const field = holds(el, FIELDS); // a field's value sits in its html; typed text in its text
     return {
       tag: el.tagName.toLowerCase(),
-      text: clip((el.textContent || '').trim(), 60),
+      text: holds(el, EDITOR) ? null : clip((el.textContent || '').trim(), 60),
       attrs,
       icon: svg
         ? {
@@ -114,13 +137,13 @@
             class: clip(svg.getAttribute('class'), 120),
           }
         : null,
-      html: clip(el.outerHTML, 400),
+      html: field ? null : clip(el.outerHTML, 400),
       path: cssPath(el),
     };
   }
   // On a failed Start step: every control near where LeetCode's reset and timer live, so the export names them.
   function dumpControls() {
-    const pick = (q) => [...document.querySelectorAll(q)].slice(0, 30).map(describe);
+    const pick = (q) => [...document.querySelectorAll(q)].filter(shown).slice(0, 30).map(describe);
     log('controls', {
       editor: pick('#editor button'),
       labelled: pick('button[aria-label]'),
@@ -143,6 +166,8 @@
     return up;
   };
   const ours = (el) => !!el.closest('aperture-lc-overlay,.monaco-editor');
+  const shown = (el) =>
+    !ours(el) && !el.closest(EDITOR) && !(el.matches('input') && el.type === 'hidden');
   // The timer's toolbar: an element within 5 levels of one labelled like a timer control or showing a clock,
   // in a small subtree (never the whole page).
   function timerArea(el) {
@@ -171,21 +196,25 @@
     ['name', 'id', 'autocomplete', 'aria-label'].some((a) => SECRET.test(el.getAttribute(a) || ''));
   // A control as the duration fields need it (editable text never reaches here: `shown`).
   const control = (el) => {
-    const c = { ...lite(el), text: clip((el.textContent || '').trim(), 40), path: cssPath(el) };
+    const c = {
+      ...lite(el),
+      text: holds(el, EDITOR) ? null : clip((el.textContent || '').trim(), 40),
+      path: cssPath(el),
+    };
     if (el.matches('input,select') && !secretField(el)) {
       const v = String(el.value);
-      if (DURATION.test(v)) c.value = v;
+      // A select's value is one of LeetCode's own options, never typed.
+      if (DURATION.test(v) || el.matches('select')) c.value = clip(v, 40);
       else c.valueLen = v.length;
+      if (el.type === 'checkbox' || el.type === 'radio') c.checked = !!el.checked;
       for (const k of ['min', 'max', 'step', 'inputmode', 'placeholder', 'name'])
         if (el.hasAttribute(k)) c[k] = clip(el.getAttribute(k), 40);
       c.disabled = !!el.disabled;
     }
     return c;
   };
-  const shown = (el) =>
-    !ours(el) && !el.closest(EDITOR) && !(el.matches('input') && el.type === 'hidden');
   function dumpPopup(p, why) {
-    const editor = !!p.querySelector(EDITOR);
+    const editor = holds(p, EDITOR);
     log('dom.popup', {
       why,
       popup: lite(p),
@@ -242,7 +271,12 @@
             ev,
             trusted: e.isTrusted,
             at,
-            target: ctl && shown(ctl) ? describe(ctl) : null,
+            target:
+              ctl && shown(ctl)
+                ? ctl.matches('input,select')
+                  ? control(ctl)
+                  : describe(ctl)
+                : null,
             hit: lite(t),
             up: ancestors(t, 3),
           });
@@ -269,9 +303,11 @@
     document.addEventListener(
       'keydown',
       (e) => {
-        if (!enabled || !KEYS.test(e.key) || !where(e.target)) return;
-        log('key', { key: e.key, trusted: e.isTrusted, target: lite(e.target) });
-        settleDump(e.target, 'key');
+        const t = e.target;
+        if (!enabled || !KEYS.test(e.key) || !where(t) || !shown(t)) return;
+        if (t.matches && t.matches('input') && secretField(t)) return; // a password's or a code's digits
+        log('key', { key: e.key, trusted: e.isTrusted, target: lite(t) });
+        settleDump(t, 'key');
       },
       true,
     );
@@ -313,6 +349,16 @@
     // fields changing state (a class only on a control: a tab may switch by its classes alone).
     const alert = (a) =>
       log('dom.alert', { el: lite(a), text: clip((a.textContent || '').trim(), 120) });
+    // A clock ticking in a live region or the title would log every second: only a change of shape counts.
+    const shape = (x) => (x || '').trim().replace(/\d/g, '#');
+    const lastShape = new WeakMap();
+    let titleShape = shape(document.title);
+    const reshaped = (a) => {
+      const sh = shape(a.textContent);
+      if (lastShape.get(a) === sh) return false;
+      lastShape.set(a, sh);
+      return true;
+    };
     const live = (node) => {
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
       const a = el && el.closest(LIVE);
@@ -326,16 +372,31 @@
           const el = m.target;
           if (el.nodeType !== 1 || ours(el) || el.closest(EDITOR) || !el.closest(POPUP)) continue;
           if (m.attributeName === 'class' && !el.matches(CONTROLS)) continue;
+          const v = el.getAttribute(m.attributeName);
+          // React mirrors a field's typed value into its value attribute: the field rule, as control() reads it.
+          if (m.attributeName === 'value') {
+            if (secretField(el)) continue;
+            const keep = v == null || DURATION.test(v) || el.matches('select,option');
+            log('dom.state', {
+              el: lite(el),
+              attr: 'value',
+              ...(keep ? { value: clip(v, 40) } : { valueLen: v.length }),
+            });
+            continue;
+          }
           log('dom.state', {
             el: lite(el),
             attr: m.attributeName,
-            value: clip(el.getAttribute(m.attributeName), m.attributeName === 'class' ? 160 : 40),
+            value: clip(v, m.attributeName === 'class' ? 160 : 40),
           });
           continue;
         }
         const tgt = m.target.nodeType === 1 ? m.target : m.target.parentElement;
         if (tgt && tgt.closest('title')) {
-          log('title', { text: clip(document.title, 80) });
+          if (shape(document.title) !== titleShape) {
+            titleShape = shape(document.title);
+            log('title', { text: clip(document.title, 80) });
+          }
           continue;
         }
         // Text into a live region already on the page (the accessible way to announce, perhaps the alarm at 0).
@@ -352,11 +413,12 @@
           const alerts = n.matches(LIVE) ? [n] : [...n.querySelectorAll(LIVE)];
           for (const x of alerts.filter((x) => !ours(x) && !x.closest(EDITOR)).slice(0, 5)) {
             changed.delete(x);
+            lastShape.set(x, shape(x.textContent));
             alert(x);
           }
         }
       }
-      for (const a of [...changed].slice(0, 5)) alert(a);
+      for (const a of [...changed].filter(reshaped).slice(0, 5)) alert(a);
     }).observe(document.documentElement, {
       childList: true,
       subtree: true,
@@ -387,7 +449,7 @@
           e.target &&
           e.target.closest &&
           e.target.closest('button,[role=button],[role=tab],[role=menuitem],a');
-        if (el && !el.closest('aperture-lc-overlay')) log('click', describe(el));
+        if (el && shown(el)) log('click', describe(el));
       },
       true,
     );
@@ -403,9 +465,7 @@
             log('dom.dialog', {
               dialog: {
                 ...lite(d),
-                text: d.querySelector(`input,select,textarea,${EDITOR}`)
-                  ? null
-                  : clip((d.textContent || '').trim(), 60),
+                text: holds(d, FIELDS) ? null : clip((d.textContent || '').trim(), 60),
                 path: cssPath(d),
               },
               buttons: [...d.querySelectorAll('button')].filter(shown).slice(0, 10).map(describe),

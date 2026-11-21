@@ -1785,6 +1785,7 @@ describe('the debug log’s submit probe', () => {
           'keyMs',
           'keys',
           'mod',
+          'n', // the page's entry sequence (every entry)
           'note',
           'open',
           'pg', // the page's random id (every entry)
@@ -1911,10 +1912,27 @@ describe('the debug log’s timer probes', () => {
       'beforeend',
       '<div role="dialog" data-state="open" data-fake="diff"><div class="monaco-editor"><button>def solve(): pass</button></div><button>Close</button></div>',
     );
+    // A textarea pop-up (a report form): Radix content carries tabindex=-1, so a press on its prose climbs to it.
+    d.body.insertAdjacentHTML(
+      'beforeend',
+      '<div role="dialog" tabindex="-1" data-state="open" data-fake="note"><p>Report</p><textarea>a typed draft</textarea>' +
+        '<select aria-label="level"><option value="Easy" selected>Easy</option></select></div>',
+    );
     await settle(10);
     const email = d.querySelector('input[type=email]') as HTMLInputElement;
     email.value = 'other@example.com';
     email.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+    // React mirrors typed text into the value attribute; a press on the field; a press on the note's prose.
+    email.setAttribute('value', 'mirror@example.com');
+    mouse(email, 'mousedown');
+    mouse(d.querySelector('[data-fake=note] p')!, 'mousedown');
+    const pw = d.querySelector('input[type=password]')!;
+    pw.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: '7', bubbles: true }));
+    // A ticking clock in the title logs once; a new shape logs again.
+    for (const title of ['12:01 Two Sum', '12:02 Two Sum', '12:03 Two Sum', 'Time’s up']) {
+      d.title = title;
+      await settle(5);
+    }
     p.w.dispatchEvent(
       new p.w.StorageEvent('storage', { key: 'draft_code_1', newValue: 'class Solution: pass' }),
     );
@@ -1929,6 +1947,8 @@ describe('the debug log’s timer probes', () => {
     for (const secret of [
       'someone@',
       'other@',
+      'mirror@',
+      'typed draft',
       'hiddenvalue1',
       'pw-value-1',
       'private note',
@@ -1954,6 +1974,21 @@ describe('the debug log’s timer probes', () => {
     expect(ctl[1]).not.toHaveProperty('value');
     expect(ctl[3]).not.toHaveProperty('value'); // named like a credential
     expect(diff).toMatchObject({ text: null, hasEditor: true });
+    const note = of(ext, 'dom.popup').find(
+      (e) => (e.popup as { attrs: Record<string, string> }).attrs['data-fake'] === 'note',
+    )!;
+    expect(note).toMatchObject({ text: null, hasEditor: true });
+    expect(note.controls).toEqual(
+      expect.arrayContaining([expect.objectContaining({ value: 'Easy', tag: 'select' })]),
+    );
+    expect(of(ext, 'dom.state')).toEqual(
+      expect.arrayContaining([expect.objectContaining({ attr: 'value', valueLen: 18 })]),
+    );
+    expect(of(ext, 'press').find((e) => e.ev === 'mousedown')).toMatchObject({
+      target: { tag: 'input', valueLen: 17 },
+    });
+    expect(of(ext, 'key')).toEqual([]);
+    expect(of(ext, 'title').map((e) => e.text)).toEqual(['12:01 Two Sum', 'Time’s up']);
     expect((diff!.controls as unknown[]).length).toBe(1);
     expect(of(ext, 'input')).toMatchObject([{ control: { valueLen: 17 } }]);
     expect(of(ext, 'storage.event')).toEqual([
@@ -2003,6 +2038,20 @@ describe('the debug log’s timer probes', () => {
     expect(all(ext).every((e, i, a) => i === 0 || (a[i - 1]!.t as number) <= (e.t as number))).toBe(
       true,
     );
+    // A tail folded twice (the page left between the write and the tail's removal) keeps each entry once.
+    const before = all(ext).length;
+    const again = all(ext).slice(-2);
+    await ext.local.set({ 'debugTail.old.0': again });
+    // A Web Lock that refuses writes unlocked rather than dropping the batch.
+    Object.defineProperty(p.w.navigator, 'locks', {
+      configurable: true,
+      value: { request: () => Promise.reject(new Error('refused')) },
+    });
+    mouse(toggle, 'mousedown');
+    await settle(2500);
+    expect(all(ext).length).toBe(before + 1);
+    expect('debugTail.old.0' in ext.local.data).toBe(false);
+    expect(of(ext, 'oc').some((e) => JSON.stringify(e.keys).includes('debugTail'))).toBe(false);
   }, 20_000);
 
   it('describes nothing inside the code editor, and records nothing with Debug mode off', async () => {
