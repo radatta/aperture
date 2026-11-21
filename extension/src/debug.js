@@ -80,10 +80,21 @@
     const batch = pending;
     try {
       const locks = globalThis.navigator && navigator.locks;
-      if (locks) await locks.request('aperture-debug-log', () => write(batch));
-      else await write(batch);
+      if (!locks) await write(batch);
+      else {
+        let timer;
+        const hung = new Promise(
+          (_, no) => (timer = setTimeout(() => no(new Error('hung')), 5000)),
+        );
+        try {
+          await Promise.race([locks.request('aperture-debug-log', () => write(batch)), hung]);
+        } finally {
+          clearTimeout(timer);
+        }
+      }
     } catch {
-      // A lock refused (an isolated-world quirk) writes unlocked rather than dropping the batch.
+      // A lock refused or hung (an isolated-world quirk, a holder frozen in the back/forward cache) writes unlocked
+      // rather than dropping the batch or stalling the log.
       try {
         await write(batch);
       } catch {}
@@ -192,9 +203,13 @@
   // A field's value only when it reads like a duration (a short number); else its length. Never a hidden field, a
   // password or one named like a credential.
   const DURATION = /^[\d:.\s]{0,8}$/;
+  const SECRET_FIELD = /one-time|otp|passcode|pin\b/i; // a one-time code reads like a duration
   const secretField = (el) =>
     el.type === 'password' ||
-    ['name', 'id', 'autocomplete', 'aria-label'].some((a) => SECRET.test(el.getAttribute(a) || ''));
+    ['name', 'id', 'autocomplete', 'aria-label'].some((a) => {
+      const v = el.getAttribute(a) || '';
+      return SECRET.test(v) || SECRET_FIELD.test(v);
+    });
   // A control as the duration fields need it (editable text never reaches here: `shown`).
   const control = (el) => {
     const c = {
@@ -306,7 +321,7 @@
       (e) => {
         const t = e.target;
         if (!enabled || !KEYS.test(e.key) || !where(t) || !shown(t)) return;
-        if (t.matches && t.matches('input') && secretField(t)) return; // a password's or a code's digits
+        if (t.matches && t.matches('input') && secretField(t)) return; // a password's or a one-time code's digits
         log('key', { key: e.key, trusted: e.isTrusted, target: lite(t) });
         settleDump(t, 'key');
       },
@@ -363,7 +378,9 @@
     const live = (node) => {
       const el = node && (node.nodeType === 1 ? node : node.parentElement);
       const a = el && el.closest(LIVE);
-      return a && !ours(a) && !a.closest(EDITOR) ? a : null;
+      return a && !ours(a) && !a.closest(EDITOR) && !el.closest(EDITOR) && !holds(a, EDITOR)
+        ? a
+        : null;
     };
     new MutationObserver((muts) => {
       if (!enabled) return;
@@ -412,14 +429,23 @@
           );
           for (const p of opened) dumpPopup(p, 'open');
           const alerts = n.matches(LIVE) ? [n] : [...n.querySelectorAll(LIVE)];
-          for (const x of alerts.filter((x) => !ours(x) && !x.closest(EDITOR)).slice(0, 5)) {
+          for (const x of alerts
+            .filter((x) => !ours(x) && !x.closest(EDITOR) && !holds(x, EDITOR))
+            .slice(0, 5)) {
             changed.delete(x);
             lastShape.set(x, shape(x.textContent));
             alert(x);
           }
         }
       }
-      for (const a of [...changed].filter(reshaped).slice(0, 5)) alert(a);
+      let logged = 0; // marked seen only once logged, so a region past the cap logs next time
+      for (const a of changed) {
+        if (logged >= 5) break;
+        if (reshaped(a)) {
+          alert(a);
+          logged++;
+        }
+      }
     }).observe(document.documentElement, {
       childList: true,
       subtree: true,

@@ -1916,8 +1916,10 @@ describe('the debug log’s timer probes', () => {
     d.body.insertAdjacentHTML(
       'beforeend',
       '<div role="dialog" tabindex="-1" data-state="open" data-fake="note"><p>Report</p><textarea>a typed draft</textarea>' +
-        '<select aria-label="level"><option value="Easy" selected>Easy</option></select></div>',
+        '<select aria-label="level"><option value="Easy" selected>Easy</option></select>' +
+        '<input autocomplete="one-time-code" value="482913"></div>',
     );
+    d.body.insertAdjacentHTML('beforeend', '<div role="status" data-fake="clock">12:01</div>');
     await settle(10);
     const email = d.querySelector('input[type=email]') as HTMLInputElement;
     email.value = 'other@example.com';
@@ -1929,8 +1931,10 @@ describe('the debug log’s timer probes', () => {
     const pw = d.querySelector('input[type=password]')!;
     pw.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: '7', bubbles: true }));
     // A ticking clock in the title logs once; a new shape logs again.
+    const clock = d.querySelector('[data-fake=clock]')!;
     for (const title of ['12:01 Two Sum', '12:02 Two Sum', '12:03 Two Sum', 'Time’s up']) {
       d.title = title;
+      clock.textContent = title.replace(' Two Sum', '');
       await settle(5);
     }
     p.w.dispatchEvent(
@@ -1949,6 +1953,7 @@ describe('the debug log’s timer probes', () => {
       'other@',
       'mirror@',
       'typed draft',
+      '482913',
       'hiddenvalue1',
       'pw-value-1',
       'private note',
@@ -1989,6 +1994,12 @@ describe('the debug log’s timer probes', () => {
     });
     expect(of(ext, 'key')).toEqual([]);
     expect(of(ext, 'title').map((e) => e.text)).toEqual(['12:01 Two Sum', 'Time’s up']);
+    // A ticking clock in a live region: its arrival and its change of shape, not every tick.
+    expect(
+      of(ext, 'dom.alert')
+        .filter((e) => (e.el as { attrs: Record<string, string> }).attrs['data-fake'] === 'clock')
+        .map((e) => e.text),
+    ).toEqual(['12:01', 'Time’s up']);
     expect((diff!.controls as unknown[]).length).toBe(1);
     expect(of(ext, 'input')).toMatchObject([{ control: { valueLen: 17 } }]);
     expect(of(ext, 'storage.event')).toEqual([
