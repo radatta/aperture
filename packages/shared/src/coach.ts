@@ -21,9 +21,11 @@ import {
   HELP_LEVELS,
   isCauseTag,
   isSittingOpen,
+  sittingActiveMsAt,
   sittingElapsedMs,
   SITTING_INGEST_WINDOW_MS,
 } from './sittings';
+import type { SittingClock } from './sittings';
 import type {
   AttemptOutcome,
   CauseTag,
@@ -124,14 +126,14 @@ const asDifficulty = (v: string | null): Difficulty | null =>
 // Test sittings never count: a sitting under minPracticeMin with no accepted submit and no peek, or one the user
 // flagged.
 export function countsAsPractice(
-  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'summary' | 'review' | 'idleMs'>,
+  s: SittingClock & Pick<Sitting, 'summary' | 'review'>,
   now: number,
   params: CoachParams = COACH_PARAMS,
 ): boolean {
   if (s.review?.test === true) return false;
   if (s.review?.help === 'solution') return true; // a quick peek is still a peek
   const end = s.endedAt ?? Math.min(now, s.startedAt + SITTING_INGEST_WINDOW_MS);
-  const ms = sittingElapsedMs({ startedAt: s.startedAt, endedAt: end, idleMs: s.idleMs }, now);
+  const ms = sittingElapsedMs({ ...s, endedAt: end }, now);
   return s.summary.firstAcceptedAt !== null || ms >= params.minPracticeMin * 60_000;
 }
 export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help: HelpLevel) {
@@ -142,16 +144,16 @@ export function outcomeOf(accepted: boolean, firstSubmitAccepted: boolean, help:
 // folded before the rule counts nowhere.
 const tracedOf = (s: Sitting['summary']): boolean | null =>
   s.commentTrace ? s.commentTrace === 'traced' : null;
-// A sitting's minutes on its problem: to the first accept (both on the extension's clock), else the whole sitting
-// once it ended; null while it's open with no accept. At least 1.
+// A sitting's minutes on its problem: to the first accept (on the extension's clock), else the whole sitting once it
+// ended; null while it's open with no accept. Less its pauses and idle gaps, like its minutes. At least 1.
 export function sittingTryMinutes(
-  s: Pick<Sitting, 'clientStartedAt' | 'startedAt' | 'endedAt' | 'summary'>,
+  s: SittingClock & Pick<Sitting, 'clientStartedAt' | 'summary'>,
 ): number | null {
   const ms =
     s.summary.firstAcceptedAt !== null
-      ? s.summary.firstAcceptedAt - s.clientStartedAt
+      ? sittingActiveMsAt(s, s.summary.firstAcceptedAt)
       : s.endedAt !== null
-        ? s.endedAt - s.startedAt
+        ? sittingElapsedMs(s, s.endedAt)
         : null;
   return ms === null ? null : Math.max(1, Math.round(ms / 60_000));
 }

@@ -30,6 +30,7 @@ import type {
   SittingReview,
   SittingSummary,
   SittingVerdict,
+  Span,
   Task,
 } from './types';
 
@@ -334,9 +335,9 @@ export function verdictOf(
     (r.correct_answer !== true && v.passed !== null && v.total !== null && v.passed < v.total);
   return wrong ? { ...v, verdict: 'wrong_answer', statusMsg: 'Wrong Answer' } : v;
 }
-// QD_TIMER_STATE (one capture, 2026-11-08): {mode:'reverse', startTimestamp, pauseMs, endMs, status}. The
-// bar read 19:07 while endMs − pauseMs ≈ 19:06, so pauseMs is read as elapsed-at-pause and a running
-// timer as pauseMs + (now − startTimestamp) — an inference until the debug log confirms it.
+// QD_TIMER_STATE: {mode, status, startTimestamp, pauseMs, endMs, isUserPaused, …}. Confirmed by the debug logs (2026-11):
+// running has startTimestamp set and pauseMs null; a pause clears startTimestamp and keeps the elapsed in pauseMs; a
+// resume backdates startTimestamp by it. So elapsed = pauseMs + (now − startTimestamp), in both modes.
 export function lcTimerState(payload: unknown, at: number): LcTimerState | null {
   const s = obj(obj(payload)?.state) ?? obj(payload);
   if (!s) return null;
@@ -348,6 +349,8 @@ export function lcTimerState(payload: unknown, at: number): LcTimerState | null 
     mode: typeof s.mode === 'string' ? s.mode : null,
     status,
     elapsedMs: running ? pauseMs + Math.max(0, at - startTs) : num(s.pauseMs),
+    endMs: num(s.endMs),
+    userPaused: s.isUserPaused === true,
     at,
     raw: s,
   };
@@ -427,6 +430,81 @@ export function headRowOf(
     deletedAt: null,
   };
 }
+// --- LeetCode's timer pauses (docs/areas/recruiting/index.md → Timer pauses) ---
+// Between two reads of one timer run, (Δat − Δelapsed) is exactly the time LeetCode didn't count: each read carries the
+// elapsed to the ms, so the 2 s poll only delays hearing a pause, never blurs it.
+export const SITTING_PAUSES_MAX = 100; // the longest kept
+const PAUSE_SLACK_MS = 1000; // a shortfall under it is a read's rounding, not a pause
+const timerExpired = (t: LcTimerState) =>
+  t.mode === 'reverse' && t.endMs != null && t.elapsedMs !== null && t.elapsedMs >= t.endMs;
+// Counting: running, with an elapsed, and not a countdown past 0 (time after 0 is wall clock, whatever LeetCode writes).
+const timerCounting = (t: LcTimerState | null): t is LcTimerState & { elapsedMs: number } =>
+  !!t && t.status === 'running' && t.elapsedMs !== null && !timerExpired(t);
+export function mergeSpans(spans: readonly Span[]): Span[] {
+  const out: Span[] = [];
+  for (const [a, b] of spans.filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0])) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out;
+}
+const clipSpans = (spans: readonly Span[], lo: number, hi: number): Span[] =>
+  mergeSpans(spans.map(([a, b]): Span => [Math.max(a, lo), Math.min(b, hi)]));
+const spansMs = (spans: readonly Span[]) => mergeSpans(spans).reduce((n, [a, b]) => n + b - a, 0);
+function addPause(pauses: readonly Span[], from: number, to: number): Span[] {
+  if (to - from < PAUSE_SLACK_MS) return [...pauses];
+  const all = mergeSpans([...pauses, [from, to]]);
+  if (all.length <= SITTING_PAUSES_MAX) return all;
+  return mergeSpans(
+    [...all].sort((x, y) => y[1] - y[0] - (x[1] - x[0])).slice(0, SITTING_PAUSES_MAX),
+  );
+}
+const closePause = (pauses: readonly Span[], from: number, to: number) => ({
+  pauses: addPause(pauses, from, Math.max(from, to)),
+  pauseFrom: null,
+});
+// One timer read `b` against the one before (`s.lcTimer`). A pause counts only once the timer was seen counting in this
+// sitting — a paused timer left from another day is never a pause (debug-log 10a, 2026-11-13). A reset (the elapsed
+// drops), an idle or unknown status, or an expired countdown closes an open pause at that read and disarms; the next
+// counting read arms again, and wall clock runs until then.
+export function foldTimer(
+  s: SittingSummary,
+  b: LcTimerState,
+): Pick<SittingSummary, 'pauses' | 'pauseFrom' | 'timerSeen'> {
+  const a = s.lcTimer;
+  const pauses = s.pauses ?? [];
+  const from = s.pauseFrom ?? null;
+  const timerSeen = s.timerSeen === true || timerCounting(b);
+  const ea = a?.elapsedMs ?? null;
+  const eb = b.elapsedMs;
+  const sameRun = ea !== null && eb !== null && eb >= ea - PAUSE_SLACK_MS;
+  const counted = sameRun ? eb! - ea! : 0;
+  const out = (p: Partial<Pick<SittingSummary, 'pauses' | 'pauseFrom'>>) => ({
+    pauses,
+    pauseFrom: from,
+    ...p,
+    timerSeen,
+  });
+  if (b.status === 'pause' && eb !== null && !timerExpired(b)) {
+    if (from !== null) return sameRun ? out({}) : out(closePause(pauses, from, b.at));
+    // Running, then paused: it stopped `counted` after the running read.
+    if (timerCounting(a) && sameRun) return out({ pauseFrom: Math.min(b.at, a.at + counted) });
+    return out({}); // stale, or a pause a Run or Submit already ended
+  }
+  if (timerCounting(b)) {
+    // Paused, then running: it resumed `counted` before this read.
+    if (from !== null) return out(closePause(pauses, from, sameRun ? b.at - counted : b.at));
+    // Running both times, with a shortfall: a pause between the reads, or the page away (LeetCode pauses itself).
+    if (timerCounting(a) && sameRun) {
+      const gap = b.at - a.at - counted;
+      return gap >= PAUSE_SLACK_MS ? out({ pauses: addPause(pauses, b.at - gap, b.at) }) : out({});
+    }
+    return out({});
+  }
+  return from !== null ? out(closePause(pauses, from, b.at)) : out({});
+}
+
 export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummary {
   const next: SittingSummary = {
     ...s,
@@ -446,6 +524,9 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
     next.firstJudgedAt = r.at;
     next.commentTrace = s.commentTrace ?? 'none';
   }
+  // A Run or Submit while LeetCode's timer is paused ends the pause there: they're back at it.
+  if ((r.type === 'run' || r.type === 'submit') && s.pauseFrom != null)
+    Object.assign(next, closePause(s.pauses ?? [], s.pauseFrom, r.at));
   if (r.type === 'run') {
     next.runs = s.runs + 1;
     if (s.submits === 0) next.runsBeforeFirstSubmit = s.runsBeforeFirstSubmit + 1;
@@ -459,7 +540,8 @@ export function foldSummary(s: SittingSummary, r: SittingHeadRow): SittingSummar
       next.submitsBeforeAccepted = s.submits; // failed submits before this one
     }
   } else if (r.type === 'note') next.notes = s.notes + 1;
-  else if (r.type === 'timer') next.lcTimer = r.timer ?? s.lcTimer;
+  else if (r.type === 'timer' && r.timer)
+    Object.assign(next, foldTimer(s, r.timer), { lcTimer: r.timer });
   // A known kind only: a head row stored before 2.2 can still hold a card kind as a plain string.
   else if (r.type === 'coach' && COACH_KINDS.some((k) => k === r.coach?.kind))
     next.coach = foldCoach(s.coach, r.coach!);
@@ -642,30 +724,76 @@ export function reserveBudget<B extends Pick<SittingBudget, 'events' | 'bytes'>>
 }
 
 // --- Metrics (derived, never stored) ---
-// Less the idle gaps its reopens bridged, so coming back hours later never counts the hours.
-export function sittingElapsedMs(
-  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'idleMs'>,
-  now: number,
-): number {
-  return Math.max(0, (s.endedAt ?? now) - s.startedAt - (s.idleMs ?? 0));
+// What a sitting's clock reads. Everything past the start and end is optional, so a partial caller reads as before.
+export type SittingClock = Pick<Sitting, 'startedAt' | 'endedAt'> &
+  Partial<Pick<Sitting, 'clientStartedAt' | 'idleMs' | 'idleGaps' | 'reopenedAt'>> & {
+    summary?: Pick<SittingSummary, 'pauses' | 'pauseFrom' | 'timerSeen'>;
+  };
+// The gaps its reopens bridged, server clock. A head reopened before `idleGaps` has `idleMs` alone: one span ending at
+// its newest reopen, exact for one reopen and the same total for more.
+export const sittingIdleGaps = (s: SittingClock): Span[] =>
+  s.idleGaps ??
+  (s.idleMs
+    ? [
+        [
+          (s.reopenedAt ?? s.startedAt + s.idleMs) - s.idleMs,
+          s.reopenedAt ?? s.startedAt + s.idleMs,
+        ],
+      ]
+    : []);
+// LeetCode's paused stretches moved onto the server clock; an open one runs to `hi`.
+function sittingPauseSpans(s: SittingClock, hi: number): Span[] {
+  const shift = s.startedAt - (s.clientStartedAt ?? s.startedAt);
+  const open = s.summary?.pauseFrom;
+  return [...(s.summary?.pauses ?? []), ...(open != null ? [[open, hi - shift] as Span] : [])].map(
+    ([a, b]): Span => [a + shift, b + shift],
+  );
+}
+// Everything left out of its minutes up to `t` (its end at the latest): the timer's pauses and the idle gaps, unioned so
+// a stretch covered by both counts once, and clipped to the sitting so a future-stamped read can't take time not lived.
+export function sittingAwaySpans(s: SittingClock, t: number): Span[] {
+  const hi = Math.min(s.endedAt ?? t, t);
+  return clipSpans([...sittingPauseSpans(s, hi), ...sittingIdleGaps(s)], s.startedAt, hi);
+}
+// Less the idle gaps its reopens bridged and LeetCode's timer pauses, so coming back hours later, or a break with the
+// timer paused, never counts.
+export function sittingElapsedMs(s: SittingClock, now: number): number {
+  const end = s.endedAt ?? now;
+  return Math.max(0, end - s.startedAt - spansMs(sittingAwaySpans(s, end)));
+}
+// Active time from the Start click to an event's `at` (the extension's clock), less what was away before it.
+export function sittingActiveMsAt(s: SittingClock, clientAt: number): number {
+  const t = clientAt + s.startedAt - (s.clientStartedAt ?? s.startedAt);
+  return Math.max(0, t - s.startedAt - spansMs(sittingAwaySpans(s, t)));
+}
+// The paused part alone (the sitting page's line, live_sitting): the timer's stretches less any idle gap over them.
+export function sittingPause(s: SittingClock, now: number) {
+  const end = s.endedAt ?? now;
+  const idle = spansMs(clipSpans(sittingIdleGaps(s), s.startedAt, end));
+  return {
+    pausedMs: Math.max(0, spansMs(sittingAwaySpans(s, end)) - idle),
+    pausedNow: s.endedAt === null && s.summary?.pauseFrom != null,
+    timerSeen: s.summary?.timerSeen === true,
+  };
 }
 // Whole minutes for display, at least 1.
-export const sittingMinutes = (
-  s: Pick<Sitting, 'startedAt' | 'endedAt' | 'idleMs'>,
-  now: number,
-): number => Math.max(1, msToMin(sittingElapsedMs(s, now)));
+export const sittingMinutes = (s: SittingClock, now: number): number =>
+  Math.max(1, msToMin(sittingElapsedMs(s, now)));
 export interface SittingMetrics {
   firstSubmitAccepted: boolean | null; // null = no submit yet — the headline
   submitsBeforeAccepted: number | null;
   timeToFirstSubmitMs: number | null;
 }
-// Event times are the extension's clock, so time-to-first-submit runs from the click on the same clock.
-export function sittingMetrics(s: Pick<Sitting, 'clientStartedAt' | 'summary'>): SittingMetrics {
+// Event times are the extension's clock, so time-to-first-submit runs from the click on the same clock, less what was
+// away before it (sittingActiveMsAt).
+export function sittingMetrics(
+  s: SittingClock & Pick<Sitting, 'clientStartedAt' | 'summary'>,
+): SittingMetrics {
   const first = s.summary.firstSubmit;
   return {
     firstSubmitAccepted: first ? first.verdict === 'accepted' : null,
     submitsBeforeAccepted: s.summary.submitsBeforeAccepted,
-    timeToFirstSubmitMs: first ? Math.max(0, first.at - s.clientStartedAt) : null,
+    timeToFirstSubmitMs: first ? sittingActiveMsAt(s, first.at) : null,
   };
 }
 
@@ -923,6 +1051,7 @@ export const reopenedSitting = (s: Sitting, now: number): Sitting => ({
   closedBy: null,
   reopenedAt: now,
   idleMs: (s.idleMs ?? 0) + Math.max(0, now - (s.endedAt ?? now)),
+  idleGaps: mergeSpans([...sittingIdleGaps(s), [s.endedAt ?? now, now]]),
   updatedAt: Math.max(now, s.updatedAt + 1),
 });
 // An idle close written at `at` (its last activity + the tail).

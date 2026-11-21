@@ -387,15 +387,19 @@ export interface SittingVerdict {
   at: number; // epoch ms — the event's `at`
 }
 
-// LeetCode's top-bar timer as last read from its localStorage (QD_TIMER_STATE). Semantics are inferred
-// from one capture (lcTimerElapsedMs); `raw` keeps the whole value for when they're confirmed.
+// LeetCode's top-bar timer as last read from its localStorage (QD_TIMER_STATE; sittings.ts lcTimerState). The
+// semantics are confirmed by the debug logs (2026-11); `raw` keeps the whole value (never on a head row).
 export interface LcTimerState {
-  mode: string | null; // 'reverse' = countdown; the stopwatch's name isn't captured yet
-  status: string | null; // 'pause' | running …
-  elapsedMs: number | null;
+  mode: string | null; // 'reverse' = the countdown, 'forward' = the stopwatch
+  status: string | null; // 'running' | 'pause' | 'idle'
+  elapsedMs: number | null; // counted so far, in both modes
+  endMs?: number | null; // a countdown's duration; absent on reads stored before it
+  userPaused?: boolean; // LeetCode's isUserPaused: the pause button, not leaving the page
   at: number;
   raw: unknown;
 }
+// A stretch of time [from, to), epoch ms.
+export type Span = [number, number];
 
 // The head's fold: only Runs, Submits, timer and note events move it (snapshots and replay fold into
 // SittingLive instead, so the frequent writes stay small).
@@ -417,6 +421,11 @@ export interface SittingSummary {
   // The trace (docs/areas/recruiting/index.md → The trace comment): `traced` when a snapshot before the first Run or
   // Submit held a trace comment, `none` once judged without one; absent until then and on sittings folded before it.
   commentTrace?: 'traced' | 'none';
+  // LeetCode's timer not counting (sittings.ts foldTimer), on the extension's clock: the closed stretches, merged, at
+  // most SITTING_PAUSES_MAX, and an open one's start. Absent on summaries folded before them; minutes read as before.
+  pauses?: Span[];
+  pauseFrom?: number | null;
+  timerSeen?: boolean; // a timer read showed it running in this sitting
 }
 
 // The user's LeetCode Start gate (one row): the day it counts (the user's zone, never the client's), that
@@ -483,6 +492,7 @@ export interface Sitting extends BaseEntity {
   closedBy?: 'idle' | null;
   reopenedAt?: number | null; // the newest reopen of an idle-closed sitting (activity on the server clock)
   idleMs?: number; // the gaps its reopens bridged, left out of its minutes (sittingElapsedMs)
+  idleGaps?: Span[]; // those gaps, server clock; absent on heads reopened before them (sittingIdleGaps)
   clientSittingId: string; // the extension's idempotency key for Start
   problemSlug: string;
   problemTitle: string;

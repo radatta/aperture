@@ -66,6 +66,12 @@ import {
   headRowOf,
   payloadError,
   summarizeHeadRows,
+  sittingActiveMsAt,
+  sittingAwaySpans,
+  sittingIdleGaps,
+  sittingMetrics,
+  sittingPause,
+  SITTING_PAUSES_MAX,
   traceCommentRow,
   utf8Bytes,
 } from './sittings';
@@ -408,6 +414,244 @@ describe('lcTimerState', () => {
       ),
     ).toMatchObject({ elapsedMs: 6000 });
     expect(lcTimerState('nope', 0)).toBeNull();
+  });
+});
+
+describe('timer pauses', () => {
+  const M = 60_000;
+  const H = 60 * M;
+  const S = 1000;
+  // A QD_TIMER_STATE read as LeetCode writes it: running keeps startTimestamp, a pause keeps the elapsed in pauseMs.
+  type Read = { status?: string; mode?: string; endMs?: number | null; user?: boolean };
+  let n = 0;
+  const read = (at: number, elapsed: number | null, r: Read = {}) => {
+    const status = r.status ?? 'running';
+    const state =
+      status === 'running'
+        ? { startTimestamp: at - (elapsed ?? 0), pauseMs: null }
+        : { startTimestamp: null, pauseMs: elapsed };
+    const payload = {
+      state: {
+        mode: r.mode ?? 'reverse',
+        status,
+        endMs: r.endMs ?? 60 * M,
+        isUserPaused: !!r.user,
+        ...state,
+      },
+    };
+    return headRowOf('s', { id: `t${String(n++).padStart(4, '0')}`, type: 'timer', at, payload });
+  };
+  const submit = (at: number, code = 10) =>
+    headRowOf('s', {
+      id: `j${at}`,
+      type: 'submit',
+      at,
+      payload: { result: { status_code: code } },
+    });
+  const run = (at: number) =>
+    headRowOf('s', { id: `r${at}`, type: 'run', at, payload: { result: { status_code: 10 } } });
+  const sitting = (rows: Parameters<typeof summarizeHeadRows>[0], over: Partial<Sitting> = {}) =>
+    ({
+      startedAt: 0,
+      clientStartedAt: 0,
+      endedAt: null,
+      summary: summarizeHeadRows(rows),
+      ...over,
+    }) as Sitting;
+
+  it('reads endMs and isUserPaused from the state', () => {
+    expect(
+      lcTimerState(
+        { state: { mode: 'reverse', status: 'pause', pauseMs: 5, endMs: 9, isUserPaused: true } },
+        0,
+      ),
+    ).toMatchObject({ endMs: 9, userPaused: true });
+    expect(lcTimerState({ state: { status: 'idle' } }, 0)).toMatchObject({
+      endMs: null,
+      userPaused: false,
+    });
+  });
+
+  // The kickoff's example 1: Start 0, pause 12:00, resume 17:00, first submit 25:00, Done 31:00.
+  const example1 = [
+    read(2 * S, 2 * S),
+    read(11 * M + 59 * S, 11 * M + 59 * S),
+    read(12 * M + 1 * S, 12 * M, { status: 'pause', user: true }),
+    read(16 * M + 59 * S, 12 * M, { status: 'pause', user: true }),
+    read(17 * M + 1 * S, 12 * M + 1 * S),
+    submit(25 * M),
+  ];
+  it('a pause and its resume leave LeetCode’s uncounted stretch out, to the ms', () => {
+    const s = sitting(example1, { endedAt: 31 * M });
+    expect(s.summary).toMatchObject({
+      pauses: [[12 * M, 17 * M]],
+      pauseFrom: null,
+      timerSeen: true,
+    });
+    expect(sittingElapsedMs(s, 99 * H)).toBe(26 * M);
+    expect(sittingMetrics(s).timeToFirstSubmitMs).toBe(20 * M);
+    expect(sittingPause(s, 99 * H)).toEqual({ pausedMs: 5 * M, pausedNow: false, timerSeen: true });
+  });
+  it('the rows fold the same in any order they arrive', () => {
+    const shuffled = [example1[4], example1[1], example1[5], example1[0], example1[3], example1[2]];
+    expect(summarizeHeadRows(shuffled)).toEqual(summarizeHeadRows(example1));
+  });
+  it('an open pause freezes the minutes, and an end while paused stops it there', () => {
+    const rows = example1.slice(0, 3);
+    const s = sitting(rows);
+    expect(s.summary.pauseFrom).toBe(12 * M);
+    expect(sittingElapsedMs(s, 14 * M)).toBe(12 * M);
+    expect(sittingElapsedMs(s, 40 * M)).toBe(12 * M);
+    expect(sittingPause(s, 14 * M)).toMatchObject({ pausedMs: 2 * M, pausedNow: true });
+    const ended = { ...s, endedAt: 20 * M };
+    expect(sittingElapsedMs(ended, 99 * H)).toBe(12 * M);
+    expect(sittingPause(ended, 99 * H)).toMatchObject({ pausedMs: 8 * M, pausedNow: false });
+  });
+  it('a paused timer left from before the sitting is never a pause (debug-log 10a)', () => {
+    const rows = [
+      read(2 * S, 40 * M, { status: 'pause' }),
+      read(20 * M, 40 * M, { status: 'pause' }),
+    ];
+    const s = sitting(rows, { endedAt: 30 * M });
+    expect(s.summary).toMatchObject({ pauses: [], pauseFrom: null, timerSeen: false });
+    expect(sittingElapsedMs(s, 0)).toBe(30 * M);
+    // Started at last: counted from then, the stale pause still not.
+    const later = sitting([
+      ...rows,
+      read(21 * M, 40 * M + S),
+      read(25 * M, 40 * M + S, { status: 'pause' }),
+    ]);
+    expect(later.summary).toMatchObject({ pauseFrom: 21 * M, timerSeen: true });
+  });
+  it('running both times with a shortfall is a pause between the reads — the page away', () => {
+    const s = sitting([read(10 * M, 10 * M), read(20 * M, 15 * M)], { endedAt: 30 * M });
+    expect(s.summary.pauses).toEqual([[15 * M, 20 * M]]);
+    expect(sittingElapsedMs(s, 0)).toBe(25 * M);
+    // Under a second is a read's rounding.
+    expect(
+      summarizeHeadRows([read(10 * M, 10 * M), read(20 * M, 10 * M - 500 + 10 * M)]).pauses,
+    ).toEqual([]);
+  });
+  it('a Run or Submit while paused ends the pause there, and the paused reads after it add nothing', () => {
+    const rows = [
+      read(1 * M, 1 * M),
+      read(2 * M + S, 2 * M, { status: 'pause' }),
+      run(5 * M),
+      read(8 * M, 2 * M, { status: 'pause' }),
+      read(10 * M + S, 2 * M + S), // resumed at 10:00 — no stretch: the Run already ended it
+    ];
+    const s = sitting(rows, { endedAt: 12 * M });
+    expect(s.summary).toMatchObject({ pauses: [[2 * M, 5 * M]], pauseFrom: null });
+    expect(sittingElapsedMs(s, 0)).toBe(9 * M);
+  });
+  it('a reset closes an open pause at that read and disarms until it runs again', () => {
+    const rows = [
+      read(1 * M, 1 * M),
+      read(2 * M + S, 2 * M, { status: 'pause' }),
+      read(6 * M, 0, { status: 'pause' }), // reset while paused: the elapsed drops
+      read(8 * M, 0, { status: 'pause' }),
+    ];
+    expect(summarizeHeadRows(rows)).toMatchObject({ pauses: [[2 * M, 6 * M]], pauseFrom: null });
+    // Reset to idle, then started again: the time between is wall clock, then pauses count again.
+    const idle = [
+      read(1 * M, 1 * M),
+      read(2 * M, null, { status: 'idle' }),
+      read(9 * M, 0 * M + S),
+      read(10 * M, S, { status: 'pause' }),
+    ];
+    expect(summarizeHeadRows(idle)).toMatchObject({ pauses: [], pauseFrom: 9 * M });
+  });
+  it('a countdown past 0 counts as wall clock, whatever LeetCode writes after it', () => {
+    const end = 30 * M;
+    const rows = [
+      read(29 * M, 29 * M, { endMs: end }),
+      read(35 * M, 30 * M, { endMs: end, status: 'pause' }), // at 0: stopped, or reads expired
+      read(40 * M, 30 * M, { endMs: end, status: 'pause' }),
+    ];
+    const s = sitting(rows, { endedAt: 45 * M });
+    expect(s.summary).toMatchObject({ pauses: [], pauseFrom: null });
+    expect(sittingElapsedMs(s, 0)).toBe(45 * M);
+    // The stopwatch has no end, so its pause is a pause.
+    const fwd = [
+      read(29 * M, 29 * M, { mode: 'forward', endMs: null }),
+      read(35 * M, 30 * M, { mode: 'forward', endMs: null, status: 'pause' }),
+    ];
+    expect(summarizeHeadRows(fwd).pauseFrom).toBe(30 * M);
+  });
+  it('a pause into the idle close and its reopen is left out once (example 2)', () => {
+    // Paused at 12:00, idle-closed at 17:00 (last activity + the tail), reopened and resumed at 3:00, Done at 3:20.
+    const rows = [read(11 * M, 11 * M), read(12 * M + S, 12 * M, { status: 'pause' })];
+    const closed = idleClosedSitting(sitting(rows), 17 * M, 70 * M);
+    const back = reopenedSitting(closed, 3 * H);
+    expect(back.idleGaps).toEqual([[17 * M, 3 * H]]);
+    const resumed = {
+      ...back,
+      summary: summarizeHeadRows([...rows, read(3 * H + S, 12 * M + S)]),
+      endedAt: 3 * H + 20 * M,
+    };
+    expect(resumed.summary.pauses).toEqual([[12 * M, 3 * H]]);
+    expect(sittingElapsedMs(resumed, 0)).toBe(32 * M); // 12 before lunch, 20 after
+    expect(sittingPause(resumed, 0).pausedMs).toBe(5 * M); // 12:00 to the close; the rest is the idle gap
+  });
+  it('pauses move onto the server clock and never take time outside the sitting', () => {
+    // The extension's clock runs 5 s behind the server's.
+    const s = {
+      startedAt: 10 * S,
+      clientStartedAt: 5 * S,
+      endedAt: 10 * M + 10 * S,
+      summary: { pauses: [[1 * M + 5 * S, 3 * M + 5 * S]] as [number, number][], pauseFrom: null },
+    };
+    expect(sittingAwaySpans(s, 99 * H)).toEqual([[1 * M + 10 * S, 3 * M + 10 * S]]);
+    expect(sittingElapsedMs(s, 0)).toBe(8 * M);
+    // Future-stamped, or before the start: clipped away.
+    const odd = {
+      ...s,
+      summary: {
+        pauses: [
+          [-5 * M, 0],
+          [20 * M, 30 * M],
+        ] as [number, number][],
+        pauseFrom: null,
+      },
+    };
+    expect(sittingElapsedMs(odd, 0)).toBe(10 * M);
+    expect(sittingActiveMsAt(s, 2 * M + 5 * S)).toBe(1 * M); // a minute in, then paused
+  });
+  it('a sitting with no reads, or one folded before pauses, reads as before', () => {
+    const old = { startedAt: 0, endedAt: 20 * M, idleMs: 5 * M } as Sitting;
+    expect(sittingElapsedMs(old, 0)).toBe(15 * M);
+    expect(sittingPause({ ...old, summary: emptySummary() }, 0)).toEqual({
+      pausedMs: 0,
+      pausedNow: false,
+      timerSeen: false,
+    });
+    // A legacy reopen (idleMs, no list): one span ending at its reopen, which seeds the list on the next one.
+    const legacy = { startedAt: 0, endedAt: null, idleMs: 2 * H, reopenedAt: 3 * H } as Sitting;
+    expect(sittingIdleGaps(legacy)).toEqual([[1 * H, 3 * H]]);
+    const again = reopenedSitting(
+      { ...legacy, status: 'abandoned', closedBy: 'idle', endedAt: 4 * H, updatedAt: 0 } as Sitting,
+      5 * H,
+    );
+    expect(again.idleGaps).toEqual([
+      [1 * H, 3 * H],
+      [4 * H, 5 * H],
+    ]);
+    expect(again.idleMs).toBe(3 * H);
+  });
+  it(`keeps the ${SITTING_PAUSES_MAX} longest pauses`, () => {
+    const sw = { mode: 'forward', endMs: null };
+    const rows = [read(0, 0, sw)];
+    let el = 0;
+    for (let i = 1; i <= SITTING_PAUSES_MAX + 20; i++) {
+      // Each cycle: run a minute, then a pause i seconds long seen as a shortfall.
+      const at = i * 10 * M;
+      el += 10 * M - (i + 1) * S;
+      rows.push(read(at, el, sw));
+    }
+    const p = summarizeHeadRows(rows).pauses!;
+    expect(p).toHaveLength(SITTING_PAUSES_MAX);
+    expect(Math.min(...p.map(([a, b]) => b - a))).toBe(22 * S); // the 20 shortest (2 s … 21 s) dropped
+    expect(p.every(([a], i) => i === 0 || a > p[i - 1][0])).toBe(true);
   });
 });
 
