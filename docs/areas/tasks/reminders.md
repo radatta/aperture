@@ -320,8 +320,10 @@ Answers from 2026-11-03/04 (the branch `localNotes/decisions.md` has the full lo
   the Topic differed. The raw Topics that failed (`ritualMorning`, 13 characters; `b<minute>`, 9; a catch-up's
   `c<minute>`, 9) have a length 1 more than a multiple of 4, which no base64url decoder can decode; the ones
   that landed (`test`, `ritualNight`, a task id: 4, 11, 26) don't, and Apple documents a `BadWebPushTopic`
-  reason. **Inference, not yet confirmed by an Apple send:** Apple checks the token before the headers (a POST
-  to a never-issued endpoint answers `BadWebPushToken` whatever the Topic), so only a real subscription can
-  show it. D25 and D26 ship together: if a refusal remains, its reason is in Settings and the log. A retry
+  reason. Apple checks the token before the headers (a POST to a never-issued endpoint answers
+  `BadWebPushToken` whatever the Topic), so only a real subscription could show it. **Confirmed on dev,
+  2026-11-21**, on the maintainer's iPhone: a two-task batch got the 400 on main's code and landed as one
+  "2 reminders" notification on this branch; Send test landed under its hashed Topic too. The 08:30 nudge's
+  `ritualMorning` was proven only by the same rule, at its next morning. D25 and D26 ship together: if a refusal remains, its reason is in Settings and the log. A retry
   in flight across the deploy goes out under the new Topic and so can't replace a first copy the service
   took under the old one: at most one duplicate (iOS doesn't replace by `tag`, §3), and only for a timed-out or 5xx send in the minutes before the deploy.
