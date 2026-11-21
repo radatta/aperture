@@ -1804,6 +1804,119 @@ describe('the debug log’s submit probe', () => {
   }, 40_000);
 });
 
+// The probe session's recorder (F392/F393): what LeetCode's timer pop-up, tabs and duration fields answer
+// to, the tab's visibility, late ticks and storage events. The pop-up here is synthetic, shaped like Radix's.
+describe('the debug log’s timer probes', () => {
+  const all = (ext: ReturnType<typeof fakeExtension>) =>
+    (ext.local.data.debugLog as DebugEntry[] | undefined) ?? [];
+  const of = (ext: ReturnType<typeof fakeExtension>, type: string) =>
+    all(ext).filter((e) => e.type === type);
+  const popupHtml =
+    '<div role="dialog" id="radix-_r_t_" data-state="open" data-fake="timer-popup">' +
+    '<div role="tablist"><button role="tab" aria-selected="false" data-state="inactive">Stopwatch</button>' +
+    '<button role="tab" aria-selected="true" data-state="active">Timer</button></div>' +
+    '<input type="number" min="0" max="23" value="0" aria-label="hr">' +
+    '<input type="number" min="0" max="59" value="45" aria-label="min">' +
+    '<button class="bg-sd-primary">Start Timer</button></div>';
+  const mouse = (el: Element, type: string) =>
+    el.dispatchEvent(new el.ownerDocument.defaultView!.MouseEvent(type, { bubbles: true }));
+
+  it('logs the pop-up’s controls, presses, field edits, keys, state flips, alerts, visibility, storage events and late ticks', async () => {
+    const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    const d = p.w.document;
+    d.body.insertAdjacentHTML('beforeend', popupHtml);
+    const popup = d.querySelector('[data-fake=timer-popup]')!;
+    const [stopwatch, timer] = [...popup.querySelectorAll('[role=tab]')];
+    const min = popup.querySelector('input[aria-label=min]') as HTMLInputElement;
+    await settle(10); // the pop-up's open dump lands before anything changes in it
+
+    mouse(stopwatch!, 'pointerdown');
+    mouse(stopwatch!, 'mousedown');
+    stopwatch!.setAttribute('aria-selected', 'true');
+    timer!.setAttribute('aria-selected', 'false');
+    min.value = '30';
+    min.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+    min.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: '3', bubbles: true }));
+    min.dispatchEvent(new p.w.KeyboardEvent('keydown', { key: 'a', bubbles: true })); // not a field key
+    d.body.insertAdjacentHTML('beforeend', '<div role="alert">Time’s up</div>');
+    mouse(d.querySelector('[data-fake=toggle]')!, 'mousedown'); // the toolbar's clock: the timer area
+    d.dispatchEvent(new p.w.Event('visibilitychange'));
+    p.w.dispatchEvent(
+      new p.w.StorageEvent('storage', { key: 'QD_TIMER_STATE', newValue: '{"status":"pause"}' }),
+    );
+    p.w.dispatchEvent(new p.w.StorageEvent('storage', { key: 'csrftoken', newValue: 'x' }));
+    p.w.localStorage.setItem('QD_TIMER_SETTINGS', '{"autoReset":true}');
+    vi.setSystemTime(Date.now() + 5000); // the clock jumps with no timer run: a throttled tab
+    await settle(3500);
+
+    const opened = of(ext, 'dom.popup').find((e) => e.why === 'open')!;
+    expect(opened.text).toContain('StopwatchTimer');
+    const controls = opened.controls as Array<Record<string, unknown>>;
+    expect(controls.map((c) => c.tag)).toEqual(['button', 'button', 'input', 'input', 'button']);
+    expect(controls[3]).toMatchObject({ value: '45', min: '0', max: '59', disabled: false });
+    // One settled re-dump after the presses and the edit, showing the new value.
+    const after = of(ext, 'dom.popup').filter((e) => e.why !== 'open');
+    expect(after).toHaveLength(1);
+    expect((after[0]!.controls as Array<Record<string, unknown>>)[3]!.value).toBe('30');
+
+    const presses = of(ext, 'press');
+    expect(presses.map((e) => [e.ev, e.at])).toEqual([
+      ['pointerdown', 'popup'],
+      ['mousedown', 'popup'],
+      ['mousedown', 'timer'],
+    ]);
+    expect((presses[0]!.up as unknown[]).length).toBe(3);
+    expect(of(ext, 'input')).toMatchObject([{ ev: 'input', control: { value: '30' } }]);
+    expect(of(ext, 'key').map((e) => e.key)).toEqual(['3']);
+    expect(of(ext, 'dom.state').map((e) => [e.attr, e.value])).toEqual(
+      expect.arrayContaining([
+        ['aria-selected', 'true'],
+        ['aria-selected', 'false'],
+      ]),
+    );
+    expect(of(ext, 'dom.alert')).toMatchObject([{ text: 'Time’s up' }]);
+    expect(of(ext, 'vis')).toMatchObject([{ ev: 'visibilitychange' }]);
+    expect(of(ext, 'vis')[0]).toHaveProperty('timer');
+    expect(of(ext, 'storage.event')).toEqual([
+      expect.objectContaining({ key: 'QD_TIMER_STATE', value: '{"status":"pause"}' }),
+      expect.objectContaining({ key: '[redacted]', value: '[redacted]' }),
+    ]);
+    expect(of(ext, 'storage').some((e) => e.key === 'QD_TIMER_SETTINGS')).toBe(true);
+    expect(of(ext, 'tick')[0]!.gapMs as number).toBeGreaterThan(5000);
+  }, 20_000);
+
+  it('describes nothing inside the code editor, and records nothing with Debug mode off', async () => {
+    const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    p.w.document.body.insertAdjacentHTML(
+      'beforeend',
+      '<div class="monaco-editor"><div role="dialog" data-state="open"><button aria-label="Reset">x</button><input value="secret code"></div></div>',
+    );
+    const inner = p.w.document.querySelector('.monaco-editor input') as HTMLInputElement;
+    mouse(p.w.document.querySelector('.monaco-editor button')!, 'mousedown');
+    inner.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+    await settle(2500);
+    expect(of(ext, 'press')).toEqual([]);
+    expect(of(ext, 'input')).toEqual([]);
+    expect(of(ext, 'dom.popup')).toEqual([]);
+    expect(JSON.stringify(all(ext))).not.toContain('secret code');
+
+    const off = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    const q = open('/problems/two-sum/', off);
+    await until(() => q.phase() === 'prompt');
+    q.w.document.body.insertAdjacentHTML('beforeend', popupHtml);
+    mouse(q.w.document.querySelector('[role=tab]')!, 'mousedown');
+    q.w.document.dispatchEvent(new q.w.Event('visibilitychange'));
+    await settle(2500);
+    expect(all(off)).toEqual([]);
+  }, 20_000);
+});
+
 describe('the debug log’s wire probe', () => {
   // Counts the isolated world's calls to wire.opNames (the parse only the probe needs).
   const counting = (p: ReturnType<typeof open>) => {
