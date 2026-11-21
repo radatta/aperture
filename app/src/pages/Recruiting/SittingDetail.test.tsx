@@ -76,6 +76,8 @@ describe('a sitting’s page', () => {
     // Paused 7 minutes on LeetCode's timer in the seed: out of the first submit too.
     expect(screen.getByText('7m paused')).toBeTruthy();
     expect(screen.getByText('after 24m')).toBeTruthy();
+    // The timeline counts on the same clock: its submit is 24 minutes in, not the wall clock's 31.
+    expect(screen.getByText('· +24m')).toBeTruthy();
   });
 });
 
@@ -382,7 +384,7 @@ describe('LeetCode’s timer paused', () => {
     renderApp({ api, path: `/recruiting/sittings/${sitting.id}` });
     expect(await screen.findByText('20m')).toBeTruthy();
     const note = screen.getByText('10m paused');
-    expect(note.className).not.toMatch(/danger|warn/); // a fact, never a warning
+    expect(note.classList.contains('text-ink-muted')).toBe(true); // a fact in the muted tone, never a warning
     const end = await screen.findByRole('button', { name: 'End sitting' });
     await waitFor(() => expect(end.getAttribute('aria-disabled')).toBeNull());
     await user.click(end);

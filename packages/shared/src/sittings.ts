@@ -435,8 +435,14 @@ export function headRowOf(
 // elapsed to the ms, so the 2 s poll only delays hearing a pause, never blurs it.
 export const SITTING_PAUSES_MAX = 100; // the longest kept
 const PAUSE_SLACK_MS = 1000; // a shortfall under it is a read's rounding, not a pause
+// A countdown this close to 0 has run out: what LeetCode stores at 0 isn't in a log yet, and a pause read a tick short
+// of the end must never open a pause that eats every minute after 0 (review pauses-1).
+const EXPIRED_SLACK_MS = 2000;
 const timerExpired = (t: LcTimerState) =>
-  t.mode === 'reverse' && t.endMs != null && t.elapsedMs !== null && t.elapsedMs >= t.endMs;
+  t.mode === 'reverse' &&
+  t.endMs != null &&
+  t.elapsedMs !== null &&
+  t.elapsedMs >= t.endMs - EXPIRED_SLACK_MS;
 // Counting: running, with an elapsed, and not a countdown past 0 (time after 0 is wall clock, whatever LeetCode writes).
 const timerCounting = (t: LcTimerState | null): t is LcTimerState & { elapsedMs: number } =>
   !!t && t.status === 'running' && t.elapsedMs !== null && !timerExpired(t);
@@ -478,7 +484,14 @@ export function foldTimer(
   const timerSeen = s.timerSeen === true || timerCounting(b);
   const ea = a?.elapsedMs ?? null;
   const eb = b.elapsedMs;
-  const sameRun = ea !== null && eb !== null && eb >= ea - PAUSE_SLACK_MS;
+  // One run: the same mode and duration (a reset to another countdown is a new one, however young the last read), and
+  // the elapsed never dropped.
+  const sameRun =
+    ea !== null &&
+    eb !== null &&
+    eb >= ea - PAUSE_SLACK_MS &&
+    (a?.mode ?? null) === (b.mode ?? null) &&
+    (a?.endMs ?? null) === (b.endMs ?? null);
   const counted = sameRun ? eb! - ea! : 0;
   const out = (p: Partial<Pick<SittingSummary, 'pauses' | 'pauseFrom'>>) => ({
     pauses,
@@ -487,9 +500,23 @@ export function foldTimer(
     timerSeen,
   });
   if (b.status === 'pause' && eb !== null && !timerExpired(b)) {
-    if (from !== null) return sameRun ? out({}) : out(closePause(pauses, from, b.at));
-    // Running, then paused: it stopped `counted` after the running read.
-    if (timerCounting(a) && sameRun) return out({ pauseFrom: Math.min(b.at, a.at + counted) });
+    // Paused both times but it counted between: a resume and a pause the poll never saw (a hidden tab, another tab).
+    // The first pause ends where the counting would have started; the new one opens at this read, at the latest.
+    const unseen = sameRun && counted >= PAUSE_SLACK_MS && a?.status === 'pause';
+    if (from !== null) {
+      if (!sameRun) return out(closePause(pauses, from, b.at));
+      return unseen
+        ? out({ pauses: addPause(pauses, from, b.at - counted), pauseFrom: b.at })
+        : out({});
+    }
+    if (unseen && s.timerSeen === true) return out({ pauseFrom: b.at });
+    // Running, then paused: it stopped `counted` after the running read — unless a Run or Submit already sorted after
+    // that (a Run right after pausing lands before the 2 s poll hears the pause): back at it, it ends there.
+    if (timerCounting(a) && sameRun) {
+      const pauseFrom = Math.min(b.at, a.at + counted);
+      const judged = Math.max(s.lastRun?.at ?? -Infinity, s.lastSubmit?.at ?? -Infinity);
+      return judged >= pauseFrom ? out(closePause(pauses, pauseFrom, judged)) : out({ pauseFrom });
+    }
     return out({}); // stale, or a pause a Run or Submit already ended
   }
   if (timerCounting(b)) {
@@ -729,18 +756,16 @@ export type SittingClock = Pick<Sitting, 'startedAt' | 'endedAt'> &
   Partial<Pick<Sitting, 'clientStartedAt' | 'idleMs' | 'idleGaps' | 'reopenedAt'>> & {
     summary?: Pick<SittingSummary, 'pauses' | 'pauseFrom' | 'timerSeen'>;
   };
-// The gaps its reopens bridged, server clock. A head reopened before `idleGaps` has `idleMs` alone: one span ending at
-// its newest reopen, exact for one reopen and the same total for more.
-export const sittingIdleGaps = (s: SittingClock): Span[] =>
-  s.idleGaps ??
-  (s.idleMs
-    ? [
-        [
-          (s.reopenedAt ?? s.startedAt + s.idleMs) - s.idleMs,
-          s.reopenedAt ?? s.startedAt + s.idleMs,
-        ],
-      ]
-    : []);
+// The gaps its reopens bridged, server clock. `idleMs` is the total every build writes; what `idleGaps` doesn't cover
+// (a head reopened before them, or by a build without them, after a rollback) is one span ending at its newest reopen —
+// exact for one such reopen, the same total for more.
+export function sittingIdleGaps(s: SittingClock): Span[] {
+  const gaps = s.idleGaps ?? [];
+  const rest = (s.idleMs ?? 0) - spansMs(gaps);
+  if (rest <= 0) return gaps;
+  const to = s.reopenedAt ?? s.startedAt + rest;
+  return mergeSpans([...gaps, [to - rest, to]]);
+}
 // LeetCode's paused stretches moved onto the server clock; an open one runs to `hi`.
 function sittingPauseSpans(s: SittingClock, hi: number): Span[] {
   const shift = s.startedAt - (s.clientStartedAt ?? s.startedAt);
@@ -772,7 +797,11 @@ export function sittingPause(s: SittingClock, now: number) {
   const idle = spansMs(clipSpans(sittingIdleGaps(s), s.startedAt, end));
   return {
     pausedMs: Math.max(0, spansMs(sittingAwaySpans(s, end)) - idle),
-    pausedNow: s.endedAt === null && s.summary?.pauseFrom != null,
+    // Open, and from a moment already lived: a read stamped ahead of the server's clock isn't a pause yet.
+    pausedNow:
+      s.endedAt === null &&
+      s.summary?.pauseFrom != null &&
+      s.summary.pauseFrom + s.startedAt - (s.clientStartedAt ?? s.startedAt) <= now,
     timerSeen: s.summary?.timerSeen === true,
   };
 }
@@ -1327,7 +1356,7 @@ export type TimelineEntry =
       type: 'run' | 'submit';
       n: number; // 1-based among its type
       at: number;
-      offsetMs: number; // from the Start click, on the extension's clock
+      offsetMs: number; // active time from the Start click to it, pauses and idle gaps out (sittingActiveMsAt)
       verdict: SittingVerdict;
       detail: JudgeDetail;
     }
@@ -1335,7 +1364,7 @@ export type TimelineEntry =
 const byTime = <E extends { at: number; id: string }>(a: E, b: E) =>
   a.at - b.at || (a.id < b.id ? -1 : 1);
 export function timelineOf(
-  s: Pick<Sitting, 'clientStartedAt'>,
+  s: SittingClock & Pick<Sitting, 'clientStartedAt'>,
   events: readonly SittingEvent[],
 ): TimelineEntry[] {
   const out: TimelineEntry[] = [];
@@ -1352,7 +1381,7 @@ export function timelineOf(
       type: e.type,
       n: ++n[e.type],
       at: e.at,
-      offsetMs: Math.max(0, e.at - s.clientStartedAt),
+      offsetMs: sittingActiveMsAt(s, e.at),
       verdict: verdictOrOther(e.payload, e.at, e.type),
       detail: judgeDetail(e.payload),
     });

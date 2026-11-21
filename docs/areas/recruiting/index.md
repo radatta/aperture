@@ -120,15 +120,17 @@ derived from the timer reads the extension already sends — `QD_TIMER_STATE`, p
 open and posted when it changes — so nothing on the wire or in the extension is new.
 
 - **The fold** (`foldTimer`, on every head row in `summarizeHeadRows`, so any order folds the same): a read carries
-  the elapsed to the ms, so between two reads of one run (the elapsed never drops by more than 1 s) the
+  the elapsed to the ms, so between two reads of one run (same mode and countdown, the elapsed never drops by more
+  than 1 s) the
   shortfall, Δat − Δelapsed, is exactly what LeetCode didn't count. Running then paused opens `pauseFrom` where it
   stopped; paused then running closes it where it resumed; running both times with a shortfall of 1 s or more
-  (`PAUSE_SLACK_MS`) is a pause between them (the page away: LeetCode pauses itself). Stored on the head's
+  (`PAUSE_SLACK_MS`) is a pause between them (the page away: LeetCode pauses itself); paused both times with
+  counting between is an unseen resume and re-pause, which ends the one pause and opens the next. Stored on the head's
   `summary` as `pauses` (the extension's clock, merged, the 100 longest kept — `SITTING_PAUSES_MAX`), `pauseFrom`
   and `timerSeen` (it was seen counting).
 - **What isn't a pause:** a paused read before any counting one (a timer left from an earlier solve); a paused read
   after a Run or Submit (they close an open pause at their time: back at it); a reset or an idle read (it closes
-  the pause there and disarms until the timer runs again); a countdown past 0 (time after 0 is wall clock,
+  the pause there and disarms until the timer runs again); a countdown at or within 2 s of 0 (`EXPIRED_SLACK_MS`: time after 0 is wall clock,
   whatever LeetCode writes); and a payload that isn't LeetCode's state.
 - **On read** (`sittingAwaySpans`): the pauses move onto the server clock (`startedAt − clientStartedAt`), an open
   one runs to now or the end, and they're unioned with the reopens' idle gaps (`idleGaps`, server clock) and
@@ -140,6 +142,11 @@ open and posted when it changes — so nothing on the wire or in the extension i
   `list_sittings` `pausedMin`. Never a warning: pausing is allowed.
 - **A pause never closes a sitting.** Idle is the server's activity clock (_Idle close_), and a paused timer posts
   nothing; a pause running into an idle close and its reopen counts once.
+- **The timeline's offsets** (`timelineOf`, "Run 2 · +12m") count on the same clock, `sittingActiveMsAt`: pauses
+  and idle out, so they agree with First submit's "after Nm".
+- **Old heads:** a summary folded before this has no pauses, and the head is refolded only when a row arrives, so a
+  sitting open across the deploy picks its pauses up at its next Run, Submit or timer change; until then it reads
+  wall-clock minutes, as before.
 
 ### What's stored, what's derived
 

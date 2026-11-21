@@ -617,6 +617,97 @@ describe('timer pauses', () => {
     expect(sittingElapsedMs(odd, 0)).toBe(10 * M);
     expect(sittingActiveMsAt(s, 2 * M + 5 * S)).toBe(1 * M); // a minute in, then paused
   });
+  it('a Submit while paused ends the pause as a Run does', () => {
+    const rows = [
+      read(1 * M, 1 * M),
+      read(2 * M + S, 2 * M, { status: 'pause' }),
+      submit(4 * M, 11),
+    ];
+    expect(summarizeHeadRows(rows)).toMatchObject({ pauses: [[2 * M, 4 * M]], pauseFrom: null });
+  });
+  it('a Run that sorts after the pause opens, before its read, ends it there', () => {
+    // Paused at 2:00, Run at 2:01, the poll hears the pause at 2:02: back at it from 2:01.
+    const rows = [
+      read(1 * M, 1 * M),
+      run(2 * M + S),
+      read(2 * M + 2 * S, 2 * M, { status: 'pause' }),
+    ];
+    expect(summarizeHeadRows(rows)).toMatchObject({
+      pauses: [[2 * M, 2 * M + S]],
+      pauseFrom: null,
+    });
+  });
+  it('a shortfall of exactly the slack is a pause; under it is a read’s rounding', () => {
+    expect(summarizeHeadRows([read(0, 0), read(2 * M, 2 * M - S)]).pauses).toEqual([
+      [2 * M - S, 2 * M],
+    ]);
+    expect(summarizeHeadRows([read(0, 0), read(2 * M, 2 * M - S + 1)]).pauses).toEqual([]);
+  });
+  it('a countdown read paused a tick short of 0 has run out: never a pause', () => {
+    const end = { mode: 'reverse', endMs: 10 * M };
+    const rows = [
+      read(5 * M, 5 * M, end),
+      read(10 * M + S, 10 * M - 900, { ...end, status: 'pause' }),
+    ];
+    expect(summarizeHeadRows(rows)).toMatchObject({ pauses: [], pauseFrom: null });
+  });
+  it('a new countdown or mode is a new run, however young the last read', () => {
+    // Started at 0:00 for 60 min; reset and restarted for 20 at 5:00 — 3 s in by 5:03. No pause between.
+    const rows = [read(2 * S, 2 * S), read(5 * M + 3 * S, 3 * S, { endMs: 20 * M })];
+    expect(summarizeHeadRows(rows).pauses).toEqual([]);
+    const flip = [read(2 * S, 2 * S), read(5 * M + 3 * S, 3 * S, { mode: 'forward', endMs: null })];
+    expect(summarizeHeadRows(flip).pauses).toEqual([]);
+  });
+  it('paused both times, counted between: an unseen resume and re-pause ends one pause and opens the next', () => {
+    // Paused at 2:00; resumed and paused again unseen (a hidden tab), 3 more minutes counted; read at 10:00.
+    const rows = [
+      read(1 * M, 1 * M),
+      read(2 * M + S, 2 * M, { status: 'pause' }),
+      read(10 * M, 5 * M, { status: 'pause' }),
+    ];
+    expect(summarizeHeadRows(rows)).toMatchObject({ pauses: [[2 * M, 7 * M]], pauseFrom: 10 * M });
+  });
+  it('a pause read stamped ahead of the server’s clock isn’t paused now yet', () => {
+    const rows = [read(1 * M, 1 * M), read(2 * M + S, 2 * M, { status: 'pause' })];
+    expect(sittingPause(sitting(rows), 1 * M + 30 * S)).toMatchObject({
+      pausedMs: 0,
+      pausedNow: false,
+    });
+    expect(sittingPause(sitting(rows), 3 * M)).toMatchObject({ pausedMs: 1 * M, pausedNow: true });
+  });
+  it('an idleMs past its idleGaps (a reopen by a build without them) still leaves its minutes', () => {
+    // idleGaps holds the first gap; a rolled-back build's reopen added the second to idleMs alone.
+    const s = {
+      startedAt: 0,
+      endedAt: 10 * H,
+      idleGaps: [[1 * H, 2 * H]] as [number, number][],
+      idleMs: 3 * H,
+      reopenedAt: 6 * H,
+    } as Sitting;
+    expect(sittingIdleGaps(s)).toEqual([
+      [1 * H, 2 * H],
+      [4 * H, 6 * H],
+    ]);
+    expect(sittingElapsedMs(s, 0)).toBe(7 * H);
+  });
+  it('the timeline’s offsets are active time, the pauses out (First submit’s clock)', () => {
+    const rows = [
+      read(1 * M, 1 * M),
+      read(2 * M + S, 2 * M, { status: 'pause' }),
+      read(9 * M, 2 * M),
+    ];
+    const s = sitting(rows);
+    const events = [
+      {
+        id: '01A',
+        sittingId: 's',
+        type: 'submit',
+        at: 12 * M,
+        payload: { result: { status_code: 10 } },
+      },
+    ] as unknown as SittingEvent[];
+    expect(timelineOf(s, events)[0]).toMatchObject({ offsetMs: 5 * M }); // 12 on the clock, 7 paused
+  });
   it('a sitting with no reads, or one folded before pauses, reads as before', () => {
     const old = { startedAt: 0, endedAt: 20 * M, idleMs: 5 * M } as Sitting;
     expect(sittingElapsedMs(old, 0)).toBe(15 * M);
@@ -1015,15 +1106,15 @@ describe('reading a sitting back', () => {
       e('01G', 'snapshot', 600),
       e('01H', 'timer', 650),
     ];
-    const t = timelineOf({ clientStartedAt: 50 }, events);
+    const t = timelineOf({ startedAt: 50, clientStartedAt: 50, endedAt: null }, events);
     expect(
       t.map((x) => (x.kind === 'judged' ? `${x.type}${x.n}:${x.verdict.verdict}` : `×${x.count}`)),
     ).toEqual(['×1', 'run1:runtime_error', '×2', 'submit1:wrong_answer', 'submit2:accepted', '×1']);
     expect(t[3]).toMatchObject({ offsetMs: 350, detail: { input: '[1]' } });
-    expect(timelineOf({ clientStartedAt: 0 }, [e('01A', 'submit', 1, {})])[0]).toMatchObject({
+    expect(timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [e('01A', 'submit', 1, {})])[0]).toMatchObject({
       verdict: { verdict: 'other' },
     });
-    expect(timelineOf({ clientStartedAt: 0 }, [])).toEqual([]);
+    expect(timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [])).toEqual([]);
   });
   it('timelineOf reads a wrong Run from its payload, so an older sitting reads right too', () => {
     const run = {
@@ -1035,7 +1126,7 @@ describe('reading a sitting back', () => {
         total_testcases: 3,
       },
     };
-    expect(timelineOf({ clientStartedAt: 0 }, [e('01A', 'run', 1, run)])[0]).toMatchObject({
+    expect(timelineOf({ startedAt: 0, clientStartedAt: 0, endedAt: null }, [e('01A', 'run', 1, run)])[0]).toMatchObject({
       verdict: { verdict: 'wrong_answer', statusMsg: 'Wrong Answer', passed: 0, total: 3 },
     });
   });

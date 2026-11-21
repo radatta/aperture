@@ -96,7 +96,6 @@ function active(pull: LiveSittingPull & { sitting: Sitting }, now: number, since
       startedAt: iso(s.startedAt),
       elapsedMin: sittingMinutes(s, now),
       ...pausedOf(s, now),
-      timerSeen: s.summary.timerSeen === true,
       status: s.status,
       prepTarget: s.prepTarget,
       liveReads: pull.liveReads,
@@ -177,7 +176,7 @@ const minutesOf = (s: Sitting, now: number) =>
 // LeetCode's timer pauses, already out of its minutes (sittings.ts sittingPause): whole minutes, and whether paused now.
 function pausedOf(s: Sitting, now: number) {
   const p = sittingPause(s, expiredAt(s, now) ? s.startedAt + SITTING_INGEST_WINDOW_MS : now);
-  return { pausedMin: msToMin(p.pausedMs), paused: p.pausedNow };
+  return { pausedMin: msToMin(p.pausedMs), paused: p.pausedNow, timerSeen: p.timerSeen };
 }
 
 function sittingRow(s: Sitting, now: number) {

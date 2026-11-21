@@ -12,7 +12,7 @@ import { devUlid } from './flux-history';
 const S = 1000;
 const M = 60_000;
 const PAUSED_FOR = 3.6 * M; // past a whole-minute round, so the minutes can't hide it
-const COUNTED_AFTER = 1.6 * M;
+const COUNTED_AFTER = 3.2 * M; // past 3 counted minutes: a shorter one, pause out, is a test sitting and no try
 
 const tag = (ctx: Ctx) => ctx.nonce.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const slugOf = (ctx: Ctx, k: string) => `devcheck-pause-${k}-${tag(ctx)}`;
@@ -72,7 +72,9 @@ const state = {
   aPauseAt: 0,
   aElapsed: 0,
   aResumeAt: 0,
-  aMinutes: 0, // So far on its page, just before Mark done
+  aMinutes: 0, // the Done form's prefill, as Mark done was pressed
+  aTook: 0, // Took on its page once ended: the server's end, as the MCP reads count it
+  d: null as DevSitting | null, // over 100 pauses
 };
 const head = async (ctx: Ctx, s: DevSitting | null, step: string) => {
   if (!s) throw new Error(`no sitting — the ${step} step failed`);
@@ -230,22 +232,12 @@ export const lcTimerPauses: Scenario = {
       entry: 'ui',
       kind: 'nominal',
       what: 'Home’s hero rep shows the sitting’s paused-out minutes and “· paused” while paused',
-      offDev: {
-        file: 'app/src/pages/Home/RightNow.test.tsx',
-        test: 'a hero rep whose LeetCode timer is paused: its minutes hold still and say paused',
-        why: 'which task is the hero depends on the test user’s whole day, which other scenarios move; the app test drives the same card over the stub’s same shared fold',
-      },
     },
     {
       id: 'max-pauses',
       entry: 'api',
       kind: 'edge',
-      what: 'More than 100 pauses keep the 100 longest',
-      offDev: {
-        file: 'packages/shared/src/sittings.test.ts',
-        test: 'keeps the longest pauses, up to the cap',
-        why: 'dev can’t take 100 real pauses within a run; the pure fold is what the Lambda runs',
-      },
+      what: 'More than 100 pauses keep the 100 longest, in the stored head',
     },
     {
       id: 'pause-idle-reopen',
@@ -255,7 +247,7 @@ export const lcTimerPauses: Scenario = {
       offDev: {
         file: 'packages/shared/src/sittings.test.ts',
         test: 'a pause into the idle close and its reopen is left out once (example 2)',
-        why: 'the idle close is a 50-min wait; sitting-auto-close carries a pause through it on dev (its pause-through-idle row), and contractTests.ts runs the same case on the stub and the Lambda',
+        why: 'the idle close is a 50-min wait, and adding it to this branch’s dev run is a devcheck runtime increase, the maintainer’s call (localNotes/decisions.md); contractTests.ts runs the same case through the stub and the Lambda',
       },
     },
   ],
@@ -382,6 +374,33 @@ export const lcTimerPauses: Scenario = {
       },
     },
     {
+      id: 'many-pauses',
+      entry: 'api',
+      proves: ['max-pauses'],
+      title: '111 pauses, stamped 5 min apart: the stored head keeps the 100 longest',
+      async run(ctx) {
+        const { sitting } = await ctx.api.writes.lcSittingStart(start(ctx, 'd'));
+        state.d = sitting;
+        const c = (await head(ctx, sitting, 'many-pauses')).clientStartedAt ?? sitting.startedAt;
+        // Running reads 5 min apart, each counting (k + 1) s short: a k + 1-second pause before read k (2–112 s).
+        const reads = [timer(c, 0, 'running')];
+        let elapsed = 0;
+        for (let k = 1; k <= 111; k++) {
+          elapsed += 5 * M - (k + 1) * S;
+          reads.push(timer(c + k * 5 * M, elapsed, 'running'));
+        }
+        for (let i = 0; i < reads.length; i += 50)
+          await ctx.api.writes.lcSittingEvents(sitting.id, reads.slice(i, i + 50));
+        const kept = pausesOf(await head(ctx, sitting, 'many-pauses')).map(([a, b]) => b - a);
+        const shortest = Math.min(...kept);
+        if (kept.length !== 100 || shortest !== 13 * S || Math.max(...kept) !== 112 * S)
+          throw new Error(
+            `kept ${kept.length}, ${shortest}–${Math.max(...kept)} ms (want 100, 13–112 s)`,
+          );
+        await drop(ctx, state.d);
+      },
+    },
+    {
       id: 'pause',
       entry: 'api',
       cost: 'slow',
@@ -439,6 +458,33 @@ export const lcTimerPauses: Scenario = {
           if (m.value !== 1 || !/^paused on LeetCode · \d+m so far$/.test(m.note ?? ''))
             throw new Error(`So far while paused: ${JSON.stringify(m)}`);
         });
+      },
+    },
+    {
+      id: 'paused-home',
+      entry: 'ui',
+      cost: 'slow',
+      proves: ['home-hero'],
+      title: 'Home: its rep is the hero, at 1m of ~45m · paused',
+      async run(ctx) {
+        if (!state.a) throw new Error('no sitting — the pause step failed');
+        // As lc-sittings finds it: the rep's link to its sitting, and the hero's Done beside it.
+        const link = ctx.page.getByRole('link', { name: 'End the LeetCode sitting →' });
+        await ctx.ui.goto('/');
+        await ctx.page.getByRole('button', { name: 'Daytime' }).click();
+        await link.first().waitFor({ timeout: 15_000 });
+        const card = link.first().locator('xpath=..');
+        if ((await card.getByRole('button', { name: 'Done', exact: true }).count()) !== 1)
+          throw new Error(
+            'its rep isn’t Home’s hero — is another task in progress for the test user?',
+          );
+        const line =
+          (await card
+            .getByText(/^\d+m of ~\d+m/)
+            .first()
+            .textContent()) ?? '';
+        if (!/^1m of ~45m · paused$/.test(line.trim())) throw new Error(`Home’s hero: “${line}”`);
+        await ctx.shot('paused-home');
       },
     },
     {
@@ -509,7 +555,7 @@ export const lcTimerPauses: Scenario = {
         });
         await row.waitFor({ timeout: 15_000 });
         const text = (await row.textContent()) ?? '';
-        if (![soFar, soFar + 1].some((n) => text.includes(`${n}m`)))
+        if (![soFar, soFar + 1].some((n) => new RegExp(`(^|\\D)${n}m(\\b|$)`).test(text)))
           throw new Error(`list row: ${text} (So far ${soFar}m)`);
         // Done starts on the paused-out minutes; Cancel leaves it open.
         await ctx.ui.goto(`/recruiting/sittings/${a.id}`);
@@ -533,6 +579,10 @@ export const lcTimerPauses: Scenario = {
         }
         await end.waitFor({ state: 'hidden', timeout: 15_000 });
         await ctx.page.getByText(note).waitFor({ timeout: 5_000 }); // ended: Took, still the paused line
+        const took = await metric(ctx, 'Took');
+        if (took.note !== note || Math.abs(took.value - state.aMinutes) > 1)
+          throw new Error(`Took ${JSON.stringify(took)}, the Done prefill ${state.aMinutes}`);
+        state.aTook = took.value;
         await ctx.shot('done');
       },
     },
@@ -544,23 +594,25 @@ export const lcTimerPauses: Scenario = {
       title:
         'get_sitting, list_sittings and get_problem give the same minutes and paused minutes, writing nothing',
       async run(ctx) {
-        if (!state.aMinutes) throw new Error('not done — the done-ui step failed');
+        if (!state.aTook) throw new Error('not done — the done-ui step failed');
         const a = state.a!;
         const pausedMin = Math.round((state.aResumeAt - state.aPauseAt) / M);
         const before = await head(ctx, a, 'pause');
         const one = (await ctx.mcp.reads.getSitting({ id: a.id })).sitting;
-        if (one?.minutes !== state.aMinutes || one?.pausedMin !== pausedMin)
+        // Took is the stored end's, as these are: exact. (The Done prefill is the page's moment: ±1, done-ui.)
+        if (one?.minutes !== state.aTook || one?.pausedMin !== pausedMin)
           throw new Error(
-            `get_sitting: ${JSON.stringify(one)} (Done ${state.aMinutes}, ${pausedMin} paused)`,
+            `get_sitting: ${JSON.stringify(one)} (Took ${state.aTook}, ${pausedMin} paused)`,
           );
         const row = (await ctx.mcp.reads.listSittings({ limit: 10 })).sittings.find(
           (x) => x.id === a.id,
         );
-        if (row?.minutes !== state.aMinutes || row?.pausedMin !== pausedMin)
+        if (row?.minutes !== state.aTook || row?.pausedMin !== pausedMin)
           throw new Error(`list_sittings: ${JSON.stringify(row)}`);
         const p = await ctx.mcp.reads.getProblem({ slug: slugOf(ctx, 'a') });
         const tryMin = p.tries?.find((t) => t.sittingIds.includes(a.id))?.minutes;
-        if (tryMin !== state.aMinutes) throw new Error(`get_problem try minutes: ${tryMin}`);
+        if (tryMin !== state.aTook)
+          throw new Error(`get_problem try minutes: ${tryMin} (Took ${state.aTook})`);
         if (!eq(await head(ctx, a, 'pause'), before)) throw new Error('an MCP read wrote');
       },
     },
@@ -569,7 +621,8 @@ export const lcTimerPauses: Scenario = {
       entry: 'api',
       title: 'Drop whatever is left open and unlink the roll, for the scenarios after',
       async run(ctx) {
-        for (const s of [state.b, state.c, state.a]) if (s) await drop(ctx, s).catch(() => {});
+        for (const s of [state.b, state.c, state.d, state.a])
+          if (s) await drop(ctx, s).catch(() => {});
         await ctx.api.writes.linkLeetcodeRoll(null);
       },
     },
