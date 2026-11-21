@@ -147,10 +147,22 @@
   // The log, led by an entry naming the build that wrote it (the array shape the readers know), with any tail a page
   // wrote as it left (debug.js) folded in.
   const tailKeys = (all) => Object.keys(all).filter((k) => k.startsWith('debugTail.'));
+  // An entry a page wrote both to the log and to its tail (it left mid-write) once, by its page and sequence (debug.js).
+  const once = () => {
+    const seen = new Set();
+    return (e) => {
+      if (!e || e.pg == null || e.sq == null) return true;
+      const id = `${e.pg}.${e.sq}`;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    };
+  };
   const logJson = async () => {
     const all = await local.get(null);
     const entries = (Array.isArray(all.debugLog) ? all.debugLog : [])
       .concat(...tailKeys(all).map((k) => (Array.isArray(all[k]) ? all[k] : [])))
+      .filter(once())
       .sort((a, b) => a.t - b.t);
     return JSON.stringify([{ t: Date.now(), type: 'export', version }, ...entries], null, 1);
   };

@@ -122,8 +122,15 @@ describe('the Options page', () => {
     const ext = fakeExtension();
     // A tail a page wrote as it left (debug.js) is folded in, in time order, and cleared with the log.
     await ext.local.set({
-      debugLog: [{ t: 1, type: 'nav', slug: 'two-sum' }],
-      'debugTail.abc.0': [{ t: 0, type: 'vis', ev: 'pagehide' }],
+      debugLog: [
+        { t: 1, type: 'nav', slug: 'two-sum' },
+        { t: 2, type: 'press', pg: 'abc', sq: 4 },
+      ],
+      // Its in-flight batch too, already in the log (it left mid-write): kept once.
+      'debugTail.abc.0': [
+        { t: 0, type: 'vis', ev: 'pagehide' },
+        { t: 2, type: 'press', pg: 'abc', sq: 4 },
+      ],
     });
     const o = await loaded(ext);
     o.click('copyLog');
@@ -133,6 +140,7 @@ describe('the Options page', () => {
     expect(log.slice(1)).toEqual([
       { t: 0, type: 'vis', ev: 'pagehide' },
       { t: 1, type: 'nav', slug: 'two-sum' },
+      { t: 2, type: 'press', pg: 'abc', sq: 4 },
     ]);
     o.click('clearLog');
     await until(() => !('debugLog' in ext.local.data) && !('debugTail.abc.0' in ext.local.data));
