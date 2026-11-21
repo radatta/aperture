@@ -504,7 +504,8 @@ the URL, so a reload or Back keeps them.
 - **Trends** (`progressWeeks`, `capTimes`), live tries only, the last 12 ISO weeks (all four cards): problems a week (clean / solved
   / not yet), first tries clean and re-solves clean a week (a week under 5 tries hollow), and minutes a try against
   the 30-minute cap (`capMin`) with the median. A try's minutes: a sitting's to its first accept (both on the
-  extension's clock), else its length once ended; a logged try's as given. Each card says what it needs when
+  extension's clock), else its length once ended, LeetCode's timer pauses and idle gaps left out
+  ([recruiting](index.md) → _Timer pauses_); a logged try's as given. Each card says what it needs when
   there isn't enough yet.
 - **A problem's page** (`/recruiting/progress/:slug`, `ProblemPage.tsx`): its lists, status and re-solve, then
   every try newest first — minutes (over the cap in gold), help, cause, the logged note, its sittings — a

@@ -638,7 +638,7 @@ describe('timer pauses', () => {
     ]);
     expect(again.idleMs).toBe(3 * H);
   });
-  it(`keeps the ${SITTING_PAUSES_MAX} longest pauses`, () => {
+  it('keeps the longest pauses, up to the cap', () => {
     const sw = { mode: 'forward', endMs: null };
     const rows = [read(0, 0, sw)];
     let el = 0;
