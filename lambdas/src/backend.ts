@@ -1012,7 +1012,10 @@ export class BackendClient implements ApiClient {
       return startCapMin(await this.coachInput(undefined, true), n.problemSlug, n.difficulty);
     } catch (e) {
       console.log(
-        JSON.stringify({ event: 'lc_start_cap_fallback', error: e instanceof Error ? e.name : 'unknown' }),
+        JSON.stringify({
+          event: 'lc_start_cap_fallback',
+          error: e instanceof Error ? e.name : 'unknown',
+        }),
       );
       return startCapFallback(n.problemSlug, n.difficulty);
     }

@@ -22,7 +22,7 @@ import { targetOrigin } from '../config';
 import { DEV_AI_PICK_NOTICE } from '../api';
 import type { DevCoachAiView, DevCoachDayAi, DevCoachSlot, DevCoachToday } from '../api';
 import { needsYou, noConsoleErrors, type Ctx, type Scenario } from '../scenario';
-import { morning, todayCard, until } from './lc-coach';
+import { inCapBand, morning, slotCapMin, todayCard, until } from './lc-coach';
 
 // A declaration, not an arrow: `if (…) fail(…)` then narrows what follows.
 function fail(msg: string): never {
@@ -198,6 +198,18 @@ export const lcCoachAi: Scenario = {
       what: 'The day row holds the pick: ok, the model, its tokens, 4 unique problems each with a why — the plan’s slots in that order; the whys and note keep the coach’s wording (never “overdue”, no missed days or streaks)',
     },
     {
+      id: 'ai-cap',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'Each pick’s cap is absent (the table’s) or whole minutes within 0.5–1.5× of it, and its slot shows that cap',
+    },
+    {
+      id: 'ai-cap-swap',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'swap_slot on a picked slot: the problem swapped in takes the table’s cap; Restore brings the pick’s back',
+    },
+    {
       id: 'once',
       entry: 'api',
       kind: 'edge',
@@ -223,6 +235,17 @@ export const lcCoachAi: Scenario = {
     },
     // --- Off dev: dev can't make Anthropic fail or the model answer a non-candidate, and a test-only switch in
     // shipped code is forbidden. ---
+    {
+      id: 'ai-cap-repair',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A pick’s cap outside its band: that slot takes the table, the pick stays ok, the repair is logged',
+      offDev: {
+        file: 'lambdas/src/coach/pick.test.ts',
+        test: 'a cap in its range is kept; one outside it takes the table, the pick still ok, the repair logged',
+        why: 'the real model can’t be made to answer an out-of-band cap without a test-only switch',
+      },
+    },
     {
       id: 'fallback-server',
       entry: 'api',
@@ -696,7 +719,7 @@ export const lcCoachAi: Scenario = {
       title: 'The day row holds this run’s pick: ok, the model, its tokens, the slots in order',
       entry: 'api',
       cost: 'slow',
-      proves: ['ai-day-stored'],
+      proves: ['ai-day-stored', 'ai-cap'],
       async run(ctx) {
         const ai = await landedRow(ctx);
         if (ai.status !== 'ok')
@@ -723,6 +746,15 @@ export const lcCoachAi: Scenario = {
           fail(`slots ${slugs(t).join(',')} vs picks ${picked.join(',')}`);
         for (const [i, s] of t.slots.entries())
           if (s.aiWhy !== ai.picks[i]!.why) fail(`${s.slug}: aiWhy ${String(s.aiWhy)}`);
+        // Each pick's cap: absent (the table's) or whole minutes within its band; the slot shows it.
+        for (const [i, s] of t.slots.entries()) {
+          const cap = ai.picks[i]!.capMin;
+          const table = slotCapMin(s.kind, s.difficulty);
+          if (cap !== undefined && !inCapBand(cap, s.kind, s.difficulty))
+            fail(`${s.slug}: stored cap ${cap} outside its band`);
+          if (s.capMin !== (cap ?? table))
+            fail(`${s.slug}: slot cap ${s.capMin}, pick ${String(cap)}`);
+        }
         if (t.ai?.model !== ai.model || t.ai.pickedAt !== ai.settledAt)
           fail(`the view: ${JSON.stringify(t.ai)}`);
         state.pick = ai;
@@ -800,6 +832,37 @@ export const lcCoachAi: Scenario = {
           await expectCardSlots(ctx, t.slots);
           if (!same(slugs(await ctx.api.reads.getCoachToday()), slugs(t)))
             fail('the plan’s slots moved across a reload');
+        });
+      },
+    },
+    {
+      id: 'ai-cap-swap',
+      title: 'swap_slot on a picked slot: the swapped-in problem takes the table; Restore',
+      entry: 'mcp',
+      cost: 'slow',
+      proves: ['ai-cap-swap'],
+      async run(ctx) {
+        await withAi(ctx, async () => {
+          const t0 = await ctx.mcp.reads.leetcodeToday();
+          const slot =
+            t0.slots.find((s) => s.status === 'open' && !s.swappedFrom && s.aiWhy) ??
+            fail('no open picked slot to swap');
+          const sw = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
+            slug: slot.slug,
+            action: 'swap',
+          });
+          const swappedIn =
+            sw.slots.find((s) => s.swappedFrom === slot.slug && s.slug !== slot.slug) ??
+            fail(`no swapped slot: ${slugs(sw).join(',')}`);
+          if (swappedIn.capMin !== slotCapMin(swappedIn.kind, swappedIn.difficulty))
+            fail(`swapped-in cap: ${JSON.stringify(swappedIn)}`);
+          const back = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
+            slug: swappedIn.slug,
+            action: 'restore',
+          });
+          if (!same(slugs(back), slugs(t0))) fail(`restore: ${slugs(back).join(',')}`);
+          if (back.slots.find((s) => s.slug === slot.slug)?.capMin !== slot.capMin)
+            fail('the restored pick lost its cap');
         });
       },
     },

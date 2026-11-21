@@ -66,7 +66,7 @@ Done on the rep ─────────────────────�
 
 ### Idle close
 
-A sitting nothing has touched for **45 minutes** (`SITTING_IDLE_MS`, the coach's 30-minute cap + 15) is closed
+A sitting nothing has touched for **45 minutes** (`SITTING_IDLE_MS`; set as the old 30-minute cap + 15, it no longer follows the per-slot caps, [coach](coach.md) → _Caps_) is closed
 by the next read, never by a scheduled job ($0, no new resource).
 
 - **Activity** is everything the server already hears, on its own clock: the Start, a reopen, every events call

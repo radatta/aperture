@@ -85,7 +85,9 @@ describe('coachPickOutputSchema', () => {
   it('each pick carries a required nullable integer cap; bounds stay in code', () => {
     const items = (
       coachPickOutputSchema(ctx) as {
-        properties: { picks: { items: { required: string[]; properties: Record<string, unknown> } } };
+        properties: {
+          picks: { items: { required: string[]; properties: Record<string, unknown> } };
+        };
       }
     ).properties.picks.items;
     expect(items.required).toEqual(['slug', 'why', 'capMin']);

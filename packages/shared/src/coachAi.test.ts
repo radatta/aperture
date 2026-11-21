@@ -344,7 +344,11 @@ describe('per-slot caps in the pick', () => {
 
   it('gives each candidate its table cap and the range the pick may set', () => {
     // group-anagrams: a Medium carry-over (the new row); two-sum: an Easy re-solve.
-    expect(cand('group-anagrams')).toMatchObject({ kind: 'carry-over', capMin: 45, capRange: [23, 67] });
+    expect(cand('group-anagrams')).toMatchObject({
+      kind: 'carry-over',
+      capMin: 45,
+      capRange: [23, 67],
+    });
     expect(cand('two-sum')).toMatchObject({ kind: 're-solve', capMin: 10, capRange: [5, 15] });
   });
 

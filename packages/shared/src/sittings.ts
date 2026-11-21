@@ -1007,7 +1007,7 @@ export function reclaimStart<G extends GateFields>(
 
 // --- Idle close (docs/areas/recruiting → Idle close): a sitting nothing has touched for SITTING_IDLE_MS is closed
 // by the next read, at its last activity + a tail — never at the moment it's noticed ---
-export const SITTING_IDLE_MS = 45 * 60_000; // the 30-min cap + 15
+export const SITTING_IDLE_MS = 45 * 60_000; // the old 30-min cap + 15; not tied to the per-slot caps (coach.md → Caps)
 export const SITTING_IDLE_TAIL_MS = 5 * 60_000;
 export const SITTING_REOPEN_ERROR = 'Only a sitting closed automatically can be reopened.';
 export const SITTING_REOPEN_REP_ERROR = 'Its rep has moved on — start a new sitting.';

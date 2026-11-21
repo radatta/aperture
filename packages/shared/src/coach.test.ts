@@ -491,8 +491,12 @@ describe('planDay', () => {
 describe('per-slot caps', () => {
   it('the table: new, stretch and carry-over 20/45/60, a re-solve 10/25/30, no difficulty reads Medium', () => {
     for (const k of ['new', 'stretch', 'carry-over'] as const)
-      expect([slotCapMin(k, 'Easy'), slotCapMin(k, 'Medium'), slotCapMin(k, 'Hard')]).toEqual([20, 45, 60]);
-    expect(['Easy', 'Medium', 'Hard'].map((d) => slotCapMin('re-solve', d as 'Easy'))).toEqual([10, 25, 30]);
+      expect([slotCapMin(k, 'Easy'), slotCapMin(k, 'Medium'), slotCapMin(k, 'Hard')]).toEqual([
+        20, 45, 60,
+      ]);
+    expect(['Easy', 'Medium', 'Hard'].map((d) => slotCapMin('re-solve', d as 'Easy'))).toEqual([
+      10, 25, 30,
+    ]);
     expect(slotCapMin('new', null)).toBe(45);
     expect(slotCapMin('re-solve', null)).toBe(25);
     expect(slotCapRange('new', 'Hard')).toEqual([30, 90]);
@@ -505,7 +509,10 @@ describe('per-slot caps', () => {
     const slot = t.slots.find((s) => s.kind === 'new')!;
     const started = sit({ slug: slot.slug, on: TODAY, open: true, cap: 33 });
     const after = planDay(input({ sittings: [failed('two-sum', day(-1)), started] }));
-    expect(after.slots.find((s) => s.slug === slot.slug)).toMatchObject({ status: 'in-progress', capMin: 33 });
+    expect(after.slots.find((s) => s.slug === slot.slug)).toMatchObject({
+      status: 'in-progress',
+      capMin: 33,
+    });
     // A sitting from before per-slot caps stored none: it ran under the old 30.
     const old = sit({ slug: slot.slug, on: TODAY, open: true });
     const legacy = planDay(input({ sittings: [failed('two-sum', day(-1)), old] }));
@@ -517,12 +524,17 @@ describe('per-slot caps', () => {
     const recs = listRecords(
       input({
         sittings: [sit({ slug: 'two-sum', on: day(-5), submits: ['accepted'], cap: 15 })],
-        attempts: [manual('valid-anagram', day(-4), 'failed'), manual('valid-anagram', day(-2), 'clean')],
+        attempts: [
+          manual('valid-anagram', day(-4), 'failed'),
+          manual('valid-anagram', day(-2), 'clean'),
+        ],
         legacy: [],
       }),
     );
     expect(recs.find((r) => r.slug === 'two-sum')!.tries.map((t) => t.capMin)).toEqual([15]);
-    expect(recs.find((r) => r.slug === 'valid-anagram')!.tries.map((t) => t.capMin)).toEqual([20, 10]);
+    expect(recs.find((r) => r.slug === 'valid-anagram')!.tries.map((t) => t.capMin)).toEqual([
+      20, 10,
+    ]);
     const before = listRecords(input({ sittings: [clean('group-anagrams', day(-3))] }));
     expect(before.find((r) => r.slug === 'group-anagrams')!.tries[0]!.capMin).toBe(30);
   });
@@ -546,7 +558,13 @@ describe('per-slot caps', () => {
   });
 
   it('a second sitting on an off-plan problem the same day keeps the unseen cap', () => {
-    const first = sit({ slug: 'course-schedule', on: TODAY, submits: ['wrong_answer'], minutes: 20, cap: 45 });
+    const first = sit({
+      slug: 'course-schedule',
+      on: TODAY,
+      submits: ['wrong_answer'],
+      minutes: 20,
+      cap: 45,
+    });
     expect(startCapMin(input({ sittings: [first] }), 'course-schedule', 'Medium')).toBe(45);
   });
 });

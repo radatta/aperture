@@ -243,8 +243,11 @@ export const INPUT_RULES: InputRule[] = [
   },
   {
     inputs: ['packages/shared/src/coach.ts'],
-    tests: ['scripts/src/devcheck/api.test.ts'],
-    why: 'reads coach.ts as text',
+    tests: [
+      'scripts/src/devcheck/api.test.ts',
+      'scripts/src/devcheck/scenarios/lc-coach.caps.test.ts',
+    ],
+    why: 'reads coach.ts as text (lc-coach.caps.test pins the cap table)',
   },
   {
     inputs: ['cdk/src/config/claudeConnector.ts'],

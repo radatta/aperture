@@ -483,8 +483,14 @@ describe('live_sitting slot', () => {
     const old: Sitting = { ...(await start('contains-duplicate')) };
     delete old.capMin;
     const today = await backend.getCoachToday();
-    expect(slotOfSitting(today, old, T0 + 25 * 60_000)).toMatchObject({ capMin: 30, overCap: false });
-    expect(slotOfSitting(today, old, T0 + 30 * 60_000)).toMatchObject({ capMin: 30, overCap: true });
+    expect(slotOfSitting(today, old, T0 + 25 * 60_000)).toMatchObject({
+      capMin: 30,
+      overCap: false,
+    });
+    expect(slotOfSitting(today, old, T0 + 30 * 60_000)).toMatchObject({
+      capMin: 30,
+      overCap: true,
+    });
   });
 });
 

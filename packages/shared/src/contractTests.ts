@@ -5270,7 +5270,9 @@ export function runApiContract(
 
       it('a Start stores its slot’s cap; a reopen keeps it; off the plan the problem’s own kind; the card shows it', async () => {
         // On the plan: contains-duplicate, an Easy new slot (20).
-        const slot = (await api.getCoachToday()).slots.find((x) => x.slug === 'contains-duplicate')!;
+        const slot = (await api.getCoachToday()).slots.find(
+          (x) => x.slug === 'contains-duplicate',
+        )!;
         expect(slot.capMin).toBe(20);
         const { sitting } = await startSitting(api, {
           problemSlug: 'contains-duplicate',
@@ -5291,7 +5293,9 @@ export function runApiContract(
         );
         expect(off.sitting.capMin).toBe(45); // a catalog Medium, whatever the Start says
         const today = await api.getCoachToday();
-        expect(today.slots.find((x) => x.slug === 'contains-duplicate')).toMatchObject({ capMin: 20 });
+        expect(today.slots.find((x) => x.slug === 'contains-duplicate')).toMatchObject({
+          capMin: 20,
+        });
         expect(today.offPlan.map((x) => x.slug)).toContain('course-schedule');
       });
 
