@@ -305,6 +305,8 @@ describe('coachPick', () => {
         ifFocus: null,
         rule: 'r',
         history: null,
+        capMin: 10,
+        capRange: [5, 15],
       },
     ],
     focus: { pattern: 'arrays-hashing', day: 1, of: 3, locked: false },
@@ -329,7 +331,11 @@ describe('coachPick', () => {
       },
     ],
   } as never;
-  const ANSWER = { picks: [{ slug: 'two-sum', why: 'due' }], note: null, focus: null };
+  const ANSWER = {
+    picks: [{ slug: 'two-sum', why: 'due', capMin: null }],
+    note: null,
+    focus: null,
+  };
 
   it('runs Opus 5.5 with thinking left on (never disabled), effort medium, its schema and its own log event', async () => {
     const { gw, calls, logs } = setup(() => message(JSON.stringify(ANSWER)));

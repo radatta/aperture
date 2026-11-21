@@ -151,12 +151,16 @@ Each slot has a time cap in whole minutes, by its kind and the problem's difficu
 | re-solve                 | 10   | 25     | 30   |
 
 - **Stored at Start** (`Sitting.capMin`, set once, like `extensionVersion`; `startCapMin`): the plan's slot for that
-  problem, else the floor's kind, else the problem's own kind (the carry-over, a seen problem a re-solve, else new).
-  A reopen or a resume keeps it. A failed plan read never fails a Start: the new row by difficulty
-  (`startCapFallback`, logged `lc_start_cap_fallback`).
+  problem, else today's earlier sitting on it (a swap since), else the floor's kind, else the problem's own kind
+  (the carry-over, a seen problem a re-solve, else new). A reopen or a resume keeps it. A failed plan read never
+  fails a Start: the new row by difficulty (`startCapFallback`, logged `lc_start_cap_fallback`); a throttle is thrown
+  instead, so the extension retries (429) rather than keeping the fallback.
 - **Read back:** a slot with a sitting shows the sitting's cap, and so do `live_sitting`'s `overCap` and the try. A
-  sitting from before the caps (none stored) reads against 30 (`capLegacyMin`). A logged try takes the table: a
-  problem's first try new, a later one re-solve.
+  sitting from before the caps (none stored) reads against 30 (`capLegacyMin`). A logged try takes the table by
+  the kind it would have been (`foldDays`): a first try new; after an unaccepted, unpeeked try on the last active
+  day within 2 days a carry-over; any other later try, or one after a history-only solve, a re-solve. A day's
+  pieces take the earliest stored cap. `live_sitting`'s `overCap` is true from the cap's minute (time's up); a
+  finished try is over only past it (Trends, the problem page).
 - **The AI pick** may set a pick's cap (`CoachAiPick.capMin`) to whole minutes within 0.5–1.5× of its cell
   (`capAi`, `slotCapRange`); anything else is repaired to the table, never a reject (_The AI pick_). A problem
   swapped in takes the table.
@@ -518,7 +522,7 @@ the URL, so a reload or Back keeps them.
   off the list, due) over a whole-list bar, then the 18 patterns in our own five stages, in roadmap order:
   Foundations, Linked structures, Search, Dynamic programming, Toolkit. Each stage is a column on a wide screen
   (one under another on a phone) with its meter and a card per pattern; a card's squares are its problems, shape
-  and fill carrying each state (hollow, dotted Premium when the setting is off, solid, ringed when due), and its
+  and fill carrying each state (hollow, dotted Premium when the setting is off, solid, a dot under it when due), and its
   accessible name says it all in words. A card opens its problems in a panel — status, tries, last tried, re-solve,
   LeetCode link, each title linking its page — under all five stages on a wide screen, under its own stage on a
   phone; Close returns focus to the card. **Left only** lists what's left: the open pattern's untried problems, or

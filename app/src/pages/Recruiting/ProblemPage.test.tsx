@@ -47,9 +47,9 @@ describe('Problem page', () => {
       screen.getByRole('region', { name: '3 tries, newest first' }),
     ).getAllByRole('listitem');
     expect(tries).toHaveLength(3);
-    // Logged tries take the table by difficulty: the first live one as new (Easy 20), a later one as a re-solve (10).
+    // Logged tries take the table by difficulty and kind: after the history-only solve both are re-solves (Easy 10).
     expect(within(tries[0]!).getByText('34 min, over the 10 min cap')).toBeTruthy();
-    expect(within(tries[1]!).getByText('41 min, over the 20 min cap')).toBeTruthy();
+    expect(within(tries[1]!).getByText('41 min, over the 10 min cap')).toBeTruthy();
     expect(within(tries[0]!).getByText(/a hint · Boundary/)).toBeTruthy();
     expect(within(tries[1]!).getByText('Peeked')).toBeTruthy();
     expect(within(tries[2]!).getByText('Before the coach')).toBeTruthy();

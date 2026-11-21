@@ -201,7 +201,7 @@ export const lcCoachAi: Scenario = {
       id: 'ai-cap',
       entry: 'api',
       kind: 'nominal',
-      what: 'Each pick’s cap is absent (the table’s) or whole minutes within 0.5–1.5× of it, and its slot shows that cap',
+      what: 'Each pick’s cap is absent (the table’s) or whole minutes within 0.5–1.5× of it, and its slot shows that cap (the model usually sends none; a moved cap’s path is proven off dev, ai-cap-repair)',
     },
     {
       id: 'ai-cap-swap',
@@ -843,10 +843,12 @@ export const lcCoachAi: Scenario = {
       proves: ['ai-cap-swap'],
       async run(ctx) {
         await withAi(ctx, async () => {
-          const t0 = await ctx.mcp.reads.leetcodeToday();
+          // The API's view: leetcode_today sends the pick's line as `why`, never `aiWhy`.
+          const t0 = await ctx.api.reads.getCoachToday();
           const slot =
             t0.slots.find((s) => s.status === 'open' && !s.swappedFrom && s.aiWhy) ??
             fail('no open picked slot to swap');
+          const pickCap = state.pick?.picks.find((p) => p.slug === slot.slug)?.capMin;
           const sw = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
             slug: slot.slug,
             action: 'swap',
@@ -863,6 +865,12 @@ export const lcCoachAi: Scenario = {
           if (!same(slugs(back), slugs(t0))) fail(`restore: ${slugs(back).join(',')}`);
           if (back.slots.find((s) => s.slug === slot.slug)?.capMin !== slot.capMin)
             fail('the restored pick lost its cap');
+          // With no cap of the pick's own, Restore brings back the table's: the pick's own goes unexercised.
+          ctx.log(
+            pickCap === undefined
+              ? 'the pick set no cap of its own: Restore checked against the table only'
+              : `Restore brought back the pick’s own cap ${pickCap}`,
+          );
         });
       },
     },

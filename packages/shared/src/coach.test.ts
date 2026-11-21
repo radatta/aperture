@@ -532,17 +532,80 @@ describe('per-slot caps', () => {
       }),
     );
     expect(recs.find((r) => r.slug === 'two-sum')!.tries.map((t) => t.capMin)).toEqual([15]);
+    // First try new (20); two days after a miss on the last active day, a carry-over (20); then a re-solve (10).
     expect(recs.find((r) => r.slug === 'valid-anagram')!.tries.map((t) => t.capMin)).toEqual([
-      20, 10,
+      20, 20,
     ]);
     const before = listRecords(input({ sittings: [clean('group-anagrams', day(-3))] }));
     expect(before.find((r) => r.slug === 'group-anagrams')!.tries[0]!.capMin).toBe(30);
+  });
+
+  it('a logged try’s kind: carry-over only after a miss on the last active day; a peek, a gap or an accept makes it a re-solve', () => {
+    const caps = (attempts: CoachAttempt[], slug = 'valid-anagram') =>
+      listRecords(input({ attempts, legacy: [] }))
+        .find((r) => r.slug === slug)!
+        .tries.map((t) => t.capMin);
+    const va = (on: string, o: CoachAttempt['outcome'], help?: HelpLevel) =>
+      manual('valid-anagram', on, o, help);
+    expect(caps([va(day(-6), 'failed'), va(day(-5), 'failed'), va(day(-4), 'clean')])).toEqual([
+      20, 20, 20,
+    ]);
+    expect(caps([va(day(-5), 'failed'), va(day(-4), 'clean'), va(day(-3), 'clean')])).toEqual([
+      20, 20, 10,
+    ]);
+    expect(caps([va(day(-5), 'failed', 'solution'), va(day(-4), 'clean')])).toEqual([20, 10]);
+    expect(caps([va(day(-6), 'failed'), va(day(-3), 'clean')])).toEqual([20, 10]); // past carryOverDays
+    // Another problem tried in between: the miss isn't on the last active day.
+    expect(
+      caps([va(day(-5), 'failed'), manual('two-sum', day(-4), 'clean'), va(day(-3), 'clean')]),
+    ).toEqual([20, 10]);
+  });
+
+  it('a history-only solve before a live try makes it a re-solve; one after it doesn’t', () => {
+    const old = (on: string) => ({
+      ...manual('valid-anagram', on, 'solved'),
+      historical: true as const,
+    });
+    const first = (attempts: CoachAttempt[]) =>
+      listRecords(input({ attempts, legacy: [] }))
+        .find((r) => r.slug === 'valid-anagram')!
+        .tries.filter((t) => !t.historical)[0]!.capMin;
+    expect(first([old(day(-30)), manual('valid-anagram', day(-3), 'clean')])).toBe(10);
+    expect(first([manual('valid-anagram', day(-30), 'clean'), old(day(-3))])).toBe(20);
+  });
+
+  it('one day’s pieces fold to the earliest stored cap: a sitting’s over a logged piece, the first sitting’s over a later one', () => {
+    const first = sit({ slug: 'two-sum', on: day(-3), submits: ['accepted'], cap: 33 });
+    const later = {
+      ...sit({ slug: 'two-sum', on: day(-3), submits: ['accepted'], cap: 45 }),
+      id: id(),
+      startedAt: first.startedAt + 2 * 3_600_000,
+      endedAt: first.endedAt! + 2 * 3_600_000,
+    };
+    const recs = listRecords(
+      input({
+        sittings: [later, first],
+        attempts: [manual('two-sum', day(-3), 'clean')],
+        legacy: [],
+      }),
+    );
+    expect(recs.find((r) => r.slug === 'two-sum')!.tries.map((t) => t.capMin)).toEqual([33]);
   });
 
   it('startCapMin: the slot’s cap on the plan (the AI pick’s: coachAi.test.ts)', () => {
     const ci = input({ sittings: [failed('two-sum', day(-1))] });
     const t = planDay(ci);
     for (const s of t.slots) expect(startCapMin(ci, s.slug, null), s.slug).toBe(s.capMin);
+  });
+
+  it('startCapMin off the plan after an earlier sitting today: that sitting’s cap', () => {
+    const ci = input({
+      sittings: [
+        { ...sit({ slug: 'course-schedule', on: day(0), submits: [], cap: 50 }), endedAt: null },
+      ],
+    });
+    expect(planDay(ci).slots.some((s) => s.slug === 'course-schedule')).toBe(false);
+    expect(startCapMin(ci, 'course-schedule', 'Medium')).toBe(50);
   });
 
   it('startCapMin off the plan: its own kind by difficulty; unknown difficulty reads Medium', () => {

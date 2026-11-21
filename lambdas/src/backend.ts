@@ -357,6 +357,7 @@ import { catalogStatus, stageComplete } from './catalog/store';
 import type { CatalogStore } from './catalog/store';
 import type { CatalogImportInput, CatalogStatus } from '@aperture/shared';
 import type { AnthropicGateway } from './anthropic/gateway';
+import { isThrottle } from './rpc/failure';
 import { SITTING_DRAFT_TIMEOUT_MS, sittingDraftData } from './anthropic/sittingReviewPrompt';
 
 export interface BackendOptions {
@@ -1003,14 +1004,15 @@ export class BackendClient implements ApiClient {
     );
     return { sitting: shaped, resumed: false };
   }
-  // A resume: an open sitting whose shaping never finished (a Start that died after its head) is shaped fully,
-  // with its own roll; a shaped one only has its rep started.
   // The new sitting's cap (coach.ts startCapMin), from the plan as the server reads it now — after the Start ended
   // any stale sitting, before the new head exists. A failed read takes the fallback: Start never fails over a cap.
+  // A throttle is the exception: thrown, so the extension's outbox retries (429) rather than the sitting keeping
+  // the fallback for good; the gate's claim lets the same Start through again.
   private async startCap(n: { problemSlug: string; difficulty: string | null }): Promise<number> {
     try {
       return startCapMin(await this.coachInput(undefined, true), n.problemSlug, n.difficulty);
     } catch (e) {
+      if (isThrottle(e)) throw e;
       console.log(
         JSON.stringify({
           event: 'lc_start_cap_fallback',
@@ -1020,6 +1022,8 @@ export class BackendClient implements ApiClient {
       return startCapFallback(n.problemSlug, n.difficulty);
     }
   }
+  // A resume: an open sitting whose shaping never finished (a Start that died after its head) is shaped fully,
+  // with its own roll; a shaped one only has its rep started.
   private async resumeShape(s: Sitting, linked: Roll): Promise<Sitting> {
     if (s.status !== 'active') return s;
     const roll = s.rollId === linked.id ? linked : ((await this.repo.getRoll(s.rollId)) ?? linked);

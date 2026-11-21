@@ -4,6 +4,7 @@
 
 import { CATALOGS } from './catalogs';
 import type { CatalogId } from './catalogs';
+import { COACH_PARAMS } from './coach';
 import type { ProblemRecord, Rate } from './coach';
 import { addDays, isoWeekKey, weekdayOf } from './dates';
 import { PATTERNS } from './neetcode150';
@@ -228,7 +229,8 @@ export function capTimes(records: readonly ProblemRecord[], today: string, weeks
     r.tries.filter((t) => !t.historical && t.minutes !== null && t.day >= from && t.day <= today),
   );
   const mins = timed.map((t) => t.minutes!).sort((a, b) => a - b);
-  const at = timed.map((t) => ({ m: 6 * t.minutes!, cap: t.capMin }));
+  // `??`: a Lambda from before the caps (a revert's window) sends no capMin; read it as the old 30, never NaN.
+  const at = timed.map((t) => ({ m: 6 * t.minutes!, cap: t.capMin ?? COACH_PARAMS.capLegacyMin }));
   const mid = mins.length >> 1;
   return {
     timed: mins.length,
