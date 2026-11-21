@@ -1,7 +1,8 @@
 // Debug mode (Options → Debug mode): a recorder for finding LeetCode's controls — what was clicked, which
 // dialogs appeared, how LeetCode's timer state moved — kept in storage.local.debugLog for Options → Export.
 // Off, it records nothing. It never records code, request bodies or tokens: wire entries are sizes only,
-// storage keys that look like credentials are redacted, and nothing inside the code editor is described.
+// storage keys that look like credentials are redacted, another key's value is kept only for LeetCode's timer and
+// session keys, a field's value only when it is a short number, and nothing inside the code editor is described.
 // The timer probes (F392/F393, the probe session in extension/README.md → Debug mode) record what LeetCode's
 // timer pop-up, its tabs and duration fields answer to, the tab's visibility, late ticks and storage events.
 (function (root) {
@@ -18,8 +19,19 @@
     '[role=dialog],[role=alertdialog],[role=menu],[role=listbox],[role=tablist],[data-radix-popper-content-wrapper]';
   const TIMER_LABEL = /^(start|pause|resume|reset|stopwatch|timer)$/i;
   const CONTROLS =
-    'button,[role=button],[role=tab],[role=tabpanel],[role=switch],[role=checkbox],[role=option],[role=menuitem],input,select,[contenteditable],[tabindex]';
+    'button,[role=button],[role=tab],[role=tabpanel],[role=switch],[role=checkbox],[role=radio],[role=spinbutton],[role=option],[role=menuitem],input,select,[contenteditable],[tabindex]';
   const KEYS = /^([0-9]|Arrow(Up|Down|Left|Right)|Tab|Enter|Backspace|Delete|Escape)$/;
+  const LIVE = '[role=alert],[role=status],[aria-live]';
+  const EDITOR = '.monaco-editor,.monaco-aria-container,[contenteditable]';
+  // The keys whose values are kept: LeetCode's timer (its heartbeat aside: it changes every second, and `vis` carries
+  // it), its solve sessions and the language. Any other key logs its length alone — it could hold a code draft.
+  const valued = (k) =>
+    (/^QD_TIMER_/.test(k) && k !== 'QD_TIMER_HEARTBEAT') ||
+    k.startsWith('qd_solve_session:') ||
+    k === 'global_lang';
+  // This page, on every entry: two tabs write one log (the session's step 11).
+  const PAGE = Math.random().toString(36).slice(2, 8);
+  const TAIL = 'debugTail.';
 
   let known = false;
   let enabled = false;
@@ -29,21 +41,43 @@
 
   const clip = (s, n) => (typeof s === 'string' && s.length > n ? `${s.slice(0, n)}…` : s);
   function log(type, data) {
-    const e = { t: Date.now(), type, ...(data || {}) };
+    const e = { t: Date.now(), type, pg: PAGE, ...(data || {}) };
     if (!known) {
       if (early.length < 200) early.push(e);
     } else if (enabled) fresh.push(e);
+  }
+  // Every 2 s: the log read, this page's batch and any tails added, written back. Under a Web Lock (origin-wide, so two
+  // LeetCode tabs take turns — inferred from the spec, unproven in Safari's isolated world); without one, as before.
+  async function write(batch) {
+    const got = await api.storage.local.get(null);
+    const tails = Object.keys(got).filter((k) => k.startsWith(TAIL));
+    const all = (Array.isArray(got.debugLog) ? got.debugLog : [])
+      .concat(...tails.map((k) => (Array.isArray(got[k]) ? got[k] : [])), batch)
+      .sort((a, b) => a.t - b.t);
+    await api.storage.local.set({ debugLog: all.slice(-MAX) });
+    if (tails.length) await api.storage.local.remove(tails);
   }
   setInterval(async () => {
     if (!fresh.length) return;
     const batch = fresh;
     fresh = [];
     try {
-      const { debugLog } = await api.storage.local.get('debugLog');
-      const all = (Array.isArray(debugLog) ? debugLog : []).concat(batch);
-      await api.storage.local.set({ debugLog: all.slice(-MAX) });
+      const locks = globalThis.navigator && navigator.locks;
+      if (locks) await locks.request('aperture-debug-log', () => write(batch));
+      else await write(batch);
     } catch {}
   }, 2000);
+  // Leaving (a reload, a close): one write with no read first, to its own key, which the next write folds in — the page
+  // may be gone before a read comes back.
+  let tails = 0;
+  function flushTail() {
+    if (!fresh.length) return;
+    const batch = fresh;
+    fresh = [];
+    try {
+      api.storage.local.set({ [`${TAIL}${PAGE}.${tails++}`]: batch }).catch(() => {});
+    } catch {}
+  }
 
   function cssPath(el) {
     const parts = [];
@@ -129,23 +163,36 @@
         : timerArea(el)
           ? 'timer'
           : null;
-  // A control as the duration fields need it: its value only for an input or select (never a textarea).
+  // A field's value only when it reads like a duration (a short number); else its length. Never a hidden field, a
+  // password or one named like a credential.
+  const DURATION = /^[\d:.\s]{0,8}$/;
+  const secretField = (el) =>
+    el.type === 'password' ||
+    ['name', 'id', 'autocomplete', 'aria-label'].some((a) => SECRET.test(el.getAttribute(a) || ''));
+  // A control as the duration fields need it (editable text never reaches here: `shown`).
   const control = (el) => {
     const c = { ...lite(el), text: clip((el.textContent || '').trim(), 40), path: cssPath(el) };
-    if (el.matches('input,select') && el.type !== 'password') {
-      c.value = clip(String(el.value), 20);
+    if (el.matches('input,select') && !secretField(el)) {
+      const v = String(el.value);
+      if (DURATION.test(v)) c.value = v;
+      else c.valueLen = v.length;
       for (const k of ['min', 'max', 'step', 'inputmode', 'placeholder', 'name'])
         if (el.hasAttribute(k)) c[k] = clip(el.getAttribute(k), 40);
       c.disabled = !!el.disabled;
     }
     return c;
   };
+  const shown = (el) =>
+    !ours(el) && !el.closest(EDITOR) && !(el.matches('input') && el.type === 'hidden');
   function dumpPopup(p, why) {
+    const editor = !!p.querySelector(EDITOR);
     log('dom.popup', {
       why,
       popup: lite(p),
-      text: clip((p.textContent || '').trim(), 200),
-      controls: [...p.querySelectorAll(CONTROLS)].slice(0, 40).map(control),
+      ...(editor
+        ? { text: null, hasEditor: true }
+        : { text: clip((p.textContent || '').trim(), 200) }),
+      controls: [...p.querySelectorAll(CONTROLS)].filter(shown).slice(0, 40).map(control),
     });
   }
   // The outermost pop-up around an element (a dialog holding a tablist is one pop-up).
@@ -180,15 +227,25 @@
   };
 
   function recordTimerProbes() {
-    // pointerdown and mousedown too: a Radix tab switches on mousedown, never on click.
-    for (const ev of ['pointerdown', 'mousedown', 'click'])
+    // pointerdown, mousedown and focusin too: a Radix tab switches on mousedown or focus, never on click.
+    for (const ev of ['pointerdown', 'mousedown', 'focusin', 'click'])
       document.addEventListener(
         ev,
         (e) => {
+          if (!enabled) return;
           const t = e.target;
           const at = where(t);
           if (!at) return;
-          log('press', { ev, trusted: e.isTrusted, at, target: describe(t), up: ancestors(t, 3) });
+          // The control pressed, in full; the element hit (often its <svg>) and three ancestors, tag and attributes only.
+          const ctl = t.closest(CONTROLS);
+          log('press', {
+            ev,
+            trusted: e.isTrusted,
+            at,
+            target: ctl && shown(ctl) ? describe(ctl) : null,
+            hit: lite(t),
+            up: ancestors(t, 3),
+          });
           settleDump(t, ev);
         },
         true,
@@ -198,7 +255,7 @@
         ev,
         (e) => {
           const t = e.target;
-          if (!t || !t.matches || !t.matches('input,select') || !where(t)) return;
+          if (!enabled || !t || !t.matches || !t.matches('input,select') || !where(t)) return;
           log('input', {
             ev,
             trusted: e.isTrusted,
@@ -212,24 +269,38 @@
     document.addEventListener(
       'keydown',
       (e) => {
-        if (!KEYS.test(e.key) || !where(e.target)) return;
+        if (!enabled || !KEYS.test(e.key) || !where(e.target)) return;
         log('key', { key: e.key, trusted: e.isTrusted, target: lite(e.target) });
         settleDump(e.target, 'key');
       },
       true,
     );
     const vis = (ev, extra) =>
+      enabled &&
       log('vis', { ev, state: document.visibilityState, ...(extra || {}), ...timerNow() });
-    document.addEventListener('visibilitychange', () => vis('visibilitychange'));
-    for (const ev of ['pagehide', 'pageshow'])
-      window.addEventListener(ev, (e) => vis(ev, { persisted: !!e.persisted }));
+    document.addEventListener('visibilitychange', () => {
+      vis('visibilitychange');
+      if (document.visibilityState === 'hidden') flushTail();
+    });
+    window.addEventListener('pagehide', (e) => {
+      vis('pagehide', { persisted: !!e.persisted });
+      flushTail();
+    });
+    window.addEventListener('pageshow', (e) => vis('pageshow', { persisted: !!e.persisted }));
     for (const ev of ['focus', 'blur']) window.addEventListener(ev, () => vis(ev));
+    // Another tab's localStorage writes (never this page's own). The heartbeat is skipped (every second, in `vis`).
     window.addEventListener('storage', (e) => {
-      const key = e.key == null ? null : SECRET.test(e.key) ? '[redacted]' : clip(e.key, 80);
-      log('storage.event', {
-        key,
-        value: key === '[redacted]' ? '[redacted]' : clip(e.newValue, STATE_CLIP),
-      });
+      if (!enabled || e.key === 'QD_TIMER_HEARTBEAT') return;
+      if (e.key == null) return void log('storage.event', { key: null, cleared: true });
+      if (SECRET.test(e.key))
+        return void log('storage.event', { key: '[redacted]', value: '[redacted]' });
+      const key = clip(e.key, 80);
+      log(
+        'storage.event',
+        valued(e.key)
+          ? { key, value: clip(e.newValue, STATE_CLIP) }
+          : { key, valueLen: e.newValue == null ? null : e.newValue.length },
+      );
     });
     // A 1 s tick that came late: how Safari throttles a hidden tab (only the late ones, so the log keeps room).
     let last = Date.now();
@@ -238,37 +309,70 @@
       if (now - last > 1500) log('tick', { gapMs: now - last, state: document.visibilityState });
       last = now;
     }, 1000);
-    // Pop-ups and alerts as they appear, and a pop-up's tabs or fields changing state with no event heard.
+    // Pop-ups and alerts as they appear, a live region or the tab's title taking new text, and a pop-up's tabs or
+    // fields changing state (a class only on a control: a tab may switch by its classes alone).
+    const alert = (a) =>
+      log('dom.alert', { el: lite(a), text: clip((a.textContent || '').trim(), 120) });
+    const live = (node) => {
+      const el = node && (node.nodeType === 1 ? node : node.parentElement);
+      const a = el && el.closest(LIVE);
+      return a && !ours(a) && !a.closest(EDITOR) ? a : null;
+    };
     new MutationObserver((muts) => {
+      if (!enabled) return;
+      const changed = new Set();
       for (const m of muts) {
         if (m.type === 'attributes') {
           const el = m.target;
-          if (el.nodeType === 1 && !ours(el) && el.closest(POPUP))
-            log('dom.state', {
-              el: lite(el),
-              attr: m.attributeName,
-              value: clip(el.getAttribute(m.attributeName), 40),
-            });
+          if (el.nodeType !== 1 || ours(el) || el.closest(EDITOR) || !el.closest(POPUP)) continue;
+          if (m.attributeName === 'class' && !el.matches(CONTROLS)) continue;
+          log('dom.state', {
+            el: lite(el),
+            attr: m.attributeName,
+            value: clip(el.getAttribute(m.attributeName), m.attributeName === 'class' ? 160 : 40),
+          });
           continue;
         }
+        const tgt = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+        if (tgt && tgt.closest('title')) {
+          log('title', { text: clip(document.title, 80) });
+          continue;
+        }
+        // Text into a live region already on the page (the accessible way to announce, perhaps the alarm at 0).
+        const a = live(m.target);
+        if (a) changed.add(a);
         for (const n of m.addedNodes) {
           if (n.nodeType !== 1 || ours(n)) continue;
           const opened = new Set(
-            (n.matches(POPUP) ? [n] : [...n.querySelectorAll(POPUP)]).map(outer),
+            (n.matches(POPUP) ? [n] : [...n.querySelectorAll(POPUP)])
+              .filter((p) => !ours(p))
+              .map(outer),
           );
           for (const p of opened) dumpPopup(p, 'open');
-          const alerts = n.matches('[role=alert],[role=status],[aria-live]')
-            ? [n]
-            : [...n.querySelectorAll('[role=alert],[role=status],[aria-live]')];
-          for (const a of alerts.slice(0, 5))
-            log('dom.alert', { el: lite(a), text: clip((a.textContent || '').trim(), 120) });
+          const alerts = n.matches(LIVE) ? [n] : [...n.querySelectorAll(LIVE)];
+          for (const x of alerts.filter((x) => !ours(x) && !x.closest(EDITOR)).slice(0, 5)) {
+            changed.delete(x);
+            alert(x);
+          }
         }
       }
+      for (const a of [...changed].slice(0, 5)) alert(a);
     }).observe(document.documentElement, {
       childList: true,
       subtree: true,
+      characterData: true,
       attributes: true,
-      attributeFilter: ['data-state', 'aria-selected', 'aria-checked', 'value'],
+      attributeFilter: [
+        'data-state',
+        'aria-selected',
+        'aria-checked',
+        'aria-pressed',
+        'aria-expanded',
+        'aria-valuenow',
+        'disabled',
+        'value',
+        'class',
+      ],
     });
   }
 
@@ -294,10 +398,17 @@
           const d = n.matches('[role=dialog],[role=alertdialog]')
             ? n
             : n.querySelector('[role=dialog],[role=alertdialog]');
+          // Tag and attributes, and its text only when it holds no field or editor (a form's values sit in its html).
           if (d)
             log('dom.dialog', {
-              dialog: describe(d),
-              buttons: [...d.querySelectorAll('button')].slice(0, 10).map(describe),
+              dialog: {
+                ...lite(d),
+                text: d.querySelector(`input,select,textarea,${EDITOR}`)
+                  ? null
+                  : clip((d.textContent || '').trim(), 60),
+                path: cssPath(d),
+              },
+              buttons: [...d.querySelectorAll('button')].filter(shown).slice(0, 10).map(describe),
             });
         }
     }).observe(document.documentElement, { childList: true, subtree: true });
@@ -314,10 +425,17 @@
           ),
         ];
         for (const k of keys) {
-          const v = SECRET.test(k) ? '[redacted]' : clip(localStorage.getItem(k), STATE_CLIP);
-          if (last[k] !== v) {
-            last[k] = v;
-            log('storage', { key: k, value: v });
+          if (k === 'QD_TIMER_HEARTBEAT') continue; // every second; `vis` carries it
+          const raw = localStorage.getItem(k);
+          const e = SECRET.test(k)
+            ? { key: k, value: '[redacted]' }
+            : valued(k)
+              ? { key: k, value: clip(raw, STATE_CLIP) }
+              : { key: k, valueLen: raw == null ? null : raw.length };
+          const seen = JSON.stringify(e);
+          if (last[k] !== seen) {
+            last[k] = seen;
+            log('storage', e);
           }
         }
       } catch {}
@@ -328,7 +446,11 @@
         .slice(0, 5)
         .map((e) => ({ text: e.textContent.trim(), path: cssPath(e) }));
       if (clocks.length)
-        log('sample', { clocks, timer: clip(localStorage.getItem('QD_TIMER_STATE'), STATE_CLIP) });
+        log('sample', {
+          clocks,
+          state: document.visibilityState,
+          timer: clip(localStorage.getItem('QD_TIMER_STATE'), STATE_CLIP),
+        });
     }, 2000);
     const nextData = () => {
       try {

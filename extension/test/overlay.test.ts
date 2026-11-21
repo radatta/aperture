@@ -1787,6 +1787,7 @@ describe('the debug log’s submit probe', () => {
           'mod',
           'note',
           'open',
+          'pg', // the page's random id (every entry)
           'repeat',
           't',
           'type',
@@ -1885,7 +1886,123 @@ describe('the debug log’s timer probes', () => {
       expect.objectContaining({ key: '[redacted]', value: '[redacted]' }),
     ]);
     expect(of(ext, 'storage').some((e) => e.key === 'QD_TIMER_SETTINGS')).toBe(true);
+    expect(of(ext, 'tick')).toHaveLength(1); // the 1 s ticks before and after log nothing
     expect(of(ext, 'tick')[0]!.gapMs as number).toBeGreaterThan(5000);
+  }, 20_000);
+
+  it('keeps values only for the timer’s keys and short numeric fields, and never what an editor holds', async () => {
+    const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    const d = p.w.document;
+    d.body.insertAdjacentHTML(
+      'beforeend',
+      '<div role="dialog" data-state="open" data-fake="form">' +
+        '<input type="number" value="25" aria-label="min">' +
+        '<input type="email" value="someone@example.com" aria-label="Email">' +
+        '<input type="hidden" name="nonce" value="hiddenvalue1">' +
+        '<input type="password" value="pw-value-1">' +
+        '<input type="text" name="csrf_field" value="12">' +
+        '<div contenteditable="true">a private note</div></div>',
+    );
+    // A pop-up holding an editor: no text, none of its controls.
+    d.body.insertAdjacentHTML(
+      'beforeend',
+      '<div role="dialog" data-state="open" data-fake="diff"><div class="monaco-editor"><button>def solve(): pass</button></div><button>Close</button></div>',
+    );
+    await settle(10);
+    const email = d.querySelector('input[type=email]') as HTMLInputElement;
+    email.value = 'other@example.com';
+    email.dispatchEvent(new p.w.Event('input', { bubbles: true }));
+    p.w.dispatchEvent(
+      new p.w.StorageEvent('storage', { key: 'draft_code_1', newValue: 'class Solution: pass' }),
+    );
+    p.w.dispatchEvent(
+      new p.w.StorageEvent('storage', { key: 'QD_TIMER_HEARTBEAT', newValue: '1' }),
+    );
+    p.w.dispatchEvent(new p.w.StorageEvent('storage', { key: null, newValue: null }));
+    p.w.localStorage.setItem('QD_NOTES', 'a private QD note');
+    await settle(2500);
+
+    const text = JSON.stringify(all(ext));
+    for (const secret of [
+      'someone@',
+      'other@',
+      'hiddenvalue1',
+      'pw-value-1',
+      'private note',
+      'class Solution',
+      'def solve',
+      'private QD',
+    ])
+      expect(text).not.toContain(secret);
+    const [form, diff] = ['form', 'diff'].map((f) =>
+      of(ext, 'dom.popup').find(
+        (e) => (e.popup as { attrs: Record<string, string> }).attrs['data-fake'] === f,
+      )!,
+    );
+    const ctl = form!.controls as Array<Record<string, unknown>>;
+    expect(ctl.map((c) => (c.attrs as Record<string, string>)['aria-label'] ?? c.tag)).toEqual([
+      'min',
+      'Email',
+      'input',
+      'input',
+    ]);
+    expect(ctl[0]).toMatchObject({ value: '25' });
+    expect(ctl[1]).toMatchObject({ valueLen: 19 });
+    expect(ctl[1]).not.toHaveProperty('value');
+    expect(ctl[3]).not.toHaveProperty('value'); // named like a credential
+    expect(diff).toMatchObject({ text: null, hasEditor: true });
+    expect((diff!.controls as unknown[]).length).toBe(1);
+    expect(of(ext, 'input')).toMatchObject([{ control: { valueLen: 17 } }]);
+    expect(of(ext, 'storage.event')).toEqual([
+      expect.objectContaining({ key: 'draft_code_1', valueLen: 20 }),
+      expect.objectContaining({ key: null, cleared: true }),
+    ]);
+    expect(of(ext, 'storage').find((e) => e.key === 'QD_NOTES')).toMatchObject({ valueLen: 17 });
+    expect(of(ext, 'storage').some((e) => e.key === 'QD_TIMER_HEARTBEAT')).toBe(false);
+  }, 20_000);
+
+  it('names the control a press lands inside, ignores presses elsewhere, and writes what is left as the page goes', async () => {
+    const ext = fakeExtension({ onMessage: (m) => fakeBackground().handle(m as Msg) });
+    await ext.local.set({ debug: true });
+    const p = open('/problems/two-sum/', ext);
+    await until(() => p.phase() === 'prompt');
+    const d = p.w.document;
+    const toggle = d.querySelector('[data-fake=toggle]')!;
+    toggle.insertAdjacentHTML('beforeend', '<svg><path></path></svg>');
+    d.body.insertAdjacentHTML(
+      'beforeend',
+      '<p data-fake="prose">A paragraph of the statement.</p>',
+    );
+    await settle(2500); // the first batch written
+    mouse(toggle.querySelector('path')!, 'mousedown');
+    mouse(d.querySelector('[data-fake=prose]')!, 'mousedown');
+    p.w.dispatchEvent(new p.w.PageTransitionEvent('pagehide', { persisted: false }));
+    // Written at once to its own key, before any 2 s write.
+    await until(() => Object.keys(ext.local.data).some((k) => k.startsWith('debugTail.')), 500);
+    const tail = Object.entries(ext.local.data).find(([k]) =>
+      k.startsWith('debugTail.'),
+    )![1] as DebugEntry[];
+    expect(tail.map((e) => e.type)).toEqual(expect.arrayContaining(['press', 'vis']));
+    expect(tail.find((e) => e.type === 'vis')).toMatchObject({ ev: 'pagehide', persisted: false });
+    const press = tail.filter((e) => e.type === 'press');
+    expect(press).toHaveLength(1);
+    expect(press[0]).toMatchObject({
+      at: 'timer',
+      target: { attrs: { 'data-fake': 'toggle' } },
+      hit: { tag: 'path' },
+    });
+    // The next write folds the tail in and drops its key; every entry names its page.
+    mouse(toggle, 'mousedown');
+    await settle(2500);
+    expect(Object.keys(ext.local.data).some((k) => k.startsWith('debugTail.'))).toBe(false);
+    expect(of(ext, 'vis').map((e) => e.ev)).toContain('pagehide');
+    expect(new Set(all(ext).map((e) => e.pg)).size).toBe(1);
+    expect(all(ext).every((e, i, a) => i === 0 || (a[i - 1]!.t as number) <= (e.t as number))).toBe(
+      true,
+    );
   }, 20_000);
 
   it('describes nothing inside the code editor, and records nothing with Debug mode off', async () => {

@@ -144,16 +144,16 @@
 
   // ---- debug ----
   $('debug').addEventListener('change', () => local.set({ debug: $('debug').checked }));
-  // The log, led by an entry naming the build that wrote it (the array shape the readers know).
-  const logJson = async () =>
-    JSON.stringify(
-      [
-        { t: Date.now(), type: 'export', version },
-        ...((await local.get('debugLog')).debugLog || []),
-      ],
-      null,
-      1,
-    );
+  // The log, led by an entry naming the build that wrote it (the array shape the readers know), with any tail a page
+  // wrote as it left (debug.js) folded in.
+  const tailKeys = (all) => Object.keys(all).filter((k) => k.startsWith('debugTail.'));
+  const logJson = async () => {
+    const all = await local.get(null);
+    const entries = (Array.isArray(all.debugLog) ? all.debugLog : [])
+      .concat(...tailKeys(all).map((k) => (Array.isArray(all[k]) ? all[k] : [])))
+      .sort((a, b) => a.t - b.t);
+    return JSON.stringify([{ t: Date.now(), type: 'export', version }, ...entries], null, 1);
+  };
   $('exportLog').addEventListener('click', async () => {
     const url = URL.createObjectURL(new Blob([await logJson()], { type: 'application/json' }));
     const a = Object.assign(document.createElement('a'), {
@@ -175,7 +175,7 @@
     }
   });
   $('clearLog').addEventListener('click', async () => {
-    await local.remove('debugLog');
+    await local.remove(['debugLog', ...tailKeys(await local.get(null))]);
     say('debugStatus', 'Cleared.', 'ok');
   });
 
