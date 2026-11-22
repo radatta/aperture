@@ -64,7 +64,12 @@ export interface CoachParams {
   // solution read) — named apart from the peeked flag, which only says the solution was read.
   gaps: { clean: readonly number[]; retry: readonly number[] };
   lastStepWindowDays: number; // the last step's due window
-  capMin: number; // a slot's time cap
+  // A slot's time cap in whole minutes, by its kind and the problem's difficulty: explicit cells, so each tunes on its
+  // own (coach.md → Caps). The AI pick may move a cap within capAi's factors of its cell.
+  slotCaps: Record<SlotKind, Record<Difficulty, number>>;
+  capUnknownDifficulty: Difficulty; // the row a problem with no known difficulty takes
+  capAi: { minFactor: number; maxFactor: number };
+  capLegacyMin: number; // the one cap before per-slot caps: a sitting with no stored cap ran under it
   carryOverDays: number; // a carry-over comes from the last active day only this recently
   blockDays: number; // active days a focus pattern holds
   swappedBackDays: number; // a problem swapped out this recently goes to the back of `new`
@@ -74,7 +79,15 @@ export interface CoachParams {
 export const COACH_PARAMS: CoachParams = {
   gaps: { clean: [3, 7, 14], retry: [1, 3, 7, 14] },
   lastStepWindowDays: 7,
-  capMin: 30,
+  slotCaps: {
+    'carry-over': { Easy: 20, Medium: 45, Hard: 60 },
+    new: { Easy: 20, Medium: 45, Hard: 60 },
+    're-solve': { Easy: 10, Medium: 25, Hard: 30 },
+    stretch: { Easy: 20, Medium: 45, Hard: 60 },
+  },
+  capUnknownDifficulty: 'Medium',
+  capAi: { minFactor: 0.5, maxFactor: 1.5 },
+  capLegacyMin: 30,
   carryOverDays: 2,
   blockDays: 3,
   swappedBackDays: 3,
@@ -82,6 +95,22 @@ export const COACH_PARAMS: CoachParams = {
   catchUp: { enterDue: 10, exitDue: 5 },
 };
 const MAX_PER_KIND = 2;
+// A slot's cap from the table; the range the AI pick may set it in (whole minutes, inside the factors).
+export const slotCapMin = (
+  kind: SlotKind,
+  difficulty: Difficulty | null,
+  params: CoachParams = COACH_PARAMS,
+): number => params.slotCaps[kind][difficulty ?? params.capUnknownDifficulty];
+export function slotCapRange(
+  kind: SlotKind,
+  difficulty: Difficulty | null,
+  params: CoachParams = COACH_PARAMS,
+): [number, number] {
+  const c = slotCapMin(kind, difficulty, params);
+  return [Math.ceil(c * params.capAi.minFactor), Math.floor(c * params.capAi.maxFactor)];
+}
+export const inCapRange = (v: unknown, [lo, hi]: readonly [number, number]): v is number =>
+  typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
 const MAX_SLOTS = 4;
 
 // --- The working catalog: the plan's list (catalogs.ts), plus any problem the user has a record on ---
@@ -185,6 +214,7 @@ export function sittingAttempt(s: Sitting): Attempt {
         ? { verdict: last.verdict, statusMsg: last.statusMsg }
         : null,
     minutes: sittingTryMinutes(s),
+    capMin: s.capMin ?? COACH_PARAMS.capLegacyMin,
     note: null,
     historical: false,
     sittingIds: [s.id],
@@ -192,7 +222,7 @@ export function sittingAttempt(s: Sitting): Attempt {
     sources: ['sitting'],
   };
 }
-export function manualAttempt(a: CoachAttempt): Attempt {
+export function manualAttempt(a: CoachAttempt): AttemptPart {
   const cat = catalogProblem(a.slug);
   return {
     slug: a.slug,
@@ -212,6 +242,7 @@ export function manualAttempt(a: CoachAttempt): Attempt {
     traced: null,
     lastError: null,
     minutes: a.minutes,
+    capMin: null, // from the table in foldDays
     note: a.note,
     historical: a.historical === true,
     sittingIds: [],
@@ -237,6 +268,9 @@ export interface Attempt {
   traced: boolean | null; // a trace comment before the first Run or Submit (tracedOf); null when the sitting predates the rule
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
   minutes: number | null; // the day's minutes on it: sittings to the first accept (else their length), logged ones as given
+  // The cap it ran under: its earliest sitting's stored cap (capLegacyMin before caps were stored); with no sitting,
+  // the table by difficulty and the kind it would have been (foldDays: new, carry-over or re-solve).
+  capMin: number;
   note: string | null; // the newest logged note
   historical: boolean; // a history-only solve (CoachAttempt.historical): seen, never scheduled or counted
   sittingIds: string[]; // newest first
@@ -244,11 +278,13 @@ export interface Attempt {
   sources: AttemptSource[];
 }
 export type AttemptSource = 'sitting' | 'legacy' | CoachAttempt['source'];
+// A logged or legacy piece, before foldDays gives it a cap.
+export type AttemptPart = Omit<Attempt, 'capMin'> & { capMin: number | null };
 const HELP_RANK: Record<HelpLevel, number> = { none: 0, hint: 1, solution: 2 };
 // Same-day pieces on one problem fold into one attempt, judged as one first try: clean only when the earliest
 // piece with a submit was a first-submit accept and no help was taken all day; accepted anywhere → solved; else
 // failed. The most help taken wins (a peek sticks); counts are summed.
-function foldDay(parts: Attempt[]): Attempt {
+function foldDay(parts: AttemptPart[]): AttemptPart {
   const sorted = [...parts].sort((a, b) => a.at - b.at);
   const last = sorted[sorted.length - 1]!;
   const help = sorted.reduce<HelpLevel>(
@@ -282,6 +318,7 @@ function foldDay(parts: Attempt[]): Attempt {
     minutes: sorted.some((p) => p.minutes !== null)
       ? sorted.reduce((n, p) => n + (p.minutes ?? 0), 0)
       : null,
+    capMin: sorted.find((p) => p.capMin !== null)?.capMin ?? null,
     note: [...sorted].reverse().find((p) => p.note)?.note ?? null,
     historical: sorted.every((p) => p.historical),
     sittingIds: sorted.flatMap((p) => p.sittingIds).reverse(),
@@ -302,11 +339,15 @@ export function attemptsOf(
   more: Pick<CoachInput, 'legacy' | 'voids'> = {},
 ): Attempt[] {
   const settled = (s: Sitting) => !isSittingOpen(s, now) || (today !== undefined && s.day < today);
-  return foldDays([
-    ...sittings.filter((s) => settled(s) && countsAsPractice(s, now, params)).map(sittingAttempt),
-    ...manual.filter((a) => a.deletedAt === null && a.historical !== true).map(manualAttempt),
-    ...legacyAttempts(more.legacy ?? [], more.voids ?? []),
-  ]);
+  return foldDays(
+    [
+      ...sittings.filter((s) => settled(s) && countsAsPractice(s, now, params)).map(sittingAttempt),
+      ...manual.filter((a) => a.deletedAt === null && a.historical !== true).map(manualAttempt),
+      ...legacyAttempts(more.legacy ?? [], more.voids ?? []),
+    ],
+    params,
+    coachScope({ attempts: manual }).history, // a live try after a history-only solve is no first try
+  );
 }
 // The history-only solves (logged with `historical`), folded by day the same way, oldest first. They never reach
 // attemptsOf: a remembered result isn't a measured try, so they only mark a problem seen and show on Progress.
@@ -315,15 +356,43 @@ function historyAttemptsOf(manual: readonly CoachAttempt[]): Attempt[] {
     manual.filter((a) => a.deletedAt === null && a.historical === true).map(manualAttempt),
   );
 }
-function foldDays(parts: Attempt[]): Attempt[] {
-  const groups = new Map<string, Attempt[]>();
+// A piece with no stored cap (a logged try, a legacy one) takes the table by the kind it would have been: a first
+// try new; the day after the last active day's latest unaccepted, unpeeked try, within carryOverDays, a carry-over
+// (one a day, as coachPools picks it); any other later try, or one after a history-only solve, a re-solve.
+function foldDays(
+  parts: AttemptPart[],
+  params: CoachParams = COACH_PARAMS,
+  history: ReadonlyMap<string, string> = new Map(),
+): Attempt[] {
+  const groups = new Map<string, AttemptPart[]>();
   for (const p of parts) {
     const k = `${p.day} ${p.slug}`;
     groups.set(k, [...(groups.get(k) ?? []), p]);
   }
+  const last = new Map<string, Attempt>();
+  const carryOf = new Map<string, string>(); // day → its latest unaccepted, unpeeked slug
+  let day = '';
+  let lastActive = '';
   return [...groups.values()]
     .map(foldDay)
-    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.at - b.at));
+    .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : a.at - b.at))
+    .map((a) => {
+      if (a.day !== day) [lastActive, day] = [day, a.day];
+      const prev = last.get(a.slug);
+      const h = history.get(a.slug);
+      const kind: SlotKind =
+        prev && // one fold per day and slug: carryOf naming this slug means prev is that day's try
+        carryOf.get(lastActive) === a.slug &&
+        daysBetween(prev.day, a.day) <= params.carryOverDays
+          ? 'carry-over'
+          : prev || (h !== undefined && h < a.day)
+            ? 're-solve'
+            : 'new';
+      const out = { ...a, capMin: a.capMin ?? slotCapMin(kind, a.difficulty, params) };
+      last.set(a.slug, out);
+      if (!a.accepted && a.help !== 'solution') carryOf.set(a.day, a.slug);
+      return out;
+    });
 }
 
 // --- Legacy history: the pre-sittings extension's submissions (lc#, read-only; coach.md → Legacy history) ---
@@ -385,7 +454,7 @@ export function legacyGroups(
 export function legacyAttempts(
   rows: readonly LegacyLeetcodeAttempt[],
   voids: readonly CoachVoid[],
-): Attempt[] {
+): AttemptPart[] {
   if (!rows.length) return [];
   const bySlugDay = new Map<string, LegacyLeetcodeAttempt[]>();
   for (const r of rows) {
@@ -418,6 +487,7 @@ export function legacyAttempts(
       traced: null,
       lastError: last.verdict !== 'accepted' ? { verdict: last.verdict, statusMsg: null } : null,
       minutes: null, // the capture kept no clock
+      capMin: null,
       note: null,
       historical: false,
       sittingIds: [],
@@ -511,6 +581,7 @@ export interface ProblemTry {
   cause: CauseTag | null;
   accepted: boolean; // accepted that day, a peek too (outcome stays failed with the solution read)
   minutes: number | null;
+  capMin: number; // the cap it ran under (Attempt.capMin)
   note: string | null;
   historical: boolean;
   sittingIds: string[];
@@ -578,6 +649,7 @@ export function problemRecords(
         cause: a.cause,
         accepted: a.accepted,
         minutes: a.minutes,
+        capMin: a.capMin,
         note: a.note,
         historical: a.historical,
         sittingIds: a.sittingIds,
@@ -1028,6 +1100,49 @@ function planModeOf(
   return { setting, mode, due, line };
 }
 
+// A problem's own kind outside the rules' pick (a swap, or a sitting off the plan): the carry-over, a problem tried
+// before today (a re-solve's rules), else unseen — new, or a stretch when it replaced one.
+export function ownKind(
+  pools: Pick<CoachPools, 'carry' | 'seen'>,
+  slug: string,
+  was: SlotKind = 'new',
+): SlotKind {
+  if (pools.carry.some((a) => a.slug === slug)) return 'carry-over';
+  if (pools.seen.has(slug)) return 're-solve';
+  return was === 'stretch' ? 'stretch' : 'new';
+}
+// The cap a new sitting stores at Start (Sitting.capMin): its slot's on today's plan (the AI pick's or the table's),
+// else today's newest sitting on it (a swap since), else the floor's kind, else the problem's own
+// kind (ownKind) — the same problem gets the same cap on or off the plan.
+// Reads only before-today pools for the kind, so a second sitting on an off-plan problem keeps its cap.
+export function startCapMin(
+  input: CoachInput,
+  slug: string,
+  difficulty: string | null,
+  params: CoachParams = COACH_PARAMS,
+): number {
+  const today = planDay(input, params);
+  const slot = today.slots.find((s) => s.slug === slug);
+  if (slot) return slot.capMin;
+  // Off the plan now but started earlier today (a swap since): that sitting's cap, picked as a slot's sitting is.
+  const earlier = input.sittings
+    .filter((x) => x.day === today.day && x.problemSlug === slug && x.review?.test !== true)
+    .sort((a, b) => b.startedAt - a.startedAt)[0];
+  if (earlier) return earlier.capMin ?? params.capLegacyMin; // one from before the caps: the old 30, as its slot reads
+  const d = startDifficulty(slug, difficulty);
+  if (today.floor?.slug === slug) return slotCapMin(today.floor.kind, d, params);
+  return slotCapMin(ownKind(coachPools(input, params), slug), d, params);
+}
+// The catalog's difficulty, else the Start's own.
+const startDifficulty = (slug: string, difficulty: string | null) =>
+  catalogProblem(slug)?.difficulty ?? asDifficulty(difficulty);
+// When the plan can't be read at Start: the new row for the problem's difficulty. A Start never fails over a cap.
+export const startCapFallback = (
+  slug: string,
+  difficulty: string | null,
+  params: CoachParams = COACH_PARAMS,
+): number => slotCapMin('new', startDifficulty(slug, difficulty), params);
+
 // The rules' pick: one of each kind; an empty kind lets the next kind (stretch wraps to new) take a second; at
 // most 2 a kind and 4 in all, never padded. A stored AI pick (coachAi.ts), when on, replaces it in its own order.
 // Then the day's changes, then today's sittings and attempts.
@@ -1036,7 +1151,6 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   const pools = coachPools(input, params);
   const { all, before, records, seen, focus, carry, fresh, cands, row } = pools;
   const dueNow = pools.due;
-  const carrySlugs = new Set(carry.map((a) => a.slug));
   const titleOf = (slug: string) =>
     catalogProblem(slug)?.title ?? records.find((r) => r.slug === slug)?.title ?? slug;
   const lastActive = before.length ? before[before.length - 1]!.day : null;
@@ -1080,10 +1194,10 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   ).slice(0, MAX_SLOTS);
   const ai = aiViewOf(input, pools);
   if (ai?.status === 'ok')
-    slots = row!.ai!.picks.map((p) => ({
-      ...slotOf(p.kind, p.slug, pickReason(p.kind, p.slug), null),
-      aiWhy: p.why,
-    }));
+    slots = row!.ai!.picks.map((p) => {
+      const s = slotOf(p.kind, p.slug, pickReason(p.kind, p.slug), null);
+      return { ...s, capMin: p.capMin ?? s.capMin, aiWhy: p.why };
+    });
   // A pick's rule reason: its candidate's, else (a pattern the AI moved the focus to) what it is.
   function pickReason(kind: SlotKind, slug: string): string {
     const own =
@@ -1108,7 +1222,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       difficulty,
       url: `https://leetcode.com/problems/${slug}/`,
       reason,
-      capMin: params.capMin,
+      capMin: slotCapMin(kind, difficulty, params),
       dueAt: endOfDay,
       status: 'open',
       sittingId: null,
@@ -1125,13 +1239,7 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
   const dueSlugs = new Set(dueNow.map((r) => r.slug));
   function swappedIn(was: SlotKind, slug: string, from: string): CoachSlot {
     // (The carry-over is always a slot already, so a swap can't target it: kept as a guard.)
-    const kind: SlotKind = carrySlugs.has(slug)
-      ? 'carry-over'
-      : dueSlugs.has(slug) || seen.has(slug)
-        ? 're-solve'
-        : was === 'stretch'
-          ? 'stretch'
-          : 'new';
+    const kind = ownKind(pools, slug, was);
     const rec = records.find((r) => r.slug === slug);
     const what =
       kind === 'carry-over'
@@ -1172,6 +1280,9 @@ export function planDay(input: CoachInput, params: CoachParams = COACH_PARAMS): 
       sitting && isSittingOpen(sitting, now) ? 'in-progress' : done ? 'done' : s.status;
     return {
       ...s,
+      // The cap its sitting runs under (a sitting from before per-slot caps: the old one), so the card, live_sitting
+      // and the try all agree.
+      capMin: sitting ? (sitting.capMin ?? params.capLegacyMin) : s.capMin,
       status,
       sittingId: sitting?.id ?? null,
       outcome: status === 'done' ? (done?.outcome ?? null) : null,

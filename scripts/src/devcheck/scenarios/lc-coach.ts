@@ -29,6 +29,26 @@ const addDays = (day: string, n: number): string => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
+// The per-slot caps (scripts has no @aperture/shared): packages/shared/src/coach.ts COACH_PARAMS slotCaps,
+// capUnknownDifficulty and capAi — lc-coach.caps.test pins the copy.
+export const DEV_SLOT_CAPS: Record<string, Record<string, number>> = {
+  'carry-over': { Easy: 20, Medium: 45, Hard: 60 },
+  new: { Easy: 20, Medium: 45, Hard: 60 },
+  're-solve': { Easy: 10, Medium: 25, Hard: 30 },
+  stretch: { Easy: 20, Medium: 45, Hard: 60 },
+};
+export const DEV_CAP_BAND = [0.5, 1.5] as const;
+export const slotCapMin = (kind: string, difficulty: string | null) =>
+  DEV_SLOT_CAPS[kind]?.[difficulty ?? 'Medium'] ?? NaN;
+// An AI pick's cap: whole minutes within the band of the table's.
+export const inCapBand = (v: number, kind: string, difficulty: string | null) => {
+  const c = slotCapMin(kind, difficulty);
+  return (
+    Number.isInteger(v) &&
+    v >= Math.ceil(c * DEV_CAP_BAND[0]) &&
+    v <= Math.floor(c * DEV_CAP_BAND[1])
+  );
+};
 const tag = (ctx: Ctx) => ctx.nonce.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 const slugOf = (ctx: Ctx, which: string) => `devcheck-coach-${tag(ctx)}-${which}`;
 const titleOf = (ctx: Ctx, which: string) => `devcheck-coach ${ctx.nonce} ${which}`;
@@ -125,6 +145,7 @@ const state = {
   plan: null as DevCoachToday | null,
   slotSlug: '',
   slotKind: '',
+  slotCap: 0,
   sittingId: '',
   repId: '',
   offId: '',
@@ -161,7 +182,7 @@ export const lcCoach: Scenario = {
       id: 'plan',
       entry: 'api',
       kind: 'nominal',
-      what: 'getCoachToday answers today’s plan: 1–4 slots, each with a kind, a reason and the 30-minute cap, and a floor',
+      what: 'getCoachToday answers today’s plan: 1–4 slots, each with a kind, a reason and its cap by kind and difficulty, and a floor',
     },
     {
       id: 'today-mcp',
@@ -176,10 +197,39 @@ export const lcCoach: Scenario = {
       what: 'A Start on a slot’s problem marks that slot in progress, with its sitting',
     },
     {
+      id: 'start-cap',
+      entry: 'api',
+      kind: 'nominal',
+      what: 'A Start stores its slot’s cap on the sitting; the same Start again resumes that sitting',
+    },
+    {
+      id: 'start-cap-off-plan',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A Start off the plan takes the problem’s own kind: one with a history-only solve the re-solve row (Easy 10, never the fallback’s 20); an unseen one with no difficulty the new row’s Medium (45)',
+    },
+    {
+      id: 'cap-own-try',
+      entry: 'ui',
+      kind: 'edge',
+      what: 'A problem’s page marks a try over its own cap in gold (a logged 50-minute first try: over the 45 min cap) and not one inside it; Trends counts tries inside their cap',
+    },
+    {
+      id: 'cap-legacy',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A sitting from before the caps (none stored) reads against 30 on its try and its slot',
+      offDev: {
+        file: 'packages/shared/src/coach.test.ts',
+        test: 'a try runs against its sitting’s stored cap, else 30; a logged one against the table, new then re-solve',
+        why: 'every Start after the deploy stores a cap, so dev can’t make a sitting without one',
+      },
+    },
+    {
       id: 'live-slot',
       entry: 'mcp',
       kind: 'nominal',
-      what: 'live_sitting on that sitting names its slot kind, the cap and the rules for it, and no trace yet',
+      what: 'live_sitting on that sitting names its slot kind, the cap its Start stored and the rules for it, and no trace yet',
     },
     {
       id: 'slot-done',
@@ -311,7 +361,7 @@ export const lcCoach: Scenario = {
       id: 'ui-card',
       entry: 'ui',
       kind: 'nominal',
-      what: 'The Today card on /recruiting shows each slot with its kind, the 30-minute cap, its reason and a LeetCode link, plus the focus and momentum',
+      what: 'The Today card on /recruiting shows each slot with its kind, its own cap, its reason and a LeetCode link, plus the focus and momentum',
     },
     {
       id: 'ui-swap',
@@ -944,8 +994,15 @@ export const lcCoach: Scenario = {
           fail(`plan day ${t.day}, the run's day ${ctx.dates.today}`);
         if (!t.slots.length || t.slots.length > 4) fail(`${t.slots.length} slots`);
         const kinds = ['carry-over', 'new', 're-solve', 'stretch'];
+        // Each slot's cap: the table by kind and difficulty, or (an AI-picked slot) the pick's within its band.
         for (const s of t.slots)
-          if (!kinds.includes(s.kind) || !s.reason.trim() || s.capMin !== 30)
+          if (
+            !kinds.includes(s.kind) ||
+            !s.reason.trim() ||
+            !(s.aiWhy
+              ? inCapBand(s.capMin, s.kind, s.difficulty)
+              : s.capMin === slotCapMin(s.kind, s.difficulty))
+          )
             fail(`slot ${JSON.stringify(s)}`);
         if (!t.floor || t.mode !== 'general') fail(`floor/mode: ${JSON.stringify(t)}`);
         state.plan = t;
@@ -979,7 +1036,7 @@ export const lcCoach: Scenario = {
       id: 'start-on-slot',
       title: 'Link a roll; Start a sitting on the first open slot’s problem',
       entry: 'api',
-      proves: ['slot-in-progress'],
+      proves: ['slot-in-progress', 'start-cap'],
       async run(ctx) {
         const slot = plan().slots.find((s) => s.status === 'open') ?? fail('no open slot to start');
         const roll = await ctx.api.writes.upsertRoll({
@@ -987,10 +1044,24 @@ export const lcCoach: Scenario = {
           estimateMin: 45,
         });
         await ctx.api.writes.linkLeetcodeRoll(roll.id);
-        const { sitting } = await ctx.api.writes.lcSittingStart(start(slot.slug, slot.title));
+        const req = start(slot.slug, slot.title);
+        const { sitting } = await ctx.api.writes.lcSittingStart(req);
+        if (sitting.capMin !== slot.capMin)
+          fail(`stored cap ${String(sitting.capMin)}, the slot’s ${slot.capMin}`);
+        // The same Start again resumes the sitting with the cap it stored.
+        const again = await ctx.api.writes.lcSittingStart(req);
+        if (
+          !again.resumed ||
+          again.sitting.id !== sitting.id ||
+          again.sitting.capMin !== slot.capMin
+        )
+          fail(
+            `resume: ${JSON.stringify({ resumed: again.resumed, capMin: again.sitting.capMin })}`,
+          );
         Object.assign(state, {
           slotSlug: slot.slug,
           slotKind: slot.kind,
+          slotCap: slot.capMin,
           sittingId: sitting.id,
           repId: sitting.repTaskId,
         });
@@ -1012,7 +1083,7 @@ export const lcCoach: Scenario = {
         const slot = live.slot ?? fail('live_sitting has no slot');
         if (
           slot.kind !== state.slotKind ||
-          slot.capMin !== 30 ||
+          slot.capMin !== state.slotCap ||
           slot.overCap ||
           !slot.rules.trim()
         )
@@ -1047,13 +1118,27 @@ export const lcCoach: Scenario = {
     },
     {
       id: 'off-plan-start',
-      title: 'Start a sitting on a problem off the plan',
+      title: 'Start a sitting on a problem off the plan, with no difficulty',
       entry: 'api',
+      proves: ['start-cap-off-plan'],
       async run(ctx) {
+        // A problem with a history-only solve is seen: off the plan its Start takes the re-solve row (Easy 10).
+        // The fallback (a failed plan read) would store the new row's 20, so this tells the two apart.
+        const seen = slugOf(ctx, 'capseen');
+        await ctx.mcp.writes.logAttempt([{ slug: seen, outcome: 'solved', historical: true }]);
+        const s0 = (await ctx.api.writes.lcSittingStart(start(seen, titleOf(ctx, 'capseen'))))
+          .sitting;
+        if (s0.capMin !== slotCapMin('re-solve', 'Easy'))
+          fail(`seen off-plan cap ${String(s0.capMin)}: the fallback, or the wrong kind`);
+        await finish(ctx, s0.id, s0.repTaskId); // an open sitting would refuse the next Start
         state.offBefore = await ctx.api.reads.getCoachToday();
-        const { sitting } = await ctx.api.writes.lcSittingStart(
-          start(slugOf(ctx, 'off'), titleOf(ctx, 'off')),
-        );
+        // No difficulty: an unseen problem off the plan takes the new row's Medium cap.
+        const { sitting } = await ctx.api.writes.lcSittingStart({
+          ...start(slugOf(ctx, 'off'), titleOf(ctx, 'off')),
+          difficulty: null,
+        });
+        const want = slotCapMin('new', null);
+        if (sitting.capMin !== want) fail(`off-plan cap ${String(sitting.capMin)}, want ${want}`);
         Object.assign(state, { offId: sitting.id, offRep: sitting.repTaskId });
       },
     },
@@ -1172,6 +1257,8 @@ export const lcCoach: Scenario = {
         const slug = slugOf(ctx, 'paper');
         const out = await ctx.mcp.writes.logAttempt([
           { slug, outcome: 'clean', minutes: 15, note: `devcheck ${ctx.nonce}` },
+          // A first try with no difficulty runs against the new row's Medium 45: 50 minutes is over (cap-own-try).
+          { slug: slugOf(ctx, 'over'), outcome: 'clean', minutes: 50 },
         ]);
         const a = out.attempts[0] ?? fail('log_attempt stored nothing');
         if (a.slug !== slug || a.nextDue?.dueDay !== addDays(today(), 3))
@@ -1500,7 +1587,15 @@ export const lcCoach: Scenario = {
           if (!(await c.getByText(s.reason, { exact: true }).count()))
             fail(`no reason for ${s.slug}`);
         }
-        if (!(await c.getByText(/· 30 min$/).count())) fail('no slot shows the 30-minute cap');
+        // Each row its own cap (by kind and difficulty, or the pick's).
+        for (const s of t.slots) {
+          const row = c
+            .getByRole('link', { name: s.title, exact: true })
+            .first()
+            .locator('xpath=ancestor::li[1]');
+          if (!(await row.getByText(new RegExp(`· ${s.capMin} min$`)).count()))
+            fail(`${s.slug}’s row doesn’t show its ${s.capMin}-minute cap`);
+        }
         await c
           .getByText(/ · day \d of 3/)
           .first()
@@ -2099,6 +2194,7 @@ export const lcCoach: Scenario = {
         'progress-solves',
         'progress-problem',
         'progress-trends',
+        'cap-own-try',
         'progress-390',
         'progress-desktop',
         'progress-load-error',
@@ -2207,6 +2303,14 @@ export const lcCoach: Scenario = {
           await ctx.ui.goto(`/recruiting/progress/${slugOf(ctx, 'paper')}`);
           await ctx.ui.expectText('15 min');
           await ctx.ui.expectText(`Note: devcheck ${ctx.nonce}`);
+          if (await ctx.page.getByText(/over the \d+ min cap/).count())
+            fail('a 15-minute try is marked over its cap');
+          // A try over its own cap: the logged 50-minute first try against the new row's 45, in gold.
+          await ctx.ui.goto(`/recruiting/progress/${slugOf(ctx, 'over')}`);
+          const over = ctx.page.getByText('50 min, over the 45 min cap', { exact: true });
+          await over.waitFor({ timeout: 10_000 });
+          if (!/\btext-gold\b/.test((await over.getAttribute('class')) ?? ''))
+            fail('the over-cap minutes aren’t gold');
 
           // Trends: the four cards.
           await ctx.ui.goto('/recruiting/progress?view=trends');
@@ -2216,7 +2320,21 @@ export const lcCoach: Scenario = {
             'Re-solves that were clean',
           ])
             await ctx.page.getByRole('heading', { name: h }).waitFor();
-          await ctx.page.getByRole('heading', { name: /^Time against the \d+ min cap$/ }).waitFor();
+          await ctx.page.getByRole('heading', { name: 'Time against the cap' }).waitFor();
+          // At least one try reads over its own cap: this run's 50-minute one guarantees it. (Its own bin isn't
+          // asserted: other tries on the test user share the window; the problem page above proves its cap.)
+          const capNote = ctx.page.getByText(/\d+ of \d+ inside their cap · median \d+ min/);
+          await capNote.waitFor({ timeout: 10_000 });
+          const [, inside, timed] =
+            /(\d+) of (\d+) inside/.exec((await capNote.textContent()) ?? '') ?? [];
+          if (!(Number(inside) < Number(timed)))
+            fail(`Trends: ${inside} of ${timed} inside their cap, with a try over its own`);
+          if (
+            !(await ctx.page
+              .getByRole('img', { name: /^Tries by time against their own cap: ≤ ⅓ \d+, / })
+              .count())
+          )
+            fail('the cap card’s bins have no label');
           await ctx.ui.settle();
           await ctx.shot('progress-trends');
 

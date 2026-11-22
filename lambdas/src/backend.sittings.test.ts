@@ -754,3 +754,35 @@ describe('idle close on the table', () => {
     expect(r).toMatchObject({ accepted: 0, skipped: 1, status: 'abandoned' });
   });
 });
+
+describe('the cap at Start', () => {
+  it('a failed plan read takes the fallback (the new row by difficulty) and never fails the Start', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const repo = (backend as unknown as { repo: Repo }).repo;
+    const spy = vi.spyOn(repo, 'listMocks').mockRejectedValue(new Error('read failed'));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const hard = { ...start(), problemSlug: 'not-a-catalog-problem', difficulty: 'Hard' };
+    const { sitting, resumed } = await backend.lcSittingStart(hard);
+    expect(resumed).toBe(false);
+    expect(sitting.capMin).toBe(60);
+    expect(log.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/lc_start_cap_fallback/);
+    spy.mockRestore();
+    log.mockRestore();
+  });
+
+  it('a throttled plan read fails the Start (the outbox retries), and the retry stores the real cap', async () => {
+    const { backend } = setup();
+    await linked(backend);
+    const repo = (backend as unknown as { repo: Repo }).repo;
+    const throttle = Object.assign(new Error('slow down'), { name: 'ThrottlingException' });
+    const spy = vi.spyOn(repo, 'listMocks').mockRejectedValueOnce(throttle);
+    const req = { ...start(), problemSlug: 'not-a-catalog-problem', difficulty: 'Hard' };
+    await expect(backend.lcSittingStart(req)).rejects.toThrow('slow down');
+    const { sitting, resumed } = await backend.lcSittingStart(req);
+    expect(resumed).toBe(false);
+    expect(sitting.capMin).toBe(60); // an unseen Hard: the new row, from the plan read this time
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockRestore();
+  });
+});

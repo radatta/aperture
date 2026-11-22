@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_PICK_NOTICE, AI_PICK_STALE_MS, AI_PICK_BUSY_ERROR } from '@aperture/shared';
+import { AI_PICK_NOTICE, AI_PICK_STALE_MS, AI_PICK_BUSY_ERROR, slotCapMin } from '@aperture/shared';
 import type { CoachToday } from '@aperture/shared';
 import { InMemoryDoc } from '../ddb/DocClient';
 import { Repo } from '../ddb/repo';
@@ -25,9 +25,15 @@ async function setup(o: { mode?: Mode; history?: boolean } = {}) {
   const anthropic = new FakeAnthropic();
   let now = NOW;
   const clock = { now: () => now, at: (t: number) => (now = t) };
+  const logs: string[] = [];
   const run = (e: CoachPickEvent) =>
     runCoachPick(
-      { repo: new Repo(doc, liveWrites(doc), e.userId), anthropic, now: clock.now, log: () => {} },
+      {
+        repo: new Repo(doc, liveWrites(doc), e.userId),
+        anthropic,
+        now: clock.now,
+        log: (l) => void logs.push(l),
+      },
       e,
     );
   const events: CoachPickEvent[] = [];
@@ -54,7 +60,7 @@ async function setup(o: { mode?: Mode; history?: boolean } = {}) {
       { slug: 'valid-anagram', day: '2026-11-13', outcome: 'failed', cause: 'boundary' },
       { slug: 'group-anagrams', day: '2026-11-15', outcome: 'failed' },
     ]);
-  return { doc, anthropic, b, clock, events, run };
+  return { doc, anthropic, b, clock, events, run, logs };
 }
 const answer =
   (pick: (req: CoachPickRequest) => unknown) =>
@@ -130,6 +136,37 @@ describe('the AI pick, end to end', () => {
     expect(await stored(b)).toMatchObject({ detail: 'not-candidate' });
   });
 
+  it('a cap in its range is kept; one outside it takes the table, the pick still ok, the repair logged', async () => {
+    const { anthropic, b, logs } = await setup();
+    let ranges: [number, number][] = [];
+    anthropic.nextPick = answer((req) => {
+      ranges = req.ctx.candidates.slice(0, 3).map((c) => c.capRange);
+      const [a, b2, c] = req.ctx.candidates;
+      return {
+        picks: [
+          { slug: a!.slug, why: 'in range', capMin: a!.capRange[1] },
+          { slug: b2!.slug, why: 'too long', capMin: b2!.capRange[1] + 1 },
+          { slug: c!.slug, why: 'default', capMin: null },
+        ],
+        note: null,
+        focus: null,
+      };
+    });
+    const t = await b.startCoachPick();
+    expect(t.ai).toMatchObject({ status: 'ok', source: 'ai' });
+    const [s0, s1, s2] = t.slots;
+    expect(s0!.capMin).toBe(ranges[0]![1]);
+    expect(s1!.capMin).toBe(slotCapMin(s1!.kind, s1!.difficulty));
+    expect(s2!.capMin).toBe(slotCapMin(s2!.kind, s2!.difficulty));
+    const picks = (await stored(b))!.picks;
+    expect(picks[0]!.capMin).toBe(ranges[0]![1]);
+    expect(picks[1]!.capMin).toBeUndefined();
+    expect(picks[2]!.capMin).toBeUndefined();
+    expect(logs.map((l) => JSON.parse(l) as { event: string; repaired?: number })).toContainEqual({
+      event: 'coach_pick_cap_repaired',
+      repaired: 1,
+    });
+  });
   it('a refusal falls to the rules', async () => {
     const { anthropic, b } = await setup();
     anthropic.nextPick = {

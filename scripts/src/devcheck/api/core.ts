@@ -352,6 +352,7 @@ export interface DevSitting {
   reopenedAt?: number | null;
   idleMs?: number;
   idleGaps?: [number, number][]; // lc-timer-pauses: each reopen's bridged gap, server clock
+  capMin?: number; // lc-slot-caps: the cap stored at Start (absent on sittings from before)
   review?: (DevSittingReview & { cause?: string | null; test?: boolean }) | null; // PR C — absent on heads from before reviews; `test` is the void
   summary: {
     runs: number;
@@ -400,6 +401,7 @@ export interface DevCoachSlot {
   kind: 'carry-over' | 'new' | 're-solve' | 'stretch';
   slug: string;
   title: string;
+  difficulty: 'Easy' | 'Medium' | 'Hard' | null;
   reason: string;
   capMin: number;
   status: 'open' | 'in-progress' | 'done' | 'skipped';
@@ -430,7 +432,7 @@ export interface DevCoachDayAi {
   startedAt: number | null;
   settledAt: number | null;
   model: string | null;
-  picks: { slug: string; kind: string; why: string }[];
+  picks: { slug: string; kind: string; why: string; capMin?: number }[];
   note: string | null;
   focus: { from: string; to: string; why: string } | null;
   reason: string | null;

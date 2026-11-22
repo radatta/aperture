@@ -14,6 +14,8 @@ const THROTTLES = [
   'ThrottlingException',
   'RequestLimitExceeded',
 ];
+export const isThrottle = (err: unknown) =>
+  THROTTLES.includes((err as { name?: string } | null)?.name ?? '');
 const BUILTIN_FAULTS: readonly (new (...a: never[]) => Error)[] = [
   TypeError,
   RangeError,
@@ -39,7 +41,7 @@ export function failureStatus(err: unknown, path: FailurePath): number {
   if (err instanceof ShapeError) return 400; // the caller's shape: retrying never helps
   const name = (err as { name?: string } | null)?.name ?? '';
   if (path === 'ingest' && name === 'ConflictError') return 409; // a lost CAS race — the outbox retries
-  if (THROTTLES.includes(name)) return path === 'ingest' ? 429 : 500;
+  if (isThrottle(err)) return path === 'ingest' ? 429 : 500;
   const aws = awsStatus(err);
   if (aws !== null) return aws >= 500 || path === 'rpc' ? 500 : 400;
   if (BUILTIN_FAULTS.some((C) => err instanceof C)) return 500; // a fault in our own code

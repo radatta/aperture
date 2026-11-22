@@ -5,6 +5,7 @@ import { Repo } from '../ddb/repo';
 import { liveWrites } from '../ddb/writes';
 import { BackendClient } from '../backend';
 import { handleRpc } from '../handler';
+import { slotOfSitting } from './coachTools';
 import { TOOLS } from './tools';
 import { RpcParamError } from './types';
 import type { ToolContext } from './types';
@@ -106,7 +107,7 @@ describe('leetcode_today', () => {
     const out = await call('leetcode_today');
     expect(out.day).toBe(TODAY);
     expect(out.slots).toHaveLength(4);
-    expect(out.slots[0]).toMatchObject({ n: 1, kind: 'new', capMin: 30, status: 'open' });
+    expect(out.slots[0]).toMatchObject({ n: 1, kind: 'new', capMin: 20, status: 'open' }); // an Easy, new
     expect(out.focus).toMatchObject({
       pattern: 'Arrays & Hashing',
       patternId: 'arrays-hashing',
@@ -416,11 +417,14 @@ describe('live_sitting slot', () => {
     });
     return sitting;
   }
-  it('names the open sitting’s slot, its cap and the rules', async () => {
-    await start('contains-duplicate');
-    t = T0 + 31 * 60_000;
+  it('names the open sitting’s slot, its stored cap and the rules; over at the cap, not a minute before', async () => {
+    const s = await start('contains-duplicate'); // an Easy, new: 20
+    expect(s.capMin).toBe(20);
+    t = T0 + 19 * 60_000;
+    expect((await call('live_sitting')).slot).toMatchObject({ capMin: 20, overCap: false });
+    t = T0 + 20 * 60_000;
     const out = await call('live_sitting');
-    expect(out.slot).toMatchObject({ kind: 'new', capMin: 30, overCap: true });
+    expect(out.slot).toMatchObject({ kind: 'new', capMin: 20, overCap: true });
     expect(out.trace).toBeNull(); // no coach event from the extension yet
     expect(out.slot.rules).toMatch(/hint ladder/);
   });
@@ -443,7 +447,7 @@ describe('live_sitting slot', () => {
     t = T0 + 31 * 60_000; // 31 on the clock, 29 of them paused
     expect((await call('live_sitting')).slot).toMatchObject({
       kind: 'new',
-      capMin: 30,
+      capMin: 20,
       overCap: false,
     });
   });
@@ -466,10 +470,27 @@ describe('live_sitting slot', () => {
     const out = await call('mark_peeked', { slug: 'contains-duplicate' });
     expect(out.nextDue).toMatchObject({ dueDay: '2026-11-10', track: 'retry' });
   });
-  it('an off-plan problem is off-plan, under the cap', async () => {
-    await start('rotting-oranges');
+  it('an off-plan problem is off-plan, under its own kind’s cap', async () => {
+    await start('rotting-oranges'); // a catalog Medium, unseen: new
     t = T0 + 5 * 60_000;
-    expect((await call('live_sitting')).slot).toMatchObject({ kind: 'off-plan', overCap: false });
+    expect((await call('live_sitting')).slot).toMatchObject({
+      kind: 'off-plan',
+      capMin: 45,
+      overCap: false,
+    });
+  });
+  it('a sitting from before per-slot caps (none stored) runs under the old 30', async () => {
+    const old: Sitting = { ...(await start('contains-duplicate')) };
+    delete old.capMin;
+    const today = await backend.getCoachToday();
+    expect(slotOfSitting(today, old, T0 + 25 * 60_000)).toMatchObject({
+      capMin: 30,
+      overCap: false,
+    });
+    expect(slotOfSitting(today, old, T0 + 30 * 60_000)).toMatchObject({
+      capMin: 30,
+      overCap: true,
+    });
   });
 });
 

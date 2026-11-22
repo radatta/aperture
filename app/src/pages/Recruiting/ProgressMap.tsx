@@ -183,6 +183,9 @@ const SQUARE: Record<string, string> = {
   peeked:
     'border-[1.5px] border-gold after:absolute after:inset-[2px] after:rounded-full after:bg-gold',
 };
+const BORDERED = new Set(['untried', 'premium', 'not-yet', 'peeked']);
+const DUE_DOT =
+  'before:absolute before:left-1/2 before:size-[2px] before:-translate-x-1/2 before:rounded-full before:bg-ink';
 export function Square({
   kind,
   due = false,
@@ -200,7 +203,12 @@ export function Square({
         'relative inline-block shrink-0 rounded-[3px]',
         small ? 'size-2.5' : 'size-3',
         SQUARE[kind],
-        due && 'outline outline-[1.5px] outline-offset-[1.5px] outline-ink',
+        // Re-solve due: a dot just under the square, inside the row gap — no outline, so the square keeps its size,
+        // neighbours never merge, and each one counts (F397). `before:` because peeked's inner dot is `after:`. The
+        // offset is from the padding box, so a bordered square's adds its 1.5px border: the same gap under every kind.
+        due && DUE_DOT,
+        due &&
+          (BORDERED.has(kind) ? 'before:top-[calc(100%+2px)]' : 'before:top-[calc(100%+0.5px)]'),
       )}
     />
   );

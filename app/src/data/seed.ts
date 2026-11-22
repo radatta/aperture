@@ -819,6 +819,10 @@ export function seedStore(store: Store, nowMs: number, ulid: () => string): void
     draftUsed: false,
     updatedAt: addTwo.endedAt ?? addTwo.startedAt,
   };
+  // The caps they ran under (Sitting.capMin, the new row by difficulty); the third stored none, as a sitting from
+  // before per-slot caps does, and reads against the old 30.
+  twoSum.capMin = 20;
+  addTwo.capMin = 45;
   sit(
     lcReps[0]!,
     'longest-substring-without-repeating-characters',

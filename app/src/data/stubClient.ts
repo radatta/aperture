@@ -160,6 +160,8 @@ import {
   patchReview,
   normalizeReviewPatch,
   planDay,
+  startCapFallback,
+  startCapMin,
   aiPickPending,
   AI_PICK_BUSY_ERROR,
   claimAiRow,
@@ -1001,6 +1003,12 @@ class StubClient implements ApiClient {
       now,
     );
     if (claimed) this.store.lcStartGate = { ...claimed, updatedAt: now };
+    let capMin: number; // coach.ts startCapMin, as the backend: a failed read takes the fallback
+    try {
+      capMin = startCapMin(this.coachInput(), n.problemSlug, n.difficulty);
+    } catch {
+      capMin = startCapFallback(n.problemSlug, n.difficulty);
+    }
     // The head first, then the rep — the backend's order (its claim is what makes a retry safe).
     const sitting = this.writes.insert(this.store.sittings, {
       ...this.base(),
@@ -1023,6 +1031,7 @@ class StubClient implements ApiClient {
       prepTarget: PREP_TARGET_DEFAULT,
       lcSolveSessionId: n.lcSolveSessionId,
       extensionVersion: n.extensionVersion, // set here only: a resume never rewrites it
+      capMin, // set here only, like extensionVersion
       shapedAt: null,
       summary: emptySummary(),
     });

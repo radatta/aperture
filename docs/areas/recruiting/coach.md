@@ -19,6 +19,7 @@ decisions are stored; everything else is recomputed on every read.
 | `lcc#void#<day>#<slug>` (`CoachVoid`)      | a legacy day's void state, `void: true` or `false` (_Legacy history_)                                              |
 | the head's `claudeNotes`                   | Claude's own notes on an ended sitting (_Claude's notes_), never in the review                                     |
 | `lcc#mock#<ulid>` (`Mock`)                 | a mock interview, planned or done, with its scores (_Mocks_)                                                       |
+| the sitting's `capMin`                     | the time cap its Start stored (_Caps_); the AI pick's own is `CoachAiPick.capMin`                                  |
 
 `lcc#imp#` is reserved for a later row. Derived on read: attempts, problem records, the re-solve
 schedule, the focus pattern, the day's plan. At a few dozen sittings a month a read is two small Queries plus the
@@ -139,6 +140,32 @@ falling back to the same level only when the pattern has nothing easier left. Re
 ("yesterday", "November 14"), and a re-solve's opens with today's rule. A slot is a rep only once the extension's Start runs (one open rep per roll,
 [rolls](../home/rolls.md) D6).
 
+### Caps
+
+Each slot has a time cap in whole minutes, by its kind and the problem's difficulty (`COACH_PARAMS.slotCaps`,
+`slotCapMin`); no known difficulty reads Medium:
+
+| Kind                     | Easy | Medium | Hard |
+| ------------------------ | ---- | ------ | ---- |
+| new, stretch, carry-over | 20   | 45     | 60   |
+| re-solve                 | 10   | 25     | 30   |
+
+- **Stored at Start** (`Sitting.capMin`, set once, like `extensionVersion`; `startCapMin`): the plan's slot for that
+  problem, else today's newest sitting on it (a swap since; a test sitting never counts; one from before the caps reads 30), else the floor's kind, else the problem's own kind
+  (the carry-over, a seen problem a re-solve, else new). A reopen or a resume keeps it. A failed plan read never
+  fails a Start: the new row by difficulty (`startCapFallback`, logged `lc_start_cap_fallback`); a throttle is thrown
+  instead, so the extension retries (429) rather than keeping the fallback.
+- **Read back:** a slot with a sitting shows the sitting's cap, and so do `live_sitting`'s `overCap` and the try. A
+  sitting from before the caps (none stored) reads against 30 (`capLegacyMin`). A logged try takes the table by
+  the kind it would have been (`foldDays`): a first try new; after the last active day's latest unaccepted, unpeeked
+  try, within 2 days, a carry-over (one a day, as the plan picks it); any other later try, or one after a history-only solve, a re-solve. A day's
+  pieces take the earliest stored cap. `live_sitting`'s `overCap` is true from the cap's minute (time's up); a
+  finished try is over only past it (Trends, the problem page).
+- **The AI pick** may set a pick's cap (`CoachAiPick.capMin`) to whole minutes within 0.5–1.5× of its cell
+  (`capAi`, `slotCapRange`); anything else is repaired to the table, never a reject (_The AI pick_). A problem
+  swapped in takes the table.
+- **Trends** reads each try against its own cap (`capTimes`, _The Progress tab_).
+
 ### Plan mode
 
 The slot mix is a setting (`Settings.coachPlanMode`, Settings → LeetCode → Plan mode; rows from before read `auto`):
@@ -212,8 +239,9 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
 - **Candidates** (`coachPickContext`): the rules' own pick first (with its kinds), then the carry-over, ≤ 15 due
   re-solves oldest first, ≤ 5 unseen in the focus, ≤ 3 stretch, and, while no focus pick is held, ≤ 3 unseen in each
   other top-3 pattern behind a focus change (`ifFocus`). Context: the rules' order, the last 14 days of attempts
-  (outcome, help, cause, last error, minutes against the 30-minute cap, notes cut to 160), per-pattern rates,
-  momentum, the focus, the top 3. No ids. The user's practice data goes to the API, as for the review draft.
+  (outcome, help, cause, last error, minutes against that try's cap, notes cut to 160), per-pattern rates,
+  momentum, the focus, the top 3. Each candidate carries its table cap (`capMin`) and the band a pick may move it in
+  (`capRange`). No ids. The user's practice data goes to the API, as for the review draft.
 - **The call:** `claude-opus-5-5`, thinking on (it can't be off), effort `medium`, structured output (slugs and
   patterns enumerated), 60 s, 8,000 max tokens, no fallback model, no retry; one log line `coach_pick` with tokens,
   never text. Typical ≈ 4–7k in, 1–3k out: about $0.04–0.10 a day, worst ≈ $0.18.
@@ -222,8 +250,9 @@ rule plan with no call. It's the hook for a later A/B arm (`CoachToday.arm` stay
   fewer only when fewer candidates are allowed); the oldest due re-solve can't be skipped two AI days running (`mustInclude`, from the last `ok` day's
   `oldestDue`); a focus change only to another top-3 pattern and never while a pick (the user's or the AI's) is held; an
   `ifFocus` pick only with that change. Any break rejects the whole answer (`invalid`, the code in `detail`); only
-  text is repaired (trimmed, a why ≤ 140, the note ≤ 240, an empty why → the rule's reason). The floor is always
-  the rules'.
+  text is repaired (trimmed, a why ≤ 140, the note ≤ 240, an empty why → the rule's reason), and a cap: null is the
+  table's, and one outside its band, fractional or not a number becomes the table's too, counted (`capRepaired`,
+  logged `coach_pick_cap_repaired`). The floor is always the rules'.
 - **Any failure** — no key, a timeout, an API error, a refusal, bad JSON, a guardrail, a failed invoke — is the rule
   plan with the notice "AI pick unavailable today, using the rules" on the card and in the thread. Never silent.
 - **The view:** an `ok` pick replaces the rule slots in its order (`CoachSlot.aiWhy`; `reason` keeps the rules'
@@ -319,8 +348,8 @@ the working catalog from the user's own sittings, its pattern from the full cata
 
 | Tool                                                                    | Kind   | Over                                                                                                                                                                                                                                                                                         |
 | ----------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `leetcode_today {day?}`                                                 | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 7.5 s; `ai` and each slot's `why`                                                                                                                                               |
-| `live_sitting`                                                          | (read) | gains `slot` (kind or `off-plan`, reason, cap, `overCap`, the rules), `trace` (`summary.commentTrace`, [index.md](index.md) → _Coach events_)                                                                                                                                                |
+| `leetcode_today {day?}`                                                 | read   | `getCoachToday`, plus the per-kind coaching `rules` and the wording note; starts a `due` AI pick and waits ≤ 7.5 s; `ai` and each slot's `why` and `capMin`                                                                                                                                  |
+| `live_sitting`                                                          | (read) | gains `slot` (kind or `off-plan`, reason, the cap its Start stored, `overCap`, the rules), `trace` (`summary.commentTrace`, [index.md](index.md) → _Coach events_)                                                                                                                           |
 | `mark_peeked {slug \| sittingId, day?, accepted?, title?, difficulty?}` | write  | that day's sitting's review → help `solution`; none → a peek attempt (an accept that day kept; a title and difficulty off the roadmap)                                                                                                                                                       |
 | `set_cause_tag {sittingId?, cause, peeked?}`                            | write  | `patchSittingReview`; no id → the newest ended sitting                                                                                                                                                                                                                                       |
 | `swap_slot {slug, action, toSlug?}`                                     | write  | `setCoachSlot`; a swap with no target → the next easier unseen problem                                                                                                                                                                                                                       |
@@ -347,7 +376,7 @@ only, none an ingest method. Day-scoped writes act on the user's day as the serv
 
 A bulk import of LeetCode's own submission history, a second problem list with its picker, and countdown
 mode — each its own PR. (History-only solves cover logging old solves by hand, in the thread.) `CoachToday.mode`,
-`target` and `arm` are already in the shape, and the gaps and cap are parameters, so countdown mode and an A/B arm
+`target` and `arm` are already in the shape, and the gaps and caps are parameters, so countdown mode and an A/B arm
 (the AI pick against the rules) add rather than change.
 
 ## Files
@@ -493,7 +522,7 @@ the URL, so a reload or Back keeps them.
   off the list, due) over a whole-list bar, then the 18 patterns in our own five stages, in roadmap order:
   Foundations, Linked structures, Search, Dynamic programming, Toolkit. Each stage is a column on a wide screen
   (one under another on a phone) with its meter and a card per pattern; a card's squares are its problems, shape
-  and fill carrying each state (hollow, dotted Premium when the setting is off, solid, ringed when due), and its
+  and fill carrying each state (hollow, dotted Premium when the setting is off, solid, a dot under it when due), and its
   accessible name says it all in words. A card opens its problems in a panel — status, tries, last tried, re-solve,
   LeetCode link, each title linking its page — under all five stages on a wide screen, under its own stage on a
   phone; Close returns focus to the card. **Left only** lists what's left: the open pattern's untried problems, or
@@ -502,13 +531,14 @@ the URL, so a reload or Back keeps them.
   cause, last tried, re-solve. Filters by pattern, status (incl. re-solve due, graduated, solved before) and
   difficulty; no match offers Clear filters.
 - **Trends** (`progressWeeks`, `capTimes`), live tries only, the last 12 ISO weeks (all four cards): problems a week (clean / solved
-  / not yet), first tries clean and re-solves clean a week (a week under 5 tries hollow), and minutes a try against
-  the 30-minute cap (`capMin`) with the median. A try's minutes: a sitting's to its first accept (both on the
+  / not yet), first tries clean and re-solves clean a week (a week under 5 tries hollow), and each try as a share of
+  its own cap (`ProblemTry.capMin`, _Caps_; bins in sixths, an edge falls in the lower bin) with how many were inside
+  and the median minutes. A try's minutes: a sitting's to its first accept (both on the
   extension's clock), else its length once ended, LeetCode's timer pauses and idle gaps left out
   ([recruiting](index.md) → _Timer pauses_); a logged try's as given. Each card says what it needs when
   there isn't enough yet.
 - **A problem's page** (`/recruiting/progress/:slug`, `ProblemPage.tsx`): its lists, status and re-solve, then
-  every try newest first — minutes (over the cap in gold), help, cause, the logged note, its sittings — a
+  every try newest first — minutes (over its own cap in gold), help, cause, the logged note, its sittings — a
   history-only one tagged _Before the coach_ with its outcome. ← Progress returns to the view and filters it came from. A slug on no list and never
   tried says so.
 - A failed records read is a `LoadError` with Retry, never an empty map; a failed plan read still draws the map,

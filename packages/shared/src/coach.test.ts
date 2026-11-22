@@ -24,7 +24,10 @@ import {
   rankPatterns,
   resolveState,
   sittingTryMinutes,
+  slotCapMin,
+  slotCapRange,
   slotChangeInputs,
+  startCapMin,
 } from './coach';
 import type { CoachInput } from './coach';
 import { loadCatalog, unloadCatalog } from './catalogs';
@@ -68,6 +71,8 @@ interface SitOpts {
   open?: boolean;
   title?: string;
   tags?: string[];
+  cap?: number; // the stored Sitting.capMin
+  difficulty?: string;
 }
 function sit(o: SitOpts): Sitting {
   const startedAt = zonedEpoch(o.on, '10:00', USER_TIME_ZONE);
@@ -105,7 +110,7 @@ function sit(o: SitOpts): Sitting {
       o.title ?? NEETCODE_150.find((c) => c.slug === o.slug)?.title ?? o.slug.replace(/-/g, ' '),
     questionId: null,
     frontendId: null,
-    difficulty: null,
+    difficulty: o.difficulty ?? null,
     topicTags: o.tags ?? null,
     lang: 'python3',
     repTaskId: id(),
@@ -113,6 +118,7 @@ function sit(o: SitOpts): Sitting {
     prepTarget: 'General',
     lcSolveSessionId: null,
     shapedAt: startedAt,
+    ...(o.cap !== undefined ? { capMin: o.cap } : {}),
     summary: {
       ...emptySummary(),
       submits: subs.length,
@@ -330,7 +336,7 @@ describe('planDay', () => {
     const t = planDay(input());
     expect(t.focus).toMatchObject({ pattern: 'arrays-hashing', day: 1, of: 3, source: 'engine' });
     expect(t.slots.map((s) => s.kind)).toEqual(['new', 'new', 'stretch', 'stretch']);
-    expect(t.slots[0]).toMatchObject({ slug: 'contains-duplicate', status: 'open', capMin: 30 });
+    expect(t.slots[0]).toMatchObject({ slug: 'contains-duplicate', status: 'open', capMin: 20 }); // Easy, new
     expect(
       t.slots.filter((s) => s.kind === 'stretch').every((s) => s.difficulty === 'Medium'),
     ).toBe(true);
@@ -479,6 +485,171 @@ describe('planDay', () => {
       changes: [],
     };
     expect(planDay(input({ days: [row] })).floor?.on).toBe(true);
+  });
+});
+
+describe('per-slot caps', () => {
+  it('the table: new, stretch and carry-over 20/45/60, a re-solve 10/25/30, no difficulty reads Medium', () => {
+    for (const k of ['new', 'stretch', 'carry-over'] as const)
+      expect([slotCapMin(k, 'Easy'), slotCapMin(k, 'Medium'), slotCapMin(k, 'Hard')]).toEqual([
+        20, 45, 60,
+      ]);
+    expect(['Easy', 'Medium', 'Hard'].map((d) => slotCapMin('re-solve', d as 'Easy'))).toEqual([
+      10, 25, 30,
+    ]);
+    expect(slotCapMin('new', null)).toBe(45);
+    expect(slotCapMin('re-solve', null)).toBe(25);
+    expect(slotCapRange('new', 'Hard')).toEqual([30, 90]);
+    expect(slotCapRange('re-solve', 'Medium')).toEqual([13, 37]);
+  });
+
+  it('each slot takes its kind and difficulty; a slot with a sitting shows the sitting’s cap', () => {
+    const t = planDay(input({ sittings: [failed('two-sum', day(-1))] }));
+    for (const s of t.slots) expect(s.capMin, s.slug).toBe(slotCapMin(s.kind, s.difficulty));
+    const slot = t.slots.find((s) => s.kind === 'new')!;
+    const started = sit({ slug: slot.slug, on: TODAY, open: true, cap: 33 });
+    const after = planDay(input({ sittings: [failed('two-sum', day(-1)), started] }));
+    expect(after.slots.find((s) => s.slug === slot.slug)).toMatchObject({
+      status: 'in-progress',
+      capMin: 33,
+    });
+    // A sitting from before per-slot caps stored none: it ran under the old 30.
+    const old = sit({ slug: slot.slug, on: TODAY, open: true });
+    const legacy = planDay(input({ sittings: [failed('two-sum', day(-1)), old] }));
+    expect(slot.capMin).not.toBe(30);
+    expect(legacy.slots.find((s) => s.slug === slot.slug)!.capMin).toBe(30);
+  });
+
+  it('a try runs against its sitting’s stored cap, else 30; a logged one against the table, new then re-solve', () => {
+    const recs = listRecords(
+      input({
+        sittings: [sit({ slug: 'two-sum', on: day(-5), submits: ['accepted'], cap: 15 })],
+        attempts: [
+          manual('valid-anagram', day(-4), 'failed'),
+          manual('valid-anagram', day(-2), 'clean'),
+        ],
+        legacy: [],
+      }),
+    );
+    expect(recs.find((r) => r.slug === 'two-sum')!.tries.map((t) => t.capMin)).toEqual([15]);
+    // First try new (20); two days after a miss on the last active day, a carry-over (20); then a re-solve (10).
+    expect(recs.find((r) => r.slug === 'valid-anagram')!.tries.map((t) => t.capMin)).toEqual([
+      20, 20,
+    ]);
+    const before = listRecords(input({ sittings: [clean('group-anagrams', day(-3))] }));
+    expect(before.find((r) => r.slug === 'group-anagrams')!.tries[0]!.capMin).toBe(30);
+  });
+
+  it('a logged try’s kind: carry-over only after a miss on the last active day; a peek, a gap or an accept makes it a re-solve', () => {
+    const caps = (attempts: CoachAttempt[], slug = 'valid-anagram') =>
+      listRecords(input({ attempts, legacy: [] }))
+        .find((r) => r.slug === slug)!
+        .tries.map((t) => t.capMin);
+    const va = (on: string, o: CoachAttempt['outcome'], help?: HelpLevel) =>
+      manual('valid-anagram', on, o, help);
+    expect(caps([va(day(-6), 'failed'), va(day(-5), 'failed'), va(day(-4), 'clean')])).toEqual([
+      20, 20, 20,
+    ]);
+    expect(caps([va(day(-5), 'failed'), va(day(-4), 'clean'), va(day(-3), 'clean')])).toEqual([
+      20, 20, 10,
+    ]);
+    expect(caps([va(day(-5), 'failed', 'solution'), va(day(-4), 'clean')])).toEqual([20, 10]);
+    expect(caps([va(day(-6), 'failed'), va(day(-3), 'clean')])).toEqual([20, 10]); // past carryOverDays
+    // Another problem tried in between: the miss isn't on the last active day.
+    expect(
+      caps([va(day(-5), 'failed'), manual('two-sum', day(-4), 'clean'), va(day(-3), 'clean')]),
+    ).toEqual([20, 10]);
+    // Two misses on one day: only the later is the carry-over (coachPools keeps one); the earlier is a re-solve.
+    const later = {
+      ...manual('two-sum', day(-4), 'failed'),
+      at: va(day(-4), 'failed').at + 60_000,
+    };
+    const two = [
+      va(day(-4), 'failed'),
+      later,
+      va(day(-3), 'clean'),
+      manual('two-sum', day(-3), 'clean'),
+    ];
+    expect(caps(two)).toEqual([20, 10]);
+    expect(caps(two, 'two-sum')).toEqual([20, 20]);
+  });
+
+  it('a history-only solve before a live try makes it a re-solve; one after it doesn’t', () => {
+    const old = (on: string) => ({
+      ...manual('valid-anagram', on, 'solved'),
+      historical: true as const,
+    });
+    const first = (attempts: CoachAttempt[]) =>
+      listRecords(input({ attempts, legacy: [] }))
+        .find((r) => r.slug === 'valid-anagram')!
+        .tries.filter((t) => !t.historical)[0]!.capMin;
+    expect(first([old(day(-30)), manual('valid-anagram', day(-3), 'clean')])).toBe(10);
+    expect(first([manual('valid-anagram', day(-30), 'clean'), old(day(-3))])).toBe(20);
+  });
+
+  it('one day’s pieces fold to the earliest stored cap: a sitting’s over a logged piece, the first sitting’s over a later one', () => {
+    const first = sit({ slug: 'two-sum', on: day(-3), submits: ['accepted'], cap: 33 });
+    const later = {
+      ...sit({ slug: 'two-sum', on: day(-3), submits: ['accepted'], cap: 45 }),
+      id: id(),
+      startedAt: first.startedAt + 2 * 3_600_000,
+      endedAt: first.endedAt! + 2 * 3_600_000,
+    };
+    const recs = listRecords(
+      input({
+        sittings: [later, first],
+        attempts: [manual('two-sum', day(-3), 'clean')],
+        legacy: [],
+      }),
+    );
+    expect(recs.find((r) => r.slug === 'two-sum')!.tries.map((t) => t.capMin)).toEqual([33]);
+  });
+
+  it('startCapMin: the slot’s cap on the plan (the AI pick’s: coachAi.test.ts)', () => {
+    const ci = input({ sittings: [failed('two-sum', day(-1))] });
+    const t = planDay(ci);
+    for (const s of t.slots) expect(startCapMin(ci, s.slug, null), s.slug).toBe(s.capMin);
+  });
+
+  it('startCapMin off the plan after an earlier sitting today: that sitting’s cap', () => {
+    const ci = input({
+      sittings: [
+        { ...sit({ slug: 'course-schedule', on: day(0), submits: [], cap: 50 }), endedAt: null },
+      ],
+    });
+    expect(planDay(ci).slots.some((s) => s.slug === 'course-schedule')).toBe(false);
+    expect(startCapMin(ci, 'course-schedule', 'Medium')).toBe(50);
+    // The newest of today's, as a slot's sitting is picked; a test sitting never counts.
+    const later = (test: boolean) => {
+      const x = sit({ slug: 'course-schedule', on: day(0), submits: [], cap: 30, test });
+      return { ...x, startedAt: x.startedAt + 60_000, endedAt: null };
+    };
+    const withLater = (test: boolean) => ({ ...ci, sittings: [...ci.sittings, later(test)] });
+    expect(startCapMin(withLater(false), 'course-schedule', 'Medium')).toBe(30);
+    expect(startCapMin(withLater(true), 'course-schedule', 'Medium')).toBe(50);
+  });
+
+  it('startCapMin off the plan: its own kind by difficulty; unknown difficulty reads Medium', () => {
+    const ci = input({ sittings: [clean('valid-anagram', day(-1))] }); // clean yesterday: not due
+    const onPlan = new Set(planDay(ci).slots.map((s) => s.slug));
+    expect(onPlan.has('valid-anagram')).toBe(false);
+    expect(startCapMin(ci, 'valid-anagram', 'Easy')).toBe(10); // tried before: a re-solve
+    expect(onPlan.has('course-schedule')).toBe(false);
+    expect(startCapMin(ci, 'course-schedule', null)).toBe(45); // a catalog Medium, unseen: new
+    expect(startCapMin(ci, 'not-a-catalog-problem', 'Hard')).toBe(60); // the Start's difficulty
+    expect(startCapMin(ci, 'not-a-catalog-problem', null)).toBe(45);
+    expect(startCapMin(ci, 'not-a-catalog-problem', 'weird')).toBe(45);
+  });
+
+  it('a second sitting on an off-plan problem the same day keeps the unseen cap', () => {
+    const first = sit({
+      slug: 'course-schedule',
+      on: TODAY,
+      submits: ['wrong_answer'],
+      minutes: 20,
+      cap: 45,
+    });
+    expect(startCapMin(input({ sittings: [first] }), 'course-schedule', 'Medium')).toBe(45);
   });
 });
 
@@ -980,6 +1151,7 @@ describe('stats', () => {
         cause: null,
         accepted: false,
         minutes: null,
+        capMin: 20, // valid-palindrome is Easy; a first logged try takes the new row
         note: null,
         historical: false,
         sittingIds: [],

@@ -5260,12 +5260,43 @@ export function runApiContract(
         expect(t.slots[0]).toMatchObject({
           slug: 'contains-duplicate',
           status: 'open',
-          capMin: 30,
+          capMin: 20, // an Easy, new
         });
         for (const x of t.slots) expect(x.reason).not.toBe('');
         expect(t.floor).toMatchObject({ slug: 'contains-duplicate', on: false, done: false });
         expect(t).toMatchObject({ mode: 'general', due: [], offPlan: [], unreviewed: [] });
         expect(await api.listProblemRecords()).toEqual([]);
+      });
+
+      it('a Start stores its slot’s cap; a reopen keeps it; off the plan the problem’s own kind; the card shows it', async () => {
+        // On the plan: contains-duplicate, an Easy new slot (20).
+        const slot = (await api.getCoachToday()).slots.find(
+          (x) => x.slug === 'contains-duplicate',
+        )!;
+        expect(slot.capMin).toBe(20);
+        const { sitting } = await startSitting(api, {
+          problemSlug: 'contains-duplicate',
+          problemTitle: 'Contains Duplicate',
+        });
+        expect(sitting.capMin).toBe(20);
+        expect((await api.getSitting(sitting.id)).sitting.capMin).toBe(20);
+        advance(SITTING_IDLE_MS + 1);
+        const again = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'contains-duplicate', startedAt: clock }),
+        );
+        expect(again).toMatchObject({ resumed: true, sitting: { id: sitting.id, capMin: 20 } });
+        await api.setTaskActual(sitting.repTaskId, 5);
+        await api.transitionTask(sitting.repTaskId, 'done');
+        // Off the plan, unseen: the new row by the Start's difficulty (a catalog problem by its own).
+        const off = await api.lcSittingStart(
+          sittingStart({ problemSlug: 'course-schedule', startedAt: clock }),
+        );
+        expect(off.sitting.capMin).toBe(45); // a catalog Medium, whatever the Start says
+        const today = await api.getCoachToday();
+        expect(today.slots.find((x) => x.slug === 'contains-duplicate')).toMatchObject({
+          capMin: 20,
+        });
+        expect(today.offPlan.map((x) => x.slug)).toContain('course-schedule');
       });
 
       it('stats: first tries and re-solves, clean as the hit, per week and pattern; a bad range refused', async () => {

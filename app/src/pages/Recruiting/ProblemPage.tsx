@@ -154,12 +154,14 @@ function TryRow({ t, today }: { t: ProblemTry; today: string }) {
   const peeked = t.help === 'solution';
   const word = t.historical ? 'Before the coach' : peeked ? 'Peeked' : OUTCOME[t.outcome];
   const tone = t.historical ? 'muted' : t.outcome === 'clean' ? 'teal' : 'gold';
-  const over = t.minutes !== null && t.minutes > COACH_PARAMS.capMin;
+  // `??`: a Lambda from before the caps (a revert's window) sends no capMin; the old 30.
+  const cap = t.capMin ?? COACH_PARAMS.capLegacyMin;
+  const over = t.minutes !== null && t.minutes > cap;
   const bits = [
     t.historical && OUTCOME[t.outcome],
     t.minutes !== null && (
       <span key="m" className={cx(over && 'font-semibold text-gold')}>
-        {t.minutes} min{over ? `, over the ${COACH_PARAMS.capMin} min cap` : ''}
+        {t.minutes} min{over ? `, over the ${cap} min cap` : ''}
       </span>
     ),
     t.help === 'hint' && 'a hint',

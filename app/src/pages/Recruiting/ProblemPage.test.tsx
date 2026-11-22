@@ -13,7 +13,7 @@ const freshApi = () => createStubClient({ seed: false, storageKey: `problem-${Ma
 const ago = (n: number) => addDays(todayKey(4, Date.now()), -n);
 
 describe('Problem page', () => {
-  it('every try newest first: minutes over the cap, cause, the note, a history-only one', async () => {
+  it('every try newest first: minutes over its own cap, cause, the note, a history-only one', async () => {
     const api = freshApi();
     await api.logCoachAttempts([
       {
@@ -47,13 +47,30 @@ describe('Problem page', () => {
       screen.getByRole('region', { name: '3 tries, newest first' }),
     ).getAllByRole('listitem');
     expect(tries).toHaveLength(3);
-    expect(within(tries[0]!).getByText('34 min, over the 30 min cap')).toBeTruthy();
+    // Logged tries take the table by difficulty and kind: after the history-only solve both are re-solves (Easy 10).
+    expect(within(tries[0]!).getByText('34 min, over the 10 min cap')).toBeTruthy();
+    expect(within(tries[1]!).getByText('41 min, over the 10 min cap')).toBeTruthy();
     expect(within(tries[0]!).getByText(/a hint · Boundary/)).toBeTruthy();
     expect(within(tries[1]!).getByText('Peeked')).toBeTruthy();
     expect(within(tries[2]!).getByText('Before the coach')).toBeTruthy();
     expect(within(tries[2]!).getByText('Solved')).toBeTruthy();
     expect(within(tries[2]!).getByText('Note: on paper')).toBeTruthy();
     expect(within(tries[2]!).getByText(/history only/)).toBeTruthy();
+  });
+
+  it('a try with no capMin (a pre-caps Lambda, the revert window) reads against 30', async () => {
+    const api = freshApi();
+    await api.logCoachAttempts([{ slug: 'two-sum', day: ago(2), outcome: 'solved', minutes: 31 }]);
+    const list = api.listProblemRecords.bind(api);
+    vi.spyOn(api, 'listProblemRecords').mockImplementation(
+      async () =>
+        (await list()).map((r) => ({
+          ...r,
+          tries: r.tries.map((t) => ({ ...t, capMin: undefined })),
+        })) as never,
+    );
+    renderApp({ api, path: '/recruiting/progress/two-sum' });
+    expect(await screen.findByText('31 min, over the 30 min cap')).toBeTruthy();
   });
 
   it('a long history lists every try', async () => {
