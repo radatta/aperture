@@ -67,8 +67,8 @@ flag, a name another file matches on.
 | U2  | the flag exists in the installed build      | 3.2.1    | probed: `tool --help` → lists `--dry-run`   |
 | U3  | the store's behaviour under a real throttle | n/a      | run-only: only the deployed stage throttles |
 
-Evidence starts with `searched:` and the URL it came from (the public page, with no explicit port: the reviewer
-fetches it, and a remote `:8080` pauses the container), `probed:` with `` `<command>` → <output> ``, or
+Evidence starts with `searched:` and the URL it came from (the public page, with no explicit port: the link
+checker fetches it, and a remote `:8080` pauses the container), `probed:` with `` `<command>` → <output> ``, or
 `run-only:` with why no search or probe can settle it. Anything else is not evidence, "from memory" included: write
 `open: <question>`, which fails the lint until the lane settles it (`search-specialist` on `sonnet`, or a probe).
 
@@ -117,12 +117,19 @@ answer.
 1. The lane saves the plan to `localNotes/plan.md` and runs `pnpm plan-lint` (`--help` for flags; `--root` for a
    plan about another checkout). It fixes what the lint names: a missing search is run and counted, an `open:` row
    settled, a stale path corrected. No second `Plan`.
-2. One `plan-reviewer` launch (`.claude/agents/plan-reviewer.md`), given the plan's and the kickoff's paths. It is
-   read-only, re-runs a sample of the census searches and checks every Unknowns row against its source, and reports
-   at most 7 serious gaps, each with its proof.
-3. The lane traces each gap. A count that differs is not a gap by itself; a reader or writer the census missed is.
-   A confirmed gap is fixed in the plan; one the lane drops is logged in `localNotes/decisions.md` with the reason.
-4. `pnpm plan-lint` again, then `[kickoff]`. No second reviewer pass: a reviewer asked again always finds something.
+2. Two launches side by side, neither able to message the other:
+   - `plan-reviewer` (`.claude/agents/plan-reviewer.md`), given the plan's and the kickoff's paths. Read-only Bash
+     and no web tools: it re-runs a sample of the census searches, checks the `probed:` and `run-only:` rows and the
+     kickoff against the plan, and reports at most 7 serious gaps, each with its proof.
+   - `plan-link-checker` (`.claude/agents/plan-link-checker.md`), given the plan's Unknowns rows as written, inside
+     an `<unknowns>` tag. Web fetch only and no local tools: for each `searched:` row it says confirmed,
+     contradicted or not on the page, with the quote and the URL.
+3. The lane merges both reports and traces each gap. A count that differs is not a gap by itself; a reader or writer
+   the census missed is. A `searched:` row the page contradicts or doesn't back is a gap, unless the lane finds the
+   claim on another page and cites it. Where a page's answer implies something about the code (a limit a call site
+   must respect, a flag the repo passes), the lane runs that search itself and raises what it finds. A confirmed gap
+   is fixed in the plan; one the lane drops is logged in `localNotes/decisions.md` with the reason.
+4. `pnpm plan-lint` again, then `[kickoff]`. No second pass of either: a reviewer asked again always finds something.
 
 What the lint checks is listed in `pnpm plan-lint --help` and pinned by `scripts/src/plan-lint/lint.test.ts`; it
 never runs a census command, so a count is checked only by the reviewer's sample.

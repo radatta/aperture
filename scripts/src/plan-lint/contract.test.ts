@@ -1,4 +1,4 @@
-// The template doc and the two agent files against the lint: the doc's section names, light drops, pre-mortem
+// The template doc and the three agent files against the lint: the doc's section names, light drops, pre-mortem
 // classes and evidence prefixes are the lint's own lists, and the doc's example rows pass the lint; the agent files
 // have no file-write tool, their exact tool sets, and `high`.
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -147,14 +147,18 @@ describe('agent files', () => {
     ? readdirSync(join(ROOT, '.claude/agents'))
     : [];
   const names = read('CLAUDE.md').includes('.claude/agents/plan.md');
-  const has = agentFiles.includes('plan.md') || agentFiles.includes('plan-reviewer.md');
-  // Tools pinned exactly, so a widening is a red test. Bash is read-only by instruction only.
+  const has = ['plan.md', 'plan-reviewer.md', 'plan-link-checker.md'].some((f) =>
+    agentFiles.includes(f),
+  );
+  // Tools pinned exactly, so a widening is a red test. Bash is read-only by instruction only, so the agent with Bash
+  // has no web tool and the one with a web tool has nothing local.
   const TOOLS: Record<string, string> = {
     'plan.md': 'Read, Grep, Glob, Bash, WebFetch, WebSearch',
-    'plan-reviewer.md': 'Read, Grep, Glob, Bash, WebFetch',
+    'plan-reviewer.md': 'Read, Grep, Glob, Bash',
+    'plan-link-checker.md': 'WebFetch',
   };
 
-  it.runIf(names || has)('plan.md and plan-reviewer.md: exact tools, high, Plan on fable', () => {
+  it.runIf(names || has)('the three plan agents: exact tools, high, Plan on fable', () => {
     for (const [f, tools] of Object.entries(TOOLS)) {
       expect(agentFiles, `${f}, exact case`).toContain(f);
       const text = read(`.claude/agents/${f}`);
@@ -165,9 +169,11 @@ describe('agent files', () => {
     expect(read('.claude/agents/plan.md')).toMatch(/^name: Plan$/m);
     expect(read('.claude/agents/plan.md')).toMatch(/^model: fable$/m);
     expect(read('.claude/agents/plan-reviewer.md')).toMatch(/^name: plan-reviewer$/m);
+    expect(read('.claude/agents/plan-link-checker.md')).toMatch(/^name: plan-link-checker$/m);
   });
 
-  it('plan-reviewer never counts as a review round', () => {
+  it('plan-reviewer and plan-link-checker never count as a review round', () => {
     expect(isReviewLens('plan-reviewer')).toBe(false);
+    expect(isReviewLens('plan-link-checker')).toBe(false);
   });
 });
