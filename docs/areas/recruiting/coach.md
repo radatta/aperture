@@ -151,7 +151,7 @@ Each slot has a time cap in whole minutes, by its kind and the problem's difficu
 | re-solve                 | 10   | 25     | 30   |
 
 - **Stored at Start** (`Sitting.capMin`, set once, like `extensionVersion`; `startCapMin`): the plan's slot for that
-  problem, else today's newest sitting on it that stored a cap (a swap since; a test sitting never counts), else the floor's kind, else the problem's own kind
+  problem, else today's newest sitting on it (a swap since; a test sitting never counts; one from before the caps reads 30), else the floor's kind, else the problem's own kind
   (the carry-over, a seen problem a re-solve, else new). A reopen or a resume keeps it. A failed plan read never
   fails a Start: the new row by difficulty (`startCapFallback`, logged `lc_start_cap_fallback`); a throttle is thrown
   instead, so the extension retries (429) rather than keeping the fallback.

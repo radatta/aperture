@@ -2321,7 +2321,8 @@ export const lcCoach: Scenario = {
           ])
             await ctx.page.getByRole('heading', { name: h }).waitFor();
           await ctx.page.getByRole('heading', { name: 'Time against the cap' }).waitFor();
-          // This run's 50-minute try is over its 45: a cap misread as ≥ 50 would count every try inside.
+          // At least one try reads over its own cap: this run's 50-minute one guarantees it. (Its own bin isn't
+          // asserted: other tries on the test user share the window; the problem page above proves its cap.)
           const capNote = ctx.page.getByText(/\d+ of \d+ inside their cap · median \d+ min/);
           await capNote.waitFor({ timeout: 10_000 });
           const [, inside, timed] =

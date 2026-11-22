@@ -381,8 +381,7 @@ function foldDays(
       const prev = last.get(a.slug);
       const h = history.get(a.slug);
       const kind: SlotKind =
-        prev &&
-        prev.day === lastActive &&
+        prev && // one fold per day and slug: carryOf naming this slug means prev is that day's try
         carryOf.get(lastActive) === a.slug &&
         daysBetween(prev.day, a.day) <= params.carryOverDays
           ? 'carry-over'
@@ -1113,7 +1112,7 @@ export function ownKind(
   return was === 'stretch' ? 'stretch' : 'new';
 }
 // The cap a new sitting stores at Start (Sitting.capMin): its slot's on today's plan (the AI pick's or the table's),
-// else today's newest sitting on it that stored one (a swap since), else the floor's kind, else the problem's own
+// else today's newest sitting on it (a swap since), else the floor's kind, else the problem's own
 // kind (ownKind) — the same problem gets the same cap on or off the plan.
 // Reads only before-today pools for the kind, so a second sitting on an off-plan problem keeps its cap.
 export function startCapMin(
@@ -1127,15 +1126,9 @@ export function startCapMin(
   if (slot) return slot.capMin;
   // Off the plan now but started earlier today (a swap since): that sitting's cap, picked as a slot's sitting is.
   const earlier = input.sittings
-    .filter(
-      (x) =>
-        x.day === today.day &&
-        x.problemSlug === slug &&
-        x.review?.test !== true &&
-        x.capMin !== undefined,
-    )
+    .filter((x) => x.day === today.day && x.problemSlug === slug && x.review?.test !== true)
     .sort((a, b) => b.startedAt - a.startedAt)[0];
-  if (earlier) return earlier.capMin!;
+  if (earlier) return earlier.capMin ?? params.capLegacyMin; // one from before the caps: the old 30, as its slot reads
   const d = startDifficulty(slug, difficulty);
   if (today.floor?.slug === slug) return slotCapMin(today.floor.kind, d, params);
   return slotCapMin(ownKind(coachPools(input, params), slug), d, params);

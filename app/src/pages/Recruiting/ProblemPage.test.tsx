@@ -58,6 +58,21 @@ describe('Problem page', () => {
     expect(within(tries[2]!).getByText(/history only/)).toBeTruthy();
   });
 
+  it('a try with no capMin (a pre-caps Lambda, the revert window) reads against 30', async () => {
+    const api = freshApi();
+    await api.logCoachAttempts([{ slug: 'two-sum', day: ago(2), outcome: 'solved', minutes: 31 }]);
+    const list = api.listProblemRecords.bind(api);
+    vi.spyOn(api, 'listProblemRecords').mockImplementation(
+      async () =>
+        (await list()).map((r) => ({
+          ...r,
+          tries: r.tries.map((t) => ({ ...t, capMin: undefined })),
+        })) as never,
+    );
+    renderApp({ api, path: '/recruiting/progress/two-sum' });
+    expect(await screen.findByText('31 min, over the 30 min cap')).toBeTruthy();
+  });
+
   it('a long history lists every try', async () => {
     const api = freshApi();
     await api.logCoachAttempts(
