@@ -128,7 +128,7 @@ export function planBackfill(
     try {
       note = normalizeNote(input.note);
     } catch (e) {
-      throw new Error(`${at}: ${(e as Error).message}`);
+      throw new Error(`${at}: ${(e as Error).message}`, { cause: e });
     }
     // A rerun's row is skipped before its note is fitted or appended: it never lands twice.
     if (task.status === 'done' && task.backfilled) return { id: task.id, next: null, task };
