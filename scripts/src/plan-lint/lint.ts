@@ -454,12 +454,18 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
         if (!r.cells[cV]) add(r.line, 'unknown', 'Version is empty (write the version, or n/a)');
         const e = r.cells[cE] ?? '';
         const bad = (why: string) => add(r.line, 'unknown', why);
+        // The rows go to plan-link-checker pasted inside an <unknowns> tag, so every cell is held to its rules.
+        const row = r.cells.join(' | ');
+        if (/[a-z][a-z0-9+.-]*:\/\/[^/\s]*:\d/i.test(row))
+          bad('a URL with an explicit port (8080 pauses the container): link the public page');
+        if (/<\s*\/?\s*unknowns\b/i.test(row))
+          bad(
+            'an <unknowns> tag in a row: it would end the tag the rows are pasted in for the link checker',
+          );
         if (/^searched:/i.test(e)) {
-          if (!/https?:\/\/\S+/.test(e)) bad('searched: needs the URL it came from');
-          else if (/https?:\/\/[^/\s]*:\d/.test(e))
-            bad(
-              'searched: a URL with an explicit port (8080 pauses the container): link the public page',
-            );
+          if (!/https:\/\/\S+/.test(e)) bad('searched: needs the https URL it came from');
+          else if (/\bhttp:\/\//i.test(e))
+            bad('searched: http is refused by the link checker: cite the https page');
         } else if (/^probed:/i.test(e)) {
           if (!/`[^`]+`\s*(?:→|->)\s*\S/.test(e)) bad('probed: needs `<command>` → <output>');
         } else if (/^run-only:/i.test(e)) {

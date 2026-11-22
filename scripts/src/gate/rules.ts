@@ -363,7 +363,7 @@ export const INPUT_RULES: InputRule[] = [
   {
     inputs: ['docs/ops/PLAN.md', 'CLAUDE.md', '.claude/agents/'],
     tests: ['scripts/src/plan-lint/contract.test.ts'],
-    why: 'checks the template doc against the lint’s lists, and the Plan and plan-reviewer agent files',
+    why: 'checks the template doc against the lint’s lists, and the three plan agent files (Plan, plan-reviewer, plan-link-checker)',
   },
   // Same-area tests: a scripts area's tests spawn its CLIs and read its files, so a change anywhere in the area runs
   // all of them (cheaper than one rule per spawn, and it keeps new spawns covered).

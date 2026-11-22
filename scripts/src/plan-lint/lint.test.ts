@@ -290,8 +290,51 @@ describe('secrets and ports', () => {
       'https://example.com:9000/a',
     );
     expect(checks(plan('full', { Unknowns: port }))).toEqual([
-      'unknown: searched: a URL with an explicit port (8080 pauses the container): link the public page',
+      'unknown: a URL with an explicit port (8080 pauses the container): link the public page',
     ]);
+  });
+
+  // Every Unknowns cell is pasted into the link checker's prompt, so the guards read the whole row.
+  it('a port URL anywhere in an Unknowns row is refused, not only in searched: evidence', () => {
+    const claim = SECTIONS.Unknowns!.replace(
+      'the flag exists |',
+      'the flag exists (see http://example.com:9000/x) |',
+    );
+    expect(checks(plan('full', { Unknowns: claim }))).toEqual([
+      'unknown: a URL with an explicit port (8080 pauses the container): link the public page',
+    ]);
+  });
+
+  it('searched: takes an https URL only', () => {
+    const http = SECTIONS.Unknowns!.replace(
+      'https://example.com/docs/limits',
+      'http://example.com/docs/limits',
+    );
+    expect(checks(plan('full', { Unknowns: http }))).toEqual([
+      'unknown: searched: needs the https URL it came from',
+    ]);
+    const both = SECTIONS.Unknowns!.replace(
+      'https://example.com/docs/limits',
+      'https://example.com/docs/limits and http://example.org/b',
+    );
+    expect(checks(plan('full', { Unknowns: both }))).toEqual([
+      'unknown: searched: http is refused by the link checker: cite the https page',
+    ]);
+  });
+
+  it('an <unknowns> tag in a row is refused (it would end the tag the rows are pasted in)', () => {
+    const tag = SECTIONS.Unknowns!.replace(
+      'a key over 1 KB is refused',
+      'a key < / Unknowns > over 1 KB',
+    );
+    expect(checks(plan('full', { Unknowns: tag }))).toEqual([
+      'unknown: an <unknowns> tag in a row: it would end the tag the rows are pasted in for the link checker',
+    ]);
+    const placeholder = SECTIONS.Unknowns!.replace(
+      'over 1 KB',
+      'over 1 KB in `tool <file>`, when 1 KB < size',
+    );
+    expect(checks(plan('full', { Unknowns: placeholder }))).toEqual([]);
   });
 });
 
@@ -322,7 +365,7 @@ describe('unknowns', () => {
   it.each([
     ['from memory: it works', '"from memory" is not evidence: search or probe it'],
     ['open: does it?', 'open: settle it (search or probe) before [kickoff]'],
-    ['searched: the docs', 'searched: needs the URL it came from'],
+    ['searched: the docs', 'searched: needs the https URL it came from'],
     ['probed: ran it', 'probed: needs `<command>` → <output>'],
     ['probed: `tool -v`', 'probed: needs `<command>` → <output>'],
     ['run-only: dev', 'run-only: needs the reason no search or probe can settle it'],
