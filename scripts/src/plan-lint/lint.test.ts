@@ -238,6 +238,17 @@ describe('searchProblem', () => {
     expect(p('git grep -n -e')).toBe('e needs a value');
   });
 
+  it('nothing but the pattern goes before --: git reads it as a revision', () => {
+    expect(p('git grep -n -e x docs -- packages')).toBe(
+      '"docs" before -- is a revision to git: put every path after --',
+    );
+    expect(p('git grep -n x docs -- packages')).toBe(
+      '"docs" before -- is a revision to git: put every path after --',
+    );
+    expect(p('git grep -n x -- docs packages')).toBeUndefined();
+    expect(p('git grep -n -e x -- docs')).toBeUndefined();
+  });
+
   it('the first operand is the pattern unless -e gave one', () => {
     // these search the whole root: `docs` is the pattern
     expect(p('git grep -n docs')).toBe('no repo path named in "git grep -n docs"');
@@ -394,6 +405,22 @@ describe('invariants, ordering, pre-mortem, matrix, steps', () => {
     expect(checks(plan('full', { Invariants: extra }))).toContain(
       'invariant: Failing test: no row id (T1)',
     );
+  });
+
+  it('fails when: an empty word refuses, a mutation starting with one passes', () => {
+    const m = (w: string) =>
+      checks(
+        plan('full', {
+          'Test matrix': SECTIONS['Test matrix']!.replace(
+            'fails when: the toggle write is dropped',
+            `fails when: ${w}`,
+          ),
+        }),
+      );
+    for (const w of ['never.', 'n/a (manual)', 'none — checked by hand', 'nothing', '-'])
+      expect(m(w), w).toEqual(['matrix: no `fails when: <mutation>`']);
+    expect(m('nothing is stored after the retry')).toEqual([]);
+    expect(m('never-sent rows are kept')).toEqual([]);
   });
 
   it('fails when: needs a real mutation; minutes run low to high', () => {

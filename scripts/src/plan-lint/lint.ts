@@ -227,6 +227,7 @@ export function searchProblem(command: string, tree: Tree): string | undefined {
     return `not a census search: "${command.slice(0, 40)}" (git grep)`;
   const f = SEARCH_FLAGS;
   const operands: string[] = [];
+  let beforeDash = -1;
   let pattern = false;
   let rest = false;
   const value = (name: string, v: string | undefined) => {
@@ -243,6 +244,7 @@ export function searchProblem(command: string, tree: Tree): string | undefined {
     }
     if (t === '--') {
       rest = true;
+      beforeDash = operands.length;
       continue;
     }
     if (t.startsWith('--')) {
@@ -267,6 +269,9 @@ export function searchProblem(command: string, tree: Tree): string | undefined {
   }
   // with no -e, the first operand before `--` is the pattern
   if (!pattern && !operands.length) return 'no pattern';
+  // with `--`, git reads every other operand before it as a revision (another commit's files)
+  if (beforeDash > (pattern ? 0 : 1))
+    return `"${operands[pattern ? 0 : 1]}" before -- is a revision to git: put every path after --`;
   const paths = pattern ? operands : operands.slice(1);
   if (!paths.length) return `no repo path named in "${command.slice(0, 40)}"`;
   for (const p of paths) {
@@ -474,7 +479,7 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
         !r.cells.some(
           (c) =>
             /fails when:\s*\S.{2,}/i.test(c) &&
-            !/fails when:\s*(n\/a|never|nothing|none|-)\s*$/i.test(c),
+            !/fails when:\s*(n\/a|never|nothing|none|-)(\W*$|\s*[(—–]|\s+-)/i.test(c),
         )
       )
         add(r.line, 'matrix', 'no `fails when: <mutation>`');
