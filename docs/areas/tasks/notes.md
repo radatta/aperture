@@ -12,6 +12,9 @@ search, and settable from bulk add and MCP. The row never shows the text, only a
 - **Contract:** `setTaskNotes(id, notes | null)`, plus `CreateTaskInput.notes`. Every writer runs
   `normalizeNotes` (`packages/shared/src/taskNotes.ts`): CRLF → LF, trim, `''` → `null`, over the cap
   throws. `createTasks` normalizes every input before writing any, so one bad input creates nothing.
+  One writer appends instead: a `backfillTasks` row's `note` lands after a blank line under the notes,
+  in the same write, and the notes after it must fit the cap ([dev-lane](../calibration/dev-lane.md) →
+  _The import path_).
   The behaviour is in the cross-impl contract suite (stub + Lambda + handler); `normalizeNotes` itself
   is unit-tested in `taskNotes.test.ts`.
 - **Semantics:** editable at **any** status (done and dropped included) and never part of the estimate
@@ -54,7 +57,7 @@ Rendered by `modules/tasks/notes/` — `parseNotes.ts` (pure) and `NotesView.tsx
   next to the icon. The add-to-today picker stays title + category only: it finds-or-creates by
   title, and notes hits would crowd that.
 - **Bulk add** ([bulk-add.md](bulk-add.md)): a `notes:"…"` token, with `\n` and `\\` as its only escapes.
-- **MCP** ([mcp/index.md](../mcp/index.md)): `notes` on `create_task`, `create_tasks` and `update_task`.
+- **MCP** ([mcp/index.md](../mcp/index.md)): `notes` on `create_task`, `create_tasks` and `update_task`; `backfill_tasks`' per-row `note` appends.
 - **Reflection** ([reflection.md](reflection.md)): the done task's look back is the same field and renderer
   with its own label, cap (1,000) and copy.
 

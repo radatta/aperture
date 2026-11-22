@@ -1057,6 +1057,21 @@ describe('mcp tools — backfill_tasks and the backfilled mark', () => {
     ]);
   });
 
+  it('backfill_tasks takes a note per row; the minutes rule stays in its description', async () => {
+    const tool = TOOLS.find((t) => t.name === 'backfill_tasks')!;
+    expect(tool.description).toMatch(/never guess/);
+    expect(tool.description).toMatch(/note \(optional: appended .* after a blank line/);
+    const items = (tool.inputSchema.properties.tasks as { items: { properties: object } }).items;
+    expect(Object.keys(items.properties)).toContain('note');
+    const { call, setup } = makeEnv();
+    const a = await setup.createTask({ title: 'a', estimateMin: 30, notes: 'Scoped it.' });
+    const b = await setup.createTask({ title: 'b', estimateMin: 30, notes: 'Kept.' });
+    const out = (await call('backfill_tasks', {
+      tasks: [row(a.id, { note: '  Shipped it.  ' }), row(b.id, { note: '   ' })],
+    })) as Row[];
+    expect(out.map((r) => r.task.notes)).toEqual(['Scoped it.\n\nShipped it.', 'Kept.']);
+  });
+
   it('refuses bad arguments as param errors before any dispatch', async () => {
     const { call, setup, dispatched } = makeEnv();
     const a = await setup.createTask({ title: 'a', estimateMin: 30 });
@@ -1071,6 +1086,8 @@ describe('mcp tools — backfill_tasks and the backfilled mark', () => {
       [{ tasks: [row(a.id, { completedDay: 'Nov 10' })] }, /completedDay/],
       [{ tasks: [{ actualMin: 40, completedDay: '2023-11-10' }] }, /"id" is required/],
       [{ tasks: [row(a.id, { reflection: 'x' })] }, /unknown field "reflection"/],
+      [{ tasks: [row(a.id, { note: 5 })] }, /"note" must be a string or null/],
+      [{ tasks: [row(a.id, { note: 'y'.repeat(5001) })] }, /"note": note is limited to 5,000/],
     ];
     for (const [args, msg] of bad) await expect(call('backfill_tasks', args)).rejects.toThrow(msg);
     expect(dispatched).toEqual([]);

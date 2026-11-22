@@ -16,6 +16,7 @@ import {
   withEstimate,
 } from './machines';
 import { calibrationTasks, hasParts, rollupParts } from './parts';
+import { appendNote, normalizeNote, TASK_NOTES_MAX } from './taskNotes';
 import type { CalibrationPoint, Category, Task } from './types';
 
 // Does this point count toward the gap? A done parent's rollup doesn't (its parts are points already, and
@@ -64,6 +65,7 @@ export interface BackfillTaskInput {
   actualMin: number; // the real minutes — required, never a default
   estimateMin?: number | null; // required when the task has none; else a revision, as complete_task
   completedDay: string; // YYYY-MM-DD, the app day it shipped; never after today
+  note?: string | null; // appended to the notes after a blank line, in the same write; blank is none
 }
 export type BackfillOutcome = 'done' | 'skipped'; // skipped: already done and backfilled (a rerun)
 export interface BackfillResult {
@@ -122,6 +124,13 @@ export function planBackfill(
       throw new Error(`${at}: completedDay must be a date (YYYY-MM-DD)`);
     if (input.completedDay > today)
       throw new Error(`${at}: completedDay ${input.completedDay} is after today (${today})`);
+    let note: string | null;
+    try {
+      note = normalizeNote(input.note);
+    } catch (e) {
+      throw new Error(`${at}: ${(e as Error).message}`);
+    }
+    // A rerun's row is skipped before its note is fitted or appended: it never lands twice.
     if (task.status === 'done' && task.backfilled) return { id: task.id, next: null, task };
     if (task.status === 'done')
       throw new Error(
@@ -137,6 +146,11 @@ export function planBackfill(
     if (est !== null) t = withEstimate(t, est, t.bufferMin, now);
     if (needsEstimate(t))
       throw new Error(`${at}: it has no estimate — pass estimateMin (what it would have been)`);
+    const notes = note === null ? null : appendNote(task.notes, note);
+    if (notes !== null && notes.length > TASK_NOTES_MAX)
+      throw new Error(
+        `${at}: the note would take its notes to ${notes.length} characters — the limit is ${TASK_NOTES_MAX}`,
+      );
     t = taskTransition({ ...t, actualAccruedMin: input.actualMin }, 'done', now);
     const completedAt = Math.min(
       zonedEpoch(input.completedDay, BACKFILL_HOUR, USER_TIME_ZONE),
@@ -145,7 +159,14 @@ export function planBackfill(
     const startedAt = Math.min(t.startedAt ?? completedAt, completedAt);
     // A failed-sync note on a task with no event is moot once it's done (transitionOne's syncCalendar
     // clears it on a finish; the batch never calls it).
-    const next = { ...t, completedAt, startedAt, gcalSyncError: null, backfilled: true };
+    const next = {
+      ...t,
+      completedAt,
+      startedAt,
+      gcalSyncError: null,
+      backfilled: true,
+      ...(notes !== null && { notes }),
+    };
     return { id: task.id, next, task };
   });
 }

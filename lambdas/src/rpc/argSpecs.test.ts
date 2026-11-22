@@ -65,6 +65,8 @@ describe('the RPC argument specs', () => {
       ['setTaskActual', ['t', 30, null]],
       ['backfillTasks', [[{ id: 't', actualMin: 40, completedDay: '2026-11-10' }]]],
       ['backfillTasks', [[{ id: 't', actualMin: 40, estimateMin: null, completedDay: 'x' }]]],
+      ['backfillTasks', [[{ id: 't', actualMin: 40, completedDay: 'x', note: 'Shipped it.' }]]],
+      ['backfillTasks', [[{ id: 't', actualMin: 40, completedDay: 'x', note: null }]]],
       ['setTaskBackfilled', ['t', false]],
       ['setTaskDue', ['t', { dueDay: null }]],
       ['splitTask', ['t', { finish: 'keep', followUp: { title: 'r', estimateMin: null } }]],
@@ -206,6 +208,7 @@ describe('the RPC argument specs', () => {
     refuses('backfillTasks', [[{ ...row, completedDay: 20261110 }]], /completedDay must be text/);
     refuses('backfillTasks', [[{ ...row, actualMin: '40' }]], /actualMin must be a number/);
     refuses('backfillTasks', [[{ ...row, extra: 1 }]], /extra/);
+    refuses('backfillTasks', [[{ ...row, note: 5 }]], /note must be text/);
     refuses('backfillTasks', [Array.from({ length: 101 }, () => row)], /100/);
     refuses('setTaskBackfilled', ['t', 'yes'], /backfilled must be/);
   });

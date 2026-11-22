@@ -13,6 +13,8 @@ const MAX = 100; // calibration.ts BACKFILL_MAX
 // Past the store's 25-item chunk, so the batch spans two; kept small for dev's capped table (100 read and 50
 // write units a second) and the run's length. Prod's real table is about twice this, on an uncapped table.
 const BATCH = 26;
+const NOTES_MAX = 5000; // taskNotes.ts TASK_NOTES_MAX
+const FULL = 'x'.repeat(NOTES_MAX - 10); // + a blank line + 8 characters = the cap exactly
 
 const addDays = (day: string, n: number): string =>
   new Date(Date.parse(`${day}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
@@ -236,6 +238,70 @@ export const calibrationDevLane: Scenario = {
       },
     },
     {
+      id: 'note-append',
+      entry: 'mcp',
+      kind: 'nominal',
+      what: 'A row’s note lands after a blank line on a ticket with notes, and is the notes on one with none (the answer and a fresh read)',
+    },
+    {
+      id: 'note-rerun',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'The same batch again with other notes: skipped, the notes unchanged — no second append',
+    },
+    {
+      id: 'note-overflow',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A note that would take the notes to 5,001 characters refuses the whole batch naming the row; the good row beside it is not written',
+    },
+    {
+      id: 'note-max',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A note that takes the notes to exactly 5,000 characters lands',
+    },
+    {
+      id: 'note-invalid',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A note that is a number, or over 5,000 alone, is refused naming "note", nothing written',
+    },
+    {
+      id: 'note-empty',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A blank note leaves the notes as they were; a note on the batch’s second chunk lands',
+    },
+    {
+      id: 'note-absent',
+      entry: 'mcp',
+      kind: 'edge',
+      what: 'A row with no note keeps the ticket’s notes',
+    },
+    {
+      id: 'note-partial',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A batch put that dies part-way: the landed row’s note is not appended again on the rerun',
+      offDev: {
+        file: 'lambdas/src/backend.backfill.test.ts',
+        test: 'a part-way batch put: a landed note is not appended again on the rerun',
+        why: 'dev can’t make DynamoDB fail one batch write part-way; note-rerun proves the skip on dev',
+      },
+    },
+    {
+      id: 'note-legacy',
+      entry: 'api',
+      kind: 'edge',
+      what: 'A ticket stored before notes existed takes the note as its whole notes',
+      offDev: {
+        file: 'packages/shared/src/calibration.test.ts',
+        test: 'a note is appended after a blank line; on no notes it is the notes',
+        why: 'no entry point can store a task without the notes attribute; note-append proves the empty case on dev',
+      },
+    },
+    {
       id: 'prod-backfill',
       entry: 'mcp',
       kind: 'nominal',
@@ -276,8 +342,9 @@ export const calibrationDevLane: Scenario = {
         };
         await make('scored', 30);
         await make('livework', 30, false);
-        await make('bfone', 10);
+        await make('bfone', 10, true, { notes: 'Scoped on the board.' });
         await make('bftwo', undefined, false);
+        await make('full', 30, false, { notes: FULL });
         await make('marked', 20);
         await make('stays', 30);
         await make('errand', 10, true, { place: place.slug });
@@ -313,16 +380,32 @@ export const calibrationDevLane: Scenario = {
     {
       id: 'backfill',
       entry: 'mcp',
-      proves: ['backfill-nominal', 'get-calibration'],
+      proves: ['backfill-nominal', 'get-calibration', 'note-append'],
       title:
         'backfill_tasks: two old tickets (Aperture, Life), one given its estimate, on two past days',
       async run(ctx) {
         const { to } = await window(ctx);
         const r = await ctx.mcp.writes.backfillTasks([
-          { id: id('bfone'), actualMin: 300, completedDay: addDays(to, -1) },
-          { id: id('bftwo'), actualMin: 45, estimateMin: 15, completedDay: addDays(to, -2) },
+          { id: id('bfone'), actualMin: 300, completedDay: addDays(to, -1), note: 'Shipped it.' },
+          {
+            id: id('bftwo'),
+            actualMin: 45,
+            estimateMin: 15,
+            completedDay: addDays(to, -2),
+            note: '  Landed in two passes.\n',
+          },
         ]);
         if ('refused' in r) throw new Error(`refused: ${r.refused}`);
+        const notes = [
+          [id('bfone'), 'Scoped on the board.\n\nShipped it.'],
+          [id('bftwo'), 'Landed in two passes.'],
+        ] as const;
+        for (const [tid, want] of notes) {
+          const got = r.rows.find((x) => x.id === tid)?.task.notes;
+          const read = (await ctx.api.reads.getTask(tid))?.notes;
+          if (got !== want || read !== want)
+            throw new Error(`${tid}: notes ${JSON.stringify(got)} / read ${JSON.stringify(read)}`);
+        }
         const want = [
           [id('bfone'), addDays(to, -1), 10],
           [id('bftwo'), addDays(to, -2), 15],
@@ -440,20 +523,30 @@ export const calibrationDevLane: Scenario = {
     {
       id: 'repeat',
       entry: 'mcp',
-      proves: ['repeat'],
-      title: 'The same batch again: all skipped, unchanged',
+      proves: ['repeat', 'note-rerun'],
+      title: 'The same batch again, other notes: all skipped, unchanged, no second append',
       async run(ctx) {
         const before = await ctx.api.reads.getTask(id('bfone'));
         const { to } = await window(ctx);
         const r = await ctx.mcp.writes.backfillTasks([
-          { id: id('bfone'), actualMin: 999, completedDay: addDays(to, -1) },
-          { id: id('bftwo'), actualMin: 999, estimateMin: 15, completedDay: addDays(to, -2) },
+          { id: id('bfone'), actualMin: 999, completedDay: addDays(to, -1), note: 'Again.' },
+          {
+            id: id('bftwo'),
+            actualMin: 999,
+            estimateMin: 15,
+            completedDay: addDays(to, -2),
+            note: 'Again.',
+          },
         ]);
         if ('refused' in r) throw new Error(`refused: ${r.refused}`);
         if (r.rows.some((x) => x.outcome !== 'skipped'))
           throw new Error(`a rerun wrote: ${JSON.stringify(r.rows.map((x) => x.outcome))}`);
         const after = await ctx.api.reads.getTask(id('bfone'));
-        if (after?.updatedAt !== before?.updatedAt || after?.actualAccruedMin !== 300)
+        if (
+          after?.updatedAt !== before?.updatedAt ||
+          after?.actualAccruedMin !== 300 ||
+          after.notes !== 'Scoped on the board.\n\nShipped it.'
+        )
           throw new Error(`a skipped row changed: ${JSON.stringify(after)}`);
       },
     },
@@ -490,9 +583,44 @@ export const calibrationDevLane: Scenario = {
       },
     },
     {
+      id: 'notes-cap',
+      entry: 'mcp',
+      proves: ['note-overflow', 'note-max', 'note-invalid'],
+      title:
+        'Notes cap: one character over refuses the batch, exactly the cap lands; a bad note is refused',
+      async run(ctx) {
+        const { to } = await window(ctx);
+        const ok = { id: id('stays'), actualMin: 10, completedDay: addDays(to, -1), note: 'Fine.' };
+        const full = { id: id('full'), actualMin: 10, completedDay: addDays(to, -1) };
+        const over = refused(
+          await ctx.mcp.writes.backfillTasks([ok, { ...full, note: 'y'.repeat(9) }]),
+        );
+        if (!over || !/Row 2 .*would take its notes to/.test(over))
+          throw new Error(`5,001 characters: ${over ?? 'it landed'}`);
+        const stays = await ctx.api.reads.getTask(id('stays'));
+        if (stays?.status !== 'backlog' || stays.notes)
+          throw new Error(`a refused batch wrote: ${JSON.stringify(stays)}`);
+        const bad: [string, unknown, RegExp][] = [
+          ['a number', 5, /"note" must be a string/],
+          ['5,001 alone', 'y'.repeat(NOTES_MAX + 1), /"note".*limited to 5,000/],
+        ];
+        for (const [what, note, msg] of bad) {
+          const why = refused(await ctx.mcp.writes.backfillTasks([{ ...ok, note }]));
+          if (!why || !msg.test(why)) throw new Error(`${what}: ${why ?? 'it landed'}`);
+        }
+        if ((await ctx.api.reads.getTask(id('stays')))?.status !== 'backlog')
+          throw new Error('a refused note wrote');
+        const r = await ctx.mcp.writes.backfillTasks([{ ...full, note: 'y'.repeat(8) }]);
+        if ('refused' in r) throw new Error(`exactly the cap refused: ${r.refused}`);
+        const notes = (await ctx.api.reads.getTask(id('full')))?.notes;
+        if (notes?.length !== NOTES_MAX || !notes.endsWith('\n\nyyyyyyyy'))
+          throw new Error(`exactly the cap: ${notes?.length} characters`);
+      },
+    },
+    {
       id: 'empty-max',
       entry: 'mcp',
-      proves: ['empty-max'],
+      proves: ['empty-max', 'note-empty', 'note-absent'],
       title: `Empty and ${MAX + 1} rows refused; ${BATCH} rows land in one call`,
       async run(ctx) {
         const { to } = await window(ctx);
@@ -510,17 +638,33 @@ export const calibrationDevLane: Scenario = {
             title: name(ctx, `bulk${i}`),
             estimateMin: 15,
             categoryId,
+            ...(i < 2 && { notes: 'Kept as it was.' }),
           });
           bulk.push(t.id);
         }
         const started = Date.now();
         const r = await ctx.mcp.writes.backfillTasks(
-          bulk.map((b, i) => ({ id: b, actualMin: 5 + i, completedDay: addDays(to, -(i % 20)) })),
+          // row 0 a blank note, row 1 none, the last (the second chunk) a real one
+          bulk.map((b, i) => ({
+            id: b,
+            actualMin: 5 + i,
+            completedDay: addDays(to, -(i % 20)),
+            ...(i === 0 && { note: '   ' }),
+            ...(i === BATCH - 1 && { note: 'Last of the batch.' }),
+          })),
         );
         const ms = Date.now() - started;
         if ('refused' in r) throw new Error(`${BATCH} rows refused: ${r.refused}`);
         if (r.rows.length !== BATCH || r.rows.some((x) => x.outcome !== 'done'))
           throw new Error(`${BATCH} rows came back ${r.rows.length}, not all done`);
+        const notesOf = async (i: number) => (await ctx.api.reads.getTask(bulk[i]!))?.notes;
+        for (const [i, want] of [
+          [0, 'Kept as it was.'],
+          [1, 'Kept as it was.'],
+          [BATCH - 1, 'Last of the batch.'],
+        ] as const)
+          if ((await notesOf(i)) !== want)
+            throw new Error(`bulk row ${i}: notes ${JSON.stringify(await notesOf(i))}`);
         ctx.log(`backfill_tasks: ${BATCH} rows in ${ms} ms (the MCP Lambda's timeout is 15 s)`);
       },
     },

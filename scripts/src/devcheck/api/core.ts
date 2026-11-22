@@ -30,6 +30,7 @@ export interface DevTask {
   gcalEventId?: string | null; // recurring: a timed occurrence's event (none — the test user has no Google)
   gcalSyncError?: string | null;
   backfilled?: boolean; // calibration-dev-lane: closed after the fact
+  notes?: string | null; // calibration-dev-lane: a backfill row's note, appended
   completedAt?: number | null;
   updatedAt?: number;
 }

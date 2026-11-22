@@ -101,4 +101,24 @@ describe('backfillTasks on the Lambda', () => {
       [c.id, true],
     ]);
   });
+
+  it('a part-way batch put: a landed note is not appended again on the rerun', async () => {
+    const doc = new InMemoryDoc();
+    const flaky = make(doc, 'local', flakyWrites(doc));
+    const a = await make(doc).createTask({ title: 'a', estimateMin: 30, notes: 'Scoped it.' });
+    const c = await make(doc).createTask({ title: 'c', estimateMin: 30 });
+    const batch = [
+      { id: a.id, actualMin: 40, completedDay: '2026-11-10', note: 'Shipped a.' },
+      { id: c.id, actualMin: 50, completedDay: '2026-11-11', note: 'Shipped c.' },
+    ];
+    await expect(flaky.backfillTasks(batch)).rejects.toThrow(/unprocessed/);
+    expect(await flaky.getTask(a.id)).toMatchObject({
+      status: 'done',
+      notes: 'Scoped it.\n\nShipped a.',
+    });
+    expect(await flaky.getTask(c.id)).toMatchObject({ status: 'backlog', notes: null });
+    await flaky.backfillTasks(batch);
+    expect((await flaky.getTask(a.id))?.notes).toBe('Scoped it.\n\nShipped a.');
+    expect(await flaky.getTask(c.id)).toMatchObject({ status: 'done', notes: 'Shipped c.' });
+  });
 });
