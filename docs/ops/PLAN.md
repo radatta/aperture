@@ -135,5 +135,10 @@ answer.
    with the reason.
 4. `pnpm plan-lint` again, then `[kickoff]`. No second pass of either: a reviewer asked again always finds something.
 
+**The checkers are on trial (F419, from 2026-11-21).** Step 2 runs after every Plan for the next 5 live lanes. Each
+lane's `[kickoff]` ends with `Checkers: <n> real gaps, <n> false` (a real gap is one step 3 traced true; a false one
+traced wrong). They stay on if a real gap turns up in at least 3 of the 5 plans with 2 or fewer false flags in each;
+otherwise step 2 comes out and the lint and the `Plan` override stay. The hub tallies the 5 and relays the call.
+
 What the lint checks is listed in `pnpm plan-lint --help` and pinned by `scripts/src/plan-lint/lint.test.ts`; it
 never runs a census command, so a count is checked only by the reviewer's sample.
