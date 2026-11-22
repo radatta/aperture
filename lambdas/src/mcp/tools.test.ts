@@ -1066,10 +1066,19 @@ describe('mcp tools — backfill_tasks and the backfilled mark', () => {
     const { call, setup } = makeEnv();
     const a = await setup.createTask({ title: 'a', estimateMin: 30, notes: 'Scoped it.' });
     const b = await setup.createTask({ title: 'b', estimateMin: 30, notes: 'Kept.' });
+    const c = await setup.createTask({ title: 'c', estimateMin: 30, notes: 'Kept too.' });
     const out = (await call('backfill_tasks', {
-      tasks: [row(a.id, { note: '  Shipped it.  ' }), row(b.id, { note: '   ' })],
+      tasks: [
+        row(a.id, { note: '  Shipped it.  ' }),
+        row(b.id, { note: '   ' }),
+        row(c.id, { note: null }),
+      ],
     })) as Row[];
-    expect(out.map((r) => r.task.notes)).toEqual(['Scoped it.\n\nShipped it.', 'Kept.']);
+    expect(out.map((r) => r.task.notes)).toEqual([
+      'Scoped it.\n\nShipped it.',
+      'Kept.',
+      'Kept too.',
+    ]);
   });
 
   it('refuses bad arguments as param errors before any dispatch', async () => {

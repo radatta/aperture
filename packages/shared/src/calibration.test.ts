@@ -211,7 +211,7 @@ describe('planBackfill', () => {
     expect(() =>
       plan(tasks, [row('ok', { note: 'fine' }), row('t', { note: 'y'.repeat(9) })]),
     ).toThrow(
-      /^Row 2 \(t\): the note would take its notes to 5001 characters — the limit is 5000$/,
+      /^Row 2 \(t\): the note would take its notes to 5,001 characters — the limit is 5,000$/,
     );
   });
 
@@ -230,6 +230,10 @@ describe('planBackfill', () => {
     const [r] = plan([landed], [row('t', { note: 'Shipped it.' })]);
     expect(r!.next).toBeNull();
     expect(r!.task.notes).toBe(full);
+    // the note's own checks come first, as actualMin's: a bad note refuses even a row that would skip
+    expect(() => plan([landed], [row('t', { note: 5 })])).toThrow(
+      /^Row 1 \(t\): note must be text/,
+    );
   });
 
   it('a note never lets a shape with side effects through', () => {

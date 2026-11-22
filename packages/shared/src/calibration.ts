@@ -149,7 +149,7 @@ export function planBackfill(
     const notes = note === null ? null : appendNote(task.notes, note);
     if (notes !== null && notes.length > TASK_NOTES_MAX)
       throw new Error(
-        `${at}: the note would take its notes to ${notes.length} characters — the limit is ${TASK_NOTES_MAX}`,
+        `${at}: the note would take its notes to ${notes.length.toLocaleString('en-US')} characters — the limit is ${TASK_NOTES_MAX.toLocaleString('en-US')}`,
       );
     t = taskTransition({ ...t, actualAccruedMin: input.actualMin }, 'done', now);
     const completedAt = Math.min(

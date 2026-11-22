@@ -2439,7 +2439,7 @@ export function runApiContract(
           { id: c.id, actualMin: 10, completedDay: '2026-11-10', note: 'Fine.' },
           { id: d.id, actualMin: 10, completedDay: '2026-11-10', note: 'y'.repeat(9) },
         ]),
-      ).rejects.toThrow(/Row 2 .*would take its notes to 5001 characters/);
+      ).rejects.toThrow(/Row 2 .*would take its notes to 5,001 characters/);
       expect(await api.getTask(c.id)).toMatchObject({ status: 'backlog', notes: null });
     });
 
