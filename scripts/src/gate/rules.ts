@@ -358,7 +358,12 @@ export const INPUT_RULES: InputRule[] = [
   {
     inputs: ['.claude/', 'CLAUDE.md', 'README.md', 'LICENSE.md', 'SECURITY.md'],
     tests: [],
-    why: 'read by no test but the always-run scanners (hooks run their own fixtures, not vitest)',
+    why: 'read by no test but the always-run scanners and the plan-lint contract test below (hooks run their own fixtures, not vitest)',
+  },
+  {
+    inputs: ['docs/ops/PLAN.md', 'CLAUDE.md', '.claude/agents/'],
+    tests: ['scripts/src/plan-lint/contract.test.ts'],
+    why: 'checks the template doc against the lint’s lists, and the three plan agent files (Plan, plan-reviewer, plan-link-checker)',
   },
   // Same-area tests: a scripts area's tests spawn its CLIs and read its files, so a change anywhere in the area runs
   // all of them (cheaper than one rule per spawn, and it keeps new spawns covered).
@@ -434,6 +439,7 @@ export const SELF_CONTAINED: Record<string, string> = {
   'scripts/src/main-dev-wait.test.ts': 'spawns its sibling main-dev-wait.ts (also imported)',
   'scripts/src/root-scripts.test.ts': 'reads the root package.json, a REPO_FULL trigger',
   'scripts/src/usage/cli.test.ts': 'temp dirs',
+  'scripts/src/plan-lint/cli.test.ts': 'temp dirs; reads its own dir’s sources, which it imports',
   'scripts/src/usage/scan.test.ts': 'temp dirs',
   'scripts/src/identifiers.test.ts': 'reads identifiers.json, a REPO_FULL trigger',
   'extension/test/load.ts':
@@ -484,6 +490,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/board/tower/web/main.ts': `${RUNTIME}: lane files, /proc, --fixtures; limits.json (the scripts/board/ rule)`,
   'scripts/src/board/tower/web/server.ts': 'its own web/ dir (the board same-area rule)',
   'scripts/src/usage/cli.ts': `${RUNTIME}: the usage dir, settings, the lane archive, board history; hub.json only names the hub`,
+  'scripts/src/plan-lint/cli.ts': `${RUNTIME}: the plan file it is given and the paths that plan names`,
   'scripts/src/usage/gh.ts': `${RUNTIME}: gh`,
   'scripts/src/usage/scan.ts': `${RUNTIME}: transcript files, the cgroup`,
   'scripts/src/usage/store.ts': `${RUNTIME}: the usage cache`,
