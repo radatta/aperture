@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendNote,
+  normalizeNote,
   normalizeNotes,
   normalizeReflection,
   setReflectionArg,
@@ -60,5 +62,21 @@ describe('setReflectionArg', () => {
     expect(() => setReflectionArg(undefined)).toThrow(/required/);
     expect(setReflectionArg(null)).toBeNull();
     expect(setReflectionArg(' kept ')).toBe('kept');
+  });
+});
+
+describe('appendNote / normalizeNote', () => {
+  it('appends after a blank line, or is the whole notes when there are none', () => {
+    expect(appendNote('Scoped it.', 'Shipped it.')).toBe('Scoped it.\n\nShipped it.');
+    for (const none of [null, undefined, ''])
+      expect(appendNote(none, 'Shipped it.')).toBe('Shipped it.');
+  });
+
+  it('a note takes the notes rules under its own name', () => {
+    expect(normalizeNote('  hi\r\n')).toBe('hi');
+    expect(normalizeNote('  ')).toBeNull();
+    expect(() => normalizeNote('x'.repeat(TASK_NOTES_MAX + 1))).toThrow(
+      /^note is limited to 5,000/,
+    );
   });
 });

@@ -24,6 +24,14 @@ function normalizeText(
 export const normalizeNotes = (notes: string | null | undefined): string | null =>
   normalizeText(notes, TASK_NOTES_MAX, 'Notes', 'are');
 
+// A backfill row's note (planBackfill): the notes rules, named for the field — the row's prefix goes in front.
+export const normalizeNote = (note: string | null | undefined): string | null =>
+  normalizeText(note, TASK_NOTES_MAX, 'note', 'is');
+
+// A note appended to a task's notes: after a blank line, or the whole notes when there are none.
+export const appendNote = (existing: string | null | undefined, note: string): string =>
+  existing ? `${existing}\n\n${note}` : note;
+
 // The one normalizer every reflection write runs — same rules as notes, TASK_REFLECTION_MAX.
 export const normalizeReflection = (reflection: string | null | undefined): string | null =>
   normalizeText(reflection, TASK_REFLECTION_MAX, 'Reflection', 'is');

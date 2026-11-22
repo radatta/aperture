@@ -2415,6 +2415,34 @@ export function runApiContract(
       });
     });
 
+    it('backfill: a note is appended in the same write; a rerun never appends again; an overflow refuses the batch', async () => {
+      at('2026-11-19');
+      const a = await api.createTask({ title: 'a', estimateMin: 30 });
+      await api.setTaskNotes(a.id, 'Scoped it.');
+      const b = await api.createTask({ title: 'b', estimateMin: 30 });
+      const batch = [
+        { id: a.id, actualMin: 45, completedDay: '2026-11-10', note: 'Shipped it.' },
+        { id: b.id, actualMin: 20, completedDay: '2026-11-10', note: 'Done.' },
+      ];
+      const res = await api.backfillTasks(batch);
+      expect(res.map((r) => r.task.notes)).toEqual(['Scoped it.\n\nShipped it.', 'Done.']);
+      expect((await api.getTask(a.id))?.notes).toBe('Scoped it.\n\nShipped it.');
+      const again = await api.backfillTasks(batch.map((r) => ({ ...r, note: 'Again.' })));
+      expect(again.map((r) => r.outcome)).toEqual(['skipped', 'skipped']);
+      expect((await api.getTask(a.id))?.notes).toBe('Scoped it.\n\nShipped it.');
+
+      const c = await api.createTask({ title: 'c', estimateMin: 30 });
+      const d = await api.createTask({ title: 'd', estimateMin: 30 });
+      await api.setTaskNotes(d.id, 'x'.repeat(4990));
+      await expect(
+        api.backfillTasks([
+          { id: c.id, actualMin: 10, completedDay: '2026-11-10', note: 'Fine.' },
+          { id: d.id, actualMin: 10, completedDay: '2026-11-10', note: 'y'.repeat(9) },
+        ]),
+      ).rejects.toThrow(/Row 2 .*would take its notes to 5,001 characters/);
+      expect(await api.getTask(c.id)).toMatchObject({ status: 'backlog', notes: null });
+    });
+
     it('backfill: the mark is set and cleared on a done task, never on an open one or a parent', async () => {
       at('2026-11-19');
       const t = await api.createTask({ title: 'closed by hand', estimateMin: 30 });

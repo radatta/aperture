@@ -280,6 +280,7 @@ export const RPC_ARGS = {
           actualMin: minutes,
           estimateMin: opt(nullable(minutes)),
           completedDay: str(KEY_MAX),
+          note: opt(nullable(str(TEXT_MAX))),
         }),
         BACKFILL_MAX,
       ),

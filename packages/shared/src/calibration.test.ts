@@ -8,6 +8,7 @@ import {
   withBackfilled,
 } from './calibration';
 import { dayKeyInZone, USER_TIME_ZONE, zonedEpoch } from './dates';
+import { TASK_NOTES_MAX } from './taskNotes';
 import type { Task } from './types';
 
 function task(over: Partial<Task> = {}): Task {
@@ -181,6 +182,67 @@ describe('planBackfill', () => {
     const landed = task({ status: 'done', backfilled: true, estimateLockedMin: 30 });
     expect(plan([landed], [row()])[0]!.next).toBeNull();
     expect(() => plan([task()], [null])).toThrow(/Row 1 \(undefined\): not found/);
+  });
+  it('a note is appended after a blank line; on no notes it is the notes', () => {
+    const next = (over: Partial<Task>, note: unknown) =>
+      plan([task(over)], [row('t', { note })])[0]!.next!;
+    expect(next({ notes: 'Scoped it.' }, '  Shipped it.\r\n')).toMatchObject({
+      notes: 'Scoped it.\n\nShipped it.',
+      status: 'done',
+    });
+    expect(next({ notes: null }, 'Shipped it.').notes).toBe('Shipped it.');
+    const legacy = task();
+    delete (legacy as Partial<Task>).notes; // a row from before the field
+    expect(plan([legacy], [row('t', { note: 'Shipped it.' })])[0]!.next!.notes).toBe('Shipped it.');
+  });
+
+  it('a blank, null or absent note leaves the notes as they were', () => {
+    for (const note of ['  \n ', null, undefined])
+      expect(plan([task({ notes: 'Scoped it.' })], [row('t', { note })])[0]!.next!.notes).toBe(
+        'Scoped it.',
+      );
+  });
+
+  it('the notes after the append are capped: exactly the limit lands, one over refuses the batch', () => {
+    const existing = 'x'.repeat(TASK_NOTES_MAX - 10); // + "\n\n" + 8 = the limit
+    const fits = plan([task({ notes: existing })], [row('t', { note: 'y'.repeat(8) })])[0]!;
+    expect(fits.next!.notes).toHaveLength(TASK_NOTES_MAX);
+    const tasks = [task({ id: 'ok' }), task({ notes: existing })];
+    expect(() =>
+      plan(tasks, [row('ok', { note: 'fine' }), row('t', { note: 'y'.repeat(9) })]),
+    ).toThrow(
+      /^Row 2 \(t\): the note would take its notes to 5,001 characters — the limit is 5,000$/,
+    );
+  });
+
+  it('refuses a note that is not text, or over the cap alone, naming the row', () => {
+    expect(() => plan([task()], [row('t', { note: 5 as unknown as string })])).toThrow(
+      /^Row 1 \(t\): note must be text/,
+    );
+    expect(() => plan([task()], [row('t', { note: 'y'.repeat(TASK_NOTES_MAX + 1) })])).toThrow(
+      /^Row 1 \(t\): note is limited to 5,000 characters/,
+    );
+  });
+
+  it('a skipped row never takes its note, even one that would no longer fit', () => {
+    const full = 'x'.repeat(TASK_NOTES_MAX);
+    const landed = task({ status: 'done', backfilled: true, estimateLockedMin: 30, notes: full });
+    const [r] = plan([landed], [row('t', { note: 'Shipped it.' })]);
+    expect(r!.next).toBeNull();
+    expect(r!.task.notes).toBe(full);
+    // the note's own checks come first, as actualMin's: a bad note refuses even a row that would skip
+    expect(() => plan([landed], [row('t', { note: 5 })])).toThrow(
+      /^Row 1 \(t\): note must be text/,
+    );
+  });
+
+  it('a note never lets a shape with side effects through', () => {
+    for (const over of [{ parentId: 'p' }, { gcalEventId: 'e' }] as Partial<Task>[])
+      expect(() => plan([task(over)], [row('t', { note: 'Shipped it.' })])).toThrow(
+        /is a part|calendar event/,
+      );
+    const tasks = [task({ id: 'p' }), task({ parentId: 'p' })];
+    expect(() => plan(tasks, [row('p', { note: 'Shipped it.' })])).toThrow(/has parts/);
   });
 });
 

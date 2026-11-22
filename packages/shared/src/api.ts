@@ -483,7 +483,8 @@ export interface ApiClient {
   // Backfill (calibration.ts; docs/areas/calibration/dev-lane.md): close old tickets with their real minutes,
   // dated to the day each shipped and marked backfilled — points that never move the gap. All-or-nothing on
   // validation (planBackfill names the bad row); a task already done and backfilled comes back `skipped`, so a
-  // rerun is safe. Plain tasks only. setTaskBackfilled sets or clears the mark on a done task.
+  // rerun is safe. Plain tasks only. A row's note is appended to the notes in the same write (never again on a
+  // skip; over the cap refuses the row). setTaskBackfilled sets or clears the mark on a done task.
   backfillTasks(inputs: BackfillTaskInput[]): Promise<BackfillResult[]>;
   setTaskBackfilled(id: string, backfilled: boolean): Promise<Task>;
   // Split always yields parent + parts (split.ts): the original finishes or keeps going, the rest becomes a

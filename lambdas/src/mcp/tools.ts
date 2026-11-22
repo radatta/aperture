@@ -13,6 +13,7 @@ import {
   isDayKey,
   isTimeKey,
   normalizeContentType,
+  normalizeNote,
   normalizeNotes,
   normalizeReflection,
   needsEstimate,
@@ -551,8 +552,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: 'backfill_tasks',
-    description:
-      'Close OPEN tickets after the fact with their real minutes — the backfill: each is marked done on completedDay (the app day it shipped, never after today) with actualMin, and marked backfilled: it stays a calibration point (listed, its minutes counted apart) but never moves the estimate-vs-actual gap, because its estimate was never a forecast. Only for work the user has confirmed, with minutes from the user — never guess. Each row: id, actualMin (required, ≥ 1), estimateMin (required when the task has none, then stored as after-the-fact; else a revision, as complete_task), completedDay (YYYY-MM-DD). All-or-nothing on validation: one bad row (unknown id, listed twice, a future day, no estimate, or a shape with side effects — a parent, a part, an errand, a Roll rep, a recurring occurrence, a task with a calendar event, a cancelled or already-done one) refuses the whole batch, naming the row, and writes nothing; those shapes go through complete_task and then update_task backfilled: true. A row already done and backfilled comes back `skipped`, unchanged, so rerunning a batch is safe — and an error after validation (a timeout, a throttle) may leave some rows written: send the same batch again. 1 to 100 rows. Returns [{ id, outcome: done | skipped, task }].',
+    description: `Close OPEN tickets after the fact with their real minutes — the backfill: each is marked done on completedDay (the app day it shipped, never after today) with actualMin, and marked backfilled: it stays a calibration point (listed, its minutes counted apart) but never moves the estimate-vs-actual gap, because its estimate was never a forecast. Only for work the user has confirmed, with minutes from the user — never guess. Each row: id, actualMin (required, ≥ 1), estimateMin (required when the task has none, then stored as after-the-fact; else a revision, as complete_task), completedDay (YYYY-MM-DD), note (optional: appended to the ticket's notes after a blank line in the same write, never replacing them; blank is no note; if the notes would pass ${TASK_NOTES_MAX} characters the row is refused, nothing is cut). All-or-nothing on validation: one bad row (unknown id, listed twice, a future day, no estimate, a note that won't fit, or a shape with side effects — a parent, a part, an errand, a Roll rep, a recurring occurrence, a task with a calendar event, a cancelled or already-done one) refuses the whole batch, naming the row, and writes nothing; those shapes go through complete_task and then update_task backfilled: true. A row already done and backfilled comes back \`skipped\`, unchanged and its note not appended again, so rerunning a batch is safe — and an error after validation (a timeout, a throttle) may leave some rows written: send the same batch again. 1 to 100 rows. Returns [{ id, outcome: done | skipped, task }].`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -571,6 +571,10 @@ export const TOOLS: Tool[] = [
                 description: 'required when the task has no estimate',
               },
               completedDay: { type: 'string', description: 'YYYY-MM-DD, the day it shipped' },
+              note: {
+                type: 'string',
+                description: `appended to the ticket's notes after a blank line, never replacing them; ${NOTES_SCHEMA_DESC}, the notes after the append included`,
+              },
             },
             required: ['id', 'actualMin', 'completedDay'],
             additionalProperties: false,
@@ -591,7 +595,7 @@ export const TOOLS: Tool[] = [
           throw new RpcParamError(`tasks[${i}] must be an object`);
         const row = t as Record<string, unknown>;
         const extra = Object.keys(row).find(
-          (k) => !['id', 'actualMin', 'estimateMin', 'completedDay'].includes(k),
+          (k) => !['id', 'actualMin', 'estimateMin', 'completedDay', 'note'].includes(k),
         );
         if (extra) throw new RpcParamError(`tasks[${i}]: unknown field "${extra}"`);
         const input: BackfillTaskInput = {
@@ -601,6 +605,8 @@ export const TOOLS: Tool[] = [
         };
         const est = optInt(row, 'estimateMin', 1);
         if (est !== undefined) input.estimateMin = est;
+        const note = nullableText(row, 'note', normalizeNote);
+        if (note !== null) input.note = note;
         return input;
       });
       return ctx.dispatch('backfillTasks', [inputs]);
