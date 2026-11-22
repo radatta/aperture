@@ -278,6 +278,16 @@ describe('capTimes', () => {
     expect(c.inside).toBe(1);
     expect(c.bins.map((b) => b.n)).toEqual([0, 0, 1, 0, 0, 1]);
   });
+  it('a try with no capMin (a pre-caps Lambda, the revert window) reads against 30', () => {
+    const [r] = [rec('two-sum', [{ on: day(-1), outcome: 'solved', minutes: 31 }])];
+    const bare = {
+      ...r!,
+      tries: r!.tries.map((t) => ({ ...t, capMin: undefined })),
+    } as unknown as typeof r;
+    const c = capTimes([bare!], TODAY);
+    expect(c).toMatchObject({ timed: 1, inside: 0 });
+    expect(c.bins.map((b) => b.n)).toEqual([0, 0, 0, 1, 0, 0]);
+  });
   it('nothing timed: no median', () => {
     expect(capTimes([], TODAY)).toMatchObject({ timed: 0, inside: 0, medianMin: null });
   });

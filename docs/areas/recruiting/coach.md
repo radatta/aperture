@@ -151,14 +151,14 @@ Each slot has a time cap in whole minutes, by its kind and the problem's difficu
 | re-solve                 | 10   | 25     | 30   |
 
 - **Stored at Start** (`Sitting.capMin`, set once, like `extensionVersion`; `startCapMin`): the plan's slot for that
-  problem, else today's earlier sitting on it (a swap since), else the floor's kind, else the problem's own kind
+  problem, else today's newest sitting on it that stored a cap (a swap since; a test sitting never counts), else the floor's kind, else the problem's own kind
   (the carry-over, a seen problem a re-solve, else new). A reopen or a resume keeps it. A failed plan read never
   fails a Start: the new row by difficulty (`startCapFallback`, logged `lc_start_cap_fallback`); a throttle is thrown
   instead, so the extension retries (429) rather than keeping the fallback.
 - **Read back:** a slot with a sitting shows the sitting's cap, and so do `live_sitting`'s `overCap` and the try. A
   sitting from before the caps (none stored) reads against 30 (`capLegacyMin`). A logged try takes the table by
-  the kind it would have been (`foldDays`): a first try new; after an unaccepted, unpeeked try on the last active
-  day within 2 days a carry-over; any other later try, or one after a history-only solve, a re-solve. A day's
+  the kind it would have been (`foldDays`): a first try new; after the last active day's latest unaccepted, unpeeked
+  try, within 2 days, a carry-over (one a day, as the plan picks it); any other later try, or one after a history-only solve, a re-solve. A day's
   pieces take the earliest stored cap. `live_sitting`'s `overCap` is true from the cap's minute (time's up); a
   finished try is over only past it (Trends, the problem page).
 - **The AI pick** may set a pick's cap (`CoachAiPick.capMin`) to whole minutes within 0.5–1.5× of its cell

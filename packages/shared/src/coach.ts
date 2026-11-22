@@ -269,7 +269,7 @@ export interface Attempt {
   lastError: { verdict: LeetcodeVerdict; statusMsg: string | null } | null;
   minutes: number | null; // the day's minutes on it: sittings to the first accept (else their length), logged ones as given
   // The cap it ran under: its earliest sitting's stored cap (capLegacyMin before caps were stored); with no sitting,
-  // the table by difficulty — the problem's first try as new, a later one as a re-solve.
+  // the table by difficulty and the kind it would have been (foldDays: new, carry-over or re-solve).
   capMin: number;
   note: string | null; // the newest logged note
   historical: boolean; // a history-only solve (CoachAttempt.historical): seen, never scheduled or counted
@@ -346,18 +346,8 @@ export function attemptsOf(
       ...legacyAttempts(more.legacy ?? [], more.voids ?? []),
     ],
     params,
-    historySince(manual),
+    coachScope({ attempts: manual }).history, // a live try after a history-only solve is no first try
   );
-}
-// Each history-only solve's slug and its earliest day: a live try after it is no first try (coach.md → Caps).
-function historySince(manual: readonly CoachAttempt[]): Map<string, string> {
-  const m = new Map<string, string>();
-  for (const a of manual) {
-    const d = m.get(a.slug);
-    if (a.deletedAt === null && a.historical === true && (d === undefined || a.day < d))
-      m.set(a.slug, a.day);
-  }
-  return m;
 }
 // The history-only solves (logged with `historical`), folded by day the same way, oldest first. They never reach
 // attemptsOf: a remembered result isn't a measured try, so they only mark a problem seen and show on Progress.
@@ -367,8 +357,8 @@ function historyAttemptsOf(manual: readonly CoachAttempt[]): Attempt[] {
   );
 }
 // A piece with no stored cap (a logged try, a legacy one) takes the table by the kind it would have been: a first
-// try new; the day after an unaccepted, unpeeked try within carryOverDays (that try on the last active day) a
-// carry-over; any other later try, or one after a history-only solve, a re-solve.
+// try new; the day after the last active day's latest unaccepted, unpeeked try, within carryOverDays, a carry-over
+// (one a day, as coachPools picks it); any other later try, or one after a history-only solve, a re-solve.
 function foldDays(
   parts: AttemptPart[],
   params: CoachParams = COACH_PARAMS,
@@ -380,6 +370,7 @@ function foldDays(
     groups.set(k, [...(groups.get(k) ?? []), p]);
   }
   const last = new Map<string, Attempt>();
+  const carryOf = new Map<string, string>(); // day → its latest unaccepted, unpeeked slug
   let day = '';
   let lastActive = '';
   return [...groups.values()]
@@ -392,8 +383,7 @@ function foldDays(
       const kind: SlotKind =
         prev &&
         prev.day === lastActive &&
-        !prev.accepted &&
-        prev.help !== 'solution' &&
+        carryOf.get(lastActive) === a.slug &&
         daysBetween(prev.day, a.day) <= params.carryOverDays
           ? 'carry-over'
           : prev || (h !== undefined && h < a.day)
@@ -401,6 +391,7 @@ function foldDays(
             : 'new';
       const out = { ...a, capMin: a.capMin ?? slotCapMin(kind, a.difficulty, params) };
       last.set(a.slug, out);
+      if (!a.accepted && a.help !== 'solution') carryOf.set(a.day, a.slug);
       return out;
     });
 }
@@ -1122,7 +1113,8 @@ export function ownKind(
   return was === 'stretch' ? 'stretch' : 'new';
 }
 // The cap a new sitting stores at Start (Sitting.capMin): its slot's on today's plan (the AI pick's or the table's),
-// else the floor's kind, else the problem's own kind (ownKind) — the same problem gets the same cap on or off the plan.
+// else today's newest sitting on it that stored one (a swap since), else the floor's kind, else the problem's own
+// kind (ownKind) — the same problem gets the same cap on or off the plan.
 // Reads only before-today pools for the kind, so a second sitting on an off-plan problem keeps its cap.
 export function startCapMin(
   input: CoachInput,
@@ -1133,10 +1125,16 @@ export function startCapMin(
   const today = planDay(input, params);
   const slot = today.slots.find((s) => s.slug === slug);
   if (slot) return slot.capMin;
-  // Off the plan now but started earlier today (a swap since): that sitting's cap, as a slot with a sitting reads.
+  // Off the plan now but started earlier today (a swap since): that sitting's cap, picked as a slot's sitting is.
   const earlier = input.sittings
-    .filter((x) => x.day === today.day && x.problemSlug === slug && x.capMin !== undefined)
-    .sort((a, b) => a.startedAt - b.startedAt)[0];
+    .filter(
+      (x) =>
+        x.day === today.day &&
+        x.problemSlug === slug &&
+        x.review?.test !== true &&
+        x.capMin !== undefined,
+    )
+    .sort((a, b) => b.startedAt - a.startedAt)[0];
   if (earlier) return earlier.capMin!;
   const d = startDifficulty(slug, difficulty);
   if (today.floor?.slug === slug) return slotCapMin(today.floor.kind, d, params);

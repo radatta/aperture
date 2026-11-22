@@ -1130,6 +1130,7 @@ export const lcCoach: Scenario = {
           .sitting;
         if (s0.capMin !== slotCapMin('re-solve', 'Easy'))
           fail(`seen off-plan cap ${String(s0.capMin)}: the fallback, or the wrong kind`);
+        await finish(ctx, s0.id, s0.repTaskId); // an open sitting would refuse the next Start
         state.offBefore = await ctx.api.reads.getCoachToday();
         // No difficulty: an unseen problem off the plan takes the new row's Medium cap.
         const { sitting } = await ctx.api.writes.lcSittingStart({
@@ -2320,7 +2321,13 @@ export const lcCoach: Scenario = {
           ])
             await ctx.page.getByRole('heading', { name: h }).waitFor();
           await ctx.page.getByRole('heading', { name: 'Time against the cap' }).waitFor();
-          await ctx.ui.expectText(/\d+ of \d+ inside their cap · median \d+ min/);
+          // This run's 50-minute try is over its 45: a cap misread as ≥ 50 would count every try inside.
+          const capNote = ctx.page.getByText(/\d+ of \d+ inside their cap · median \d+ min/);
+          await capNote.waitFor({ timeout: 10_000 });
+          const [, inside, timed] =
+            /(\d+) of (\d+) inside/.exec((await capNote.textContent()) ?? '') ?? [];
+          if (!(Number(inside) < Number(timed)))
+            fail(`Trends: ${inside} of ${timed} inside their cap, with a try over its own`);
           if (
             !(await ctx.page
               .getByRole('img', { name: /^Tries by time against their own cap: ≤ ⅓ \d+, / })

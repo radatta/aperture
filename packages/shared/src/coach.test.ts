@@ -559,6 +559,19 @@ describe('per-slot caps', () => {
     expect(
       caps([va(day(-5), 'failed'), manual('two-sum', day(-4), 'clean'), va(day(-3), 'clean')]),
     ).toEqual([20, 10]);
+    // Two misses on one day: only the later is the carry-over (coachPools keeps one); the earlier is a re-solve.
+    const later = {
+      ...manual('two-sum', day(-4), 'failed'),
+      at: va(day(-4), 'failed').at + 60_000,
+    };
+    const two = [
+      va(day(-4), 'failed'),
+      later,
+      va(day(-3), 'clean'),
+      manual('two-sum', day(-3), 'clean'),
+    ];
+    expect(caps(two)).toEqual([20, 10]);
+    expect(caps(two, 'two-sum')).toEqual([20, 20]);
   });
 
   it('a history-only solve before a live try makes it a re-solve; one after it doesn’t', () => {
@@ -606,6 +619,14 @@ describe('per-slot caps', () => {
     });
     expect(planDay(ci).slots.some((s) => s.slug === 'course-schedule')).toBe(false);
     expect(startCapMin(ci, 'course-schedule', 'Medium')).toBe(50);
+    // The newest of today's, as a slot's sitting is picked; a test sitting never counts.
+    const later = (test: boolean) => {
+      const x = sit({ slug: 'course-schedule', on: day(0), submits: [], cap: 30, test });
+      return { ...x, startedAt: x.startedAt + 60_000, endedAt: null };
+    };
+    const withLater = (test: boolean) => ({ ...ci, sittings: [...ci.sittings, later(test)] });
+    expect(startCapMin(withLater(false), 'course-schedule', 'Medium')).toBe(30);
+    expect(startCapMin(withLater(true), 'course-schedule', 'Medium')).toBe(50);
   });
 
   it('startCapMin off the plan: its own kind by difficulty; unknown difficulty reads Medium', () => {

@@ -397,7 +397,7 @@ describe('per-slot caps in the pick', () => {
     if (v.ok) expect(v.picks.every((p) => p.capMin === undefined)).toBe(true);
   });
 
-  it('a stored pick’s cap sets its slot; one with none takes the table; a swap takes the table', () => {
+  it('a stored pick’s cap sets its slot; one with none takes the table; a swap takes the table, Restore the pick’s', () => {
     const picks = [
       { slug: 'group-anagrams', kind: 'carry-over' as const, why: 'a', capMin: 50 },
       { slug: 'two-sum', kind: 're-solve' as const, why: 'b' },
@@ -420,6 +420,17 @@ describe('per-slot caps in the pick', () => {
     const swapped = planDay(input({ days: [{ ...row, changes }] }));
     // valid-anagram was tried before: an Easy re-solve, from the table (the pick's 50 stays with group-anagrams).
     expect(swapped.slots[0]).toMatchObject({ slug: 'valid-anagram', kind: 're-solve', capMin: 10 });
+    // Restore: the pick's own 50 comes back with group-anagrams (the devcheck's ai-cap-swap rarely sees one).
+    const restore = applySlotChange(
+      swapped,
+      changes,
+      { slug: 'valid-anagram', action: 'restore' },
+      () => true,
+      new Set(),
+      NOW,
+    );
+    const back = planDay(input({ days: [{ ...row, changes: restore }] }));
+    expect(back.slots[0]).toMatchObject({ slug: 'group-anagrams', capMin: 50 });
   });
 
   it('the stand-in pick sends no cap', () => {

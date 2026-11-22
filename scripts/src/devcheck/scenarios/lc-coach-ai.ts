@@ -207,7 +207,7 @@ export const lcCoachAi: Scenario = {
       id: 'ai-cap-swap',
       entry: 'mcp',
       kind: 'edge',
-      what: 'swap_slot on a picked slot: the problem swapped in takes the table’s cap; Restore brings the pick’s back',
+      what: 'swap_slot on a picked slot: the problem swapped in takes the table’s cap; Restore brings back the slot’s cap as it was (the pick’s own when it set one — usually none, logged; the pick’s own cap through a swap and Restore is proven off dev in coachAi.test.ts)',
     },
     {
       id: 'once',
