@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,6 +158,16 @@ describe('plan-lint cli', () => {
     expect(out).toContain('plan-lint: 0 problems (light)');
   });
 
+  it('runs through a symlinked path too (never a silent exit 0)', () => {
+    writeFileSync(join(root, 'q.md'), CLEAN);
+    symlinkSync(here(), join(root, 'linked'));
+    const out = execFileSync(process.execPath, [join(root, 'linked', 'cli.ts'), 'q.md'], {
+      cwd: root,
+      env: noInit,
+    }).toString();
+    expect(out).toContain('plan-lint: 0 problems (light)');
+  });
+
   it('runs as a script, and never spawns or runs what a plan names', () => {
     const here = fileURLToPath(new URL('.', import.meta.url));
     for (const f of ['cli.ts', 'lint.ts'])
@@ -174,6 +184,7 @@ describe('plan-lint cli', () => {
       ),
     );
     let code = 0;
+    let stdout = '';
     try {
       execFileSync(process.execPath, [join(here, 'cli.ts'), 'p.md'], {
         cwd: root,
@@ -182,8 +193,11 @@ describe('plan-lint cli', () => {
       });
     } catch (err) {
       code = (err as { status: number }).status;
+      stdout = String((err as { stdout: Buffer }).stdout);
     }
     expect(code).toBe(1); // the chained command is a census problem, and nothing ran
+    expect(stdout).toContain('shell syntax outside quotes');
+    expect(stdout).toContain('plan-lint: 1 problem');
     expect(() => readFileSync(marker)).toThrow();
     const help = execFileSync(process.execPath, [join(here, 'cli.ts'), '--help'], {
       cwd: root,

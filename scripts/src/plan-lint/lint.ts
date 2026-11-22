@@ -124,19 +124,33 @@ const stripCode = (s: string) => s.replace(/`([^`]*)`/g, '$1');
 const isNone = (s: Section) =>
   /^none\b/i.test(stripCode(s.body[0]?.text.trim() ?? '')) && !table(s);
 
-// `git grep … → 9; grep -rn … → 0`: each search with its hit count.
+// `git grep … → 9; git grep … → 0`: each search with its hit count. The cell splits on every `;` outside backticks,
+// and each piece must be one whole search, `` `cmd` → n `` and at most a bracketed note: text after a count is never
+// dropped unread, since the reviewer re-runs what the cell shows.
 export interface Search {
   command: string;
   hits: number | undefined;
+  rest?: string;
 }
 export function searches(cell: string): Search[] {
-  return cell
-    .split(/;\s*(?=`?(?:git grep|grep|rg)\b)/)
+  const pieces: string[] = [];
+  let cur = '';
+  let code = false;
+  for (const ch of cell) {
+    if (ch === '`') code = !code;
+    if (ch === ';' && !code) {
+      pieces.push(cur);
+      cur = '';
+    } else cur += ch;
+  }
+  pieces.push(cur);
+  return pieces
     .map((seg) => {
-      const m = /^`?([^`]*?)`?\s*(?:→|->)\s*(\d+)\b/.exec(seg.trim());
-      return m
-        ? { command: m[1]!.trim(), hits: Number(m[2]) }
-        : { command: stripCode(seg).trim(), hits: undefined };
+      const m = /^`?([^`]*?)`?\s*(?:→|->)\s*(\d+)\b(.*)$/s.exec(seg.trim());
+      if (!m) return { command: stripCode(seg).trim(), hits: undefined };
+      const rest = m[3]!.trim();
+      const s: Search = { command: m[1]!.trim(), hits: Number(m[2]) };
+      return rest && !/^\([^`()]*\)$/.test(rest) ? { ...s, rest } : s;
     })
     .filter((s) => s.command);
 }
@@ -436,7 +450,9 @@ export function lint(text: string, tree: Tree): { mode?: Mode; problems: Problem
           const why =
             s.hits === undefined
               ? `no hit count after "${s.command.slice(0, 40)}"`
-              : searchProblem(s.command, tree);
+              : s.rest !== undefined
+                ? `text after the hit count of "${s.command.slice(0, 40)}": put each search in its own \`…\` → n, separated by ;`
+                : searchProblem(s.command, tree);
           if (why) add(r.line, 'census', why);
         }
       }

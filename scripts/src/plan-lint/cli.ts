@@ -1,7 +1,7 @@
 // @aperture/scripts — `pnpm plan-lint [<file>] [--root <dir>]` (docs/ops/PLAN.md → _After Plan_): a lane's plan
 // against the template's shape. Reads the plan and stats the paths it names; never runs or spawns anything.
 // Plain `node`: erasable syntax, node: builtins only.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lint, type Tree } from './lint.ts';
@@ -99,5 +99,7 @@ export function main(argv: string[], log = console.log, cwd = typedIn()): number
   return problems.length ? 1 : 0;
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1])
+// argv[1] is only resolved, import.meta.url realpathed: through a symlinked path they differ, and the CLI would
+// print nothing and exit 0.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
   process.exit(main(process.argv.slice(2)));

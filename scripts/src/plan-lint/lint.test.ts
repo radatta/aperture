@@ -158,6 +158,17 @@ describe('census', () => {
     );
   });
 
+  it('a command after a counted search is checked, not dropped (in either mode)', () => {
+    const second = row(`${g1} → 3; \`cat docs/x.md\` → 1`);
+    expect(checks(plan('light', { 'Change census': second }))).toContain(
+      'census: not a census search: "cat docs/x.md" (git grep)',
+    );
+    const tail = row(`${g1} → 3 \`cat docs/x.md\`; ${g2} → 1`);
+    expect(checks(plan('full', { 'Change census': tail }))).toEqual([
+      `census: text after the hit count of "${g1.replace(/`/g, '').slice(0, 40)}": put each search in its own \`…\` → n, separated by ;`,
+    ]);
+  });
+
   it('the census row reports what searchProblem finds', () => {
     expect(
       checks(plan('full', { 'Change census': row(`\`find packages -name x\` → 2; ${g2} → 1`) })),
@@ -701,10 +712,17 @@ describe('helpers', () => {
     ]);
   });
 
-  it('searches split on ; before a search only', () => {
-    expect(searches('`grep -rn "a;b" docs` → 2; `rg x tools` → 1')).toEqual([
+  it('searches split on every ; outside backticks, and keep text after a count', () => {
+    expect(searches('`grep -rn "a;b" docs` → 2; `rg x tools` → 1 (two forms)')).toEqual([
       { command: 'grep -rn "a;b" docs', hits: 2 },
       { command: 'rg x tools', hits: 1 },
+    ]);
+    expect(searches('`git grep -n -e a -- docs` → 3; `ls docs` → 1')).toEqual([
+      { command: 'git grep -n -e a -- docs', hits: 3 },
+      { command: 'ls docs', hits: 1 },
+    ]);
+    expect(searches('`git grep -n -e a -- docs` → 3 then `ls docs`')).toEqual([
+      { command: 'git grep -n -e a -- docs', hits: 3, rest: 'then `ls docs`' },
     ]);
   });
 
