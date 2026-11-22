@@ -849,9 +849,18 @@ export const lcCoachAi: Scenario = {
             t0.slots.find((s) => s.status === 'open' && !s.swappedFrom && s.aiWhy) ??
             fail('no open picked slot to swap');
           const pickCap = state.pick?.picks.find((p) => p.slug === slot.slug)?.capMin;
+          // A named problem, so a pattern with no easier unseen one left on the test user can't refuse it: an
+          // easier alternative if the slot offers one, else a catalog problem off today's plan.
+          const onPlan = new Set(t0.slots.map((s) => s.slug));
+          const toSlug =
+            slot.alternatives?.[0]?.slug ??
+            ['contains-duplicate', 'valid-anagram', 'two-sum', 'valid-palindrome'].find(
+              (x) => !onPlan.has(x),
+            )!;
           const sw = await ctx.mcp.writes.swapSlot(t0.day, slot.slug, {
             slug: slot.slug,
             action: 'swap',
+            toSlug,
           });
           const swappedIn =
             sw.slots.find((s) => s.swappedFrom === slot.slug && s.slug !== slot.slug) ??
