@@ -31,7 +31,7 @@ import type { Tool, ToolContext } from './types';
 // the Log page and "Today in review" in one call. Nothing here writes: get_day reads the stored day row
 // (peekDay), never getDay, whose read spawns recurrences and sweeps stale plans.
 
-const QUERY_MAX = 200;
+export const QUERY_MAX = 200;
 const SEARCH_LIMIT = { def: 50, max: 100 };
 const LIST_LIMIT = { def: 100, max: 200 };
 // A cursor is the SK without `log#`: "<day>#<ULID>". A ULID sorts by time within a day, so this orders entries.
@@ -85,7 +85,7 @@ function page(entries: LogEntry[], limit: number, cursor: string | undefined) {
 }
 
 // --- arg guards (typeof → RpcParamError, -32602, before any dispatch) ---
-function optDay(args: Record<string, unknown>, key: string): string | undefined {
+export function optDay(args: Record<string, unknown>, key: string): string | undefined {
   const v = args[key];
   if (v === undefined || v === null) return undefined;
   if (typeof v !== 'string' || !isDayKey(v))
@@ -102,7 +102,7 @@ function range(from: string | undefined, to: string | undefined) {
     throw new RpcParamError('"from" must be on or before "to"');
   return { from, to };
 }
-function limitArg(args: Record<string, unknown>, l: { def: number; max: number }): number {
+export function limitArg(args: Record<string, unknown>, l: { def: number; max: number }): number {
   const v = args.limit;
   if (v === undefined || v === null) return l.def;
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1 || v > l.max)
@@ -116,7 +116,7 @@ function cursorArg(args: Record<string, unknown>): string | undefined {
     throw new RpcParamError('"cursor" must be a nextCursor from a previous call, unchanged');
   return v;
 }
-function queryArg(args: Record<string, unknown>): string {
+export function queryArg(args: Record<string, unknown>): string {
   const v = args.query;
   if (typeof v !== 'string' || v.trim() === '')
     throw new RpcParamError('"query" is required: the text to find');
