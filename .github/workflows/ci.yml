@@ -2,9 +2,11 @@ name: CI
 
 # The quality gate, factored out so pr.yml, branch.yml and deploy.yml run the exact same checks instead of
 # copies drifting apart. Reusable (workflow_call) — callers own their own triggers + concurrency.
-# Three jobs so the app suite (the long pole) runs beside lint/typecheck/the other tests instead of after
-# them, itself halved with vitest --shard. A caller's `needs` sees one combined result, but a ruleset
-# gates on per-job check names, so both shards must be required checks by name too (INFRA §9).
+# Eight parallel jobs, no `needs` between them, so the run takes as long as its slowest job (~2 min) instead of
+# one job's sum: `check` (scan, lint, typecheck, fixture slice 1), the app suite in two vitest --shard halves,
+# the scripts suite in two, the other packages in one, and fixture slices 2 and 3 (INFRA §9). A caller's `needs`
+# sees one combined result, but a ruleset gates on per-job check names: the required ones are `ci / check` and the
+# two app shards; the newer jobs are enforced by the run's conclusion (gate:ci, checked-tree.ts, deploy.yml).
 # Toolchain + install is the local setup action (.github/actions/setup). The secret scan is a step of `check` (it was
 # its own one-minute workflow). On a main push deploy.yml may skip this whole call when a PR run already checked the
 # exact tree, or pass `fixtures_only` to run just the fixture suite (scripts/src/checked-tree.ts, INFRA §9).
@@ -104,14 +106,14 @@ jobs:
       # fails, but the step list shows a red X per actual failure instead of skipping the rest.
       - run: pnpm typecheck
         if: ${{ !cancelled() && !inputs.fixtures_only }}
-      # Everything but app, which runs in the test-app shards, and the fixture suite, which runs next. The root
-      # `pnpm test` (pnpm -r test) is unchanged for local use; the split lives here only. --exclude reaches every
-      # package's vitest and matches only in scripts.
-      - run: pnpm -r --filter '!@aperture/app' test --exclude src/mailroom/runner-fixtures.test.ts
-        if: ${{ !cancelled() && !inputs.fixtures_only }}
+      # The package tests run in their own jobs below (test-app, test-scripts, test-packages); the fixture suite runs
+      # here as slice 1 of 3, the `fixtures` jobs running 2 and 3 (tools/mailroom/run-fixtures.sh,
+      # MAILROOM_FIXTURE_SLICE). Its step name and gating stay in this job: checked-tree.ts reads them here.
       - name: Mailroom fixture suite
         if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run != 'false') }}
         run: pnpm --filter @aperture/scripts test src/mailroom/runner-fixtures.test.ts
+        env:
+          MAILROOM_FIXTURE_SLICE: 1/3
 
   test-app:
     name: test-app-${{ matrix.shard }} # the check name; without it GitHub renders `test-app (1)`
@@ -142,8 +144,115 @@ jobs:
       # Half the suite per job, by vitest's own --shard: a file is assigned by a hash of its path, so it
       # lands in the same shard every run until a file is added or removed; the shuffle still orders each
       # half and prints its seed. Each shard runs on vitest's default one worker — a second worker measured
-      # no faster on the 2-vCPU runner. No `--` before the flag: pnpm forwards a `--` itself, and vitest
+      # no faster (on the 2-vCPU runner of the time; public repos now get 4). No `--` before the flag: pnpm forwards a `--` itself, and vitest
       # then runs all 68 files.
       - env:
           SHARD: ${{ matrix.shard }}
         run: pnpm --filter @aperture/app test --shard="$SHARD/2"
+
+  # The scripts suite (the fixture suite aside) in two vitest --shard halves, by path hash as test-app's. Its floor is
+  # one ~90 s file (board-cli.test.ts), so a third shard buys nothing. Full history, as `check` had when these ran
+  # there.
+  test-scripts:
+    name: test-scripts-${{ matrix.shard }}
+    if: ${{ !inputs.fixtures_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - env:
+          SHARD: ${{ matrix.shard }}
+        run: pnpm --filter @aperture/scripts test --exclude src/mailroom/runner-fixtures.test.ts --shard="$SHARD/2"
+
+  # Every package but app and scripts (shared, cdk, lambdas, extension): ~1.5 min together.
+  test-packages:
+    if: ${{ !inputs.fixtures_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - run: pnpm -r --filter '!@aperture/app' --filter '!@aperture/scripts' test
+
+  # Fixture slices 2 and 3 (slice 1 is `check`'s). The same PR-only input rule and step gating as `check`, byte for
+  # byte (fixture-inputs.test.ts pins it), so no slice skips while another runs. No job-level `if`: deploy.yml's
+  # `fixtures_only` call runs these with `check`.
+  fixtures:
+    name: fixtures-${{ matrix.slice }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: [2, 3]
+    steps:
+      # Fails a fork's pull request, never skips it: a skipped job passes a required check (INFRA §9 → Public repo).
+      # Byte-identical in every job; scripts/src/workflow-fork-guard.test.ts pins it and runs it.
+      - name: Fork guard
+        env:
+          EVENT: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          case "$EVENT" in
+            push | workflow_dispatch) exit 0 ;;
+            pull_request) if [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ]; then exit 0; fi ;;
+          esac
+          echo "::error::this repo's workflows don't run for pull requests from forks (or for event '$EVENT')"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Mailroom fixture inputs
+        id: fixtures
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          git rev-parse -q --verify HEAD^2 >/dev/null && files=$(git diff --name-only --no-renames HEAD^1 HEAD) || files=''
+          run=$(printf '%s\n' "$files" | node scripts/src/fixture-inputs.ts 2>"$RUNNER_TEMP/fixtures.txt") ||
+            { cat "$RUNNER_TEMP/fixtures.txt"; exit 1; }
+          cat "$RUNNER_TEMP/fixtures.txt" # stdout, so a skip's ::notice:: becomes an annotation on the run
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup
+        if: ${{ !cancelled() }}
+      - name: Mailroom fixture suite
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run != 'false') }}
+        run: pnpm --filter @aperture/scripts test src/mailroom/runner-fixtures.test.ts
+        env:
+          MAILROOM_FIXTURE_SLICE: ${{ matrix.slice }}/3
