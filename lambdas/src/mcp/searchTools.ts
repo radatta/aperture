@@ -65,6 +65,7 @@ function categoryArg(args: Record<string, unknown>): string | undefined {
 
 // The notes around the earliest query word, whitespace collapsed, at most SNIPPET_SIDE characters either
 // side; a cut never splits a surrogate pair (surrogate-safe, not grapheme-safe: a joined emoji can lose a part).
+// The hit is found in the lowercased text, which a rare letter lengthens (İ), shifting the window a little.
 export function notesSnippet(notes: string, words: string[]): string | undefined {
   const flat = notes.replace(/\s+/g, ' ').trim();
   const lower = flat.toLowerCase();

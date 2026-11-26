@@ -2,8 +2,8 @@
 // test user, then prove search_tasks finds them by a title word and by a notes word, that each filter narrows,
 // that the limit caps and says so, and that list_tasks' compact rows carry no notes. The tools only read; every
 // seeded task and the category are ledgered by id and torn down here by id (the pipeline's cleanup is the
-// backstop). Every title and the noted task's notes carry the run's nonce, and every query includes it, so the
-// counts are exact whatever else the test user holds; the nonce never picks what gets deleted.
+// backstop). Every title carries the run's key (tsq + the nonce, one word no other scenario's title holds), and
+// every query includes it, so the counts are exact whatever else the test user holds; it never picks what is deleted.
 // Reads are eventually consistent: the first read after seeding and the one after teardown retry a few times.
 import { McpRpcError, PARAM_ERROR, type DevCompactTask, type DevTaskSearch } from '../mcp';
 import { noConsoleErrors, type Ctx, type Scenario } from '../scenario';
@@ -47,7 +47,9 @@ const expectParamError = async (what: string, call: () => Promise<unknown>) => {
   }
   fail(`${what}: expected a param error (-32602), got a result`);
 };
-const title = (ctx: Ctx, what: string) => `devcheck find ${ctx.nonce} ${what}`;
+// The run's nonce is in every scenario's titles, so this one's queries use a word only its own titles hold.
+const key = (ctx: Ctx) => `tsq${ctx.nonce}`;
+const title = (ctx: Ctx, what: string) => `devcheck find ${key(ctx)} ${what}`;
 const search = (ctx: Ctx, args: Record<string, unknown>) => ctx.mcp.reads.searchTasks(args);
 const ids = (r: DevTaskSearch) => r.tasks.map((t) => t.id);
 const same = (got: string[], want: string[]) =>
@@ -223,7 +225,7 @@ export const taskSearchMcp: Scenario = {
         const w = ctx.api.writes;
         const { today, tomorrow } = ctx.dates;
         seeded.cat = (
-          await w.upsertCategory({ label: `devcheck find ${ctx.nonce}`, isWork: false })
+          await w.upsertCategory({ label: `devcheck find ${key(ctx)}`, isWork: false })
         ).id;
         seeded.a = (await w.createTask({ title: title(ctx, 'alpha started'), estimateMin: 15 })).id;
         // The word sits past 45 emoji (90 UTF-16 units), so the snippet's front cut lands inside the run, on the
@@ -272,7 +274,7 @@ export const taskSearchMcp: Scenario = {
           ].filter(Boolean);
         };
         const settled = await until(
-          () => search(ctx, { query: ctx.nonce }),
+          () => search(ctx, { query: key(ctx) }),
           (r) => !missing(r).length,
         );
         expect(!missing(settled).length, 'the seeded state never read back', missing(settled));
@@ -311,7 +313,7 @@ export const taskSearchMcp: Scenario = {
       entry: 'mcp',
       proves: ['find-title', 'find-notes', 'snippet-edges'],
       async run(ctx) {
-        const byTitle = await search(ctx, { query: `${ctx.nonce} alpha` });
+        const byTitle = await search(ctx, { query: `${key(ctx)} alpha` });
         expect(same(ids(byTitle), [seeded.a]), 'a title word', byTitle);
         expect(
           keysOf(byTitle.tasks[0]!).join() === COMPACT_KEYS.join(),
@@ -324,7 +326,7 @@ export const taskSearchMcp: Scenario = {
           byTitle,
         );
 
-        const byNotes = await search(ctx, { query: `${NOTES_WORD.toUpperCase()} ${ctx.nonce}` });
+        const byNotes = await search(ctx, { query: `${NOTES_WORD.toUpperCase()} ${key(ctx)}` });
         expect(same(ids(byNotes), [seeded.b]), 'a notes word, upper case', ids(byNotes));
         const snip = byNotes.tasks[0]!.notesSnippet ?? '';
         expect(snip.includes(NOTES_WORD), 'the snippet holds the word', snip.length);
@@ -343,9 +345,9 @@ export const taskSearchMcp: Scenario = {
       entry: 'mcp',
       proves: ['all-words'],
       async run(ctx) {
-        const both = await search(ctx, { query: `${NOTES_WORD} beta ${ctx.nonce}` });
+        const both = await search(ctx, { query: `${NOTES_WORD} beta ${key(ctx)}` });
         expect(same(ids(both), [seeded.b]), 'a title word plus a notes word', ids(both));
-        const none = await search(ctx, { query: `${ctx.nonce} beta nowordlikethis` });
+        const none = await search(ctx, { query: `${key(ctx)} beta nowordlikethis` });
         expect(
           none.totalMatches === 0 && none.tasks.length === 0 && none.more === false,
           'a word no task has',
@@ -359,7 +361,7 @@ export const taskSearchMcp: Scenario = {
       entry: 'mcp',
       proves: ['status'],
       async run(ctx) {
-        const q = ctx.nonce;
+        const q = key(ctx);
         expect(
           same(ids(await search(ctx, { query: q, status: 'in_progress' })), [seeded.a]),
           'in_progress',
@@ -382,7 +384,7 @@ export const taskSearchMcp: Scenario = {
       entry: 'mcp',
       proves: ['category-due'],
       async run(ctx) {
-        const q = ctx.nonce;
+        const q = key(ctx);
         const { today, tomorrow } = ctx.dates;
         const got = async (args: Record<string, unknown>) =>
           ids(await search(ctx, { query: q, ...args }));
@@ -409,14 +411,14 @@ export const taskSearchMcp: Scenario = {
       entry: 'mcp',
       proves: ['limit'],
       async run(ctx) {
-        const all = await search(ctx, { query: ctx.nonce });
+        const all = await search(ctx, { query: key(ctx) });
         const mine = [seeded.a, seeded.b, seeded.c, seeded.parent, seeded.part1, seeded.part2];
         expect(
           same(ids(all), mine) && all.totalMatches === 6 && !all.more,
           'the nonce alone',
           ids(all),
         );
-        const two = await search(ctx, { query: ctx.nonce, limit: 2 });
+        const two = await search(ctx, { query: key(ctx), limit: 2 });
         expect(two.tasks.length === 2 && two.totalMatches === 6 && two.more, 'limit 2', {
           n: two.tasks.length,
           totalMatches: two.totalMatches,
@@ -471,8 +473,14 @@ export const taskSearchMcp: Scenario = {
           seeded.part2,
         ]);
         const parts = { total: 2, done: 0, estimateMin: 30 };
+        const bff = await until(
+          () => ctx.api.reads.listTasks(),
+          (rows) =>
+            rows.filter((t) => mine.has(t.id)).length === 6 &&
+            rows.some((t) => t.id === seeded.a && t.status === 'in_progress'),
+        );
         const stored = new Map(
-          (await ctx.api.reads.listTasks())
+          bff
             .filter((t) => mine.has(t.id))
             .map((t) => [t.id, canon(t.id === seeded.parent ? { ...t, parts } : t)]),
         );
@@ -534,8 +542,8 @@ export const taskSearchMcp: Scenario = {
           'the default list after compact',
           full && Object.keys(full),
         );
-        const once = await search(ctx, { query: ctx.nonce });
-        const twice = await search(ctx, { query: ctx.nonce });
+        const once = await search(ctx, { query: key(ctx) });
+        const twice = await search(ctx, { query: key(ctx) });
         expect(JSON.stringify(once) === JSON.stringify(twice), 'the same search twice', ids(twice));
       },
     },
@@ -550,7 +558,7 @@ export const taskSearchMcp: Scenario = {
           if (id) await w.deleteTask(id);
         if (seeded.cat) await w.deleteCategory(seeded.cat, null);
         const after = await until(
-          () => search(ctx, { query: ctx.nonce }),
+          () => search(ctx, { query: key(ctx) }),
           (r) => r.totalMatches === 0,
         );
         expect(after.totalMatches === 0, 'the nonce after teardown', ids(after));
