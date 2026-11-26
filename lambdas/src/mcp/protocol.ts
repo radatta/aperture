@@ -39,6 +39,48 @@ const toolSpec = (t: (typeof TOOLS)[number]) => ({
 });
 
 // Handle one parsed JSON-RPC message. Returns the response, or null for a notification (no reply body).
+// The dev meter's op label (ddb/meter.ts): the JSON-RPC method from a fixed set, plus the tool name only when it is a
+// known tool — never request text. Non-POST routes (the well-known metadata) read by their HTTP verb.
+const MCP_METHODS = new Set([
+  'initialize',
+  'ping',
+  'tools/list',
+  'tools/call',
+  'notifications/initialized',
+  'notifications/cancelled',
+]);
+const HTTP_VERBS = new Set(['GET', 'HEAD', 'OPTIONS']);
+export function mcpOp(event: {
+  requestContext?: { http?: { method?: string } };
+  body?: string | null;
+  isBase64Encoded?: boolean;
+}): string {
+  const verb = event.requestContext?.http?.method;
+  if (verb && verb !== 'POST') return HTTP_VERBS.has(verb) ? verb.toLowerCase() : 'unknown';
+  try {
+    const raw =
+      event.isBase64Encoded && event.body
+        ? Buffer.from(event.body, 'base64').toString('utf8')
+        : event.body;
+    const msg = (raw ? JSON.parse(raw) : null) as {
+      method?: unknown;
+      params?: { name?: unknown };
+    } | null;
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return 'unknown';
+    const method =
+      typeof msg.method === 'string' && MCP_METHODS.has(msg.method) ? msg.method : null;
+    if (!method) return 'unknown';
+    const name = msg.params?.name;
+    if (method === 'tools/call')
+      return TOOLS.some((t) => t.name === name)
+        ? `tools/call:${String(name)}`
+        : 'tools/call:unknown';
+    return method;
+  } catch {
+    return 'unparsed';
+  }
+}
+
 export async function handleMcpMessage(
   msg: unknown,
   ctx: ToolContext,

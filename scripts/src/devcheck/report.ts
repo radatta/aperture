@@ -17,6 +17,7 @@ export interface StepResult {
   title: string;
   status: StepStatus;
   ms: number;
+  at?: number; // epoch ms at the step's start, on steps that ran (the read-cost reader's windows: devcheck:cost)
   error?: string;
   note?: string; // needs-you: the reason; deferred: how to run it
   shot?: string;
@@ -62,6 +63,7 @@ export interface RunPhases {
 
 export interface RunResult {
   runId: string;
+  startedAt?: number; // epoch ms at the run's start; with phases, the setup and cleanup windows (devcheck:cost)
   tier: string;
   feature: string[]; // scenario ids whose rows are this feature's ([] = none named)
   expectedSha: string;

@@ -17,9 +17,10 @@ import {
   placeReadUnknownText,
   placeUnknownError,
 } from '@aperture/shared';
-import { isApiMethod } from '@aperture/shared';
+import { isApiMethod, isDevSlot } from '@aperture/shared';
 import type { CaptureError, CaptureResult, PlaceRead, PlaceReadError } from '@aperture/shared';
 import { createLiveDoc } from './ddb/LiveDoc';
+import { bffOp, wrapIfDev } from './ddb/meter';
 import {
   bffVerifier,
   createCognitoVerifier,
@@ -63,7 +64,11 @@ import type { PublicKeyReader } from './push/publicKey';
 
 export const runtime = `${APERTURE}-lambda` as const;
 
-const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
+// The dev slots meter every DynamoDB call's units into one `ddb_units` line per request (meter.ts); strict, so an
+// unset STAGE is unmetered.
+const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture', {
+  meter: isDevSlot(process.env.STAGE),
+});
 
 // Built once at cold start. Construction never touches the network, so an empty FILES_BUCKET (local /
 // tests) is fine — only an actual attachment call would then fail.
@@ -205,7 +210,7 @@ export const createBffHandler =
   (d: BffDeps) =>
   (event: HttpEvent): Promise<HttpResult> =>
     handle(event, d);
-export const handler = createBffHandler(live);
+export const handler = wrapIfDev(process.env.STAGE, 'bff', bffOp, createBffHandler(live));
 
 async function handle(event: HttpEvent, d: BffDeps): Promise<HttpResult> {
   const path = event.rawPath ?? event.requestContext?.http?.path ?? '';

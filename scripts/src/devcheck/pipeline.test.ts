@@ -2976,3 +2976,31 @@ describe('the sitting budget', () => {
     expect((await run(w2, sc(w2), ledger())).sittingStarts).toBe(2);
   });
 });
+
+// The read-cost reader's windows (devcheck:cost): each step that ran carries the clock at its start, the run its own.
+describe('step and run start stamps', () => {
+  it('stamps `at` before a step runs, on run steps only, and `startedAt` at the run start', async () => {
+    let t = 1_000;
+    const seen: number[] = [];
+    const sc = scenario(
+      async () => void seen.push(t),
+      async () => {
+        seen.push(t);
+        throw new Error('boom');
+      },
+      async () => void seen.push(t),
+    );
+    const r = await runPipeline(
+      deps(world(), [sc(world())], memLedger(), { now: () => (t += 10) }),
+    );
+    expect(r.startedAt).toBe(1_010);
+    expect(r.steps.map((s) => s.status)).toEqual(['pass', 'fail', 'skipped']);
+    const [a, b, c] = r.steps;
+    expect(seen).toHaveLength(2);
+    expect(a!.at).toBeGreaterThan(r.startedAt!);
+    expect(a!.at).toBeLessThanOrEqual(seen[0]!); // stamped before the step ran, not after
+    expect(b!.at).toBeGreaterThan(seen[0]!);
+    expect(b!.at).toBeLessThanOrEqual(seen[1]!);
+    expect(c).not.toHaveProperty('at');
+  });
+});

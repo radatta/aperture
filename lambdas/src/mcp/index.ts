@@ -3,9 +3,16 @@
 // a tool call dispatched through the SAME handleRpc the BFF uses. Auth is the static agent token in a
 // custom header (Claude Code); phase 2 adds a Cognito-bearer path here for claude.ai. Business logic and
 // the writes-discipline live in BackendClient/handleRpc — this file is just the AWS/HTTP + auth edge.
-import { AGENT_TOKEN_HEADER, APERTURE, AUTH_HEADER, ORIGIN_SECRET_HEADER } from '@aperture/shared';
+import {
+  AGENT_TOKEN_HEADER,
+  APERTURE,
+  AUTH_HEADER,
+  ORIGIN_SECRET_HEADER,
+  isDevSlot,
+} from '@aperture/shared';
 import type { ApiMethod } from '@aperture/shared';
 import { createLiveDoc } from '../ddb/LiveDoc';
+import { wrapIfDev } from '../ddb/meter';
 import { createCognitoVerifier, resolveAgentUserId, resolveUserId } from '../auth/verify';
 import { AUTH_ENV, logMissingAuthEnv, originPasses } from '../auth/strict';
 import type { Verifier } from '../auth/verify';
@@ -26,13 +33,16 @@ import type { CoachPickInvoker } from '../coach/invoker';
 import { livePickInvoker } from '../coach/liveInvoker';
 import { liveCatalogInvoker, noopCatalogInvoker } from '../catalog/invoker';
 import type { CatalogImportInvoker } from '../catalog/invoker';
-import { handleMcpMessage } from './protocol';
+import { handleMcpMessage, mcpOp } from './protocol';
 import { authorizationServer, matchWellKnown, protectedResource } from './wellKnown';
 import type { ToolContext } from './types';
 
 export const runtime = `${APERTURE}-mcp` as const;
 
-const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture');
+// Metered on the dev slots only, like the BFF (ddb/meter.ts).
+const doc = createLiveDoc(process.env.TABLE_NAME ?? 'aperture', {
+  meter: isDevSlot(process.env.STAGE),
+});
 // Built once at cold start; construction never touches the network (empty bucket/URL is fine locally).
 const presigner = createS3Presigner(process.env.FILES_BUCKET ?? '');
 const objects = createS3ObjectStore(process.env.FILES_BUCKET ?? ''); // deletes attachment bytes
@@ -138,7 +148,7 @@ export const createMcpHandler =
   (d: McpDeps) =>
   (event: HttpEvent): Promise<HttpResult> =>
     handle(event, d);
-export const handler = createMcpHandler(live);
+export const handler = wrapIfDev(process.env.STAGE, 'mcp', mcpOp, createMcpHandler(live));
 logMissingAuthEnv('mcp', [...AUTH_ENV.mcp.required], [...AUTH_ENV.mcp.optional]);
 
 async function handle(event: HttpEvent, d: McpDeps): Promise<HttpResult> {

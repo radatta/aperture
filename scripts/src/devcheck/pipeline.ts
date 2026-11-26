@@ -168,6 +168,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   };
   const r: RunResult = {
     runId: d.runId,
+    startedAt: t0,
     tier: d.tier,
     feature: d.feature ?? [],
     expectedSha: d.expectedSha,
@@ -443,6 +444,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           continue;
         }
         const s0 = d.now();
+        res.at = s0;
         stepNo++;
         refusal = null;
         bodyReads.length = 0;
