@@ -43,7 +43,7 @@ describe('mailroom runner', () => {
 
   // CI runs the suite as 3 slices in 3 jobs (MAILROOM_FIXTURE_SLICE, ci.yml): together they run every case once and
   // the tail checks once, and unset is the whole suite. A malformed slice fails rather than running everything.
-  it('the slices partition the suite', () => {
+  it('the slices partition the suite', { timeout: 30_000 }, () => {
     const list = (slice?: string) => {
       const env: NodeJS.ProcessEnv = { ...process.env, MAILROOM_FIXTURE_LIST: '1' };
       delete env.MAILROOM_FIXTURE_SLICE;
@@ -57,7 +57,7 @@ describe('mailroom runner', () => {
       readFileSync(`${TOOLS_DIR}testdata/jobs.jsonl`, 'utf8').trimEnd().split('\n').length - 2;
     expect(whole).toEqual([...Array.from({ length: total }, (_, i) => String(i + 1)), 'tail']);
     const slices = ['1/3', '2/3', '3/3'].map(list);
-    for (const s of slices) expect(s.length).toBeGreaterThan(1);
+    for (const s of slices) expect(s.length).toBeGreaterThan(total / 3 - 1);
     expect(slices.map((s) => s.includes('tail'))).toEqual([false, false, true]);
     const merged = slices.flat().filter((x) => x !== 'tail');
     expect(merged.sort((a, b) => Number(a) - Number(b))).toEqual(whole.filter((x) => x !== 'tail'));
@@ -70,6 +70,23 @@ describe('mailroom runner', () => {
       }
       expect(out, bad).toMatch(/^Bail out! MAILROOM_FIXTURE_SLICE/);
     }
+    // A slice past the case count runs nothing, and nothing must not pass.
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      MAILROOM_FIXTURE_SLICE: `${total + 1}/${total + 1}`,
+    };
+    delete env.MAILROOM_FIXTURE_LIST;
+    let none = '';
+    try {
+      execFileSync('bash', [`${TOOLS_DIR}run-fixtures.sh`], {
+        encoding: 'utf8',
+        env,
+        stdio: 'pipe',
+      });
+    } catch (err) {
+      none = String((err as { stdout?: string }).stdout);
+    }
+    expect(none).toMatch(/^Bail out! slice \d+\/\d+ has no cases/);
   });
 
   it('jobs.jsonl is exactly what gen-jobs.py generates', () => {

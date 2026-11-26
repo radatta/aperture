@@ -120,9 +120,8 @@ hub message (the checkpoints stay).
    and prints why. Its exit code is real (`pipefail` if piped). The full suite runs on GitHub on every push (phase 8);
    `pnpm gate:fast --remote` (GATE.md → _`--remote`_) keeps the tests off the container: typecheck and lint here,
    the tests' verdict from GitHub's run for the pushed, clean `HEAD`, the local tests when there's no such verdict.
-   It pushes from phase 5 on, so **every `pnpm bot push` gets phase 8's public-content scan first**, over what it
-   would publish (`origin/<branch>..HEAD`, or `origin/main..HEAD` the first time); a finding after a push is fixed
-   forward and sent to the hub as `[info]` (a push can't be recalled).
+   It pushes from phase 5 on, so **every `pnpm bot push` gets the public-content scan first**
+   (`docs/ops/PUBLIC-CONTENT.md` → _What enforces it_).
    `pnpm gate:fast --full` locally only to reproduce a red Branch run a single file can't, or when GitHub is
    unreachable. Nothing goes to a subagent on a red gate.
 6. **Review** — read `docs/ops/REVIEW.md` first: the lens map, the merge, the finding shape and the escalation

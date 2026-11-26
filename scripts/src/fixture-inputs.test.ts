@@ -117,6 +117,17 @@ describe('ci.yml wiring', () => {
     expect(job('check')).toContain(suiteStep('1/3'));
     expect(job('fixtures')).toContain(suiteStep('${{ matrix.slice }}/3'));
     expect(job('fixtures')).toMatch(/^ {8}slice: \[2, 3\]$/m);
+    // The rule step needs HEAD^1 (full history), and the suite needs the toolchain, in the fixtures job too.
+    expect(job('fixtures')).toMatch(
+      /- uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 0\n/,
+    );
+    const f = job('fixtures');
+    expect(f.indexOf('- uses: ./.github/actions/setup')).toBeGreaterThan(
+      f.indexOf('name: Mailroom fixture inputs'),
+    );
+    expect(f.indexOf('- uses: ./.github/actions/setup')).toBeLessThan(
+      f.indexOf('name: Mailroom fixture suite'),
+    );
     expect(ci.split('- name: Mailroom fixture suite')).toHaveLength(3);
     expect(ci).not.toContain('continue-on-error');
   });

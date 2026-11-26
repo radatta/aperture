@@ -34,7 +34,8 @@ export const USAGE = `pnpm gate:fast [--full | --remote] [--dry-run] [--base <re
   --wait     how long heavy.sh waits for a slot before giving up with 75 (default 90 s)
   Exit: 1 before any step when the registry check finds a test file the gate can't pick up (every mode, --dry-run
   too); 2 for a bad argument, the inner pass outside heavy.sh, or a diff that widened past its slot; else the first failing step's code in the order
-  printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted.`;
+  printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted. --remote: 1 also for a red
+  GitHub run; a fallback exits with the local gate's code (typecheck and lint run again in it).`;
 
 export interface Opts {
   full: boolean;
@@ -497,10 +498,16 @@ export async function remoteVerdict(
   let said = false;
   for (;;) {
     let v: ReturnType<typeof ciCheck>;
+    const waited0 = (now() - start) / 1000;
     try {
       v = ciCheck(run, sha);
     } catch (err) {
-      return { fallback: `gh failed (${(err as Error).message.split('\n')[0]})` };
+      // A blip is retried as gate:ci --wait does; gh still failing after REMOTE_START_S is offline or unauthenticated.
+      const why = `gh failed (${(err as Error).message.split('\n')[0]})`;
+      if (waited0 >= REMOTE_START_S) return { fallback: why };
+      log(`gate:fast --remote — ${why}: retrying`);
+      await sleep(REMOTE_POLL_MS);
+      continue;
     }
     const waited = (now() - start) / 1000;
     if (v.code === 0) return { ok: 0, line: v.line };
@@ -564,11 +571,14 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
       deps,
     );
   };
+  // -uall: a config hiding untracked files must not read a new test file as a clean tree.
+  const dirty = () =>
+    run('git', ['status', '--porcelain', '-z', '-uall'], { cwd: root }).length > 0;
+  const head = () => run('git', ['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: root });
   let sha = '';
   if (opts.remote && !inner) {
-    if (run('git', ['status', '--porcelain', '-z'], { cwd: root }).length)
-      return local('uncommitted or untracked changes');
-    sha = run('git', ['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: root });
+    if (dirty()) return local('uncommitted or untracked changes');
+    sha = head();
   }
   // The caller pass only: the inner one runs after the slot wait, and rules.test.ts catches a file added meanwhile.
   const reg = inner ? undefined : registryCheck(run, root, read);
@@ -650,6 +660,10 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
     if (code !== 0 || !opts.remote) return code;
     const r = await remoteVerdict(run, sha, sleep, now, out);
     if ('fallback' in r) return local(r.fallback);
+    // A commit or edit during the slot wait, the steps or the GitHub wait: typecheck and lint, or the run, saw
+    // another tree than the one on disk now.
+    if (head() !== sha || dirty())
+      return local(`HEAD or the tree changed since ${sha.slice(0, 8)}`);
     out(`gate:fast --remote — tests: ${r.line}`);
     if (r.ok)
       out('gate:fast --remote — `pnpm gate:ci` checks the failing files against the plan (a miss)');

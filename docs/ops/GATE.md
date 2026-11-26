@@ -90,9 +90,12 @@ now finishes in ~2 min (_The full suite on GitHub_, below).
 - **Anything else runs the local tests instead** — the plain `gate:fast` plan, with one line saying why, never a pass:
   - a dirty tree (any `git status --porcelain` line, untracked included): the pushed commit isn't what's on disk;
   - no run for the sha after `REMOTE_START_S` (90 s): not pushed;
-  - `gh` failing (offline, unauthenticated);
+  - `gh` still failing after 90 s of retries (offline, unauthenticated);
   - a `cancelled` run (a newer push superseded it);
   - no verdict within `REMOTE_WAIT_S` (600 s).
+- A commit or edit while it waits (the slot, the steps, GitHub) falls back too: the verdict is for exactly the `HEAD`
+  and tree it started on.
+- A fallback re-enters the plain gate, so typecheck and lint run again there (warm, seconds).
 - `--full` and `--remote` together is a bad argument (exit 2).
 
 So the order is commit, `pnpm bot push` (with its scan first: FEATURE-WORKFLOW.md → phase 5), then
