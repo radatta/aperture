@@ -152,7 +152,7 @@ hub message (the checkpoints stay).
    the lane holds a dev lock, after the dev run ends (same section). Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
    the lock, a green one proves nothing about dev.
-   - **Before the first `pnpm bot push`, scan for publication.** The repo is public, so a push publishes; an amend
+   - **Before the first `pnpm bot push` (with `--remote`, before every one since phase 5), scan for publication.** The repo is public, so a push publishes; an amend
      or a later force-push doesn't recall it. Check the branch name, every commit message and the diff against
      `origin/main` against `docs/ops/PUBLIC-CONTENT.md` — the judgment half; the identifier and identity checks are
      `pnpm bot push`'s own. Phase 10 scans the PR text again.

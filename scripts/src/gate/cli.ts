@@ -29,7 +29,8 @@ export const USAGE = `pnpm gate:fast [--full | --remote] [--dry-run] [--base <re
   a full-suite (\`test\`) slot when 3+ packages' tests or a whole suite run.
   --full     every package's whole suite (what CI runs), e.g. to reproduce a red Branch run
   --remote   typecheck + lint here, the tests' verdict from GitHub's run for HEAD (pushed, clean tree); else, or
-             when gh fails, the run is cancelled or not done in ${REMOTE_WAIT_S} s, the local tests, saying why
+             when gh keeps failing for ${REMOTE_START_S} s, the run is cancelled or not done in ${REMOTE_WAIT_S} s, the
+             local tests, saying why
   --dry-run  print the plan; run nothing
   --wait     how long heavy.sh waits for a slot before giving up with 75 (default 90 s)
   Exit: 1 before any step when the registry check finds a test file the gate can't pick up (every mode, --dry-run
@@ -496,15 +497,21 @@ export async function remoteVerdict(
 ): Promise<Remote> {
   const start = now();
   let said = false;
+  let failingSince: number | undefined; // the current run of gh failures, reset by any good read
   for (;;) {
     let v: ReturnType<typeof ciCheck>;
-    const waited0 = (now() - start) / 1000;
     try {
       v = ciCheck(run, sha);
+      failingSince = undefined;
     } catch (err) {
-      // A blip is retried as gate:ci --wait does; gh still failing after REMOTE_START_S is offline or unauthenticated.
+      // A blip is retried; gh failing for REMOTE_START_S straight, or past REMOTE_WAIT_S, is offline or unauthenticated.
       const why = `gh failed (${(err as Error).message.split('\n')[0]})`;
-      if (waited0 >= REMOTE_START_S) return { fallback: why };
+      failingSince ??= now();
+      if (
+        (now() - failingSince) / 1000 >= REMOTE_START_S ||
+        (now() - start) / 1000 >= REMOTE_WAIT_S
+      )
+        return { fallback: why };
       log(`gate:fast --remote — ${why}: retrying`);
       await sleep(REMOTE_POLL_MS);
       continue;
@@ -658,12 +665,14 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
         'gate:fast — no slot in time: run `pnpm gate:fast --wait 600` in the background (board.sh status shows who holds them)',
       );
     if (code !== 0 || !opts.remote) return code;
+    // A commit or edit during the slot wait, the steps or the GitHub wait: typecheck and lint, or the run, saw
+    // another tree than the one on disk now. Checked before the wait too, so a moved HEAD doesn't wait for nothing.
+    const moved = () => head() !== sha || dirty();
+    const changed = () => local(`HEAD or the tree changed since ${sha.slice(0, 8)}`);
+    if (moved()) return changed();
     const r = await remoteVerdict(run, sha, sleep, now, out);
     if ('fallback' in r) return local(r.fallback);
-    // A commit or edit during the slot wait, the steps or the GitHub wait: typecheck and lint, or the run, saw
-    // another tree than the one on disk now.
-    if (head() !== sha || dirty())
-      return local(`HEAD or the tree changed since ${sha.slice(0, 8)}`);
+    if (moved()) return changed();
     out(`gate:fast --remote — tests: ${r.line}`);
     if (r.ok)
       out('gate:fast --remote — `pnpm gate:ci` checks the failing files against the plan (a miss)');

@@ -1163,6 +1163,34 @@ describe('main --remote', () => {
     expect(r.outers).toHaveLength(1);
   });
 
+  it('retries a gh blip late in the wait, and gives up on gh failing 90 s straight', async () => {
+    let n = 0;
+    const blip = await go(
+      world({
+        runs: () => {
+          n++;
+          if (n === 10) throw new Error('gh: blip'); // 135 s in, past REMOTE_START_S
+          return n < 12 ? ghRun('in_progress', '') : ghRun('completed', 'success');
+        },
+      }),
+    );
+    expect(blip.code).toBe(0);
+    expect(blip.out).toMatch(/gh failed \(gh: blip\): retrying/);
+    expect(blip.out).not.toMatch(/running the local tests/);
+    let m = 0;
+    const down = await go(
+      world({
+        runs: () => {
+          if (++m < 5) return ghRun('in_progress', '');
+          throw new Error('gh: offline'); // from 60 s in, for good
+        },
+      }),
+    );
+    expect(down.out).toMatch(/gh failed \(gh: offline\)/);
+    expect(down.out).toMatch(/running the local tests instead/);
+    expect(down.clock.t).toBe(60_000 + 90_000);
+  });
+
   it('waits for a run in progress, polling', async () => {
     let n = 0;
     const r = await go(
@@ -1173,6 +1201,10 @@ describe('main --remote', () => {
     expect(r.out.match(/waiting for GitHub/g)).toHaveLength(1);
   });
 
+  const dirtyLater = () => {
+    let n = 0;
+    return () => (++n === 1 ? '' : ' M app/src/lib/x.ts\0');
+  };
   const moved = () => {
     let n = 0;
     return () => (++n === 1 ? SHA : 'b'.repeat(40));
@@ -1180,6 +1212,12 @@ describe('main --remote', () => {
   it.each([
     ['a dirty tree', { status: ' M docs/a.md\0' }, /uncommitted or untracked changes/, 0],
     ['an untracked file', { status: '?? app/src/new.test.ts\0' }, /uncommitted or untracked/, 0],
+    [
+      'the tree going dirty during the wait',
+      { status: dirtyLater(), runs: () => ghRun('completed', 'success') },
+      /HEAD or the tree changed since aaaaaaaa/,
+      0,
+    ],
     [
       'HEAD moving during the steps',
       { head: moved(), runs: () => ghRun('completed', 'success') },
@@ -1215,7 +1253,7 @@ describe('main --remote', () => {
     expect(r.out).toMatch(why);
     expect(r.out).toMatch(/running the local tests instead/);
     expect(r.outers.at(-1)).toEqual([]); // the plain gate, without --remote
-    expect(r.outers).toHaveLength('status' in w ? 1 : 2);
+    expect(r.outers).toHaveLength('status' in w && typeof w.status === 'string' ? 1 : 2);
     expect(r.clock.t).toBe(waited);
     // the fallback's own plan, printed after the reason: app's related tests, not an empty run
     const after = r.out.slice(r.out.indexOf('running the local tests instead'));

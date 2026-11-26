@@ -90,7 +90,7 @@ now finishes in ~2 min (_The full suite on GitHub_, below).
 - **Anything else runs the local tests instead** — the plain `gate:fast` plan, with one line saying why, never a pass:
   - a dirty tree (any `git status --porcelain` line, untracked included): the pushed commit isn't what's on disk;
   - no run for the sha after `REMOTE_START_S` (90 s): not pushed;
-  - `gh` still failing after 90 s of retries (offline, unauthenticated);
+  - `gh` failing for 90 s straight, retried every 15 s (offline, unauthenticated);
   - a `cancelled` run (a newer push superseded it);
   - no verdict within `REMOTE_WAIT_S` (600 s).
 - A commit or edit while it waits (the slot, the steps, GitHub) falls back too: the verdict is for exactly the `HEAD`
