@@ -21,7 +21,6 @@ import {
   PARENT_NO_ESTIMATE_ERROR,
   parentOf,
   partsOf,
-  partsSummary,
   userDueEpoch,
 } from '@aperture/shared';
 import { failureStatus, shownMessage } from '../rpc/failure';
@@ -36,7 +35,6 @@ import type {
   Settings,
   SplitTaskInput,
   Task,
-  TaskStatus,
   CreateCategoryInput,
   UpdateCategoryInput,
 } from '@aperture/shared';
@@ -47,6 +45,7 @@ import { LEETCODE_TOOLS } from './leetcodeTools';
 import { LOG_TOOLS } from './logTools';
 import { PLACE_ARG_DESC, PLACE_TOOLS, placeArg } from './placeTools';
 import { PULSE_TOOLS } from './pulseTools';
+import { SEARCH_TOOLS, TASK_STATUSES, compactRows, withParts } from './searchTools';
 import { SERIES_TOOLS } from './seriesTools';
 import { RpcParamError } from './types';
 import type { Tool, ToolContext } from './types';
@@ -55,8 +54,6 @@ import type { Tool, ToolContext } from './types';
 // methods dispatched through handleRpc, so the writes-discipline and the state machines apply unchanged.
 // The grammar is meant to be GENERATED (the operator is Claude), so it's strict and concrete: ISO dates
 // only, minutes only, ids from list_categories — the descriptions carry the rules the model can't infer.
-
-const TASK_STATUSES: TaskStatus[] = ['backlog', 'planned', 'in_progress', 'done', 'cancelled'];
 
 // attach_file carries bytes IN the tool call (base64). Tool arguments are model OUTPUT tokens (~1 token
 // per 2–3 base64 chars), so this is a small-text-artifact path (a spec, notes, a snippet) — a real file
@@ -203,35 +200,28 @@ function reqTime(args: Record<string, unknown>, key: string): number {
   return ms;
 }
 
-// A parent's progress on each listed task, from the full list (parts.ts): { total, done, estimateMin }.
-function withParts(shown: Task[], all: Task[]) {
-  return shown.map((t) => {
-    const parts = partsOf(all, t.id);
-    if (!parts.length) return t;
-    const { total, done, estimateMin } = partsSummary(parts);
-    return { ...t, parts: { total, done, estimateMin } };
-  });
-}
-
 // --- the tools -----------------------------------------------------------------------------------------
 
 export const TOOLS: Tool[] = [
   {
     name: 'list_tasks',
     description:
-      'List all live tasks (any status), newest first. Optionally filter by status (backlog, planned, in_progress, done, cancelled). A task with parts (a parent: the deliverable, holding the deadline) carries parts: { total, done, estimateMin } — total and estimateMin leave dropped parts out; a part carries parentId.',
+      'List all live tasks (any status), newest first, every field of each (notes in full). Looking for particular tasks? Use search_tasks. Optionally filter by status (backlog, planned, in_progress, done, cancelled). A task with parts (a parent: the deliverable, holding the deadline) carries parts: { total, done, estimateMin } — total and estimateMin leave dropped parts out; a part carries parentId. compact: true returns only { id, title, status, dueDay, dueTime, estimateMin, categoryId, parentId } per task (null when unset; a parent keeps parts) — no notes, calendar fields or timestamps; even compact, every task of every status can be too long for one answer, so pass status too.',
     inputSchema: {
       type: 'object',
       properties: {
         status: { type: 'string', enum: TASK_STATUSES, description: 'optional status filter' },
+        compact: { type: 'boolean', description: 'optional: short rows, no notes (default false)' },
       },
       additionalProperties: false,
     },
     async run(args, ctx) {
       const tasks = (await ctx.dispatch('listTasks', [])) as Task[];
       const status = optEnum(args, 'status', TASK_STATUSES);
+      const compact = present(args, 'compact') ? reqBool(args, 'compact') : false;
       // One read: a parent's progress comes from the same list (parts.ts).
-      return withParts(status ? tasks.filter((t) => t.status === status) : tasks, tasks);
+      const shown = status ? tasks.filter((t) => t.status === status) : tasks;
+      return compact ? compactRows(shown, tasks) : withParts(shown, tasks);
     },
   },
   {
@@ -244,6 +234,7 @@ export const TOOLS: Tool[] = [
       return withParts(backlog, (await ctx.dispatch('listTasks', [])) as Task[]);
     },
   },
+  ...SEARCH_TOOLS,
   {
     name: 'create_task',
     description:

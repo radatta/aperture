@@ -57,7 +57,7 @@ Rendered by `modules/tasks/notes/` — `parseNotes.ts` (pure) and `NotesView.tsx
   next to the icon. The add-to-today picker stays title + category only: it finds-or-creates by
   title, and notes hits would crowd that.
 - **Bulk add** ([bulk-add.md](bulk-add.md)): a `notes:"…"` token, with `\n` and `\\` as its only escapes.
-- **MCP** ([mcp/index.md](../mcp/index.md)): `notes` on `create_task`, `create_tasks` and `update_task`; `backfill_tasks`' per-row `note` appends.
+- **MCP** ([mcp/index.md](../mcp/index.md)): `notes` on `create_task`, `create_tasks` and `update_task`; `backfill_tasks`' per-row `note` appends; `search_tasks` matches words in notes and answers a short snippet, and `list_tasks {compact: true}` leaves notes out (_Finding a task_ there).
 - **Reflection** ([reflection.md](reflection.md)): the done task's look back is the same field and renderer
   with its own label, cap (1,000) and copy.
 
@@ -75,8 +75,7 @@ Rendered by `modules/tasks/notes/` — `parseNotes.ts` (pure) and `NotesView.tsx
 ## 5. Deferred
 
 - Notes on series templates (occurrences would copy them).
-- Trimming notes out of the MCP list tools (`list_tasks` / `list_backlog` return them in full, up to
-  5 KB each) if that payload gets heavy.
+- Trimming notes out of `list_backlog` (it returns them in full, up to 5 KB each; `list_tasks` has `compact`).
 - A `\"` escape in the bulk token.
 
 ## 6. Build record

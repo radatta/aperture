@@ -83,6 +83,28 @@ describe('createMcpClient', () => {
     });
   });
 
+  it('sends search_tasks with its args, and list_tasks with compact unless overridden', async () => {
+    const answer = { query: 'q', totalMatches: 0, more: false, tasks: [] };
+    const sent = async (call: (c: ReturnType<typeof client>) => Promise<unknown>, tool: string) => {
+      const fetch = server({ [tool]: json(tool === 'search_tasks' ? answer : []) });
+      await call(client(fetch));
+      return JSON.parse(fetch.mock.calls[0]![1].body as string).params;
+    };
+    expect(
+      await sent((c) => c.reads.searchTasks({ query: 'q', limit: 2 }), 'search_tasks'),
+    ).toEqual({
+      name: 'search_tasks',
+      arguments: { query: 'q', limit: 2 },
+    });
+    expect(await sent((c) => c.reads.listTasksCompact(), 'list_tasks')).toEqual({
+      name: 'list_tasks',
+      arguments: { compact: true },
+    });
+    expect(
+      await sent((c) => c.reads.listTasksCompact({ compact: 'yes', status: 'done' }), 'list_tasks'),
+    ).toEqual({ name: 'list_tasks', arguments: { compact: 'yes', status: 'done' } });
+  });
+
   it('exposes exactly the declared reads and writes', () => {
     const c = client(server({}));
     expect(Object.keys(c.reads).sort()).toEqual([
@@ -110,9 +132,11 @@ describe('createMcpClient', () => {
       'listSittings',
       'listStories',
       'listTasks',
+      'listTasksCompact',
       'liveSitting',
       'parseTask',
       'searchLog',
+      'searchTasks',
       'toolSchemas',
       'toolsList',
     ]);

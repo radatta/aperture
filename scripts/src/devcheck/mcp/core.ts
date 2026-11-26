@@ -164,6 +164,26 @@ export interface DevLiveSlot {
   rules: string;
 }
 
+// A compact task row (lambdas/src/mcp/searchTools.ts): the same keys on every row, null when unset.
+export interface DevCompactTask {
+  id: string;
+  title: string;
+  status: string;
+  dueDay: string | null;
+  dueTime: string | null;
+  estimateMin: number | null;
+  categoryId: string | null;
+  parentId: string | null;
+  parts?: { total: number; done: number; estimateMin: number };
+  notesSnippet?: string;
+}
+// What search_tasks answers.
+export interface DevTaskSearch {
+  query: string;
+  totalMatches: number;
+  more: boolean;
+  tasks: DevCompactTask[];
+}
 // What search_log / list_log answer (lambdas/src/mcp/logTools.ts) — the fields the scenario reads.
 export interface DevLogPage {
   entries: {

@@ -17,9 +17,11 @@ import { DevcheckError } from '../errors';
 import type { Reads } from '../mcp';
 import {
   type Core,
+  type DevCompactTask,
   type DevDayView,
   type DevLogPage,
   type DevPulseResult,
+  type DevTaskSearch,
   MCP_CREATE_VIA,
   McpRpcError,
   PARAM_ERROR,
@@ -33,6 +35,11 @@ export function tasksReads(c: Core) {
   const { data } = c;
   const reads = {
     listTasks: () => data<DevTask[]>('list_tasks'),
+    // Finding a task (lambdas/src/mcp/searchTools.ts): pure reads. Args go as given — the param-error rows
+    // send bad ones on purpose; listTasksCompact sends compact: true unless args override it.
+    listTasksCompact: (args: Record<string, unknown> = {}) =>
+      data<DevCompactTask[]>('list_tasks', { compact: true, ...args }),
+    searchTasks: (args: Record<string, unknown>) => data<DevTaskSearch>('search_tasks', args),
     listBacklog: () => data<DevTask[]>('list_backlog'),
     getCalibration: (range: { from: string; to: string }) =>
       data<
