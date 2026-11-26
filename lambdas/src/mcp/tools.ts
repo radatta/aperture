@@ -216,9 +216,9 @@ export const TOOLS: Tool[] = [
       additionalProperties: false,
     },
     async run(args, ctx) {
-      const tasks = (await ctx.dispatch('listTasks', [])) as Task[];
       const status = optEnum(args, 'status', TASK_STATUSES);
       const compact = present(args, 'compact') ? reqBool(args, 'compact') : false;
+      const tasks = (await ctx.dispatch('listTasks', [])) as Task[];
       // One read: a parent's progress comes from the same list (parts.ts).
       const shown = status ? tasks.filter((t) => t.status === status) : tasks;
       return compact ? compactRows(shown, tasks) : withParts(shown, tasks);

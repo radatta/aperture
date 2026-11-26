@@ -209,6 +209,8 @@ Effectively free at single-user scale: DynamoDB / Lambda / Cognito within always
 
 **Pulses** ([mcp/pulse](../areas/mcp/pulse.md)): one MCP invocation per claude.ai reply, about 6 read units and 3–10 write units for a steady-state one (the state and session rows each carry up to 20 notes), plus two reads that grow with history — the task list when a pulse opens a session, the sitting heads on a Roll rep — usage-priced — cents a month at one user's few thousand pulses (estimated, on-demand); no standing charge and no new resource.
 
+**Task search** ([mcp](../areas/mcp/index.md) → _Finding a task_): each `search_tasks` or compact `list_tasks` call is one read of the user's task partition, the same read `list_tasks` makes — usage-priced and growing with history (tombstones included); no standing charge and no new resource.
+
 ---
 
 ## Status

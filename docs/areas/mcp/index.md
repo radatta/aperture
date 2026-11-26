@@ -142,14 +142,14 @@ followUpEstimateMin?, followUpBufferMin?}`** ([tasks/split.md](../tasks/split.md
   a script. `search_tasks` splits `query` on whitespace and keeps a task when every word is a case-insensitive
   substring of its title or its notes; `status` (one or a list), `categoryId` and `dueFrom`/`dueTo` (stored
   `dueDay` strings, inclusive; an undated task never passes a due filter) narrow it. Answer:
-  `{ query, totalMatches, more, tasks }`, newest first, `limit` 1–50 (default 25, ~10k characters with
+  `{ query, totalMatches, more, tasks }`, newest first, `limit` 1–50 (default 25, typically ~10k characters with
   snippets); `more` says rows were cut — narrow rather than page (no cursor). A row is the compact row:
   `{ id, title, status, dueDay, dueTime, estimateMin, categoryId, parentId }`, null when unset, plus `parts` on a
   parent and, on a search row whose notes held a query word, `notesSnippet` (whitespace collapsed, ≤60
   characters either side of the earliest word). `list_tasks {compact: true}` returns the same rows (with
   `status`, if given); without it `list_tasks` is unchanged. Both read the one `listTasks` the list tools make
   (eventually consistent, as they are: a task made a second ago can be missing) and filter in memory — no index,
-  no extra cost. Unknown arguments are refused by name, every check before the read. Voice: "find my passport
+  one task-partition read per call, as `list_tasks` (usage-priced, grows with history; INFRA §11). `search_tasks` refuses an unknown argument by name and runs every check before the read. Its match is simpler than the app's task search (`app/src/modules/tasks/query.ts`): no accent folding, and a category's label never matches. Voice: "find my passport
   task" → `search_tasks {query: 'passport'}`.
 - **Reflection** ([tasks/reflection.md](../tasks/reflection.md)) — the user's look back at a finished task —
   rides on `complete_task` (saved in the same write as `actualMin`; on a parent, after its rollup; on an errand

@@ -1,6 +1,6 @@
 import { partsOf, partsSummary } from '@aperture/shared';
 import type { Task, TaskStatus } from '@aperture/shared';
-import { limitArg, optDay, queryArg } from './logTools';
+import { QUERY_MAX, limitArg, optDay, queryArg } from './logTools';
 import { RpcParamError } from './types';
 import type { Tool } from './types';
 
@@ -58,12 +58,13 @@ function statusArg(args: Record<string, unknown>): TaskStatus[] | undefined {
 function categoryArg(args: Record<string, unknown>): string | undefined {
   const v = args.categoryId;
   if (v === undefined || v === null) return undefined;
-  if (typeof v !== 'string') throw new RpcParamError('"categoryId" must be a string');
+  if (typeof v !== 'string' || !v)
+    throw new RpcParamError('"categoryId" must be an id from list_categories');
   return v;
 }
 
 // The notes around the earliest query word, whitespace collapsed, at most SNIPPET_SIDE characters either
-// side; a cut never splits a surrogate pair.
+// side; a cut never splits a surrogate pair (surrogate-safe, not grapheme-safe: a joined emoji can lose a part).
 export function notesSnippet(notes: string, words: string[]): string | undefined {
   const flat = notes.replace(/\s+/g, ' ').trim();
   const lower = flat.toLowerCase();
@@ -85,7 +86,7 @@ export const SEARCH_TOOLS: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '1–200 characters: the words to find' },
+        query: { type: 'string', description: `1–${QUERY_MAX} characters: the words to find` },
         status: {
           anyOf: [
             { type: 'string', enum: TASK_STATUSES },

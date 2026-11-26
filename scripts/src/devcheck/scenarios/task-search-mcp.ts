@@ -173,7 +173,7 @@ export const taskSearchMcp: Scenario = {
       offDev: {
         file: OFF_FILE,
         test: 'limit 50 returns 50 and says more matched',
-        why: 'seeding 51 tasks on dev’s capped table is waste; the limit row runs the same count-then-cut path on dev',
+        why: 'same path as limit (proven on dev): count, then cut, at another number; 51 seeded tasks would spend dev’s capped reads for nothing new',
       },
     },
     {
@@ -262,19 +262,20 @@ export const taskSearchMcp: Scenario = {
         ).id;
         await ctx.mcp.writes.updateTask(seeded.a, { status: 'in_progress' });
         // Reads are eventually consistent: wait until one search sees the whole seeded state.
+        const missing = (r: DevTaskSearch) => {
+          const row = (id: string) => r.tasks.find((t) => t.id === id);
+          return [
+            r.totalMatches !== 6 && `${r.totalMatches} of 6 rows`,
+            row(seeded.a)?.status !== 'in_progress' && 'A in_progress',
+            row(seeded.c)?.categoryId !== seeded.cat && 'C’s category',
+            row(seeded.parent)?.parts?.total !== 2 && 'the parent’s parts',
+          ].filter(Boolean);
+        };
         const settled = await until(
           () => search(ctx, { query: ctx.nonce }),
-          (r) => {
-            const row = (id: string) => r.tasks.find((t) => t.id === id);
-            return (
-              r.totalMatches === 6 &&
-              row(seeded.a)?.status === 'in_progress' &&
-              row(seeded.c)?.categoryId === seeded.cat &&
-              row(seeded.parent)?.parts?.total === 2
-            );
-          },
+          (r) => !missing(r).length,
         );
-        expect(settled.totalMatches === 6, 'the seeded tasks never all read back', ids(settled));
+        expect(!missing(settled).length, 'the seeded state never read back', missing(settled));
       },
     },
     {
@@ -367,8 +368,9 @@ export const taskSearchMcp: Scenario = {
         const list = await search(ctx, { query: q, status: ['done', 'in_progress'] });
         expect(same(ids(list), [seeded.a]), 'a status list', ids(list));
         const backlog = await search(ctx, { query: q, status: 'backlog' });
+        const backlogIds = [seeded.b, seeded.c, seeded.parent, seeded.part1, seeded.part2];
         expect(
-          !ids(backlog).includes(seeded.a) && backlog.tasks.every((t) => t.status === 'backlog'),
+          same(ids(backlog), backlogIds),
           'backlog',
           backlog.tasks.map((t) => t.status),
         );
@@ -421,7 +423,7 @@ export const taskSearchMcp: Scenario = {
           more: two.more,
         });
         expect(
-          ids(two).join() === ids(all).slice(0, 2).join(),
+          ids(two).join() === [seeded.part2, seeded.part1].join(),
           'limit 2 keeps the newest',
           ids(two),
         );
@@ -480,9 +482,15 @@ export const taskSearchMcp: Scenario = {
           ['compact false', () => ctx.mcp.reads.listTasksCompact({ compact: false })],
         ];
         for (const [what, read] of reads) {
-          const listed = (await read()).filter((t) => mine.has(t.id));
-          const off = listed.filter((t) => canon(t) !== stored.get(t.id)).map((t) => t.id);
-          expect(listed.length === 6 && !off.length, `list_tasks with ${what} differs`, off);
+          // Two eventually consistent reads: retry until they agree, then judge the last.
+          const offOf = (rows: { id: string }[]) => {
+            const listed = rows.filter((t) => mine.has(t.id));
+            return listed.length !== 6
+              ? [`${listed.length} of 6`]
+              : listed.filter((t) => canon(t) !== stored.get(t.id)).map((t) => t.id);
+          };
+          const off = offOf(await until(read, (rows) => !offOf(rows).length));
+          expect(!off.length, `list_tasks with ${what} differs`, off);
         }
         const parent = (await ctx.mcp.reads.listBacklog()).find((t) => t.id === seeded.parent) as
           { parts?: unknown } | undefined;
@@ -546,7 +554,10 @@ export const taskSearchMcp: Scenario = {
           (r) => r.totalMatches === 0,
         );
         expect(after.totalMatches === 0, 'the nonce after teardown', ids(after));
-        const cats = await ctx.api.reads.listCategories();
+        const cats = await until(
+          () => ctx.api.reads.listCategories(),
+          (list) => !list.some((c) => c.id === seeded.cat),
+        );
         expect(!cats.some((c) => c.id === seeded.cat), 'the category after teardown', seeded.cat);
       },
     },

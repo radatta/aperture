@@ -198,9 +198,16 @@ describe('search_tasks', () => {
       { query: 'a', dueFrom: '2026-13-01' },
       { query: 'a', dueFrom: '2026-12-02', dueTo: '2026-12-01' },
       { query: 'a', due: '2026-12-01' },
+      {},
+      { query: 5 },
+      { query: 'a', categoryId: '' },
+      { query: 'a', dueTo: 'x' },
+      { query: 'a', limit: '5' },
     ];
     for (const args of bad)
       await expect(search(args), JSON.stringify(args)).rejects.toThrow(RpcParamError);
+    await expect(run('list_tasks', { compact: 'yes' })).rejects.toThrow(RpcParamError);
+    await expect(run('list_tasks', { status: 'open' })).rejects.toThrow(RpcParamError);
     expect(dispatched).toEqual([]);
   });
 });
@@ -277,12 +284,9 @@ describe('notesSnippet', () => {
     expect(
       notesSnippet(`${'d'.repeat(80)} alpha ${'e'.repeat(80)} zephyr`, ['zephyr', 'alpha']),
     ).toContain('alpha');
-    // a cut never halves an emoji: no lone surrogate on either end
-    for (let pad = 55; pad < 66; pad++) {
-      const emojis = '😀'.repeat(40);
-      const out = notesSnippet(`${emojis.slice(0, pad * 2)}x zephyr x${emojis}`, ['zephyr'])!;
-      expect(out, String(pad)).not.toMatch(/^…?[\udc00-\udfff]|[\ud800-\udbff]…?$/);
-      expect(JSON.stringify(out)).not.toMatch(/\\ud[89ab]/);
-    }
+    // a cut that lands on the second half of an emoji moves past it, at either end
+    const e = '😀';
+    expect(notesSnippet(`a${e.repeat(40)} zephyr`, ['zephyr'])).toBe(`…${e.repeat(29)} zephyr`);
+    expect(notesSnippet(`zephyr ${e.repeat(40)}`, ['zephyr'])).toBe(`zephyr ${e.repeat(29)}…`);
   });
 });

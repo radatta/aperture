@@ -31,7 +31,7 @@ import type { Tool, ToolContext } from './types';
 // the Log page and "Today in review" in one call. Nothing here writes: get_day reads the stored day row
 // (peekDay), never getDay, whose read spawns recurrences and sweeps stale plans.
 
-const QUERY_MAX = 200;
+export const QUERY_MAX = 200;
 const SEARCH_LIMIT = { def: 50, max: 100 };
 const LIST_LIMIT = { def: 100, max: 200 };
 // A cursor is the SK without `log#`: "<day>#<ULID>". A ULID sorts by time within a day, so this orders entries.
