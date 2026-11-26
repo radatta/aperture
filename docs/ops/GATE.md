@@ -73,6 +73,36 @@ pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
 
 `--full` runs the whole suite, e.g. to reproduce a red Branch run. `--dry-run` prints the plan and runs nothing.
 
+## `--remote`: the tests' verdict from GitHub
+
+```
+pnpm gate:fast --remote [--dry-run] [--base <ref>] [--wait <sec>]
+```
+
+Typecheck and lint run in the container as always, in a narrow slot (`gate-narrow`); the tests don't. Their verdict is
+GitHub's run for `HEAD`, read the way `gate:ci` reads it (the PR run, else the Branch run), polled every 15 s
+(`ci-offload`, 2026-11). It exists because tests were about half the container's heavy core-hours, and a Branch run
+now finishes in ~2 min (_The full suite on GitHub_, below).
+
+- **Green** (exit 0): the run for exactly `HEAD` passed. It prints the run and the sha.
+- **Red** (exit 1): the run failed; it names the failed jobs. Run `pnpm gate:ci` for the miss check.
+- **A red typecheck or lint** fails at once; GitHub isn't asked.
+- **Anything else runs the local tests instead** — the plain `gate:fast` plan, with one line saying why, never a pass:
+  - a dirty tree (any `git status --porcelain` line, untracked included): the pushed commit isn't what's on disk;
+  - no run for the sha after `REMOTE_START_S` (90 s): not pushed;
+  - `gh` failing for 90 s straight, retried every 15 s (offline, unauthenticated);
+  - a `cancelled` run (a newer push superseded it);
+  - no verdict within `REMOTE_WAIT_S` (600 s).
+- A commit or edit while it waits (the slot, the steps, GitHub) falls back too: the verdict is for exactly the `HEAD`
+  and tree it started on.
+- A fallback re-enters the plain gate, so typecheck and lint run again there (warm, seconds).
+- A commit the bot can't push (one touching `.github/workflows/`: the user pushes it) has no run until the user
+  pushes, so `--remote` waits 90 s and falls back; use the plain gate on such a commit.
+- `--full` and `--remote` together is a bad argument (exit 2).
+
+So the order is commit, `pnpm bot push` (with its scan first: FEATURE-WORKFLOW.md → phase 5), then
+`pnpm gate:fast --remote`. `--remote` is opt-in, not the default yet.
+
 ## The rules
 
 `scripts/src/gate/rules.ts` is the one home. `rules.test.ts` pins it against the real tree.
@@ -185,6 +215,11 @@ stands.
 
 - Every push of a feature branch (the bot's `pnpm bot push`) starts the `Branch` workflow: the same `ci.yml` as the
   PR check, with the fixture suite always on.
+- `ci.yml` runs eight jobs at once with no `needs` (INFRA §9): `check` (scan, lint, typecheck, fixture slice 1),
+  `test-app-1`/`-2`, `test-scripts-1`/`-2` (vitest `--shard`), `test-packages` (shared, cdk, lambdas, extension) and
+  `fixtures-2`/`-3`. A run takes as long as its slowest job.
+  - A failing test's package comes from the job name in a single-package job (no pnpm prefix): `miss.ts` maps
+    `test-app` to app and `test-scripts`/`fixtures-` to scripts.
 - `pnpm gate:ci [--wait]` gives the verdict for `HEAD`: the PR run when a PR exists, which tests the merge with main,
   else the Branch run.
   - Exit 0: green.

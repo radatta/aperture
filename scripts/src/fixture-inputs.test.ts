@@ -77,20 +77,81 @@ describe('ci.yml wiring', () => {
   const ci = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
   const suite = FIXTURE_SUITE.replace('scripts/', '');
 
-  it('the non-app step excludes the suite, once', () => {
-    expect(ci.split('\n').filter((l) => l.endsWith(`test --exclude ${suite}`))).toHaveLength(1);
-    expect(ci).toMatch(/^ {6}- run: pnpm -r --filter '!@aperture\/app' test --exclude /m);
+  // Every package's tests run in exactly one job: app in test-app, scripts (the suite aside) in test-scripts, the
+  // rest in test-packages, the suite in its three slices.
+  it('the package test commands cover every package once, the suite left out of scripts', () => {
+    expect(ci.split('\n').filter((l) => l.includes('test --exclude'))).toEqual([
+      `        run: pnpm --filter @aperture/scripts test --exclude ${suite} --shard="$SHARD/2"`,
+    ]);
+    expect(
+      ci.split('\n').filter((l) => /^ {6,8}(- )?run: pnpm (-r )?--filter .*test\b/.test(l)),
+    ).toEqual([
+      `        run: pnpm --filter @aperture/scripts test ${suite}`,
+      '        run: pnpm --filter @aperture/app test --shard="$SHARD/2"',
+      `        run: pnpm --filter @aperture/scripts test --exclude ${suite} --shard="$SHARD/2"`,
+      "      - run: pnpm -r --filter '!@aperture/app' --filter '!@aperture/scripts' test",
+      `        run: pnpm --filter @aperture/scripts test ${suite}`,
+    ]);
+    expect(ci.match(/^ {8}shard: \[1, 2\]$/gm)).toHaveLength(2);
   });
 
-  it('the suite step runs it on a main push and unless the rule says no — one step, never allowed to fail', () => {
-    expect(ci).toContain(
-      [
-        '      - name: Mailroom fixture suite',
-        "        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run != 'false') }}",
-        `        run: pnpm --filter @aperture/scripts test ${suite}\n`,
-      ].join('\n'),
+  // The suite runs as 3 slices: 1 in `check` (checked-tree.ts reads its step there), 2 and 3 in `fixtures`. Each
+  // slice's step is the same text, gated the same, so no slice skips while another runs.
+  const suiteStep = (slice: string) =>
+    [
+      '      - name: Mailroom fixture suite',
+      "        if: ${{ !cancelled() && (github.event_name != 'pull_request' || steps.fixtures.outputs.run != 'false') }}",
+      `        run: pnpm --filter @aperture/scripts test ${suite}`,
+      '        env:',
+      `          MAILROOM_FIXTURE_SLICE: ${slice}\n`,
+    ].join('\n');
+  // One job's text, from its id line to the next job's (the id line may carry a comment).
+  const job = (id: string) => {
+    const start = ci.search(new RegExp(`\\n {2}${id}:( #[^\\n]*)?\\n`));
+    if (start < 0) return '';
+    const next = ci.slice(start + 1).search(/\n {2}[a-z-]+:( #[^\n]*)?\n/);
+    return next < 0 ? ci.slice(start) : ci.slice(start, start + 1 + next);
+  };
+
+  it('the suite steps run it on a main push and unless the rule says no — 3 slices, never allowed to fail', () => {
+    expect(job('check')).toContain(suiteStep('1/3'));
+    expect(job('fixtures')).toContain(suiteStep('${{ matrix.slice }}/3'));
+    expect(job('fixtures')).toMatch(/^ {8}slice: \[2, 3\]$/m);
+    // The rule step needs HEAD^1 (full history), and the suite needs the toolchain, in the fixtures job too.
+    expect(job('fixtures')).toMatch(
+      /- uses: actions\/checkout@v7\n {8}with:\n {10}fetch-depth: 0\n/,
     );
+    const f = job('fixtures');
+    expect(f.indexOf('- uses: ./.github/actions/setup')).toBeGreaterThan(
+      f.indexOf('name: Mailroom fixture inputs'),
+    );
+    expect(f.indexOf('- uses: ./.github/actions/setup')).toBeLessThan(
+      f.indexOf('name: Mailroom fixture suite'),
+    );
+    expect(ci.split('- name: Mailroom fixture suite')).toHaveLength(3);
     expect(ci).not.toContain('continue-on-error');
+  });
+
+  it('both rule steps are the same text', () => {
+    const rule = (text: string) =>
+      text.slice(
+        text.indexOf('      - name: Mailroom fixture inputs'),
+        text.indexOf('echo "run=$run"'),
+      );
+    expect(rule(job('check')).length).toBeGreaterThan(100);
+    expect(rule(job('fixtures'))).toBe(rule(job('check')));
+  });
+
+  it('fixtures_only skips every test job but the suite slices', () => {
+    for (const id of ['test-app', 'test-scripts', 'test-packages'])
+      expect(job(id)).toMatch(/^ {4}if: \$\{\{ !inputs\.fixtures_only \}\}$/m);
+    expect(job('fixtures')).not.toMatch(/^ {4}if:/m);
+  });
+
+  // One saver of the per-commit key (the comment on `check`'s cache step).
+  it('only check restores and saves the incremental cache', () => {
+    expect(ci.split('uses: actions/cache@')).toHaveLength(2);
+    expect(job('check')).toContain('uses: actions/cache@');
   });
 
   it('the rule runs on PRs only, against the merge commit’s first parent', () => {

@@ -1058,3 +1058,205 @@ describe('main: the registry check, first', () => {
     expect(calls.some((c) => c.args.includes('--cached'))).toBe(false);
   });
 });
+
+// --remote: typecheck + lint in the container, the tests' verdict from GitHub's run for HEAD; anything that isn't a
+// real verdict runs the local tests instead, saying why, never a pass by default.
+describe('main --remote', () => {
+  const SHA = 'a'.repeat(40);
+  const ghRun = (status: string, conclusion: string) =>
+    JSON.stringify([
+      {
+        databaseId: 7,
+        workflowName: 'Branch',
+        event: 'push',
+        status,
+        conclusion,
+        createdAt: '2026-11-25T00:00:00Z',
+        url: 'https://example.test/run/7',
+      },
+    ]);
+  const world = (opts: {
+    status?: string | (() => string);
+    head?: () => string;
+    runs?: () => string;
+    jobs?: string;
+  }) => {
+    // A diff that reaches app's tests, so a fallback's local plan is visibly not empty.
+    const base = git(z('M', 'app/src/lib/x.ts'));
+    const f = fakeRun([
+      ['git status --porcelain -z -uall', opts.status ?? ''],
+      ['git rev-parse --verify HEAD^{commit}', opts.head ?? SHA],
+      ['gh run list --commit', opts.runs ?? (() => '[]')],
+      ['gh run view 7 --json jobs', opts.jobs ?? '{"jobs":[]}'],
+    ]);
+    const run = ((cmd: string, args: string[], o?: object) => {
+      const line = [cmd, ...args].join(' ');
+      return /^(git status|git rev-parse --verify|gh )/.test(line)
+        ? f.run(cmd, args, o)
+        : base.run(cmd, args, o);
+    }) as typeof base.run;
+    return { run, calls: f.calls };
+  };
+  const go = async (w: ReturnType<typeof world>, report = '0', heavy = 0) => {
+    const outers: string[][] = [];
+    const out: string[] = [];
+    const clock = { t: 0 };
+    const code = await main(['--remote'], {
+      run: w.run,
+      outer: async (_h, _r, args, e) => {
+        outers.push(args.slice(args.indexOf('--') + 3));
+        writeFileSync(e.GATE_RESULT!, report);
+        return heavy;
+      },
+      log: (l) => out.push(l),
+      env: {},
+      sleep: async (ms) => void (clock.t += ms),
+      now: () => clock.t,
+    });
+    return { code, outers, out: out.join('\n'), clock };
+  };
+
+  it('parses, and refuses --full beside it; its steps are typecheck and lint alone', () => {
+    expect(parseArgs(['--remote'])).toMatchObject({ remote: true, full: false });
+    expect(parseArgs(['--remote', '--full'])).toBe('--full and --remote: pick one');
+    const p = plan([{ path: 'packages/shared/src/x.ts', deleted: false }], ALWAYS_RUN);
+    expect(steps(p, ROOT, { full: false, remote: true }).map((s) => s.label)).toEqual([
+      'typecheck',
+      'lint',
+    ]);
+  });
+
+  let last: ReturnType<typeof world>;
+  it('green: typecheck + lint here (a narrow slot), the run’s green for HEAD, no local tests', async () => {
+    last = world({ runs: () => ghRun('completed', 'success') });
+    const r = await go(last);
+    expect(r.code).toBe(0);
+    expect(r.outers).toEqual([['--remote']]);
+    expect(r.out).toMatch(/--remote — tests: Branch run 7 on aaaaaaaa: green/);
+    expect(r.out).not.toMatch(/running the local tests/);
+    // the run asked for is HEAD's, by its full sha
+    const list = last.calls.filter((c) => c.cmd === 'gh' && c.args[1] === 'list');
+    expect(list.map((c) => c.args.slice(0, 4))).toEqual([['run', 'list', '--commit', SHA]]);
+  });
+
+  it('red: exit 1 with the failed jobs named, no fallback', async () => {
+    const jobs = JSON.stringify({
+      jobs: [
+        { name: 'ci / test-scripts-2', conclusion: 'failure' },
+        { name: 'ci / check', conclusion: 'success' },
+      ],
+    });
+    const r = await go(world({ runs: () => ghRun('completed', 'failure'), jobs }));
+    expect(r.code).toBe(1);
+    expect(r.outers).toHaveLength(1);
+    expect(r.out).toMatch(/tests: Branch run 7 on aaaaaaaa: failure \(ci \/ test-scripts-2\)/);
+  });
+
+  it.each([
+    ['a red typecheck or lint', '1', 0, 1],
+    ['heavy.sh’s cap giving up', '0', 75, 75],
+  ])('%s fails at once: GitHub is never asked', async (_, report, heavy, want) => {
+    const w = world({ runs: () => ghRun('completed', 'success') });
+    const r = await go(w, report, heavy);
+    expect(r.code).toBe(want);
+    expect(w.calls.some((c) => c.cmd === 'gh')).toBe(false);
+    expect(r.outers).toHaveLength(1);
+  });
+
+  it('retries a gh blip late in the wait, and gives up on gh failing 90 s straight', async () => {
+    let n = 0;
+    const blip = await go(
+      world({
+        runs: () => {
+          n++;
+          if (n === 10) throw new Error('gh: blip'); // 135 s in, past REMOTE_START_S
+          return n < 12 ? ghRun('in_progress', '') : ghRun('completed', 'success');
+        },
+      }),
+    );
+    expect(blip.code).toBe(0);
+    expect(blip.out).toMatch(/gh failed \(gh: blip\): retrying/);
+    expect(blip.out).not.toMatch(/running the local tests/);
+    let m = 0;
+    const down = await go(
+      world({
+        runs: () => {
+          if (++m < 5) return ghRun('in_progress', '');
+          throw new Error('gh: offline'); // from 60 s in, for good
+        },
+      }),
+    );
+    expect(down.out).toMatch(/gh failed \(gh: offline\)/);
+    expect(down.out).toMatch(/running the local tests instead/);
+    expect(down.clock.t).toBe(60_000 + 90_000);
+  });
+
+  it('waits for a run in progress, polling', async () => {
+    let n = 0;
+    const r = await go(
+      world({ runs: () => (++n < 4 ? ghRun('in_progress', '') : ghRun('completed', 'success')) }),
+    );
+    expect(r.code).toBe(0);
+    expect(n).toBe(4);
+    expect(r.out.match(/waiting for GitHub/g)).toHaveLength(1);
+  });
+
+  const dirtyLater = () => {
+    let n = 0;
+    return () => (++n === 1 ? '' : ' M app/src/lib/x.ts\0');
+  };
+  const moved = () => {
+    let n = 0;
+    return () => (++n === 1 ? SHA : 'b'.repeat(40));
+  };
+  it.each([
+    ['a dirty tree', { status: ' M docs/a.md\0' }, /uncommitted or untracked changes/, 0],
+    ['an untracked file', { status: '?? app/src/new.test.ts\0' }, /uncommitted or untracked/, 0],
+    [
+      'the tree going dirty during the wait',
+      { status: dirtyLater(), runs: () => ghRun('completed', 'success') },
+      /HEAD or the tree changed since aaaaaaaa/,
+      0,
+    ],
+    [
+      'HEAD moving during the steps',
+      { head: moved(), runs: () => ghRun('completed', 'success') },
+      /HEAD or the tree changed since aaaaaaaa/,
+      0,
+    ],
+    ['no run (not pushed)', {}, /no GitHub run for aaaaaaaa after 90 s \(not pushed\?\)/, 90_000],
+    [
+      'a cancelled run',
+      { runs: () => ghRun('completed', 'cancelled') },
+      /cancelled.*superseded/,
+      0,
+    ],
+    [
+      'a run not done in time',
+      { runs: () => ghRun('in_progress', '') },
+      /not done in 600 s/,
+      600_000,
+    ],
+    [
+      'gh failing',
+      {
+        runs: () => {
+          throw new Error('gh: offline');
+        },
+      },
+      /gh failed \(gh: offline\)/,
+      90_000,
+    ],
+  ] as const)('%s: the local tests run instead, saying why', async (_, w, why, waited) => {
+    const r = await go(world(w));
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(why);
+    expect(r.out).toMatch(/running the local tests instead/);
+    expect(r.outers.at(-1)).toEqual([]); // the plain gate, without --remote
+    expect(r.outers).toHaveLength('status' in w && typeof w.status === 'string' ? 1 : 2);
+    expect(r.clock.t).toBe(waited);
+    // the fallback's own plan, printed after the reason: app's related tests, not an empty run
+    const after = r.out.slice(r.out.indexOf('running the local tests instead'));
+    expect(after).toMatch(/app: tests related to 1 changed module/);
+  });
+});

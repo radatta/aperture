@@ -14,21 +14,33 @@ import { planWithBase, RULES_PATH } from './base.ts';
 import { modeOf, isTest, type Change, type Plan } from './plan.ts';
 import { checkRegistry, formatProblems } from './registry.ts';
 import { PACKAGES } from './rules.ts';
+import { check as ciCheck } from './ci.ts';
 import { run as execRun, type Run } from '../bot/sh.ts';
 
-export const USAGE = `pnpm gate:fast [--full] [--dry-run] [--base <ref>] [--wait <sec>]
+// --remote: how long to wait for GitHub's run to finish, and for one to show up at all (a push takes ~10 s to start a
+// run), before falling back to the local tests. A Branch run takes ~2 min (ci.yml's parallel jobs).
+export const REMOTE_WAIT_S = 600;
+export const REMOTE_START_S = 90;
+const REMOTE_POLL_MS = 15_000;
+
+export const USAGE = `pnpm gate:fast [--full | --remote] [--dry-run] [--base <ref>] [--wait <sec>]
   typecheck + lint in full and the tests the branch's diff can reach (vs the merge-base with <ref>, default
   origin/main: committed, staged, unstaged and untracked), all at once under one scripts/board/heavy.sh slot —
   a full-suite (\`test\`) slot when 3+ packages' tests or a whole suite run.
   --full     every package's whole suite (what CI runs), e.g. to reproduce a red Branch run
+  --remote   typecheck + lint here, the tests' verdict from GitHub's run for HEAD (pushed, clean tree); else, or
+             when gh keeps failing for ${REMOTE_START_S} s, the run is cancelled or not done in ${REMOTE_WAIT_S} s, the
+             local tests, saying why
   --dry-run  print the plan; run nothing
   --wait     how long heavy.sh waits for a slot before giving up with 75 (default 90 s)
   Exit: 1 before any step when the registry check finds a test file the gate can't pick up (every mode, --dry-run
   too); 2 for a bad argument, the inner pass outside heavy.sh, or a diff that widened past its slot; else the first failing step's code in the order
-  printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted.`;
+  printed (75 = heavy.sh's cap gave up); every step still runs; 128+n when interrupted. --remote: 1 also for a red
+  GitHub run; a fallback exits with the local gate's code (typecheck and lint run again in it).`;
 
 export interface Opts {
   full: boolean;
+  remote?: boolean;
   dryRun: boolean;
   base: string;
   wait?: string;
@@ -39,11 +51,13 @@ export function parseArgs(argv: string[]): Opts | string {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === '--full') o.full = true;
+    else if (a === '--remote') o.remote = true;
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--base' && argv[i + 1] && !argv[i + 1]!.startsWith('-')) o.base = argv[++i]!;
     else if (a === '--wait' && /^\d+$/.test(argv[i + 1] ?? '')) o.wait = argv[++i]!;
     else return `unknown argument ${JSON.stringify(a)}`;
   }
+  if (o.full && o.remote) return '--full and --remote: pick one';
   return o;
 }
 
@@ -179,7 +193,7 @@ export const isWide = (todo: Step[]) =>
   todo.filter(isTestStep).length >= 3 ||
   todo.some((s) => s.label === 'test' || s.label.startsWith('test:'));
 
-export function steps(p: Plan, root: string, opts: Pick<Opts, 'full'>): Step[] {
+export function steps(p: Plan, root: string, opts: Pick<Opts, 'full' | 'remote'>): Step[] {
   const step = (label: string, argv: string[], cls: string, cost: number): Step => ({
     label,
     argv,
@@ -192,6 +206,7 @@ export function steps(p: Plan, root: string, opts: Pick<Opts, 'full'>): Step[] {
     step('typecheck', ['pnpm', 'typecheck'], 'gate-typecheck', 1),
     step('lint', ['pnpm', 'lint'], 'gate-lint', 1),
   ];
+  if (opts.remote) return out; // the tests' verdict comes from GitHub (remoteVerdict)
   // The whole suite costs the whole budget: it starts once tsc and eslint are done, and runs alone.
   if (opts.full || p.full.length) {
     const all = step('test', ['pnpm', 'test'], 'gate-test', BUDGET);
@@ -469,6 +484,55 @@ const onProcessSignal: OnSignal = (fn) => {
   };
 };
 
+// --remote's test verdict: GitHub's run for `sha` (gate:ci's pick: the PR run, else the Branch run). `ok` is a real
+// verdict (0 green, 1 red); anything that isn't one (gh failing, no run, a cancelled run, a timeout) is `fallback`
+// with why, and the caller runs the local tests instead: never a pass by default.
+export type Remote = { ok: 0 | 1; line: string } | { fallback: string };
+export async function remoteVerdict(
+  run: Run,
+  sha: string,
+  sleep: (ms: number) => Promise<void>,
+  now: () => number,
+  log: (l: string) => void,
+): Promise<Remote> {
+  const start = now();
+  let said = false;
+  let failingSince: number | undefined; // the current run of gh failures, reset by any good read
+  for (;;) {
+    let v: ReturnType<typeof ciCheck>;
+    try {
+      v = ciCheck(run, sha);
+      failingSince = undefined;
+    } catch (err) {
+      // A blip is retried; gh failing for REMOTE_START_S straight, or past REMOTE_WAIT_S, is offline or unauthenticated.
+      const why = `gh failed (${(err as Error).message.split('\n')[0]})`;
+      failingSince ??= now();
+      if (
+        (now() - failingSince) / 1000 >= REMOTE_START_S ||
+        (now() - start) / 1000 >= REMOTE_WAIT_S
+      )
+        return { fallback: why };
+      log(`gate:fast --remote — ${why}: retrying`);
+      await sleep(REMOTE_POLL_MS);
+      continue;
+    }
+    const waited = (now() - start) / 1000;
+    if (v.code === 0) return { ok: 0, line: v.line };
+    if (v.code === 1)
+      return v.run?.conclusion === 'cancelled'
+        ? { fallback: `${v.line} (superseded by a newer push?)` }
+        : { ok: 1, line: v.line };
+    if (!v.run && waited >= REMOTE_START_S)
+      return {
+        fallback: `no GitHub run for ${sha.slice(0, 8)} after ${REMOTE_START_S} s (not pushed?)`,
+      };
+    if (waited >= REMOTE_WAIT_S) return { fallback: `${v.line}: not done in ${REMOTE_WAIT_S} s` };
+    if (!said) log(`gate:fast --remote — waiting for GitHub: ${v.line}`);
+    said = true;
+    await sleep(REMOTE_POLL_MS);
+  }
+}
+
 export interface Deps {
   run: Run;
   exec: Exec;
@@ -477,6 +541,8 @@ export interface Deps {
   log: (l: string) => void;
   env: NodeJS.ProcessEnv;
   read: (abs: string) => string;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
 }
 const DEFAULTS: Deps = {
   run: execRun,
@@ -486,12 +552,14 @@ const DEFAULTS: Deps = {
   log: console.log,
   env: process.env,
   read: (abs) => readFileSync(abs, 'utf8'),
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  now: Date.now,
 };
 
 // Two passes: the caller plans, prints and re-runs this CLI under one heavy.sh slot (GATE_INNER=1, env, never
 // argv); that inner pass re-plans quietly and runs the steps at once.
 export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<number> {
-  const { run, exec, outer, onSignal, env, read } = { ...DEFAULTS, ...deps };
+  const { run, exec, outer, onSignal, env, read, sleep, now } = { ...DEFAULTS, ...deps };
   const out = deps.log ?? DEFAULTS.log;
   const inner = env.GATE_INNER === '1';
   const log = inner ? () => {} : out;
@@ -501,6 +569,24 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
   if (inner && !env.HEAVY_WRAPPER)
     return (out('gate:fast — the inner pass runs only under heavy.sh: run `pnpm gate:fast`'), 2);
   const root = run('git', ['rev-parse', '--show-toplevel']);
+  // --remote stands for HEAD's run only when HEAD is the whole tree: an edit, staged or not, or an untracked file
+  // isn't in any pushed commit, so the local tests run instead (the caller pass decides; the inner one follows argv).
+  const local = (why: string) => {
+    out(`gate:fast --remote — ${why}: running the local tests instead`);
+    return main(
+      argv.filter((a) => a !== '--remote'),
+      deps,
+    );
+  };
+  // -uall: a config hiding untracked files must not read a new test file as a clean tree.
+  const dirty = () =>
+    run('git', ['status', '--porcelain', '-z', '-uall'], { cwd: root }).length > 0;
+  const head = () => run('git', ['rev-parse', '--verify', 'HEAD^{commit}'], { cwd: root });
+  let sha = '';
+  if (opts.remote && !inner) {
+    if (dirty()) return local('uncommitted or untracked changes');
+    sha = head();
+  }
   // The caller pass only: the inner one runs after the slot wait, and rules.test.ts catches a file added meanwhile.
   const reg = inner ? undefined : registryCheck(run, root, read);
   if (reg?.fail) return (out(reg.fail), 1);
@@ -519,6 +605,10 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
   );
   log(describePlan(p, diff.changes, opts.base, opts));
   if (reg) log(reg.note);
+  if (opts.remote)
+    log(
+      `  --remote: typecheck + lint here; the tests' verdict from GitHub's run for ${sha.slice(0, 8) || 'HEAD'} (the local plan above runs only if that falls back)`,
+    );
   const todo = steps(p, root, opts);
   const wide = isWide(todo);
   const whole = todo.some((s) => s.label === 'test');
@@ -574,7 +664,19 @@ export async function main(argv: string[], deps: Partial<Deps> = {}): Promise<nu
       out(
         'gate:fast — no slot in time: run `pnpm gate:fast --wait 600` in the background (board.sh status shows who holds them)',
       );
-    return code;
+    if (code !== 0 || !opts.remote) return code;
+    // A commit or edit during the slot wait, the steps or the GitHub wait: typecheck and lint, or the run, saw
+    // another tree than the one on disk now. Checked before the wait too, so a moved HEAD doesn't wait for nothing.
+    const moved = () => head() !== sha || dirty();
+    const changed = () => local(`HEAD or the tree changed since ${sha.slice(0, 8)}`);
+    if (moved()) return changed();
+    const r = await remoteVerdict(run, sha, sleep, now, out);
+    if ('fallback' in r) return local(r.fallback);
+    if (moved()) return changed();
+    out(`gate:fast --remote — tests: ${r.line}`);
+    if (r.ok)
+      out('gate:fast --remote — `pnpm gate:ci` checks the failing files against the plan (a miss)');
+    return r.ok;
   }
   // The diff can widen during the slot wait (a background gate, files still being written): never run a wide plan
   // inside a narrow slot.

@@ -118,6 +118,10 @@ hub message (the checkpoints stay).
 5. **Gate** — `pnpm gate:fast` (`docs/ops/GATE.md`): full typecheck and lint, then the tests the branch's diff can
    reach, each step under `heavy.sh` by itself; it runs a package's whole suite, or all of them, when its rules say so,
    and prints why. Its exit code is real (`pipefail` if piped). The full suite runs on GitHub on every push (phase 8);
+   `pnpm gate:fast --remote` (GATE.md → _`--remote`_) keeps the tests off the container: typecheck and lint here,
+   the tests' verdict from GitHub's run for the pushed, clean `HEAD`, the local tests when there's no such verdict.
+   It pushes from phase 5 on, so **every `pnpm bot push` gets the public-content scan first**
+   (`docs/ops/PUBLIC-CONTENT.md` → _What enforces it_).
    `pnpm gate:fast --full` locally only to reproduce a red Branch run a single file can't, or when GitHub is
    unreachable. Nothing goes to a subagent on a red gate.
 6. **Review** — read `docs/ops/REVIEW.md` first: the lens map, the merge, the finding shape and the escalation
@@ -148,7 +152,7 @@ hub message (the checkpoints stay).
    the lane holds a dev lock, after the dev run ends (same section). Then a green
    `pnpm devcheck:local --tier full --feature <its scenario>` (`docs/ops/LOCAL-CHECK.md`) — a red one is fixed before
    the lock, a green one proves nothing about dev.
-   - **Before the first `pnpm bot push`, scan for publication.** The repo is public, so a push publishes; an amend
+   - **Before the first `pnpm bot push` (with `--remote`, before every one since phase 5), scan for publication.** The repo is public, so a push publishes; an amend
      or a later force-push doesn't recall it. Check the branch name, every commit message and the diff against
      `origin/main` against `docs/ops/PUBLIC-CONTENT.md` — the judgment half; the identifier and identity checks are
      `pnpm bot push`'s own. Phase 10 scans the PR text again.
@@ -172,7 +176,10 @@ hub message (the checkpoints stay).
      command `&&`-chained after it the first time (after a rebase, `git push --force-with-lease -u origin <branch>`),
      again after every fix commit, since the branch head must be the dispatched commit. **A `.github/workflows/`
      branch never skips this phase:** PR checks never run the deploy workflows, so a green `dev` deploy run is the
-     only proof they even start. For a changed reusable workflow, check who else calls it
+     only proof they even start. The one exception is a branch whose only workflow change is `ci.yml`. Its own Branch
+     and PR runs start that file, and `deploy-dev.yml` never calls it, so a dev deploy proves nothing more. The
+     first main run's `check` (`deploy.yml`, `fixtures_only` among its inputs) is watched to green after the merge
+     instead (`ci-offload`, 2026-11). For a changed reusable workflow, check who else calls it
      (`scripts/src/workflow-permissions.test.ts` checks caller permissions).
    - **A dispatch that fails in `Deploy stacks` with `explicit deny in a service control policy`** means the branch
      changes a shape dev's freeze holds still: the user opens the freeze for it (`docs/ops/CI-BOT.md` → _Kill

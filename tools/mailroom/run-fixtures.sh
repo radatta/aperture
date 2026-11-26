@@ -176,11 +176,13 @@ fxbase="$(head -1 "$CASES" | jq -c .fixturesBase)"
 defapi="$(sed -n 2p "$CASES" | jq -c .defaultApi)"
 deftape="$(sed -n 2p "$CASES" | jq -c .defaultTape)"
 
-run_shard() { # $1: this shard's index; a case runs here when its index mod MAILROOM_FIXTURE_JOBS is $1
+in_slice() { [ $(($1 % SLICE_N)) = $((SLICE_K % SLICE_N)) ]; } # $1: a case's index (from 1)
+run_shard() { # $1: this shard's index; a slice's case runs here when (index / slices) mod MAILROOM_FIXTURE_JOBS is $1
   local ci=0
   while IFS= read -r c; do
   ci=$((ci + 1))
-  [ $((ci % MAILROOM_FIXTURE_JOBS)) = "$1" ] || continue
+  in_slice "$ci" || continue
+  [ $((ci / SLICE_N % MAILROOM_FIXTURE_JOBS)) = "$1" ] || continue
   # Every scalar the harness reads from the case, in one jq: one value per line (the JSON ones are compact, so
   # single-line), read back in order.
   {
@@ -432,11 +434,40 @@ run_shard() { # $1: this shard's index; a case runs here when its index mod MAIL
   rm -r -f -- "$T"
   done < <(tail -n +3 "$CASES")
 }
-# Up to 4 shards, never more than the machine has cores: no gain past that, and CI's other tests share its two.
+# Up to 4 shards, never more than the machine has cores: no gain past that.
 if [ -z "${MAILROOM_FIXTURE_JOBS:-}" ]; then
   MAILROOM_FIXTURE_JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
   [ "$MAILROOM_FIXTURE_JOBS" -le 4 ] 2>/dev/null || MAILROOM_FIXTURE_JOBS=4
 fi
+# MAILROOM_FIXTURE_SLICE=k/n runs slice k of n, so CI can split the suite across jobs (ci.yml): the cases whose index
+# mod n is k mod n, and the tail checks below only in slice n. Unset is 1/1, the whole suite. MAILROOM_FIXTURE_LIST=1
+# prints the slice's case indices (and `tail` when it runs the tail) and runs nothing: runner-fixtures.test.ts checks
+# the slices partition the suite.
+SLICE="${MAILROOM_FIXTURE_SLICE-1/1}" # set but empty is malformed, not unset
+SLICE_K="${SLICE%%/*}"
+SLICE_N="${SLICE#*/}"
+case "$SLICE" in
+  */*/* | /* | */ | *[!0-9/]* | 0*) bail "MAILROOM_FIXTURE_SLICE must be k/n with 1 <= k <= n, got '$SLICE'" ;;
+esac
+case "$SLICE_N" in "$SLICE" | 0*) bail "MAILROOM_FIXTURE_SLICE must be k/n with 1 <= k <= n, got '$SLICE'" ;; esac
+[ "$SLICE_K" -le "$SLICE_N" ] || bail "MAILROOM_FIXTURE_SLICE must be k/n with 1 <= k <= n, got '$SLICE'"
+TAIL=0
+[ "$SLICE_K" != "$SLICE_N" ] || TAIL=1
+TOTAL="$(($(wc -l <"$CASES" | tr -d ' ') - 2))"
+in_cases=0
+ci=1
+while [ "$ci" -le "$TOTAL" ]; do
+  if in_slice "$ci"; then
+    in_cases=$((in_cases + 1))
+    [ -z "${MAILROOM_FIXTURE_LIST:-}" ] || echo "$ci"
+  fi
+  ci=$((ci + 1))
+done
+if [ -n "${MAILROOM_FIXTURE_LIST:-}" ]; then
+  [ "$TAIL" = 0 ] || echo tail
+  exit 0
+fi
+[ "$in_cases" -gt 0 ] || bail "slice $SLICE has no cases (of $TOTAL)"
 OUTD="$(tmpdir_real)" || bail "no temp dir for the shards"
 trap 'rm -r -f -- "$OUTD" "$CASES"' EXIT
 s=0
@@ -450,6 +481,8 @@ while [ "$s" -lt "$MAILROOM_FIXTURE_JOBS" ]; do emit <"$OUTD/$s"; s=$((s + 1)); 
 pass="$(cat "$OUTD"/* | grep -c '^ok - ' || true)"
 failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
 
+# The tail checks run once, in the last slice (MAILROOM_FIXTURE_SLICE above).
+if [ "$TAIL" = 1 ]; then
 # sim_cap kills a command that outlives its cap (the sim job's only guard against a hung axe/simctl/security).
 (
   . "$HERE/jobs/sim.sh"
@@ -484,6 +517,7 @@ failed="$(cat "$OUTD"/* | grep -c '^not ok - ' || true)"
   command sleep 0.2
   [ "$out" = 124 ] && ! kill -0 "$(cat "$f")" 2>/dev/null
 ) && ok "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" || bad "fx_cap kills a command's whole tree at its cap, and its leftovers after a normal exit" "a wrong code, a slow return, or a child survived"
+fi
 
 # Lanes, for real: a slow drain inside a 20 s sim op, a second slow drain, and a fast drain beside it — as launchd's
 # two agents would run them.
@@ -562,9 +596,9 @@ lanes_check() {
   if [ -z "$fails" ]; then ok "lanes: slow and fast drains started together on one sim: only the slow takes it (10 runs)"
   else bad "lanes: slow and fast drains started together on one sim: only the slow takes it (10 runs)" "failed runs:$fails"; fi
 }
-lanes_check
+[ "$TAIL" = 0 ] || lanes_check
 LANES_CHECKS=6 # five lanes checks, plus fx_cap
 
-cases="$(($(wc -l <"$CASES" | tr -d ' ') - 2 + 1 + LANES_CHECKS))"
+cases="$((in_cases + TAIL * (1 + LANES_CHECKS)))" # the tail adds sim_cap and the lanes checks
 echo "# $pass passed, $failed failed, of $cases cases"
 [ "$failed" = 0 ] && [ "$pass" = "$cases" ] # a harness that ran nothing must not pass

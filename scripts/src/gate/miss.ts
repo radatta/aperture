@@ -43,7 +43,7 @@ const pathIn = (rest: string) => {
 };
 
 // The failed logs → the failing test files, as repo paths. A line's package comes from pnpm's `<dir> test:` prefix,
-// an app shard's job name, or a unique match among the sha's test files.
+// an app or scripts job's name, or a unique match among the sha's test files.
 export function failingFiles(log: string, testFiles: string[]): string[] {
   const out = new Set<string>();
   for (const raw of log.split('\n')) {
@@ -51,7 +51,10 @@ export function failingFiles(log: string, testFiles: string[]): string[] {
     const path = m && pathIn(m[3]!);
     if (!path) continue;
     const [, job, dir] = m as unknown as [string, string, string | undefined];
-    const pkg = dir ?? (/test-app/.test(job) ? 'app' : undefined);
+    // A single-package job prints no pnpm prefix: its name says the package.
+    const pkg =
+      dir ??
+      (/test-app/.test(job) ? 'app' : /test-scripts|fixtures-/.test(job) ? 'scripts' : undefined);
     if (pkg) out.add(`${pkg}/${path}`);
     else {
       const hits = testFiles.filter((t) => t === path || t.endsWith(`/${path}`));
