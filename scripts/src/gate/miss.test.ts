@@ -53,6 +53,8 @@ describe('failingFiles', () => {
       // plain or ` app ` coloured, before the path
       `ci / test-app-2\tRun tests\t2026-11-18T01:09:17Z  FAIL  |app| src/pages/Home/Home.test.tsx > Home > shows`,
       `ci / test-app-1\tRun tests\t2026-11-18T01:09:17Z ^[[41m^[[1m FAIL ^[[22m^[[49m ^[[46m app ^[[49m src/pages/Home/HomeCard.test.tsx^[[2m > ^[[22mx`,
+      `ci / test-scripts-1\tRun tests\t2026-11-25T01:09:17Z  FAIL  src/gate/cli.test.ts > main > x`,
+      `ci / fixtures-2\tMailroom fixture suite\t2026-11-25T01:09:17Z  FAIL  src/mailroom/runner-fixtures.test.ts > r`,
       `ci / lambdas\tRun tests\t2026-11-18T01:09:17Z  FAIL  src/lone.test.ts [ src/lone.test.ts ]`,
       `ci / check\tUNKNOWN STEP\t2026-11-18T01:09:17Z [ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL] @aperture/extension test failed`,
       `ci / check\tUNKNOWN STEP\t2026-11-18T01:09:17Z  FAIL  not-a-test.ts`,
@@ -61,6 +63,8 @@ describe('failingFiles', () => {
       'extension/test/overlay.test.ts',
       'app/src/pages/Home/Home.test.tsx',
       'app/src/pages/Home/HomeCard.test.tsx',
+      'scripts/src/gate/cli.test.ts',
+      'scripts/src/mailroom/runner-fixtures.test.ts',
       'scripts/src/lone.test.ts',
     ]);
   });

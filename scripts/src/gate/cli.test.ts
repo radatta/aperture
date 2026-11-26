@@ -1058,3 +1058,138 @@ describe('main: the registry check, first', () => {
     expect(calls.some((c) => c.args.includes('--cached'))).toBe(false);
   });
 });
+
+// --remote: typecheck + lint in the container, the tests' verdict from GitHub's run for HEAD; anything that isn't a
+// real verdict runs the local tests instead, saying why, never a pass by default.
+describe('main --remote', () => {
+  const SHA = 'a'.repeat(40);
+  const ghRun = (status: string, conclusion: string) =>
+    JSON.stringify([
+      {
+        databaseId: 7,
+        workflowName: 'Branch',
+        event: 'push',
+        status,
+        conclusion,
+        createdAt: '2026-11-25T00:00:00Z',
+        url: 'https://example.test/run/7',
+      },
+    ]);
+  const world = (opts: { status?: string; runs?: () => string; jobs?: string }) => {
+    const base = git(z('M', 'docs/a.md'));
+    const f = fakeRun([
+      ['git status --porcelain -z', opts.status ?? ''],
+      ['git rev-parse --verify HEAD^{commit}', SHA],
+      ['gh run list --commit', opts.runs ?? (() => '[]')],
+      ['gh run view 7 --json jobs', opts.jobs ?? '{"jobs":[]}'],
+    ]);
+    const run = ((cmd: string, args: string[], o?: object) => {
+      const line = [cmd, ...args].join(' ');
+      return /^(git status|git rev-parse --verify|gh )/.test(line)
+        ? f.run(cmd, args, o)
+        : base.run(cmd, args, o);
+    }) as typeof base.run;
+    return { run, calls: f.calls };
+  };
+  const go = async (w: ReturnType<typeof world>, report = '0') => {
+    const outers: string[][] = [];
+    const out: string[] = [];
+    const clock = { t: 0 };
+    const code = await main(['--remote'], {
+      run: w.run,
+      outer: async (_h, _r, args, e) => {
+        outers.push(args.slice(args.indexOf('--') + 3));
+        writeFileSync(e.GATE_RESULT!, report);
+        return 0;
+      },
+      log: (l) => out.push(l),
+      env: {},
+      sleep: async (ms) => void (clock.t += ms),
+      now: () => clock.t,
+    });
+    return { code, outers, out: out.join('\n'), clock };
+  };
+
+  it('parses, and refuses --full beside it; its steps are typecheck and lint alone', () => {
+    expect(parseArgs(['--remote'])).toMatchObject({ remote: true, full: false });
+    expect(parseArgs(['--remote', '--full'])).toBe('--full and --remote: pick one');
+    const p = plan([{ path: 'packages/shared/src/x.ts', deleted: false }], ALWAYS_RUN);
+    expect(steps(p, ROOT, { full: false, remote: true }).map((s) => s.label)).toEqual([
+      'typecheck',
+      'lint',
+    ]);
+  });
+
+  it('green: typecheck + lint here (a narrow slot), the run’s green for HEAD, no local tests', async () => {
+    const r = await go(world({ runs: () => ghRun('completed', 'success') }));
+    expect(r.code).toBe(0);
+    expect(r.outers).toEqual([['--remote']]);
+    expect(r.out).toMatch(/--remote — tests: Branch run 7 on aaaaaaaa: green/);
+    expect(r.out).not.toMatch(/running the local tests/);
+  });
+
+  it('red: exit 1 with the failed jobs named, no fallback', async () => {
+    const jobs = JSON.stringify({
+      jobs: [
+        { name: 'ci / test-scripts-2', conclusion: 'failure' },
+        { name: 'ci / check', conclusion: 'success' },
+      ],
+    });
+    const r = await go(world({ runs: () => ghRun('completed', 'failure'), jobs }));
+    expect(r.code).toBe(1);
+    expect(r.outers).toHaveLength(1);
+    expect(r.out).toMatch(/tests: Branch run 7 on aaaaaaaa: failure \(ci \/ test-scripts-2\)/);
+  });
+
+  it('a red typecheck or lint fails at once: GitHub is never asked', async () => {
+    const w = world({ runs: () => ghRun('completed', 'success') });
+    const r = await go(w, '1');
+    expect(r.code).toBe(1);
+    expect(w.calls.some((c) => c.cmd === 'gh')).toBe(false);
+  });
+
+  it('waits for a run in progress, polling', async () => {
+    let n = 0;
+    const r = await go(
+      world({ runs: () => (++n < 4 ? ghRun('in_progress', '') : ghRun('completed', 'success')) }),
+    );
+    expect(r.code).toBe(0);
+    expect(n).toBe(4);
+    expect(r.out.match(/waiting for GitHub/g)).toHaveLength(1);
+  });
+
+  it.each([
+    ['a dirty tree', { status: ' M docs/a.md\0' }, /uncommitted or untracked changes/, 0],
+    ['no run (not pushed)', {}, /no GitHub run for aaaaaaaa after 90 s \(not pushed\?\)/, 90_000],
+    [
+      'a cancelled run',
+      { runs: () => ghRun('completed', 'cancelled') },
+      /cancelled.*superseded/,
+      0,
+    ],
+    [
+      'a run not done in time',
+      { runs: () => ghRun('in_progress', '') },
+      /not done in 600 s/,
+      600_000,
+    ],
+    [
+      'gh failing',
+      {
+        runs: () => {
+          throw new Error('gh: offline');
+        },
+      },
+      /gh failed \(gh: offline\)/,
+      0,
+    ],
+  ] as const)('%s: the local tests run instead, saying why', async (_, w, why, waited) => {
+    const r = await go(world(w));
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(why);
+    expect(r.out).toMatch(/running the local tests instead/);
+    expect(r.outers.at(-1)).toEqual([]); // the plain gate, without --remote
+    expect(r.outers).toHaveLength(w === undefined || 'status' in w ? 1 : 2);
+    expect(r.clock.t).toBeGreaterThanOrEqual(waited);
+  });
+});

@@ -61,7 +61,7 @@ describe('mailroom runner', () => {
     expect(slices.map((s) => s.includes('tail'))).toEqual([false, false, true]);
     const merged = slices.flat().filter((x) => x !== 'tail');
     expect(merged.sort((a, b) => Number(a) - Number(b))).toEqual(whole.filter((x) => x !== 'tail'));
-    for (const bad of ['0/3', '4/3', '3', 'a/3', '1/3/3', '1/']) {
+    for (const bad of ['', '0/3', '4/3', '3', 'a/3', '1/3/3', '1/']) {
       let out = '';
       try {
         list(bad);

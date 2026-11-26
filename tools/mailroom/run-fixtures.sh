@@ -443,7 +443,7 @@ fi
 # mod n is k mod n, and the tail checks below only in slice n. Unset is 1/1, the whole suite. MAILROOM_FIXTURE_LIST=1
 # prints the slice's case indices (and `tail` when it runs the tail) and runs nothing: runner-fixtures.test.ts checks
 # the slices partition the suite.
-SLICE="${MAILROOM_FIXTURE_SLICE:-1/1}"
+SLICE="${MAILROOM_FIXTURE_SLICE-1/1}" # set but empty is malformed, not unset
 SLICE_K="${SLICE%%/*}"
 SLICE_N="${SLICE#*/}"
 case "$SLICE" in
