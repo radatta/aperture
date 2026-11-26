@@ -38,7 +38,6 @@ const toolSpec = (t: (typeof TOOLS)[number]) => ({
   ...(t.annotations ? { annotations: t.annotations } : {}),
 });
 
-// Handle one parsed JSON-RPC message. Returns the response, or null for a notification (no reply body).
 // The dev meter's op label (ddb/meter.ts): the JSON-RPC method from a fixed set, plus the tool name only when it is a
 // known tool — never request text. Non-POST routes (the well-known metadata) read by their HTTP verb.
 const MCP_METHODS = new Set([
@@ -81,6 +80,7 @@ export function mcpOp(event: {
   }
 }
 
+// Handle one parsed JSON-RPC message. Returns the response, or null for a notification (no reply body).
 export async function handleMcpMessage(
   msg: unknown,
   ctx: ToolContext,

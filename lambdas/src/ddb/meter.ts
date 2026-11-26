@@ -25,10 +25,12 @@ const store = new AsyncLocalStorage<Tally>();
 // The sort key's leading letters-only segment (`task#…` → task, `settings` → settings); an id-first or unknown
 // shape reads `other`, so an id can't reach the line.
 export const skKind = (sk: string): string => /^([a-z]{2,16})(?:#|$)/.exec(sk)?.[1] ?? 'other';
-// A GSI1PK's trailing kind (`u#<id>#done` → done).
+// A GSI1PK's key space (`u#<id>#done` → done), from the fixed set keys.ts's gsi1 builds; anything else reads
+// `other`, so a future key space ending in user text can't reach the line.
+const INDEX_KINDS = new Set(['done', 'remind', 'fintxn']);
 export const indexKind = (gsi1pk: string): string => {
   const last = gsi1pk.slice(gsi1pk.lastIndexOf('#') + 1);
-  return /^[a-z]{2,16}$/.test(last) ? last : 'other';
+  return INDEX_KINDS.has(last) ? last : 'other';
 };
 
 export interface Call {

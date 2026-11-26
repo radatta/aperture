@@ -62,7 +62,8 @@ describe('LiveDoc.add', () => {
 // requests are exactly today's — the parameter appears nowhere.
 describe('LiveDoc meter', () => {
   const all = [update, ...Object.values(sdk)];
-  beforeEach(() => {
+  // The query's two pages are one-shot, so a second drive re-arms the mocks.
+  const arm = () => {
     for (const f of all) f.mockReset();
     update.mockResolvedValue({ Attributes: { n: 1 }, ConsumedCapacity: { CapacityUnits: 1 } });
     sdk.get.mockResolvedValue({
@@ -92,7 +93,8 @@ describe('LiveDoc meter', () => {
         ConsumedCapacity: { CapacityUnits: 1.5 },
       })
       .mockResolvedValue({ Items: [] }); // no ConsumedCapacity: counts 0
-  });
+  };
+  beforeEach(arm);
 
   const drive = async (d: ReturnType<typeof createLiveDoc>) => {
     await d.get('p', 'settings', { consistent: true });
@@ -107,11 +109,20 @@ describe('LiveDoc meter', () => {
     await d.batchPut([{ PK: 'p', SK: 'log#d#1' }]);
   };
 
-  it('unmetered: no call carries ReturnConsumedCapacity', async () => {
+  const params = () => all.flatMap((f) => f.mock.calls.map((c) => c[0] as Record<string, unknown>));
+
+  it('unmetered: no call carries ReturnConsumedCapacity, and metering adds that key and nothing else', async () => {
     await drive(createLiveDoc('t'));
-    const params = all.flatMap((f) => f.mock.calls.map((c) => c[0] as Record<string, unknown>));
-    expect(params).toHaveLength(11); // 10 calls, the query paginating once
-    for (const p of params) expect(p).not.toHaveProperty('ReturnConsumedCapacity');
+    const plain = params();
+    expect(plain).toHaveLength(11); // 10 calls, the query paginating once
+    for (const p of plain) expect(p).not.toHaveProperty('ReturnConsumedCapacity');
+    arm();
+    await drive(createLiveDoc('t', { meter: true }));
+    expect(
+      params().map((p) =>
+        Object.fromEntries(Object.entries(p).filter(([k]) => k !== 'ReturnConsumedCapacity')),
+      ),
+    ).toEqual(plain);
   });
 
   it('metered: every call asks for TOTAL, and the line sums pages, the batch array and absent capacity', async () => {

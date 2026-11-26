@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bffOp, indexKind, metered, record, skKind, unitsLine, wrapIfDev } from './meter';
 import type { UnitsLine } from './meter';
-import { gsi1, pushSk, sk } from './keys';
+import { catalogSk, gsi1, pushSk, sk } from './keys';
 
 const run = (lines: string[], clock = { t: 1000 }) =>
   metered(
@@ -126,7 +126,7 @@ describe('unitsLine', () => {
 });
 
 describe('wrapIfDev', () => {
-  const h = async (_e: object) => ({ statusCode: 200 });
+  const h: (e: object) => Promise<{ statusCode: number }> = async () => ({ statusCode: 200 });
   it('returns the same function off the dev slots: prod, unset, unknown', () => {
     for (const stage of ['prod', undefined, '', 'devc', 'DEV'])
       expect(wrapIfDev(stage, 'bff', () => 'x', h)).toBe(h);
@@ -148,7 +148,11 @@ describe('kinds never carry an id', () => {
   const ID = 'zqsentinelzq';
   it('skKind over every sort-key builder', () => {
     const kinds = new Set<string>();
-    for (const [name, fn] of [...Object.entries(sk), ...Object.entries(pushSk)]) {
+    for (const [name, fn] of [
+      ...Object.entries(sk),
+      ...Object.entries(pushSk),
+      ...Object.entries(catalogSk),
+    ]) {
       const f = fn as (...a: unknown[]) => string;
       const kind = skKind(f(...Array.from({ length: f.length }, () => ID)));
       expect(kind, name).not.toContain(ID);
@@ -167,7 +171,8 @@ describe('kinds never carry an id', () => {
   it('indexKind over the GSI builders', () => {
     const pks = [gsi1.donePk, gsi1.remindPk, gsi1.finTxnPk];
     expect(pks.map((f) => indexKind(f(ID)))).toEqual(['done', 'remind', 'fintxn']);
-    expect(indexKind(`u#${ID}`)).toBe(ID);
+    expect(indexKind(`u#${ID}`)).toBe('other');
+    expect(indexKind(`u#${ID}#notakind`)).toBe('other');
     expect(indexKind('u#3f2a-11')).toBe('other');
   });
 });
