@@ -80,6 +80,49 @@ describe('backend recurrence', () => {
     expect(await backend.listPlansForDay('2026-08-04')).toHaveLength(0);
   });
 
+  // getDay's series pass and its stale sweep read the same `task#` rows: once nothing spawns, the sweep reuses the
+  // pass's list (one read, the same rows), and after a spawn it reads its own.
+  it('getDay reads task# once when the due series has spawned, and sweeps as before', async () => {
+    const doc = new InMemoryDoc();
+    const repo = new Repo(doc, liveWrites(doc), 'local');
+    const backend = new BackendClient(repo, {
+      userId: 'local',
+      now: () => AUG_4_NOON,
+    });
+    const series = await backend.upsertSeries({
+      title: 'Weekly report',
+      categoryId: null,
+      defaultEstimateMin: 60,
+      rule: { kind: 'daily' },
+      anchorDate: '2026-08-01',
+    });
+    const stale = await backend.createTask({ title: 'left over' });
+    // Planned with no plan row today or later: the sweep moves it back to the backlog.
+    const strand = async () =>
+      repo.putTask({ ...(await repo.getTask(stale.id))!, status: 'planned' });
+    await strand();
+
+    const taskReads = async (f: () => Promise<unknown>) => {
+      doc.queries.length = 0;
+      await f();
+      return doc.queries.filter((q) => q.prefix === sk.taskPrefix()).length;
+    };
+    // The spawn: the pass's two reads (eventual, then consistent), then the sweep's own, which sees the occurrence.
+    expect(await taskReads(() => backend.getDay('2026-08-04'))).toBe(3);
+    const occ = (await backend.listTasks()).filter((t) => t.seriesId === series.id);
+    expect(occ.map((t) => t.status)).toEqual(['planned']);
+    expect((await backend.getTask(stale.id))?.status).toBe('backlog');
+
+    await strand();
+    const before = (await backend.listTasks()).map((t) => [t.id, t.status]);
+    // Steady state: one read, shared, and the sweep still moves the stale task.
+    expect(await taskReads(() => backend.getDay('2026-08-04'))).toBe(1);
+    expect((await backend.getTask(stale.id))?.status).toBe('backlog');
+    expect((await backend.listTasks()).map((t) => [t.id, t.status])).toEqual(
+      before.map(([id, st]) => [id, id === stale.id ? 'backlog' : st]),
+    );
+  });
+
   // deleteSeries is a tombstone (TECH.md asks every new delete path to prove soft, not hard), and the row
   // then reads as gone to every series write — a stop or edit after it is Not found, as the stub answers.
   it('deleteSeries tombstones the template and later series writes answer Not found', async () => {
@@ -1320,5 +1363,57 @@ describe('backend private log entries', () => {
     const e = await live.createLogEntry('stays public', '2026-08-04');
     await make(doc, 'local', noopWrites()).setLogEntryPrivate(e.id, true);
     expect((await live.listLogEntries(e.day))[0]?.private).toBe(false);
+  });
+});
+
+// The running prefix is read strongly (repo.listRunningSessions): each reader looks up a row a request just wrote or
+// dropped, and an eventual replica lags it.
+describe('backend running sessions', () => {
+  const setup = () => {
+    const doc = new InMemoryDoc();
+    const backend = new BackendClient(new Repo(doc, liveWrites(doc), 'local'), {
+      userId: 'local',
+      now: () => AUG_4_NOON,
+    });
+    return { doc, backend };
+  };
+
+  it('a stopped timer is gone from the running list while an eventual query still returns it', async () => {
+    const { doc, backend } = setup();
+    const task = await backend.createTask({ title: 'timed' });
+    const s = await backend.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    const live = await doc.get('u#local', sk.sessionRunning(s.id));
+    await backend.stopSession(s.id, 'completed');
+    doc.staleNextQueries('u#local', sk.sessionRunning(s.id), live, 5); // the dropped row, still on a replica
+    expect(await backend.listRunningSessions()).toEqual([]);
+    expect(doc.queries.at(-1)).toMatchObject({
+      prefix: sk.sessionRunningPrefix(),
+      consistent: true,
+    });
+  });
+
+  it('a second start right after the first returns the first, not a duplicate', async () => {
+    const { doc, backend } = setup();
+    const task = await backend.createTask({ title: 'timed' });
+    const first = await backend.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    doc.staleNextQueries('u#local', sk.sessionRunning(first.id), null, 5); // not on a replica yet
+    const again = await backend.startSession({
+      taskId: task.id,
+      categoryId: null,
+      kind: 'work',
+      day: '2026-08-04',
+    });
+    expect(again.id).toBe(first.id);
+    expect((await backend.listRunningSessions()).map((x) => x.id)).toEqual([first.id]);
   });
 });

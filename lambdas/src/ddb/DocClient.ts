@@ -167,6 +167,15 @@ export class InMemoryDoc implements DocClient {
         if (lag.snapshot) rows.push(lag.snapshot);
       }
     }
+    // A row deleted since: an eventual query can still return its old copy, as a lagging replica would.
+    if (opts?.consistent !== true)
+      for (const [key, lag] of this.staleQueries) {
+        const old = lag.snapshot;
+        if (this.items.has(key) || !old || old.PK !== pk || !old.SK.startsWith(skPrefix)) continue;
+        if (old.SK < from || old.SK > to) continue;
+        if (--lag.left <= 0) this.staleQueries.delete(key);
+        rows.push(old);
+      }
     return rows.sort((a, b) => (a.SK < b.SK ? -1 : a.SK > b.SK ? 1 : 0)).map(clone);
   }
 

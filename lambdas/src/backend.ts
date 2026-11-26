@@ -1593,13 +1593,13 @@ export class BackendClient implements ApiClient {
   // Everything the plan reads, for the user's day as the server reads it (or `day`). Consistent for a write's
   // read-modify-write, so a change made a moment ago is in the plan it changes.
   // The AI pick reads only the server's today: a `day` argument never starts one.
-  private async coachInput(day?: string, consistent = false): Promise<CoachInput> {
+  private async coachInput(day: string | undefined, consistent: boolean): Promise<CoachInput> {
     if (day !== undefined && !isDayKey(day)) throw new Error('day must be YYYY-MM-DD');
     const now = this.now();
     await this.ensureCatalog();
-    const settings = await this.ensureSettings();
-    const { dayStartHour, leetcodePremium } = settings;
     const opts = { consistent };
+    const settings = await this.ensureSettings(opts); // a plan-mode change a moment ago is the plan's mode
+    const { dayStartHour, leetcodePremium } = settings;
     const [sittings, attempts, days, focus, legacy, voids, mocks] = await Promise.all([
       this.repo.listSittings(opts),
       this.repo.listCoachAttempts(opts),
@@ -2825,8 +2825,9 @@ export class BackendClient implements ApiClient {
     const { dayStartHour } = await this.ensureSettings();
     if (day > dayKeyInZone(this.now(), USER_TIME_ZONE, dayStartHour))
       throw new Error(FUTURE_DAY_ERROR);
-    await this.materializeDueSeries(day);
-    await this.sweepStalePlanned(day);
+    // The series pass's task list, when it read one and spawned nothing: the sweep reads the same rows, so it's reused.
+    const known = await this.materializeDueSeries(day);
+    await this.sweepStalePlanned(day, known);
     const existing = await this.repo.getDayRow(day, opts);
     if (existing) return existing;
     return this.repo.putDay({
@@ -2843,11 +2844,12 @@ export class BackendClient implements ApiClient {
   // putTask/putPlan like every other task write (their item shapes are the repo's). Planned with a row
   // unless it's a same-day timed one; a timed one makes its calendar event like any timed task, inside
   // the bulk budget so a getDay with several never nears the Lambda timeout (D8).
-  private async materializeDueSeries(day: string): Promise<void> {
+  // Returns its eventual task list when it spawned nothing (getDay's sweep reuses it), else undefined.
+  private async materializeDueSeries(day: string): Promise<Task[] | undefined> {
     const active = (await this.repo.listSeries()).filter((s) => s.active);
-    if (active.length === 0) return;
+    if (active.length === 0) return undefined;
     const due = active.filter((s) => seriesDueOn(s, day));
-    if (due.length === 0) return;
+    if (due.length === 0) return undefined;
     const deadline = Date.now() + BULK_SYNC_BUDGET_MS; // from here: the spawn writes spend it too
     // The steady state (everything already spawned) reads eventually; a spawn about to happen re-reads
     // consistently first, since a duplicate would now also duplicate a Google event.
@@ -2855,7 +2857,7 @@ export class BackendClient implements ApiClient {
     let plansOnDay = await this.repo.listPlans(day);
     const missing = (ts: Task[], ps: TaskPlan[]) =>
       due.filter((s) => !seriesHasOccurrence(s, day, ts, ps));
-    if (missing(tasks, plansOnDay).length === 0) return;
+    if (missing(tasks, plansOnDay).length === 0) return tasks;
     [tasks, plansOnDay] = await Promise.all([
       this.repo.listTasks({ consistent: true }),
       this.repo.listPlans(day, { consistent: true }),
@@ -2879,12 +2881,13 @@ export class BackendClient implements ApiClient {
       // sees these as spawned and never syncs them again.
       await this.syncCreated(spawned, deadline, []);
     }
+    return undefined;
   }
   // Rule lives in the shared stalePlannedMoves (stub parity). Plans are read only when something is
   // planned. Each move re-reads the task first (consistently): a sweep races the user's own writes (e.g.
   // starting the task, or clearing its time), and writing back the list-time copy would undo them.
-  private async sweepStalePlanned(day: string): Promise<void> {
-    const tasks = await this.repo.listTasks();
+  private async sweepStalePlanned(day: string, known?: Task[]): Promise<void> {
+    const tasks = known ?? (await this.repo.listTasks());
     if (!tasks.some((t) => t.status === 'planned')) return;
     // A move is decided on consistent rows: a row "+ Today" just wrote must not read as missing. Rows
     // before `day` never decide one (stalePlannedMoves reads `p.day >= day`), so this is one bounded

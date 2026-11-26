@@ -20,6 +20,7 @@
     "gate:ci": "node scripts/src/gate/ci.ts",
     "devcheck": "pnpm --filter @aperture/scripts devcheck",
     "devcheck:local": "pnpm --filter @aperture/scripts devcheck:local",
+    "devcheck:cost": "node scripts/src/devcheck/read-cost-cli.ts",
     "ios-probe": "pnpm --filter @aperture/scripts ios-probe",
     "sim-bench:plans": "pnpm --filter @aperture/scripts sim-bench:plans",
     "sim-bench:seed": "pnpm --filter @aperture/scripts sim-bench:seed",

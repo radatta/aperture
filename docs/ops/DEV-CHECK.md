@@ -318,6 +318,40 @@ Simulator's cold Home loads land on the same reservation as the browser lane's s
 
 The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
 
+## Read cost
+
+On the dev slots only (`isDevSlot(STAGE)`, so prod's handler and requests are unchanged), the BFF and `/mcp`
+Lambdas ask DynamoDB for `ReturnConsumedCapacity: 'TOTAL'` and log one line per request when it ends, a throw
+included (`lambdas/src/ddb/meter.ts`):
+`{"event":"ddb_units","v":1,"edge","op","status","at","ms","ru","wu","n","by"}`. `op` is the RPC method, a
+fixed route, or the MCP method plus a known tool name. Nothing from the request's own data reaches it.
+`ru`/`wu` are the read and write units, and `n` the calls. `by` holds the top 8 accesses as
+`[verb+c:kind, calls, units, items, dead]`, with the rest summed as `other`. The verb is `q`, `g`, `x` (a GSI
+query), `p`, `d`, `u` or `b`, with a `c` added for a consistent read. The kind is the sort key's leading word.
+`dead` counts the tombstoned rows the read returned. A read is billed on everything its key condition
+covers, so a JS filter after it saves nothing. A refused conditional write records no units, and DynamoDB work
+still running after the handler returns isn't on its line: both are small undercounts. The worker Lambdas
+aren't metered, and `devcheck:local` writes no line: its table is the in-memory doc (LOCAL-CHECK.md).
+
+The harness stamps each step's start (`StepResult.at`) and the run's (`RunResult.startedAt`) into
+`report.json`. `pnpm devcheck:cost` joins the lines to those windows and prints units and Lambda ms per phase,
+scenario, step, op and access, plus the top 10 requests:
+
+1. About 3 min into the run, prove the line is there: `pnpm bot logs --groups bff,mcp --since 5m --filter '%ddb_units%'`.
+   The groups are slot A's, `bff-devb,mcp-devb` on devb, so always pass `--groups`.
+2. At least 2 min after the run ends, and before the slot's lock is released, take two fetches over the run's
+   window (`--start` one minute before `startedAt`, `--end` two minutes after the end): one with
+   `--filter '%ddb_units%'` and one with `--filter REPORT`, for the Lambda's own Duration.
+3. Then run `pnpm devcheck:cost --report localNotes/devcheck/<run>/report.json --logs localNotes/devlogs/<key> --logs …
+--out localNotes/read-cost-<run>.md`. Pass `--before <an earlier out>.json` for deltas. The steps that
+   ran in one run only are named, because the totals then compare different work. To compare two runs,
+   give both the same slow-step selection (`--feature`; _Slow tier_), because a diff that reaches a
+   scenario's `slowPaths` changes which steps run.
+
+That is three of `pnpm bot logs`' ten fetches an hour (CI-BOT.md). The reader refuses a fetch that hit its line
+cap, a failed fetch, a report without the stamps, and a two-lane parallel run, because two lanes' requests
+share one window.
+
 ## Ledgers
 
 | File (in the main checkout's `localNotes/devcheck/`) | Written by                        | Covers                                                                                                 |

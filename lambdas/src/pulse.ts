@@ -166,7 +166,7 @@ export class PulseService {
   // credits the whole gap on its next beat), or a LeetCode sitting (only a Roll rep can have one).
   private async blockOf(task: Task): Promise<PulseBlock | null> {
     // Consistent: a timer started a moment ago must block this pulse (startSession's yield covers the rest).
-    const timers = await this.d.repo.listRunningSessions({ consistent: true });
+    const timers = await this.d.repo.listRunningSessions();
     if (timers.some((s) => s.kind === 'work' && s.taskId === task.id)) return 'timer';
     if (!task.rollId) return null;
     const sittings = await this.d.repo.listSittings({ consistent: true });
