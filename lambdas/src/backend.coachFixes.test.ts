@@ -160,7 +160,8 @@ describe('the coach reads strongly', () => {
     doc.staleNextGets(pk('u1'), sk.settings(), old, 20); // an eventual get still serves 'balanced'
     doc.queries.length = 0;
     expect((await backend.getCoachToday()).planMode.setting).toBe('catch-up');
-    // The seven coach lists, too (PRs 191 and 225): none of the coach's queries is eventual.
+    // The seven coach lists, too (PRs 191 and 225): none of the coach's queries is eventual. A pin on the whole
+    // path: a new eventual read here fails it on purpose, to be weighed (a stale coach answer) before it lands.
     expect(doc.queries.filter((q) => !q.consistent).map((q) => q.prefix)).toEqual([]);
   });
 });

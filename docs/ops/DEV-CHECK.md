@@ -333,24 +333,57 @@ covers, so a JS filter after it saves nothing. A refused conditional write recor
 still running after the handler returns isn't on its line: both are small undercounts. The worker Lambdas
 aren't metered, and `devcheck:local` writes no line: its table is the in-memory doc (LOCAL-CHECK.md).
 
+**Its log cost.** The line is about 250 bytes, roughly 2 MB of CloudWatch ingest per full run on top of the
+Lambda's own START/END/REPORT lines. CloudWatch Logs' always-free tier is 5 GB a month, one figure for
+ingestion, storage and Logs Insights scans. The dev account's whole intake over the month before the meter
+(2026-10-27 to 11-26) was about 333 MB across every group, with 96 MB stored: about 120 full runs a month. At
+that pace the meter adds about 240 MB a month. Even at 30 full runs a day it adds about 1.8 GB, and the total
+stays under 2.2 GB. Not measured: prod's share, if the free tier is shared across the organization. Re-measure
+with the maintainer's break-glass profile. `IncomingBytes` is per log group, so a plain
+`get-metric-statistics` call reads almost nothing; sum the groups with a search:
+
+```
+aws cloudwatch get-metric-data --profile aperture-dev --region us-west-1 --start-time <iso> --end-time <iso> --metric-data-queries "[{\"Id\":\"logs\",\"Expression\":\"SUM(SEARCH('{AWS/Logs,LogGroupName} MetricName=\\\"IncomingBytes\\\"', 'Sum', 86400))\"}]" --query 'MetricDataResults[0].Values' --output text
+```
+
+The values are bytes per day; add them up. Past the free tier, the meter is the first thing to shorten.
+
 The harness stamps each step's start (`StepResult.at`) and the run's (`RunResult.startedAt`) into
 `report.json`. `pnpm devcheck:cost` joins the lines to those windows and prints units and Lambda ms per phase,
 scenario, step, op and access, plus the top 10 requests:
 
-1. About 3 min into the run, prove the line is there: `pnpm bot logs --groups bff,mcp --since 5m --filter '%ddb_units%'`.
-   The groups are slot A's, `bff-devb,mcp-devb` on devb, so always pass `--groups`.
-2. At least 2 min after the run ends, and before the slot's lock is released, take two fetches over the run's
-   window (`--start` one minute before `startedAt`, `--end` two minutes after the end): one with
-   `--filter '%ddb_units%'` and one with `--filter REPORT`, for the Lambda's own Duration.
-3. Then run `pnpm devcheck:cost --report localNotes/devcheck/<run>/report.json --logs localNotes/devlogs/<key> --logs …
---out localNotes/read-cost-<run>.md`. Pass `--before <an earlier out>.json` for deltas. The steps that
-   ran in one run only are named, because the totals then compare different work. To compare two runs,
-   give both the same slow-step selection (`--feature`; _Slow tier_), because a diff that reaches a
-   scenario's `slowPaths` changes which steps run.
+1. About 3 min into the run, prove the line is there:
+   `pnpm bot logs --groups bff,mcp --since 5m --filter '%ddb_units%'` (`bff-devb,mcp-devb` on devb). Without
+   `--groups`, `bot logs` reads the held slot's groups, but falls back to slot A's when it can't read the lock,
+   so name them.
+2. The fetches cover a past window and the reader drops every request outside the run, so release the slot's
+   lock first. At least 2 min after the run ends (log delivery), print the run's two fetches, one minute
+   before its start to two after its end, with its slot's groups, and run both:
 
-That is three of `pnpm bot logs`' ten fetches an hour (CI-BOT.md). The reader refuses a fetch that hit its line
-cap, a failed fetch, a report without the stamps, and a two-lane parallel run, because two lanes' requests
-share one window.
+   ```
+   pnpm devcheck:cost --report localNotes/devcheck/<run>/report.json --window
+   ```
+
+   One is `--filter '%ddb_units%'`; the other is `--filter REPORT`, for the Lambda's own Duration.
+
+3. Read the two fetch directories:
+
+   ```
+   pnpm devcheck:cost --report localNotes/devcheck/<run>/report.json --logs localNotes/devlogs/<units key> --logs localNotes/devlogs/<REPORT key> --out localNotes/read-cost-<run>.md
+   ```
+
+   Pass `--before <an earlier out>.json` for deltas. The steps that ran in one run only are named, because
+   the totals then compare different work. To compare two runs, give both the same slow-step selection
+   (`--feature`; _Slow tier_), because a diff that reaches a scenario's `slowPaths` changes which steps run.
+
+That is three of `pnpm bot logs`' ten fetches an hour (CI-BOT.md). The reader refuses, exit 1:
+
+- a fetch that hit its line cap or failed;
+- a fetch directory with no `.log` file, or missing one edge's group (a partial artifact);
+- a fetch with no units line inside the run (the wrong slot, a window that misses it, or an unmetered build);
+- a report without the stamps;
+- a two-user report, parallel or serial. The merged report keeps one lane's windows, so the other lane's
+  requests would land in the wrong step.
 
 ## Ledgers
 

@@ -19,6 +19,8 @@ vi.mock('@aws-sdk/client-dynamodb', () => ({
 }));
 const { createLiveDoc } = await import('./LiveDoc');
 const { metered } = await import('./meter');
+const { ConditionalCheckFailedException } = await import('@aws-sdk/client-dynamodb');
+const { ConditionFailedError } = await import('./DocClient');
 
 describe('LiveDoc.add', () => {
   beforeEach(() => update.mockReset());
@@ -153,5 +155,32 @@ describe('LiveDoc meter', () => {
         ['u:lcs', 1, 1, 0, 0],
       ]),
     );
+  });
+
+  it('a refused conditional write records no units, and the line keeps the rest and the refusal', async () => {
+    sdk.put.mockRejectedValueOnce(
+      new ConditionalCheckFailedException({ message: 'refused', $metadata: {} }),
+    );
+    const lines: string[] = [];
+    const d = createLiveDoc('t', { meter: true });
+    await expect(
+      metered(
+        'bff',
+        () => 'x',
+        async () => {
+          await d.get('p', 'settings', { consistent: true });
+          await d.putIf({ PK: 'p', SK: 'task#a' }, 7);
+          return { statusCode: 200 };
+        },
+        { log: (l) => lines.push(l) },
+      )({}),
+    ).rejects.toBeInstanceOf(ConditionFailedError);
+    expect(JSON.parse(lines[0]!)).toMatchObject({
+      status: 'threw',
+      ru: 0.5,
+      wu: 0,
+      n: 1,
+      by: [['gc:settings', 1, 0.5, 1, 0]],
+    });
   });
 });

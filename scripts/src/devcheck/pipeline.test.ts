@@ -2532,6 +2532,8 @@ describe('runPipeline', () => {
         ['quick', 'pass'],
       ]);
       expect(r.steps[0]!.note).toBe(DEFER_NOTE);
+      expect(r.steps[0]).not.toHaveProperty('at'); // a deferred step never ran: no read-cost window
+      expect(r.steps[1]!.at).toEqual(expect.any(Number));
       expect(r.coverage.map((x) => [x.row, x.status])).toEqual([
         ['slow', 'deferred'],
         ['cheap', 'pass'],

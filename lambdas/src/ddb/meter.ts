@@ -139,7 +139,11 @@ export function metered<E, R extends { statusCode: number }>(
         status = res.statusCode;
         return res;
       } finally {
-        log(JSON.stringify(unitsLine(edge, op, status, at, now() - at, t)));
+        try {
+          log(JSON.stringify(unitsLine(edge, op, status, at, now() - at, t)));
+        } catch {
+          // a measurement never replaces the response (or its error)
+        }
       }
     });
   };

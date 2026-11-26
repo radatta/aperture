@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { analyse, checkCap, FETCH_CAP, parseLogs, render, windows } from './read-cost';
+import { analyse, checkCap, FETCH_CAP, fetchLines, parseLogs, render, windows } from './read-cost';
 import { parseArgs, run, USAGE } from './read-cost-cli';
 import type { RunResult, StepResult } from './report';
 
@@ -41,8 +44,8 @@ const units = (
   id = `req-${++seq}`,
 ) =>
   `2026-11-25T00:00:00.000Z 2026/11/25/[$LATEST]abc 2026-11-25T00:00:00.000Z\t${id}\tINFO\t${JSON.stringify({ event: 'ddb_units', v: 1, edge: 'bff', op, status: 200, at, ms: 7, ru, wu: 1, n: 1, by })}`;
-const reportLine = (id: string, ms: number) =>
-  `2026-11-25T00:00:00.000Z 2026/11/25/[$LATEST]abc REPORT RequestId: ${id}\tDuration: ${ms} ms\tBilled Duration: ${Math.ceil(ms)} ms\tMemory Size: 512 MB`;
+const reportLine = (id: string, ms: number, at = 11_000) =>
+  `${new Date(at).toISOString()} 2026/11/25/[$LATEST]abc REPORT RequestId: ${id}\tDuration: ${ms} ms\tBilled Duration: ${Math.ceil(ms)} ms\tMemory Size: 512 MB`;
 
 describe('windows', () => {
   it('lays out the phases and the run steps contiguously, steps to the next one start', () => {
@@ -55,6 +58,16 @@ describe('windows', () => {
       ['b/s1', 11_200, 11_600],
       ['cleanup', 11_600, 12_000],
     ]);
+  });
+  it('opens a steps-gap before a late first step, and one steps window when none ran', () => {
+    const late = windows(report({ steps: [step('a', 's1', 10_700)] }));
+    expect(late.slice(2, 5).map((w) => [w.label, w.from, w.to])).toEqual([
+      ['setup', 10_300, 10_600],
+      ['steps-gap', 10_600, 10_700],
+      ['a/s1', 10_700, 11_600],
+    ]);
+    const none = windows(report({ steps: [step('a', 's1', undefined, 'skipped')] }));
+    expect(none.map((w) => w.label)).toEqual(['deployWait', 'open', 'setup', 'steps', 'cleanup']);
   });
   it('refuses a report written before the stamps', () => {
     expect(() => windows(report({ startedAt: undefined }))).toThrow(/startedAt/);
@@ -77,6 +90,8 @@ describe('parseLogs + analyse', () => {
       units(12_500, 'getDay', 77), // after the run
       units(10_650, 'listTasks', 10, undefined, 'r-a1'), // an overlapping fetch's duplicate
       `2026-11-25T00:00:00.000Z s 2026-11-25T00:00:00.000Z\tr-bad\tINFO\t{"event":"ddb_units",broken`,
+      '{"event":"ddb_units"}', // not a fetched line, but names the event: counted, never dropped silently
+      units(10_700, 'listTasks', 3, 'not-an-array' as unknown as unknown[], 'r-shape'), // `by` the wrong shape
       'not a fetched line',
     ].join('\n');
     const reports = [
@@ -84,13 +99,14 @@ describe('parseLogs + analyse', () => {
       reportLine('r-a2', 60),
       reportLine('r-b1', 80),
       reportLine('r-gone', 15000),
+      reportLine('r-early', 9, 9_000), // the previous build's poll, before the run: not a join miss
     ].join('\n');
     return analyse(report(), parseLogs([text, reports]));
   };
 
   it('attributes each request to its window and sums it once', () => {
     const r = a();
-    expect([r.before, r.after, r.duplicates, r.malformed]).toEqual([1, 1, 1, 1]);
+    expect([r.before, r.after, r.duplicates, r.malformed]).toEqual([1, 1, 1, 3]);
     expect(r.totals).toMatchObject({ reqs: 5, ru: 66, wu: 5, calls: 5 });
     expect(r.phases.map((p) => [p.label, p.ru])).toEqual([
       ['setup', 1],
@@ -113,7 +129,7 @@ describe('parseLogs + analyse', () => {
     expect(r.steps[0]!.lambdaMs).toBe(40.5);
     expect(r.phases[0]!.lambdaMs).toBe(7); // the setup request has no REPORT line
     expect(r.unitsWithoutReport).toBe(2); // setup, cleanup
-    expect(r.reportsWithoutUnits).toBe(1); // r-gone: a timeout's REPORT with no units line
+    expect(r.reportsWithoutUnits).toBe(1); // r-gone: a timeout's REPORT with no units line; r-early is outside
   });
 
   it('ranks ops and accesses by units, with the dead share', () => {
@@ -145,9 +161,43 @@ describe('parseLogs + analyse', () => {
     expect(diff).toContain('before only c/s9; this run only none');
   });
 
-  it('refuses a parallel two-lane run', () => {
-    expect(() => analyse(report({ lanes: { mode: 'parallel' } }), parseLogs([]))).toThrow(
-      /parallel/,
+  it('counts a request near its own window edge, not the run start or end', () => {
+    const r = report({
+      phases: { deployWaitMs: 100, openMs: 200, setupMs: 300, stepsMs: 3000, cleanupMs: 400 },
+      steps: [step('a', 's1', 10_600), step('a', 's2', 12_000)],
+    });
+    const at = [11_000, 11_900, 12_100, 13_000, 13_990]; // inside · 100 before a/s2 · 100 after it · inside · 10 before the end
+    const got = analyse(r, parseLogs([at.map((t) => units(t, 'getDay', 1)).join('\n')]));
+    expect(got.nearEdge).toBe(2);
+  });
+
+  it('refuses two users in one report: parallel, a serial iPhone lane, or a step before the start', () => {
+    const p = parseLogs([units(10_650, 'listTasks', 1)]);
+    expect(() => analyse(report({ lanes: { mode: 'parallel' } }), p)).toThrow(/parallel/);
+    expect(() =>
+      analyse(report({ lanes: { mode: 'serial', browserMs: 9, iphoneMs: 9 } }), p),
+    ).toThrow(/two-user/);
+    expect(() => analyse(report({ steps: [step('a', 's1', 9_000)] }), p)).toThrow(/before the run/);
+    expect(() => analyse(report({ lanes: { mode: 'serial', browserMs: 9 } }), p)).not.toThrow();
+  });
+
+  it('refuses a fetch with no units line inside the run (wrong slot, wrong window, no meter)', () => {
+    expect(() => analyse(report(), parseLogs([units(9_000, 'getDay', 1)]))).toThrow(
+      /no ddb_units line inside the run \(1 outside it\)/,
+    );
+  });
+});
+
+describe('fetchLines', () => {
+  it("prints both fetches over the run padded 1 min before, 2 after, with the slot's groups", () => {
+    const t0 = Date.UTC(2026, 10, 25, 6, 0, 0);
+    const [u, rep] = fetchLines(report({ startedAt: t0, target: 'devb (https://example.test)' }));
+    expect(u).toBe(
+      "pnpm bot logs --groups bff-devb,mcp-devb --start 2026-11-25T05:59:00.000Z --end 2026-11-25T06:02:02.000Z --filter '%ddb_units%'",
+    );
+    expect(rep).toMatch(/--groups bff-devb,mcp-devb .* --filter REPORT$/);
+    expect(fetchLines(report({ startedAt: t0, target: 'dev (https://example.test)' }))[0]).toMatch(
+      /--groups bff,mcp /,
     );
   });
 });
@@ -161,23 +211,48 @@ describe('checkCap', () => {
 });
 
 describe('CLI', () => {
+  const cli = (argv: string[]) => {
+    const o = { out: '', err: '', code: 0 };
+    o.code = run(
+      argv,
+      (s) => (o.out += s),
+      (s) => (o.err += s),
+    );
+    return o;
+  };
   it('--help prints the usage and reads nothing', () => {
-    let out = '';
-    expect(run(['--help'], (s) => (out += s))).toBe(0);
-    expect(out).toBe(`${USAGE}\n`);
+    expect(cli(['--help'])).toEqual({ out: `${USAGE}\n`, err: '', code: 0 });
   });
-  it('refuses missing or unknown arguments with exit 2', () => {
-    let out = '';
-    expect(run([], (s) => (out += s))).toBe(2);
-    expect(out).toMatch(/--report and --logs are required/);
+  it('refuses missing or unknown arguments with exit 2, on stderr', () => {
+    const o = cli([]);
+    expect([o.code, o.out]).toEqual([2, '']);
+    expect(o.err).toMatch(/--report is required/);
+    expect(() => parseArgs(['--report', 'r'])).toThrow(/--logs is required/);
     expect(() => parseArgs(['--report'])).toThrow(/needs a value/);
     expect(() => parseArgs(['--nope'])).toThrow(/unknown argument/);
+    expect(() => parseArgs(['--report', 'r', '--window', '--logs', 'd'])).toThrow(/only --report/);
   });
   it('a missing file is a refusal (exit 1), never a partial table', () => {
-    let out = '';
-    expect(
-      run(['--report', '/nonexistent/r.json', '--logs', '/nonexistent'], (s) => (out += s)),
-    ).toBe(1);
-    expect(out).toMatch(/^devcheck:cost: /);
+    const o = cli(['--report', '/nonexistent/r.json', '--logs', '/nonexistent']);
+    expect([o.code, o.out]).toEqual([1, '']);
+    expect(o.err).toMatch(/^devcheck:cost: /);
+  });
+  it("refuses a logs directory with no .log file, or missing one edge's group", () => {
+    const root = mkdtempSync(join(tmpdir(), 'read-cost-'));
+    const rep = join(root, 'report.json');
+    writeFileSync(rep, JSON.stringify(report()));
+    const empty = join(root, 'empty');
+    mkdirSync(empty);
+    writeFileSync(join(empty, 'fetches.jsonl'), '');
+    expect(cli(['--report', rep, '--logs', empty]).err).toMatch(/no \.log file/);
+    const half = join(root, 'half');
+    mkdirSync(half);
+    writeFileSync(join(half, 'bff.log'), `${units(10_650, 'listTasks', 1)}\n`);
+    const o = cli(['--report', rep, '--logs', half]);
+    expect([o.code, o.err]).toEqual([1, expect.stringMatching(/no mcp group's log/)]);
+    writeFileSync(join(half, 'mcp.log'), '');
+    expect(cli(['--report', rep, '--logs', half]).code).toBe(0);
+    const w = cli(['--report', rep, '--window']);
+    expect([w.code, w.out.split('\n').length]).toEqual([0, 3]);
   });
 });

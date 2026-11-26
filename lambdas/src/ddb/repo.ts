@@ -784,8 +784,9 @@ export class Repo {
     );
   }
   // One day's sessions: the running rows on that day, then the day's bucket, never the whole `sess#` history.
-  // Running first: a stop between the two reads moves the row into the bucket, so it's in one read or both,
-  // never neither. Both → the bucket's copy (the stopped one). Order as the old whole-prefix read: bucket, running.
+  // Running first: a stop between the two reads moves the row into the bucket, so it's in one read or both —
+  // never neither, except when both reads fall between stop's delete and its put (putSession), the same gap the
+  // whole-prefix read had. Both → the bucket's copy (the stopped one). Order as the old whole-prefix read: bucket, running.
   // Both reads consistent: an eventual bucket beside a consistent running read would drop a session stopped just
   // before, for as long as the replica lags. One day's bucket is small.
   async listSessionsForDay(day: string): Promise<PomodoroSession[]> {

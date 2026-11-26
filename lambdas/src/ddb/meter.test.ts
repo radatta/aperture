@@ -56,6 +56,25 @@ describe('metered', () => {
     expect(parse(lines[0]!)).toMatchObject({ status: 'threw', ru: 4, op: 'listTasks' });
   });
 
+  it('a log that throws never replaces the response or the error', async () => {
+    const h = (boom: boolean) =>
+      metered(
+        'bff',
+        () => 'x',
+        async () => {
+          if (boom) throw new Error('boom');
+          return { statusCode: 200 };
+        },
+        {
+          log: () => {
+            throw new Error('log down');
+          },
+        },
+      );
+    await expect(h(false)({})).resolves.toEqual({ statusCode: 200 });
+    await expect(h(true)({})).rejects.toThrow('boom');
+  });
+
   it('writes exactly the allowed keys, with the op, timing and per-access entries', async () => {
     const lines: string[] = [];
     await run(lines)({ units: [0.5, 1.5] });

@@ -3,29 +3,34 @@
 // Reads files only; never fetches, spawns or writes outside --out. Plain `node`: erasable syntax, node: builtins only.
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { analyse, checkCap, parseLogs, render } from './read-cost.ts';
+import { pathToFileURL } from 'node:url';
+import { analyse, checkCap, fetchLines, oneUser, parseLogs, render } from './read-cost.ts';
 import type { Analysis } from './read-cost.ts';
 import type { RunResult } from './report.ts';
 
 export const USAGE = `pnpm devcheck:cost --report <report.json> --logs <devlogs dir> [--logs <dir>…] [--before <analysis.json>] [--out <file.md>]
+pnpm devcheck:cost --report <report.json> --window
   joins the dev slots' ddb_units lines and Lambda REPORT lines (pnpm bot logs --filter '%ddb_units%', then --filter
   REPORT, over the run's window) to the run's step windows and prints the read-cost tables.
   --report   the run's localNotes/devcheck/<run>/report.json
   --logs     a localNotes/devlogs/<key> directory (every *.log in it); repeat for the units and the REPORT fetches
   --before   an earlier run's analysis JSON (written beside --out) for before/after columns
   --out      write the markdown here and the analysis JSON beside it (<out>.json); default: markdown to stdout
-  Exit: 0 tables written · 1 refused (a fetch at its cap, a report without step stamps, a parallel two-lane run) · 2 a bad argument`;
+  --window   print the two \`pnpm bot logs\` fetches for the run's window and slot, and stop
+  Exit: 0 written · 1 refused (a fetch at its cap, failed, or missing a group; no units line in the run; a report
+  without step stamps; a two-user run) · 2 a bad argument`;
 
 interface Args {
   report?: string;
   logs: string[];
   before?: string;
   out?: string;
+  window: boolean;
   help: boolean;
 }
 
 export function parseArgs(argv: string[]): Args {
-  const a: Args = { logs: [], help: false };
+  const a: Args = { logs: [], window: false, help: false };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i]!;
     const v = () => {
@@ -38,21 +43,44 @@ export function parseArgs(argv: string[]): Args {
     else if (k === '--logs') a.logs.push(v());
     else if (k === '--before') a.before = v();
     else if (k === '--out') a.out = v();
+    else if (k === '--window') a.window = true;
     else throw new Error(`unknown argument ${k}`);
   }
-  if (!a.help && (!a.report || !a.logs.length)) throw new Error('--report and --logs are required');
+  if (a.help) return a;
+  if (!a.report) throw new Error('--report is required');
+  if (a.window && (a.logs.length || a.before || a.out))
+    throw new Error('--window takes only --report');
+  if (!a.window && !a.logs.length) throw new Error('--logs is required');
   return a;
+}
+
+// Each --logs directory: every *.log in it, and both edges' groups (a partial artifact lacks one).
+function readLogs(dir: string): string[] {
+  const files = readdirSync(dir)
+    .filter((x) => x.endsWith('.log'))
+    .sort();
+  if (!files.length)
+    throw new Error(`${dir}: no .log file — not a \`pnpm bot logs\` fetch directory`);
+  for (const edge of ['bff', 'mcp'])
+    if (!files.some((f) => f.startsWith(edge)))
+      throw new Error(`${dir}: no ${edge} group's log — a partial fetch; refetch both groups`);
+  return files.map((f) => {
+    const text = readFileSync(join(dir, f), 'utf8');
+    checkCap(join(dir, f), text);
+    return text;
+  });
 }
 
 export function run(
   argv: string[],
   out: (s: string) => void = (s) => process.stdout.write(s),
+  err: (s: string) => void = (s) => process.stderr.write(s),
 ): number {
   let a: Args;
   try {
     a = parseArgs(argv);
   } catch (e) {
-    out(`${(e as Error).message}\n${USAGE}\n`);
+    err(`${(e as Error).message}\n${USAGE}\n`);
     return 2;
   }
   if (a.help) {
@@ -60,16 +88,13 @@ export function run(
     return 0;
   }
   try {
-    const texts: string[] = [];
-    for (const dir of a.logs)
-      for (const f of readdirSync(dir)
-        .filter((x) => x.endsWith('.log'))
-        .sort()) {
-        const text = readFileSync(join(dir, f), 'utf8');
-        checkCap(join(dir, f), text);
-        texts.push(text);
-      }
     const report = JSON.parse(readFileSync(a.report!, 'utf8')) as RunResult;
+    if (a.window) {
+      oneUser(report);
+      out(`${fetchLines(report).join('\n')}\n`);
+      return 0;
+    }
+    const texts = a.logs.flatMap(readLogs);
     const analysis = analyse(report, parseLogs(texts));
     const before = a.before ? (JSON.parse(readFileSync(a.before, 'utf8')) as Analysis) : undefined;
     const md = render(analysis, before);
@@ -80,9 +105,10 @@ export function run(
     } else out(md);
     return 0;
   } catch (e) {
-    out(`devcheck:cost: ${(e as Error).message}\n`);
+    err(`devcheck:cost: ${(e as Error).message}\n`);
     return 1;
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) process.exitCode = run(process.argv.slice(2));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  process.exitCode = run(process.argv.slice(2));
