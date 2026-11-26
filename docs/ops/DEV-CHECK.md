@@ -267,7 +267,11 @@ session before launch`.
   (`siri-capture.ts`) — and a new kind's goes there too, not here
   (`git grep -l 'ledger kinds\? (DEV-CHECK' scripts/src/devcheck/scenarios` finds them).
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
-  A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
+  A coach attempt's answer is one export read per pass (sweep, removals, read-back), plus one per throw: the
+  export is an eventual read, any throw drops the held answer before the retry, a returned delete removes its
+  own id from it, and the read-back takes its own after the last removal — except for an attempt this run
+  called `gone`, which got no delete and so is read back on its own read. A task already gone
+  (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't
   know are never deleted: ones there before the run are listed, ones that appeared during it (a create path the
   recorder missed) fail the run — keep the test user free of recurring series, whose day's occurrence can
