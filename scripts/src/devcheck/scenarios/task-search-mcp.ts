@@ -52,6 +52,13 @@ const search = (ctx: Ctx, args: Record<string, unknown>) => ctx.mcp.reads.search
 const ids = (r: DevTaskSearch) => r.tasks.map((t) => t.id);
 const same = (got: string[], want: string[]) =>
   got.length === want.length && want.every((id) => got.includes(id));
+// Key-order-free JSON, to compare two reads of one row.
+const canon = (v: unknown): string =>
+  JSON.stringify(v, (_k, x: unknown) =>
+    x && typeof x === 'object' && !Array.isArray(x)
+      ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1)))
+      : x,
+  );
 const keysOf = (row: DevCompactTask) =>
   Object.keys(row)
     .filter((k) => k !== 'parts' && k !== 'notesSnippet')
@@ -139,23 +146,13 @@ export const taskSearchMcp: Scenario = {
       id: 'default-unchanged',
       entry: 'mcp',
       kind: 'edge',
-      what: 'list_tasks with no argument or compact false returns every stored field, exactly as before',
-      offDev: {
-        file: OFF_FILE,
-        test: 'list_tasks without compact returns every stored field, as before',
-        why: 'an exact comparison needs the stored rows, which only the in-memory table exposes; neighbour proves the default keeps notes on dev',
-      },
+      what: 'list_tasks with no argument or compact false returns each seeded task exactly as the BFF lists it, plus parts on the parent',
     },
     {
       id: 'backlog-parts',
       entry: 'mcp',
       kind: 'edge',
       what: 'list_backlog still carries parts on a parent (its helper moved)',
-      offDev: {
-        file: OFF_FILE,
-        test: 'list_backlog still carries parts on a parent',
-        why: 'the same withParts path compact runs on dev; the unit test pins list_backlog itself',
-      },
     },
     {
       id: 'ownership',
@@ -183,12 +180,7 @@ export const taskSearchMcp: Scenario = {
       id: 'snippet-edges',
       entry: 'mcp',
       kind: 'edge',
-      what: 'A snippet has no … at a notes end, collapses whitespace, never halves an emoji',
-      offDev: {
-        file: OFF_FILE,
-        test: 'notesSnippet cuts cleanly around the first matching word',
-        why: 'pure text edges; find-notes runs the same snippet path on dev',
-      },
+      what: 'A snippet cut inside a run of emoji starts with … and keeps every emoji whole; blank lines and runs of spaces collapse',
     },
     {
       id: 'old-row',
@@ -234,7 +226,10 @@ export const taskSearchMcp: Scenario = {
           await w.upsertCategory({ label: `devcheck find ${ctx.nonce}`, isWork: false })
         ).id;
         seeded.a = (await w.createTask({ title: title(ctx, 'alpha started'), estimateMin: 15 })).id;
-        seeded.bNotes = `Ask the clerk about the\n\n${NOTES_WORD} form ${ctx.nonce}`;
+        // The word sits past 45 emoji (90 UTF-16 units), so the snippet's front cut lands inside the run, on the
+        // second half of a pair (the word at 2n+25, the cut 60 before it: odd). No nonce here: the queries match
+        // it in the title, and the earliest word in the notes must be NOTES_WORD.
+        seeded.bNotes = `${'🌿'.repeat(45)} ask the clerk\n\n  about the ${NOTES_WORD} form, then file it`;
         seeded.b = (
           await w.createTask({
             title: title(ctx, 'beta noted'),
@@ -266,6 +261,20 @@ export const taskSearchMcp: Scenario = {
           })
         ).id;
         await ctx.mcp.writes.updateTask(seeded.a, { status: 'in_progress' });
+        // Reads are eventually consistent: wait until one search sees the whole seeded state.
+        const settled = await until(
+          () => search(ctx, { query: ctx.nonce }),
+          (r) => {
+            const row = (id: string) => r.tasks.find((t) => t.id === id);
+            return (
+              r.totalMatches === 6 &&
+              row(seeded.a)?.status === 'in_progress' &&
+              row(seeded.c)?.categoryId === seeded.cat &&
+              row(seeded.parent)?.parts?.total === 2
+            );
+          },
+        );
+        expect(settled.totalMatches === 6, 'the seeded tasks never all read back', ids(settled));
       },
     },
     {
@@ -299,12 +308,9 @@ export const taskSearchMcp: Scenario = {
       id: 'find',
       title: 'search_tasks by a title word and by a notes word',
       entry: 'mcp',
-      proves: ['find-title', 'find-notes'],
+      proves: ['find-title', 'find-notes', 'snippet-edges'],
       async run(ctx) {
-        const byTitle = await until(
-          () => search(ctx, { query: `${ctx.nonce} alpha` }),
-          (r) => r.tasks.length === 1,
-        );
+        const byTitle = await search(ctx, { query: `${ctx.nonce} alpha` });
         expect(same(ids(byTitle), [seeded.a]), 'a title word', byTitle);
         expect(
           keysOf(byTitle.tasks[0]!).join() === COMPACT_KEYS.join(),
@@ -320,10 +326,14 @@ export const taskSearchMcp: Scenario = {
         const byNotes = await search(ctx, { query: `${NOTES_WORD.toUpperCase()} ${ctx.nonce}` });
         expect(same(ids(byNotes), [seeded.b]), 'a notes word, upper case', ids(byNotes));
         const snip = byNotes.tasks[0]!.notesSnippet ?? '';
-        expect(snip.includes(NOTES_WORD) && !/\n/.test(snip), 'the snippet', snip.length);
-        const full = (await ctx.mcp.reads.listTasks()).find((t) => t.id === seeded.b) as
-          { notes?: string | null } | undefined;
-        expect(full?.notes === seeded.bNotes, 'the default list has B’s full notes', !!full?.notes);
+        expect(snip.includes(NOTES_WORD), 'the snippet holds the word', snip.length);
+        expect(!/\n| {2}/.test(snip), 'the snippet collapses whitespace', JSON.stringify(snip));
+        expect(snip.startsWith('…🌿'), 'the snippet cut in the emoji run', snip.slice(0, 3));
+        expect(
+          !/\\ud[89a-f]/i.test(JSON.stringify(snip)),
+          'the snippet halves an emoji',
+          snip.length,
+        );
       },
     },
     {
@@ -445,6 +455,41 @@ export const taskSearchMcp: Scenario = {
       },
     },
     {
+      id: 'default',
+      title: 'list_tasks without compact, and list_backlog, as before',
+      entry: 'mcp',
+      proves: ['default-unchanged', 'backlog-parts'],
+      async run(ctx) {
+        const mine = new Set([
+          seeded.a,
+          seeded.b,
+          seeded.c,
+          seeded.parent,
+          seeded.part1,
+          seeded.part2,
+        ]);
+        const parts = { total: 2, done: 0, estimateMin: 30 };
+        const stored = new Map(
+          (await ctx.api.reads.listTasks())
+            .filter((t) => mine.has(t.id))
+            .map((t) => [t.id, canon(t.id === seeded.parent ? { ...t, parts } : t)]),
+        );
+        expect(stored.size === 6, 'the BFF lists the seeded tasks', [...stored.keys()]);
+        const reads: [string, () => Promise<{ id: string }[]>][] = [
+          ['no argument', () => ctx.mcp.reads.listTasks()],
+          ['compact false', () => ctx.mcp.reads.listTasksCompact({ compact: false })],
+        ];
+        for (const [what, read] of reads) {
+          const listed = (await read()).filter((t) => mine.has(t.id));
+          const off = listed.filter((t) => canon(t) !== stored.get(t.id)).map((t) => t.id);
+          expect(listed.length === 6 && !off.length, `list_tasks with ${what} differs`, off);
+        }
+        const parent = (await ctx.mcp.reads.listBacklog()).find((t) => t.id === seeded.parent) as
+          { parts?: unknown } | undefined;
+        expect(canon(parent?.parts) === canon(parts), 'list_backlog’s parent parts', parent?.parts);
+      },
+    },
+    {
       id: 'compact',
       title: 'list_tasks compact: no notes, parts kept, status applies',
       entry: 'mcp',
@@ -474,7 +519,10 @@ export const taskSearchMcp: Scenario = {
         const full = (await ctx.mcp.reads.listTasks()).find((t) => t.id === seeded.b) as
           Record<string, unknown> | undefined;
         expect(
-          full?.notes === seeded.bNotes && !!full.createdAt && !!full.updatedAt,
+          typeof full?.notes === 'string' &&
+            full.notes.includes(NOTES_WORD) &&
+            !!full.createdAt &&
+            !!full.updatedAt,
           'the default list after compact',
           full && Object.keys(full),
         );

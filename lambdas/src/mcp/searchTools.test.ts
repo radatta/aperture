@@ -162,7 +162,8 @@ describe('search_tasks', () => {
     const t = await add({ title: 'old row', notes: 'kept' });
     // Strip the fields a pre-existing row lacks, straight in the table.
     const item = (await doc.query(pk(U), sk.task(t.id)))[0]!;
-    const { dueTime: _t, parentId: _p, notes: _n, ...old } = item;
+    const old = { ...item };
+    for (const k of ['dueTime', 'parentId', 'notes']) delete old[k];
     doc.putNow(old);
     const [row] = (await search({ query: 'old row' })).tasks;
     expect(row).toEqual({
