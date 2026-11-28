@@ -9,7 +9,8 @@ import { failOnConsoleNoise } from '@aperture/shared/console-guard';
 const env = () => (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
 const atLoad = env();
 
-describe('act() checking (setup.ts)', () => {
+// Order is load-bearing (the third test reads what the second left), so it stays fixed whatever the shuffle setting.
+describe('act() checking (setup.ts)', { shuffle: false }, () => {
   it('is on as the file loads', () => {
     expect(atLoad).toBe(true);
     expect(env()).toBe(true);
@@ -20,7 +21,7 @@ describe('act() checking (setup.ts)', () => {
     expect(env()).toBe(false);
   });
 
-  // Reads what the test above left: tests in a file run in order (the config shuffles files, not tests).
+  // Reads what the test above left.
   it('is back on for the next test', () => {
     expect(env()).toBe(true);
   });

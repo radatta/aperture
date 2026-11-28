@@ -10,6 +10,7 @@ import { CAPTURE_OUTBOX_KEY, CAPTURE_PARKED_KEY, OUTBOX_STALE_MS } from './captu
 import { PomodoroProvider } from '../pomodoro/PomodoroProvider';
 import { IdleFocus } from '../pomodoro/TimerBar';
 import { CaptureBar } from './CaptureBar';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -551,7 +552,7 @@ describe('CaptureBar', () => {
         focusManager.setFocused(true);
         await waitFor(() => expect(spy).toHaveBeenCalled());
         await expect(spy.mock.results[0]!.value).rejects.toThrow();
-        await new Promise((r) => setTimeout(r, 0)); // let the query settle into its error state
+        await realWait(0); // let the query settle into its error state
       } finally {
         focusManager.setFocused(undefined);
       }
@@ -1360,7 +1361,7 @@ describe('CaptureBar', () => {
       await user.type(box(), 'x');
       await user.click(screen.getByRole('button', { name: 'Review before saving' }));
       await waitFor(() => expect(api.parseTask).toHaveBeenCalled());
-      await new Promise((r) => setTimeout(r, 0));
+      await realWait(0);
       expect(screen.queryByText('yesterday parse')).toBeNull();
     });
 

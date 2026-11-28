@@ -11,6 +11,7 @@ import {
 import type { ApiClient } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient, STUB_FAIL_NEXT_SYNC_KEY } from '../../data/stubClient';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -589,7 +590,7 @@ describe('Finances page', () => {
     const dialog = await screen.findByRole('dialog', { name: /Chipotle/ });
     await user.type(within(dialog).getByLabelText('Note'), 'split{Enter}');
     await waitFor(() => expect(document.activeElement?.getAttribute('data-txn-id')).toBe(id));
-    await new Promise((r) => setTimeout(r, 20));
+    await realWait(20);
     expect(screen.queryByRole('dialog', { name: /Chipotle/ })).toBeNull();
     expect(save.mock.calls).toEqual([[id, 'split']]);
   });
@@ -625,7 +626,7 @@ describe('Finances page', () => {
       focusManager.setFocused(true);
     });
     await waitFor(() => expect(list).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 20));
+    await realWait(20);
     focusManager.setFocused(undefined);
   }
 
@@ -683,7 +684,7 @@ describe('Finances page', () => {
     const budget = within(dialog).getByRole('radio', { name: 'Budget' });
     expect(budget.getAttribute('aria-checked')).toBe('true'); // shown at once
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 20));
+    await realWait(20);
     expect(save).toHaveBeenCalledTimes(1); // the second waits for the first
     gates.shift()!();
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
@@ -1056,7 +1057,7 @@ describe('Refund link search', () => {
     } finally {
       focusManager.setFocused(undefined);
     }
-    await new Promise((r) => setTimeout(r, 50)); // past the hand-off's effect
+    await realWait(50); // past the hand-off's effect
     expect(document.activeElement).toBe(note);
   });
 

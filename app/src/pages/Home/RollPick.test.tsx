@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { addDays, todayKey } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -94,7 +95,7 @@ describe('Rolls ↔ daytime home', () => {
     await user.click(chip);
     await screen.findByRole('alert');
     await waitFor(() => expect(list.mock.calls.length).toBeGreaterThan(reads)); // the invalidate's refetch
-    await new Promise((r) => setTimeout(r, 100));
+    await realWait(100);
     expect(screen.getByRole('alert').textContent).toMatch(/change its time/);
   });
 });

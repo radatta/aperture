@@ -3,6 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp, timersAdopted } from '../../test/utils';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -95,7 +96,7 @@ describe('Plan today › the waiting count', () => {
     renderApp({ api, path: '/' });
     await user.click(screen.getByRole('button', { name: 'Morning' }));
     await screen.findByText(/Nothing planned yet/);
-    await new Promise((r) => setTimeout(r, 100)); // the tasks read has landed
+    await realWait(100); // the tasks read has landed
     expect(line()).toBeNull();
     open();
     await waitFor(() => expect(line()).toBe('1 waiting in the backlog'));

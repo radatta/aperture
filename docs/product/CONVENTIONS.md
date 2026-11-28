@@ -82,8 +82,9 @@ can only show up in a local run, and only when vitest's workers happen to pair t
 - **New module-level state in `app/src`** (a singleton, cache, or `let`) needs a reset in
   `app/src/test/setup.ts`'s `afterEach`, or it leaks into the next file — and its module joins the gate's
   setup-imports rule (`scripts/src/gate/rules.ts`; `rules.test.ts` names it if missed).
-- **A test file that uses `vi.resetModules` / `vi.doMock`** belongs in the `isolated` project in
-  `app/vitest.config.ts`.
+- **A test file that uses `vi.resetModules` / `vi.doMock`, or reads shared global state as it loads,** belongs in
+  the `isolated` project in `app/vitest.config.ts` and in its mirror, `PACKAGES[].projects` in
+  `scripts/src/gate/rules.ts`.
 - **File order is shuffled every run.** A failure that comes and goes is order-dependence; the seed is
   printed — reproduce with `--sequence.seed=<n>`.
 
@@ -98,8 +99,9 @@ state update that lands outside `act()` warns and the guard fails the test (`app
 Testing Library's own waits (`findBy*`, `waitFor`, user-event) switch the check off while they wait, so it catches
 what lands outside them. Wait on the thing itself: `findBy*` or `waitFor` for what the screen shows; an awaited `act`
 around a trigger the test fires by hand (a resolved promise, a dispatched event, `focus()`), around a fake-timer
-advance, and around a real-time wait with a tree mounted; `timersAdopted()` (`app/src/test/utils.tsx`) for the timer
-engine's mount read in a test that renders and then only reads the screen. Never an empty `await act(async () => {})`,
+advance; `realWait(ms)` (`app/src/test/realWait.ts`) for a real-time wait with a tree mounted (a raw sleep can catch
+the timer engine's one-second tick, and one `act` around the sleep holds renders and effects to its end);
+`timersAdopted()` (`app/src/test/utils.tsx`) for the timer engine's mount read in a test that renders and then only reads the screen. Never an empty `await act(async () => {})`,
 and never switch the check off to quiet a warning (the one off, in `TaskCard.test.tsx`, observes a render lag that
 `act()` would drain, and restores it in a `finally`). Locally under Claude Code, vitest picks its `agent` reporter, which hides a passing test's logs: pass
 `--reporter=default` to see what CI prints.

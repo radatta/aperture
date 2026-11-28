@@ -14,8 +14,8 @@ import { routes } from '../routes';
 
 // Both helpers wrap PomodoroProvider, whose mount read (adopting running timers) sets state when it answers. A test
 // that renders and then only reads the screen ends before that, outside act(): await timersAdopted() after the
-// render. It waits on that read of the tree rendered last; with no read to wait on it throws
-// (docs/product/CONVENTIONS.md → the console guard).
+// render. It waits on that read of the tree rendered last, once: a second call, or one with no helper render since the
+// last, throws rather than wait on a read already settled (docs/product/CONVENTIONS.md → the console guard).
 let adoptRead: Promise<void> | undefined;
 const noteAdopt = (client: QueryClient) => {
   adoptRead = client
@@ -28,6 +28,7 @@ const noteAdopt = (client: QueryClient) => {
 };
 export async function timersAdopted(): Promise<void> {
   const read = adoptRead;
+  adoptRead = undefined;
   if (!read)
     throw new Error('timersAdopted(): no adopt read found — render through these helpers first');
   await act(async () => void (await read));

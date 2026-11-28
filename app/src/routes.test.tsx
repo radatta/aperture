@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
-import { act, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { AppShell } from './components/AppShell';
 import { lazyPage } from './lib/lazyPage';
 import { renderApp } from './test/utils';
+import { realWait } from './test/realWait';
 
 // The Flux pages are the one lazy chunk (routes.tsx → lib/lazyPage). The Suspense sits inside the route
 // element, so a deep link shows the shell with "Loading…" in the outlet while the chunk loads — never a blank
@@ -35,9 +36,7 @@ describe('routes', () => {
     });
     expect(screen.getByRole('link', { name: 'Flux' })).toBeTruthy(); // the shell, at once
     expect(screen.getByText('Loading…')).toBeTruthy();
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
+    await realWait(50);
     expect(screen.queryByRole('heading', { name: 'Flux history landed' })).toBeNull(); // still held
     expect(screen.getByText('Loading…')).toBeTruthy();
     land();
