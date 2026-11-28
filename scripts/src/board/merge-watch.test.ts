@@ -1,7 +1,7 @@
 // scripts/board/merge-watch.sh (docs/ops/SESSION-BOARD.md → Watchers → merge-watch) against a fake board. The clock
 // is a file, as in watchers.test.ts: PATH shims replace `sleep` (advance the clock, apply the next tick's files, or —
 // with no tick left — kill the watcher, which reads as "stayed quiet") and `date` (`+%s` reads the clock).
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
   existsSync,
@@ -138,14 +138,14 @@ describe('merge-watch.sh: merges', () => {
   it.skipIf(process.getuid?.() === 0)(
     'a state file it cannot write: its lines, then exit 74 naming it, never a quiet exit 10',
     () => {
-      const dir = fake(
-        [{ [ev('2026-11-18')]: `${merged(231, sha('b'))}\n`, 'board/merge-announced': '' }],
-        (d) => {
-          mkdirSync(join(d, 'board/ran'), { recursive: true });
-          writeFileSync(join(d, 'board/ran-announced'), '');
-          chmodSync(join(d, 'board'), 0o500);
-        },
-      );
+      // only merge-announced is unwritable (a read-only directory at its path: the read finds nothing, the write's
+      // mv into it fails), so the lock and pid files beside it still work
+      const dir = fake([{ [ev('2026-11-18')]: `${merged(231, sha('b'))}\n` }], (d) => {
+        mkdirSync(join(d, 'board/ran'), { recursive: true });
+        writeFileSync(join(d, 'board/ran-announced'), '');
+        mkdirSync(join(d, 'board/merge-announced'));
+        chmodSync(join(d, 'board/merge-announced'), 0o555);
+      });
       try {
         const r = run(dir);
         expect([r.status, r.stderr]).toEqual([
@@ -154,7 +154,7 @@ describe('merge-watch.sh: merges', () => {
         ]);
         expect(r.stdout).toMatch(/MERGED PR 231 bbbbbbb/); // recorded or not, its line is said before the exit
       } finally {
-        chmodSync(join(dir, 'board'), 0o700);
+        chmodSync(join(dir, 'board/merge-announced'), 0o755);
       }
     },
   );
@@ -356,5 +356,28 @@ describe('merge-watch.sh: its shape', () => {
     const dir = fake([]);
     expect(run(dir, ['x'])).toMatchObject({ status: 2 });
     expect(statSync(SCRIPT).mode & 0o111).toBe(0o111);
+  });
+});
+
+describe('merge-watch.sh: the singleton lock', () => {
+  it('held by another process: 73, no wrong pid named, nothing seeded', async () => {
+    const dir = fake([{ [ev('2026-11-18')]: `${merged(220, sha('a'))}\n` }]);
+    const lock = join(dir, 'board/merge-watch.lock');
+    writeFileSync(join(dir, 'board/merge-watch.pid'), `${process.pid}\n`); // alive, but not the holder
+    // one process holds it: bash takes the lock, then execs into the sleep, so one kill frees it
+    const holder = spawn('bash', ['-c', 'exec 9>>"$0" && flock 9 && exec sleep 30', lock], {
+      stdio: 'ignore',
+    });
+    try {
+      for (let i = 0; i < 100 && spawnSync('flock', ['-n', lock, 'true']).status !== 1; i++)
+        await new Promise((r) => setTimeout(r, 50));
+      const r = run(dir);
+      expect(r.status).toBe(73);
+      expect(r.stderr).toMatch(/held, but not by the pid in .*merge-watch\.pid/);
+      expect(r.stderr).not.toContain(String(process.pid));
+      expect(existsSync(join(dir, 'board/merge-announced'))).toBe(false);
+    } finally {
+      holder.kill('SIGKILL');
+    }
   });
 });

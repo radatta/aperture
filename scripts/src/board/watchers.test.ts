@@ -3,7 +3,7 @@
 // next tick's files, or — with no tick left — kill the watcher, which reads as "stayed quiet") and `date` (`+%s` reads
 // the clock; `-d @N` forms pass through). Each exit fires once, at the tick worked out by hand; each non-exit stays
 // quiet. TZ=PST8 needs no tzdata and pins local time to -08:00, which the meter rows and history file names use.
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   chmodSync,
@@ -57,6 +57,7 @@ exec ${REAL_DATE} -d "@$c" "$@"
 type Files = Record<string, string>; // path under the fake root → content
 type Run = {
   status: number | null;
+  pid: number | undefined;
   quiet: boolean;
   tick: number;
   stdout: string;
@@ -89,24 +90,27 @@ function fake(t0: number, ticks: Files[]) {
   return dir;
 }
 
+// Always the fake's own board dir, so no test ever meets the live watchers' locks.
+const envOf = (dir: string): NodeJS.ProcessEnv => ({
+  PATH: `${dir}/bin:${process.env.PATH}`,
+  HOME: process.env.HOME,
+  TZ: 'PST8',
+  WATCH_FAKE: dir,
+  APERTURE_BOARD_DIR: join(dir, 'board'), // the usage dir follows it: <board>/../usage
+  APERTURE_CGROUP_DIR: join(dir, 'cg'),
+  APERTURE_LOADAVG: join(dir, 'loadavg'),
+});
+
 function run(dir: string, script: string, args: string[] = [], env: NodeJS.ProcessEnv = {}): Run {
   const r = spawnSync('bash', [join(BOARD, script), ...args], {
     encoding: 'utf8',
     timeout: 25_000,
     killSignal: 'SIGKILL', // a hung watcher must never read as the shim's SIGTERM
-    env: {
-      PATH: `${dir}/bin:${process.env.PATH}`,
-      HOME: process.env.HOME,
-      TZ: 'PST8',
-      WATCH_FAKE: dir,
-      APERTURE_BOARD_DIR: join(dir, 'board'), // the usage dir follows it: <board>/../usage
-      APERTURE_CGROUP_DIR: join(dir, 'cg'),
-      APERTURE_LOADAVG: join(dir, 'loadavg'),
-      ...env,
-    },
+    env: { ...envOf(dir), ...env },
   });
   return {
     status: r.status,
+    pid: r.pid,
     // quiet: killed by the shim once every tick ran, and nothing on stderr on the way
     quiet:
       r.signal === 'SIGTERM' &&
@@ -742,6 +746,319 @@ describe('context-watch.sh', () => {
   });
 });
 
+// ---- the meter gone blind (exit 13) ----
+// A live working session: this test process, with its real start tick (sb_alive checks both).
+const startTick = (pid: number) =>
+  readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ').at(-1)!.split(' ')[19]!;
+const session = (o: object = {}, file = `${process.pid}`) => ({
+  [`board/sessions/${file}.json`]: JSON.stringify({
+    pid: process.pid,
+    pidStart: startTick(process.pid),
+    state: 'working',
+    name: 'lane-a',
+    ...o,
+  }),
+});
+const blank = (n: number): Files[] => Array.from({ length: n }, () => ({}));
+const OLD = meterRow(T10 - 9000, 30); // a usable row 2.5 h old at the start: 07:30
+const old = meter([OLD]);
+const stale = (first: Files, n = 12, args: string[] = []) => usage([first, ...blank(n - 1)], args);
+const deadPid = () => spawnSync('true').pid!;
+const fired = (r: Run) => read(r, 'board/meter-stale-fired');
+
+describe('usage-watch.sh: the meter gone blind (13)', () => {
+  it('no usable row for staleSec while a session works: 13 after freshSec of blind ticks', () => {
+    const r = stale({ ...old, ...session() });
+    expect([r.status, r.tick, r.stdout]).toEqual([
+      13,
+      10,
+      '10:10 METER STALE last usable row 11-17 07:30, working: lane-a\n',
+    ]);
+    expect(fired(r)).toBe(`${T10 + 600}\n`);
+    expect(read(r, 'board/usage-watch.log')).toContain('10:10 METER STALE last usable row');
+    // a row exactly staleSec old at tick 12 fires there; one second newer, a tick later
+    const edge = stale({ ...meter([meterRow(T10 + 720 - 7200, 30)]), ...session() }, 14);
+    expect([edge.status, edge.tick]).toEqual([13, 12]);
+    const newer = stale({ ...meter([meterRow(T10 + 721 - 7200, 30)]), ...session() }, 14);
+    expect([newer.status, newer.tick]).toEqual([13, 13]);
+    const hard = stale({ ...old, ...session() }, 12, ['--hard-only']);
+    expect([hard.status, hard.tick]).toEqual([13, 10]);
+  });
+
+  it('nothing working: quiet, whatever the session files say', () => {
+    for (const s of [
+      {},
+      session({ state: 'idle' }),
+      session({ pid: deadPid() }),
+      session({ pidStart: '1' }),
+      session({ state: 'gone' }),
+    ])
+      expect(stale({ ...old, ...s }, 14).quiet, JSON.stringify(s)).toBe(true);
+  });
+
+  it('a healed blind spell does not arm the next pause: a reading resets the hold', () => {
+    const r = usage([
+      { ...old, ...session() },
+      ...blank(8),
+      meter([OLD, meterRow(T10 + 540, 30)]), // tick 9: a reading
+      { clock: `${T10 + 600 + 8 * 3600}\n` }, // tick 10: the VM slept 8 h
+      ...blank(5),
+    ]);
+    expect(r.quiet).toBe(true);
+  });
+
+  it('a pause is not an outage: the hold counts ticks, not the clock', () => {
+    const wake = T10 + 60 + 8 * 3600;
+    const r = usage([
+      { ...meter([meterRow(T10 - 30, 30)]), ...session() },
+      { clock: `${wake}\n` }, // tick 1: every row is 8 h old
+      {},
+      meter([meterRow(T10 - 30, 30), meterRow(wake + 120, 30)]), // tick 3: the lane's logger writes
+      ...blank(4),
+    ]);
+    expect(r.quiet).toBe(true);
+  });
+
+  it('a bad session file hides nothing and counts for nothing', () => {
+    const torn = stale({ ...old, 'board/sessions/1.json': '{"pid":1,"sta', ...session() });
+    expect([torn.status, torn.tick]).toEqual([13, 10]);
+    for (const text of [
+      '[1]',
+      '5',
+      'null',
+      JSON.stringify({ pid: `${process.pid}`, state: 'working' }),
+    ])
+      expect(stale({ ...old, 'board/sessions/9.json': text }, 14).quiet, text).toBe(true);
+  });
+
+  it('rows without a weekly % are not a reading, and do not make the meter fresh', () => {
+    const rows = [
+      OLD,
+      JSON.stringify({ ts: ts(T10 - 30), name: 's', rl: null }),
+      JSON.stringify({ ts: ts(T10 - 20), name: 's', rl: { five_hour: { used_percentage: 3 } } }),
+    ];
+    const r = stale({ ...meter(rows), ...session() });
+    expect([r.status, r.tick]).toEqual([13, 10]);
+    expect(r.stdout).toContain('last usable row 11-17 07:30');
+  });
+
+  it("the row's own offset sets its age; a ts of another shape is dropped alone", () => {
+    const row = (t: unknown) =>
+      JSON.stringify({ ts: t, name: 's', rl: { seven_day: { used_percentage: 30 } } });
+    const east = stale({ ...meter([row('2026-11-17T09:30:00-05:00')]), ...session() }); // 06:30 here, 3.5 h old
+    expect([east.status, east.tick]).toEqual([13, 10]);
+    expect(east.stdout).toContain('last usable row 11-17 06:30');
+    const west = stale({ ...meter([row('2026-11-17T06:30:00-10:00')]), ...session() }, 13); // 08:30 here
+    expect(west.quiet).toBe(true);
+    const bad = [
+      row('2026-11-17T05:00:00Z'),
+      row('2026-11-17T05:00:00'),
+      row('2026-00-17T05:00:00-08:00'),
+      row(5),
+    ];
+    const alone = stale({ ...meter(bad), ...session() });
+    expect([alone.status, alone.stdout]).toEqual([
+      13,
+      '10:10 METER STALE no usable row in the two newest meter files, working: lane-a\n',
+    ]);
+    expect(
+      stale({ ...meter([...bad, row('2026-11-17T08:30:00-08:00')]), ...session() }, 13).quiet,
+    ).toBe(true);
+  });
+
+  it('at most one 13 per staleSec, across both meter watchers (meter-stale-fired)', () => {
+    const m = (v: string | number) => ({ 'board/meter-stale-fired': `${v}\n` });
+    expect(stale({ ...old, ...session(), ...m(T10 - 100) }).quiet).toBe(true);
+    const due = stale({ ...old, ...session(), ...m(T10 + 600 - 7200) });
+    expect([due.status, due.tick, fired(due)]).toEqual([13, 10, `${T10 + 600}\n`]);
+    const younger = stale({ ...old, ...session(), ...m(T10 + 601 - 7200) });
+    expect([younger.status, younger.tick]).toEqual([13, 11]);
+    expect(stale({ ...old, ...session(), ...m('garbage') }).tick).toBe(10);
+    expect(stale({ ...old, ...session(), ...m(T10 + 99999) }).tick).toBe(10);
+    // restarted after its 13, it stays quiet
+    writeFileSync(join(due.dir, 'tick'), '0\n');
+    writeFileSync(join(due.dir, 'clock'), `${T10 + 600}\n`);
+    expect(run(due.dir, 'usage-watch.sh').quiet).toBe(true);
+    // the marker usage-watch wrote keeps context-watch quiet too
+    const ctx = context([
+      { ...meter([meterRow(T10 - 30, 30)]), ...session(), ...m(T10) },
+      ...blank(3),
+    ]);
+    expect(ctx.quiet).toBe(true);
+  });
+
+  // root writes through the mode bit: the container user and CI's runner aren't root
+  it.skipIf(process.getuid?.() === 0)(
+    'an unwritable marker is 74 with the line, never 13 on every restart',
+    () => {
+      const d = fake(T10, [{ ...old, ...session() }, ...blank(11)]);
+      mkdirSync(join(d, 'board/meter-stale-fired'));
+      chmodSync(join(d, 'board/meter-stale-fired'), 0o555);
+      const r = run(d, 'usage-watch.sh');
+      expect([r.status, r.stdout]).toEqual([
+        74,
+        '10:10 METER STALE last usable row 11-17 07:30, but meter-stale-fired is unwritable\n',
+      ]);
+    },
+  );
+
+  it('no meter file at all: 13 only when a session works', () => {
+    const r = stale(session());
+    expect([r.status, r.tick, r.stdout]).toEqual([
+      13,
+      10,
+      '10:10 METER STALE no usable row in the two newest meter files, working: lane-a\n',
+    ]);
+    expect(stale({}, 14).quiet).toBe(true);
+  });
+});
+
+describe('context-watch.sh: the meter gone blind (13)', () => {
+  it('13 by the same rule, on its own usable test (a ctx object and a name)', () => {
+    const noCtx = meter([meterRow(T10 - 30, 30)]); // fresh, with a weekly %, but no ctx
+    const r = context([{ ...noCtx, ...session() }, ...blank(3)]);
+    expect([r.status, r.tick, r.stdout]).toEqual([
+      13,
+      2,
+      '10:10 METER STALE no usable row in the two newest meter files, working: lane-a\n',
+    ]);
+    expect(json(r, 'board/ctx.json')).toEqual([]);
+    expect(context([noCtx, ...blank(4)]).quiet).toBe(true);
+    const urgent = context([
+      { ...meter([ctxRow(T10 - 30, 'a', 600000)]), ...session() },
+      ...blank(3),
+    ]);
+    expect([urgent.status, urgent.tick]).toEqual([9, 0]);
+  });
+});
+
+// ---- the singleton lock (exit 73) ----
+const REAL_SLEEP = ['/usr/bin/sleep', '/bin/sleep'].find(existsSync)!;
+// A holder's sleep: records its pid, then becomes a real 30 s sleep, so the holder sits in it.
+const HOLD_SLEEP = `#!/bin/bash
+echo $$ >"$WATCH_FAKE/sleeper"
+exec ${REAL_SLEEP} 30
+`;
+const WATCHERS = {
+  'pace-watch.sh': () => paceFake(T10, 3),
+  'usage-watch.sh': () => fake(T10, [meter([meterRow(T10 - 30, 20)]), {}]),
+  'context-watch.sh': () => fake(T10, [meter([ctxRow(T10 - 30, 'a', 1000)]), {}]),
+  'merge-watch.sh': () => fake(T10, [{}, {}]),
+} as const;
+type W = keyof typeof WATCHERS;
+const kill = (pid: number | undefined, sig: NodeJS.Signals = 'SIGKILL') => {
+  try {
+    if (pid) process.kill(pid, sig);
+  } catch {
+    /* gone already */
+  }
+};
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const pidOf = (dir: string, w: W) =>
+  readFileSync(join(dir, `board/${w.replace('.sh', '')}.pid`), 'utf8');
+
+// Starts a copy of the watcher that sits in a real sleep holding the lock; resolves once it is there.
+async function holder(dir: string, w: W) {
+  mkdirSync(join(dir, 'hbin'), { recursive: true });
+  writeFileSync(join(dir, 'hbin/sleep'), HOLD_SLEEP, { mode: 0o755 });
+  writeFileSync(join(dir, 'hbin/date'), DATE, { mode: 0o755 });
+  const p = spawn('bash', [join(BOARD, w)], {
+    stdio: 'ignore',
+    env: { ...envOf(dir), PATH: `${dir}/hbin:${process.env.PATH}` },
+  });
+  const exited = new Promise<void>((res) => p.once('exit', () => res()));
+  for (let i = 0; i < 200 && !existsSync(join(dir, 'sleeper')); i++)
+    await new Promise((r) => setTimeout(r, 50));
+  const sleeper = Number(readFileSync(join(dir, 'sleeper'), 'utf8'));
+  return { pid: p.pid!, sleeper, exited };
+}
+
+describe('the singleton lock (73)', () => {
+  vi.setConfig({ testTimeout: 60_000 });
+
+  it('a second copy is refused with the holder’s pid, before it writes any state', async () => {
+    const hs: { pid: number; sleeper: number }[] = [];
+    try {
+      for (const w of Object.keys(WATCHERS) as W[]) {
+        const dir = WATCHERS[w]();
+        const h = await holder(dir, w);
+        hs.push(h);
+        rmSync(join(dir, 'board/ctx-alerted.json'), { force: true });
+        rmSync(join(dir, 'board/merge-announced'), { force: true });
+        const r = run(dir, w, w === 'usage-watch.sh' ? ['--hard-only'] : []);
+        expect(r.status, w).toBe(73);
+        expect(r.stderr, w).toMatch(new RegExp(`already running as pid ${h.pid} `));
+        expect(read(r, `board/${w.replace('.sh', '')}.log`), w).toContain(
+          `already running as pid ${h.pid}`,
+        );
+        expect(pidOf(dir, w).trim(), w).toBe(String(h.pid));
+        expect(existsSync(join(dir, 'board/ctx-alerted.json')), w).toBe(false);
+        expect(existsSync(join(dir, 'board/merge-announced')), w).toBe(false);
+      }
+    } finally {
+      hs.forEach((h) => (kill(h.pid), kill(h.sleeper)));
+    }
+  });
+
+  it('a copy stopped by pid frees the lock at once, though its sleep lives on', async () => {
+    for (const w of Object.keys(WATCHERS) as W[]) {
+      const dir = WATCHERS[w]();
+      const h = await holder(dir, w);
+      try {
+        kill(h.pid, 'SIGTERM');
+        await h.exited;
+        expect(alive(h.sleeper), w).toBe(true);
+        const r = run(dir, w);
+        expect([r.quiet, r.stderr], w).toEqual([true, '']);
+        expect(pidOf(dir, w).trim(), w).toBe(String(r.pid));
+      } finally {
+        kill(h.pid);
+        kill(h.sleeper);
+      }
+    }
+  });
+
+  it('a dead copy’s lock and pid files are taken over', () => {
+    for (const w of Object.keys(WATCHERS) as W[]) {
+      const dir = WATCHERS[w]();
+      const n = w.replace('.sh', '');
+      writeFileSync(join(dir, `board/${n}.lock`), '');
+      writeFileSync(join(dir, `board/${n}.pid`), `${deadPid()}\n`);
+      const r = run(dir, w);
+      expect(r.quiet, w).toBe(true);
+      expect(pidOf(dir, w).trim(), w).toBe(String(r.pid));
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('lock faults are 74, never 73, and no tick runs', () => {
+    const asDir = WATCHERS['usage-watch.sh']();
+    mkdirSync(join(asDir, 'board/usage-watch.lock'));
+    const a = run(asDir, 'usage-watch.sh');
+    expect([a.status, a.tick]).toEqual([74, 0]);
+    expect(a.stderr).toMatch(/cannot open .*usage-watch\.lock/);
+
+    const shim = WATCHERS['usage-watch.sh']();
+    writeFileSync(join(shim, 'bin/flock'), '#!/bin/bash\nexit 66\n', { mode: 0o755 });
+    const b = run(shim, 'usage-watch.sh');
+    expect([b.status, b.tick]).toEqual([74, 0]);
+    expect(b.stderr).toMatch(/flock failed \(66\)/);
+
+    const ro = WATCHERS['usage-watch.sh']();
+    mkdirSync(join(ro, 'board/usage-watch.pid'));
+    chmodSync(join(ro, 'board/usage-watch.pid'), 0o555);
+    const c = run(ro, 'usage-watch.sh');
+    expect([c.status, c.tick]).toEqual([74, 0]);
+    expect(c.stderr).toMatch(/cannot write .*usage-watch\.pid/);
+  });
+});
+
 // ---- all three ----
 function limitsWithout(path: readonly string[]) {
   const l = structuredClone(LIMITS);
@@ -835,7 +1152,7 @@ describe('limits.json and the scripts themselves', () => {
         idleFromHour: 7,
         idleEverySec: 1800,
       },
-      usage: { softPct: 58, hardPct: 60, intervalSec: 60, freshSec: 600 },
+      usage: { softPct: 58, hardPct: 60, intervalSec: 60, freshSec: 600, staleSec: 7200 },
       context: {
         flagPct: 40,
         urgentPct: 50,
@@ -843,6 +1160,7 @@ describe('limits.json and the scripts themselves', () => {
         intervalSec: 300,
         realertSec: 21600,
         freshSec: 600,
+        staleSec: 7200,
       },
     });
     // the four the trip shares with the start gate
@@ -855,7 +1173,7 @@ describe('limits.json and the scripts themselves', () => {
   });
 
   it('every watcher is executable (a sed -i once dropped the bit: exit 126)', () => {
-    for (const s of ['pace-watch.sh', 'usage-watch.sh', 'context-watch.sh'])
+    for (const s of ['pace-watch.sh', 'usage-watch.sh', 'context-watch.sh', 'merge-watch.sh'])
       expect(statSync(join(BOARD, s)).mode & 0o111, s).toBe(0o111);
   });
 });

@@ -5,7 +5,8 @@
 #   3 = trip (calm → hot)   0 = recovered (hot → calm)   5 = a held lane's resume trigger met   4 = hot for hotExitSec
 #   6 = idle capacity and a ready autoStart lane (start it, or say why not)   78 = a limits.json key is missing or bad
 #   12 = the hub's hard stop is STOP_LEAD away (stop.json stopAt, set only by `pnpm board stop HH:MM|off`)
-#   74 = stop-fired unwritable (fixing the board dir comes first)   2 = an argument (it takes none)
+#   74 = stop-fired, or the lock or pid file, unusable (fixing the board dir comes first)   2 = an argument (it takes none)
+#   73 = another copy holds the lock (the line names its pid): nothing to restart
 # The hub owns pace-control.json ({state: calm|hot, since: <epoch>, held, triggers: [{lane, load5Below}]}), stop.json
 # ({stopAt: <epoch>|null}) and queue.json; all are read-only here. Thresholds: limits.json → watchers.pace, plus four
 # of the gate's `pace` keys (psiMemFullMax, psiCpuBelow, anonMiBBelow, minSamples) so the trip and the gate share them.
@@ -38,6 +39,7 @@ FLOOR=$(wl_int $W .pace.minSamples) || exit 78
 # a floor above the window is never reached: no trip, recovery or idle ever, and the gate stays warming
 [ "$FLOOR" -le "$WINDOW" ] || { echo "$W: limits.json .pace.minSamples $FLOOR is above .watchers.pace.windowSamples $WINDOW" | tee -a "$BOARD_DIR/$W.log" >&2; exit 78; }
 sb_init_dirs
+wl_singleton $W
 OUT=$BOARD_DIR/pace.json CTL=$BOARD_DIR/pace-control.json STOPF=$BOARD_DIR/stop.json
 # The mailroom's shared folder (docs/ops/MAILROOM.md): beside the real board's checkout, else only when named.
 HOSTJOBS=${APERTURE_HOSTJOBS:-}
@@ -76,7 +78,7 @@ u_prev=$(cg_usage_usec 2>/dev/null) t_prev=$(date +%s)
 [[ "$u_prev" =~ ^[0-9]+$ ]] || u_prev=
 
 while :; do
-  sleep "$EVERY"
+  sleep "$EVERY" 8>&-
   now=$(date +%s) u=$(cg_usage_usec 2>/dev/null) an=$(cg_anon 2>/dev/null) pc=$(wl_psi cpu some) pmem=$(wl_psi memory full) l5=
   # 12 = the hub's hard stop, before any reading (a stop never waits on a good sample): STOP_LEAD ahead of stopAt, and
   # until an hour past it (a watcher down at the time still wakes the hub), once per stopAt (stop-fired holds the last).

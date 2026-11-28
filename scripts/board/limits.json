@@ -68,14 +68,15 @@
       "idleFromHour": 7,
       "idleEverySec": 1800
     },
-    "usage": { "softPct": 58, "hardPct": 60, "intervalSec": 60, "freshSec": 600 },
+    "usage": { "softPct": 58, "hardPct": 60, "intervalSec": 60, "freshSec": 600, "staleSec": 7200 },
     "context": {
       "flagPct": 40,
       "urgentPct": 50,
       "windowTokens": 1000000,
       "intervalSec": 300,
       "realertSec": 21600,
-      "freshSec": 600
+      "freshSec": 600,
+      "staleSec": 7200
     }
   },
   "measuredAt": "2026-10-14T02:52:03Z",

@@ -75,6 +75,8 @@ present — no `five_hour`.
 
 3. **`pnpm usage doctor`** checks all three: the key, the sourcing line, a meter row under 10 min old.
 
+   From the hub's side, a dead logger shows as the meter watchers' exit 13 (`docs/ops/SESSION-BOARD.md` → _Watchers_).
+
 **Undo:** delete the sourcing line. The data stays; the `/tmp/aperture-usage-stamp-*` files are throwaway.
 
 ## Scan

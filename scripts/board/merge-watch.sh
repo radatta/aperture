@@ -4,6 +4,7 @@
 #   10 = one or more PRs merged on main (one MERGED line each; any RAN lines ride along)
 #   11 = a handed-out Mac line finished, no merge (one RAN line each)
 #   74 = its own state file couldn't be written (stderr names it): a restart would announce the same again
+#   73 = another copy holds the lock (the line names its pid)   74 also = the lock or pid file unusable
 #   78 = jq is missing   2 = an argument (it takes none)
 # What it reads and keeps, and the checks a marker passes before it is read: docs/ops/SESSION-BOARD.md → Watchers.
 # Run: timeout 65m scripts/board/merge-watch.sh   (124 = an hour, nothing happened: restart it)
@@ -14,6 +15,7 @@ W=merge-watch
 EVERY=30 # a merge or a Mac line is a few minutes' news; the sync records merges every 120 s
 sb_init_dirs
 command -v jq >/dev/null || { echo "$W: jq missing" | tee -a "$BOARD_DIR/$W.log" >&2; exit 78; }
+wl_singleton $W
 HIST=$BOARD_DIR/history
 ANN=$BOARD_DIR/merge-announced
 RAN=$BOARD_DIR/ran
@@ -103,5 +105,5 @@ while :; do
     [ ${#shas[@]} -gt 0 ] && exit 10
     exit 11
   fi
-  sleep "$EVERY"
+  sleep "$EVERY" 8>&-
 done

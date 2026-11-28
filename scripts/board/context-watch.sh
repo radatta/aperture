@@ -4,6 +4,8 @@
 # ctx = current_usage), tokens = input + cache_creation + cache_read, pct = tokens / windowTokens. Writes ctx.json
 # (every session, sorted by pct: the hub and the web tower read it) and a history line. Exits:
 #   9 = a session reached urgentPct and wasn't alerted in the last realertSec (ctx-alerted.json keeps when each was)
+#   13 = the meter is blind: no usable row for staleSec while a session works (watch-lib.sh wl_meter_blind)
+#   73 = another copy holds the lock (the line names its pid)   74 = the lock, pid or meter-stale-fired file unusable
 #   78 = a limits.json key is missing or bad   2 = an argument (it takes none) or a bad override
 # Thresholds: limits.json → watchers.context (flagPct is the tower's warn line; this script only checks it sits below
 # urgent); APERTURE_CTX_WINDOW / _URGENT in the env override. windowTokens is the lanes' model's window (1M).
@@ -19,22 +21,25 @@ FLAG=$(wl_need $W .watchers.context.flagPct) || exit 78
 EVERY=$(wl_int $W .watchers.context.intervalSec) || exit 78
 REALERT=$(wl_int $W .watchers.context.realertSec) || exit 78
 FRESH=$(wl_int $W .watchers.context.freshSec) || exit 78
+STALE=$(wl_int $W .watchers.context.staleSec) || exit 78
 [[ "$WINDOW" =~ ^[1-9][0-9]*$ ]] || { echo "$W: APERTURE_CTX_WINDOW must be a whole number >= 1" >&2; exit 2; }
 wl_num "$URGENT" || { echo "$W: APERTURE_CTX_URGENT must be a number" >&2; exit 2; }
 awk -v f="$FLAG" -v u="$LIM_URGENT" 'BEGIN{exit !(f+0 <= u+0)}' || { echo "$W: limits.json flagPct $FLAG is above urgentPct $LIM_URGENT" | tee -a "$BOARD_DIR/$W.log" >&2; exit 78; }
 sb_init_dirs
+wl_singleton $W
 A=$BOARD_DIR/ctx-alerted.json
 [ -f "$A" ] || echo '{}' >"$A"
 
 while :; do
   now=$(date +%s)
   cut=$(date -d "@$((now - FRESH))" +%Y-%m-%dT%H:%M:%S)
-  wl_meter_rows 1500 | jq --arg cut "$cut" --argjson w "$WINDOW" '
+  list=$(wl_meter_rows 1500 | jq --arg cut "$cut" --argjson w "$WINDOW" '
     [.[] | select((.ts | strings)[0:19] >= $cut and (.ctx | type) == "object" and (.name | type) == "string")]
     | group_by(.name) | map(max_by(.ts)) | map({name, ts:.ts[11:16],
         tokens:(((.ctx.input_tokens | numbers) // 0) + ((.ctx.cache_creation_input_tokens | numbers) // 0)
           + ((.ctx.cache_read_input_tokens | numbers) // 0))})
-    | map(. + {pct: ((.tokens * 1000 / $w | floor) / 10)}) | sort_by(-.pct)' 2>/dev/null | sb_write "$BOARD_DIR/ctx.json"
+    | map(. + {pct: ((.tokens * 1000 / $w | floor) / 10)}) | sort_by(-.pct)' 2>/dev/null)
+  [ -z "$list" ] || sb_write "$BOARD_DIR/ctx.json" <<<"$list"
   l=$(jq -c --arg t "$(wl_at -Iseconds)" '{t:$t, sessions:.}' "$BOARD_DIR/ctx.json" 2>/dev/null) && wl_hist ctx "$l"
   # An unreadable alerted file counts as none alerted: a corrupt file must not silence every alert.
   al=$(jq -c 'if type == "object" then . else {} end' "$A" 2>/dev/null) || al='{}'
@@ -48,5 +53,7 @@ while :; do
     wl_say $W "$(wl_at +%H:%M) URGENT $(jq -r 'map("\(.name) \(.pct)%") | join(", ")' <<<"$hit")"
     exit 9
   fi
-  sleep "$EVERY"
+  if [ -n "$list" ] && [ "$list" != "[]" ]; then wl_meter_ok
+  else wl_meter_blind $W "$STALE" "$FRESH" "$EVERY" '(.ctx | type) == "object" and (.name | type) == "string"'; fi
+  sleep "$EVERY" 8>&-
 done
