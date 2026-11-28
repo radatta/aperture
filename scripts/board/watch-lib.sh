@@ -93,14 +93,15 @@ wl_working() {
 
 # Epoch of the newest row in the two newest meter files that passes jq test $1 (a row the caller can use), or
 # nothing. The row's own offset is applied (jq's fromdateiso8601 reads only the Z form). Streams the files whole and
-# takes the largest epoch, so no row order is assumed and a torn line drops alone: a tail can be 40 minutes of rows
+# takes the largest epoch, so no row order is assumed and a torn line drops alone (grep -h '' ends each file's
+# last line, so yesterday's torn tail can't swallow today's first row): a tail can be 40 minutes of rows
 # with no weekly %. ~1 s of CPU on a 38 MB day, and it runs only on a blind tick past the hold.
 wl_meter_last() {
   local files=("$USAGE_DIR"/meter-*.jsonl)
   [ -e "${files[0]}" ] || return 0
   local n=${#files[@]} pick=("${files[@]: -2}")
   [ "$n" -ge 2 ] || pick=("${files[0]}")
-  cat "${pick[@]}" 2>/dev/null | jq -Rn "def ok: $1;"'
+  grep -h '' "${pick[@]}" 2>/dev/null | jq -Rn "def ok: $1;"'
     def ep: (capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$")
       | ((.d + "Z" | fromdateiso8601) - (if .s == "-" then -1 else 1 end) * ((.h | tonumber) * 3600 + (.m | tonumber) * 60)))? // empty;
     reduce (inputs | fromjson? | objects | select(ok) | .ts | strings | ep) as $e (null; if . == null or $e > . then $e else . end) // empty' 2>/dev/null

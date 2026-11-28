@@ -875,6 +875,12 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
     // a torn last line (no newline) drops alone: the row before it still counts
     const torn = { 'usage/meter-2026-11-17.jsonl': `${OLD}\n${fresh}\n{"ts":"2026-11-17T09:` };
     expect(stale({ ...torn, ...session() }, 13).quiet).toBe(true);
+    // …and yesterday's torn tail doesn't swallow today's first row
+    const edge = {
+      'usage/meter-2026-11-16.jsonl': `${OLD}\n{"ts":"2026-11-16T23:`,
+      'usage/meter-2026-11-17.jsonl': `${fresh}\n`,
+    };
+    expect(stale({ ...edge, ...session() }, 13).quiet).toBe(true);
   });
 
   it("the row's own offset sets its age; a ts of another shape is dropped alone", () => {
