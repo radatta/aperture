@@ -65,9 +65,9 @@ per slot: the env file
 (`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
 scope (`config.ts` → `SLOT_TARGETS`). So is the run lock (`run.lock` for `dev`, `run.devb.lock`; `config.ts` → `runLockFile`): two
 sessions can each run one devcheck at once, one per slot — each slot's functions have their own reservations
-(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. One slot at a time stays inside the kill
-alarms, but both slots on back-to-back full runs trip the three-hour Duration alarm in 2.0–2.6 h: a full run is
-~250k Lambda ms (measured 2026-11-26). So **before each run on dev, the lane counts** (the lock doesn't): the
+(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. Back-to-back full runs can trip the three-hour
+Duration alarm — in 1.5–2.6 h on both slots, and on one slot alone at the fastest measured pace (cause unmeasured): a full run is ~231–259k
+Lambda ms (measured 2026-11-26 and 11-27). So **before each run on dev, the lane counts** (the lock doesn't): the
 runs whose `run-start` falls in the last three hours and the last hour (ids and `t` are UTC) in
 `/workspace/localNotes/devcheck/`'s `ledger.dev.web.jsonl` and `ledger.dev.jsonl` (slot A: one run per id across the
 two; an id in `ledger.dev.jsonl` had iOS rows) and `ledger.devb.jsonl` (slot B: its own runs, even at the same id).
