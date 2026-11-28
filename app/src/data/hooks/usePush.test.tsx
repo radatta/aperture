@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createStubClient } from '../stubClient';
 import { renderWithProviders } from '../../test/utils';
@@ -11,6 +11,7 @@ import {
   syncErrorHere,
 } from '../../modules/push/browserPush';
 import { usePushSync, useUnsubscribePush } from './usePush';
+import { realWait } from '../../test/realWait';
 
 const stub = () => createStubClient({ seed: false, storageKey: `push-sync-${Math.random()}` });
 const DAY = 86_400_000;
@@ -82,7 +83,7 @@ describe('usePushSync (D7)', () => {
     rememberHere(device, Date.now());
     unmount();
     renderWithProviders(<Sync on={false} />, { api });
-    await new Promise((r) => setTimeout(r, 20));
+    await realWait(20);
     expect(status).not.toHaveBeenCalled();
   });
 
@@ -125,9 +126,11 @@ describe('usePushSync (D7)', () => {
     renderWithProviders(<SyncAndRemove id={d.id} />, { api });
     await waitFor(() => expect(pm.subscribe).toHaveBeenCalled());
     await user.click(screen.getByRole('button', { name: 'Remove here' }));
-    await new Promise((r) => setTimeout(r, 30)); // an unserialised Remove would finish here
-    release();
-    await afterResync();
+    await realWait(30); // an unserialised Remove would finish here
+    await act(async () => {
+      release();
+      await afterResync();
+    });
     await waitFor(() => expect(deviceIdHere()).toBeNull()); // the Remove has run
     expect(await api.getPushStatus()).toMatchObject({ devices: [], removedDeviceIds: [d.id] });
   });
@@ -143,13 +146,13 @@ describe('usePushSync (D7)', () => {
     rememberHere(old, Date.now() - DAY);
     renderWithProviders(<Sync on />, { api });
     await waitFor(() => expect(deviceIdHere()).not.toBe(old.id));
-    await afterResync();
+    await act(() => afterResync());
     const s = await api.getPushStatus();
     expect(pm.subscribe).toHaveBeenCalledTimes(1);
     expect(s.devices.map((d) => d.id)).toEqual([deviceIdHere()]);
     expect(s.removedDeviceIds).toEqual([old.id]);
     // The refresh after it reads the old id's tombstone — not taken for a removal elsewhere.
-    await new Promise((r) => setTimeout(r, 30));
+    await realWait(30);
     expect(removedElsewhereHere()).toBe(false);
     expect(deviceIdHere()).toBe(s.devices[0]!.id);
   });
@@ -168,11 +171,11 @@ describe('usePushSync (D7)', () => {
     });
     renderWithProviders(<Sync on />, { api });
     await waitFor(() => expect(api.getPushStatus).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 5));
+    await realWait(5);
     rememberHere(device, Date.now()); // a fresh Enable while the read is out
-    await new Promise((r) => setTimeout(r, 5));
+    await realWait(5);
     release();
-    await new Promise((r) => setTimeout(r, 30));
+    await realWait(30);
     await afterResync();
     expect(pm.subscribe).not.toHaveBeenCalled();
   });

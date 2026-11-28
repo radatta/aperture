@@ -165,9 +165,6 @@ let invalidateSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mounts = 0;
-  // We drive React's act() directly here (outside RTL's own calls), so the flag has to be set explicitly
-  // or React logs "environment is not configured to support act(...)".
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();
   setVisibility('visible');
   setOnline(true);

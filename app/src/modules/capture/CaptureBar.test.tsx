@@ -3,13 +3,14 @@ import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-libra
 import { focusManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { addDays, todayKey, type ParseTaskResult } from '@aperture/shared';
-import { renderWithProviders } from '../../test/utils';
+import { renderWithProviders, timersAdopted } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { STUB_FAIL_NEXT_PARSE_KEY } from '../../data/stubParse';
 import { CAPTURE_OUTBOX_KEY, CAPTURE_PARKED_KEY, OUTBOX_STALE_MS } from './captureOutbox';
 import { PomodoroProvider } from '../pomodoro/PomodoroProvider';
 import { IdleFocus } from '../pomodoro/TimerBar';
 import { CaptureBar } from './CaptureBar';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -81,6 +82,7 @@ describe('CaptureBar', () => {
   it('captures into a wrapping textarea, not a single-line input', async () => {
     const api = createStubClient({ seed: false, storageKey: 'cap-textarea' });
     renderWithProviders(<CaptureBar />, { api });
+    await timersAdopted();
     expect(field().tagName).toBe('TEXTAREA');
   });
 
@@ -550,7 +552,7 @@ describe('CaptureBar', () => {
         focusManager.setFocused(true);
         await waitFor(() => expect(spy).toHaveBeenCalled());
         await expect(spy.mock.results[0]!.value).rejects.toThrow();
-        await new Promise((r) => setTimeout(r, 0)); // let the query settle into its error state
+        await realWait(0); // let the query settle into its error state
       } finally {
         focusManager.setFocused(undefined);
       }
@@ -986,8 +988,10 @@ describe('CaptureBar', () => {
         expect((await api.listTasks()).map((t) => t.title)).toEqual(['admin, call bank']),
       );
       expect(box().value).toBe('');
-      resolve(parsed('LATE'));
-      await new Promise((r) => setTimeout(r, 0));
+      await act(async () => {
+        resolve(parsed('LATE'));
+        await new Promise((r) => setTimeout(r, 0));
+      });
       expect(screen.queryByText('LATE')).toBeNull();
       expect(await api.listTasks()).toHaveLength(1);
     });
@@ -1001,8 +1005,10 @@ describe('CaptureBar', () => {
       expect(screen.getByText('Reading it…')).toBeTruthy();
       await user.click(screen.getByRole('button', { name: 'Read with AI' }));
       expect(screen.queryByText('Reading it…')).toBeNull();
-      resolve(parsed('LATE'));
-      await new Promise((r) => setTimeout(r, 0));
+      await act(async () => {
+        resolve(parsed('LATE'));
+        await new Promise((r) => setTimeout(r, 0));
+      });
       expect(screen.queryByText('LATE')).toBeNull();
       expect(box().value).toBe('admin, call bank');
       await user.click(screen.getByRole('button', { name: 'Save task' }));
@@ -1036,8 +1042,10 @@ describe('CaptureBar', () => {
       await user.click(screen.getByRole('button', { name: 'Review before saving' }));
       expect(screen.getByText('Reading it…')).toBeTruthy();
       await user.type(box(), '!');
-      resolve(parsed('STALE'));
-      await new Promise((r) => setTimeout(r, 0));
+      await act(async () => {
+        resolve(parsed('STALE'));
+        await new Promise((r) => setTimeout(r, 0));
+      });
       expect(screen.queryByText('STALE')).toBeNull();
       expect(screen.queryByText('Reading it…')).toBeNull();
       expect(screen.getByRole('button', { name: 'Review before saving' })).toBeTruthy();
@@ -1262,7 +1270,7 @@ describe('CaptureBar', () => {
       expect(screen.queryByText(/from the other tab/)).toBeNull();
       vi.spyOn(Date, 'now').mockReturnValue(t0 + OUTBOX_STALE_MS);
       try {
-        document.dispatchEvent(new Event('visibilitychange'));
+        act(() => void document.dispatchEvent(new Event('visibilitychange')));
         expect(await screen.findByText(/check first: “from the other tab”/)).toBeTruthy();
       } finally {
         vi.mocked(Date.now).mockRestore();
@@ -1353,7 +1361,7 @@ describe('CaptureBar', () => {
       await user.type(box(), 'x');
       await user.click(screen.getByRole('button', { name: 'Review before saving' }));
       await waitFor(() => expect(api.parseTask).toHaveBeenCalled());
-      await new Promise((r) => setTimeout(r, 0));
+      await realWait(0);
       expect(screen.queryByText('yesterday parse')).toBeNull();
     });
 
@@ -1537,7 +1545,8 @@ describe('CaptureBar — Review category suggestion', () => {
     const { user, box } = await seededBar();
     await user.type(box(), LINE);
     await review(user);
-    (await screen.findByRole('button', { name: 'Use suggested category Garden' })).focus();
+    const suggested = await screen.findByRole('button', { name: 'Use suggested category Garden' });
+    act(() => suggested.focus());
     await user.keyboard('{Enter}');
     expect(chip()).toBeNull();
     expect(document.activeElement).toBe(box());

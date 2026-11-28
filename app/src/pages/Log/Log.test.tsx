@@ -5,6 +5,7 @@ import { todayKey } from '@aperture/shared';
 import { renderWithProviders } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { LogPage } from './index';
+import { realWait } from '../../test/realWait';
 
 async function page(key: string) {
   const api = createStubClient({ seed: false, storageKey: `log-page-${key}` });
@@ -51,7 +52,7 @@ describe('LogPage lock', () => {
     gates[0]!();
     await waitFor(() => expect(gates).toHaveLength(2));
     // a refresh now would read b as public; b's lock must stay pressed
-    await new Promise((r) => setTimeout(r, 50));
+    await realWait(50);
     expect((await locks())[1]!.getAttribute('aria-pressed')).toBe('true');
     gates[1]!();
     await waitFor(async () =>

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ulid, type RecordFluxSetInput } from '@aperture/shared';
-import { renderWithProviders } from '../../test/utils';
+import { renderWithProviders, timersAdopted } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { FLUX_OUTBOX_KEY, outboxAdd, outboxMarkError } from './fluxOutbox';
 import { UnsavedSetsStrip } from './UnsavedSetsStrip';
@@ -75,6 +75,7 @@ describe('useFluxOutbox', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const { api } = server();
     renderWithProviders(<Harness set={input()} />, { api });
+    await timersAdopted();
     act(() => screen.getByRole('button', { name: 'save' }).click());
     expect(screen.queryByText(/not saved yet/)).toBeNull();
     act(() => vi.advanceTimersByTime(8_000));
@@ -96,6 +97,7 @@ describe('useFluxOutbox', () => {
   it('another tab’s queued set shows through the storage event', async () => {
     const { api } = server();
     renderWithProviders(<UnsavedSetsStrip />, { api });
+    await timersAdopted();
     expect(screen.queryByText(/not saved yet/)).toBeNull();
     const raw = JSON.stringify([{ input: input(), at: 1, error: 'offline' }]);
     localStorage.setItem(FLUX_OUTBOX_KEY, raw);
@@ -151,6 +153,7 @@ describe('useFluxOutbox', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const { api } = server();
     renderWithProviders(<Harness set={input()} />, { api });
+    await timersAdopted();
     act(() => screen.getByRole('button', { name: 'save' }).click());
     vi.setSystemTime(Date.now() - 2_000); // the timer will fire 2 s inside the grace
     act(() => vi.advanceTimersByTime(8_000));
@@ -179,6 +182,7 @@ describe('useFluxOutbox', () => {
     ]);
     localStorage.setItem(FLUX_OUTBOX_KEY, raw);
     renderWithProviders(<UnsavedSetsStrip />, { api });
+    await timersAdopted();
     expect(screen.getByText('2 sets not saved yet')).toBeTruthy();
     expect(
       screen.getByText('1 can’t be saved: A Flux set count must be a whole number.'),
@@ -196,6 +200,7 @@ describe('useFluxOutbox', () => {
     outboxAdd(a, 1);
     outboxMarkError(a.id, 'Load failed');
     renderWithProviders(<UnsavedSetsStrip />, { api });
+    await timersAdopted();
     expect(screen.getByText(/can’t store it/)).toBeTruthy();
     setItem.mockRestore();
     act(() => outboxMarkError(a.id, 'Load failed')); // same contents, now in storage
@@ -219,6 +224,7 @@ describe('useFluxOutbox', () => {
   it('keeps its live region mounted while empty, so the strip arriving is announced', async () => {
     const { api } = server();
     renderWithProviders(<UnsavedSetsStrip />, { api });
+    await timersAdopted();
     const region = screen.getByRole('status');
     expect(region.textContent).toBe('');
     localStorage.setItem(FLUX_OUTBOX_KEY, JSON.stringify([{ input: input(), at: 1, error: 'x' }]));
@@ -265,6 +271,7 @@ describe('useFluxOutbox', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     const { api } = server();
     renderWithProviders(<Harness set={input()} />, { api });
+    await timersAdopted();
     act(() => screen.getByRole('button', { name: 'save' }).click());
     act(() => vi.advanceTimersByTime(8_000)); // shown, but still on its way
     expect(screen.getByRole('button', { name: 'Discard' }).getAttribute('aria-disabled')).toBe(

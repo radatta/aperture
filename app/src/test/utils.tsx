@@ -1,5 +1,6 @@
+import { expect } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, type RenderResult } from '@testing-library/react';
+import { act, render, type RenderResult } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
 import { useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
@@ -9,7 +10,33 @@ import { ThemeProvider } from '../components/ThemeProvider';
 import { HomeModeProvider } from '../modules/home/HomeModeProvider';
 import { PomodoroProvider } from '../modules/pomodoro/PomodoroProvider';
 import { createStubClient } from '../data/stubClient';
+import { qk } from '../data/queryKeys';
 import { routes } from '../routes';
+
+// Both helpers wrap PomodoroProvider, whose mount read (adopting running timers) sets state when it answers. A test
+// that renders and then only reads the screen ends before that, outside act(): await timersAdopted() after the
+// render. It waits on that read of the tree this test rendered last, once: a second call, or one with no helper render
+// in this test since the last, throws rather than wait on a read already settled (docs/product/CONVENTIONS.md → the
+// console guard). The read is keyed to its test, as the module outlives tests in the shared jsdom.
+const thisTest = () => `${expect.getState().testPath} › ${expect.getState().currentTestName}`;
+let adoptRead: { test: string; read: Promise<void> } | undefined;
+const noteAdopt = (client: QueryClient) => {
+  const read = client
+    .getQueryCache()
+    .find({ queryKey: qk.runningSessions() })
+    ?.promise?.then(
+      () => {},
+      () => {},
+    );
+  adoptRead = read && { test: thisTest(), read };
+};
+export async function timersAdopted(): Promise<void> {
+  const noted = adoptRead;
+  adoptRead = undefined;
+  if (noted?.test !== thisTest())
+    throw new Error('timersAdopted(): no adopt read found — render through these helpers first');
+  await act(async () => void (await noted.read));
+}
 
 // Render a component with a fresh QueryClient and an injected (isolated) ApiClient.
 // A router is part of the baseline: in the real app nothing renders outside one, so any component
@@ -34,7 +61,9 @@ export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }):
       </QueryClientProvider>
     );
   }
-  return render(ui, { wrapper: Wrapper });
+  const result = render(ui, { wrapper: Wrapper });
+  noteAdopt(client);
+  return result;
 }
 
 // Render the whole app (real route table + all providers) at a starting path, over an isolated stub.
@@ -60,5 +89,6 @@ export function renderApp(
       </ApiContext>
     </QueryClientProvider>,
   );
+  noteAdopt(client);
   return Object.assign(result, { api, router });
 }

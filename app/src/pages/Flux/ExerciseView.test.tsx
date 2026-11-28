@@ -273,7 +273,7 @@ describe('Flux exercise stage', () => {
   it('a finished set counts for the session and shows its cue on the HUD', async () => {
     const s = await stage('/flux/chin-tuck');
     await running(s);
-    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
+    await act(async () => s.fake().event({ type: 'setCompleted', summary: { count: 5 } }));
     expect(screen.getByText('Sets this session · 1 of 2')).toBeTruthy();
     expect(screen.getByText('Set complete. Well done.')).toBeTruthy();
   });
@@ -339,7 +339,7 @@ describe('Flux saved sets (D47, D49)', () => {
     await s.user.click(screen.getByRole('button', { name: 'Left' })); // mid-set
     await waitFor(async () => expect(await s.api.listFluxSets()).toHaveLength(1));
     expect((await s.api.listFluxSets())[0]).toMatchObject({ side: 'a', stoppedEarly: true });
-    act(() => s.fake().event({ type: 'setCompleted', summary: { count: 2 } })); // Left, finished
+    await act(async () => s.fake().event({ type: 'setCompleted', summary: { count: 2 } })); // Left, finished
     expect(screen.getByText('Sets this session · 1 of 2 · 1 stopped early')).toBeTruthy();
     act(() => vi.advanceTimersByTime(30_000));
     expect(screen.getByRole('button', { name: 'Right', pressed: true })).toBeTruthy();

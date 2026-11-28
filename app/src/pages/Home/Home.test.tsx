@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createStubClient } from '../../data/stubClient';
-import { renderApp } from '../../test/utils';
+import { renderApp, timersAdopted } from '../../test/utils';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -62,8 +63,9 @@ describe('routing', () => {
     expect(await screen.findByText('Hours available today')).toBeTruthy();
   });
 
-  it('deep-links straight to the log', () => {
+  it('deep-links straight to the log', async () => {
     renderApp({ path: '/log' });
+    await timersAdopted();
     // The capture bar (global) and the log day-nav both render on the log route.
     expect(screen.getByLabelText('Capture log')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Today' })).toBeTruthy();
@@ -94,7 +96,7 @@ describe('Plan today › the waiting count', () => {
     renderApp({ api, path: '/' });
     await user.click(screen.getByRole('button', { name: 'Morning' }));
     await screen.findByText(/Nothing planned yet/);
-    await new Promise((r) => setTimeout(r, 100)); // the tasks read has landed
+    await realWait(100); // the tasks read has landed
     expect(line()).toBeNull();
     open();
     await waitFor(() => expect(line()).toBe('1 waiting in the backlog'));

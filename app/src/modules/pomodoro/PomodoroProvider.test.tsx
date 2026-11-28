@@ -123,6 +123,7 @@ describe('PomodoroProvider: failed calls never look like success', () => {
     const api = stub();
     const real = api.heartbeatSession.bind(api);
     renderApp({ api, path: '/settings' });
+    await act(async () => void (await vi.advanceTimersByTimeAsync(0)));
     await startFocus(user);
     let fail = true;
     api.heartbeatSession = (id) => (fail ? boom('heartbeatSession')() : real(id));

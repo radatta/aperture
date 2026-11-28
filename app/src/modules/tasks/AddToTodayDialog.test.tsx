@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { todayKey } from '@aperture/shared';
 import { renderApp } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => {
   globalThis.localStorage?.clear();
@@ -124,7 +125,7 @@ describe('Home "+ Add" to today', () => {
     await waitFor(async () =>
       expect((await api.listTasks()).filter((t) => t.title === 'call bank')).toHaveLength(1),
     );
-    await new Promise((r) => setTimeout(r, 50));
+    await realWait(50);
     expect((await api.listTasks()).filter((t) => t.title === 'call bank')).toHaveLength(1);
   });
 

@@ -10,6 +10,7 @@ import { useAddToDay } from './useAddToDay';
 import { useDay } from './useDay';
 import { usePlansForDay } from './usePlans';
 import { useAllTasks } from './useTasks';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -227,7 +228,7 @@ describe('useAddToDay', () => {
     act(() => void (first = hook.result.current.addToDay(a)));
     await waitFor(() => expect(heldReads).toBe(1));
     act(() => void (second = hook.result.current.addToDay(b)));
-    await new Promise((r) => setTimeout(r, 20));
+    await realWait(20);
     held = false;
     letStatus(); // A's status write invalidates the plans and cancels the refetch B joined
     await act(async () => {

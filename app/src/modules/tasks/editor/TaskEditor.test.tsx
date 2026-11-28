@@ -4,7 +4,7 @@ import { useState } from 'react';
 import userEvent from '@testing-library/user-event';
 import { todayKey } from '@aperture/shared';
 import type { ApiClient, Task } from '@aperture/shared';
-import { renderWithProviders } from '../../../test/utils';
+import { renderWithProviders, timersAdopted } from '../../../test/utils';
 import { createStubClient } from '../../../data/stubClient';
 import { TaskDetailsForm } from './TaskDetailsForm';
 import { usePomodoro } from '../../pomodoro/pomodoro-context';
@@ -117,6 +117,7 @@ describe('TaskEditor', () => {
       title: 'A very long task title that would truncate to one line inside a card row',
     });
     renderEditor(client, t);
+    await timersAdopted();
     expect(screen.getByDisplayValue(t.title)).toBeTruthy(); // the Title textarea, unclipped
   });
 
@@ -283,6 +284,7 @@ describe('TaskEditor', () => {
       return <TaskDetailsForm task={live} />;
     }
     renderWithProviders(<Host />, { api: client });
+    await timersAdopted();
     // An open, untouched notes draft follows the change (so a Save can't write the old note back).
     fireEvent.click(screen.getByRole('button', { name: 'Edit notes' }));
     act(() => push({ ...t, notes: 'new note', updatedAt: t.updatedAt + 1 }));
@@ -299,6 +301,7 @@ describe('TaskEditor', () => {
       return <TaskDetailsForm task={live} />;
     }
     renderWithProviders(<Host />, { api: client });
+    await timersAdopted();
     const time = screen.getByLabelText('Due time') as HTMLInputElement;
     fireEvent.change(time, { target: { value: '09:00' } });
     act(() => push({ ...t, dueDay: '2026-10-12', dueTime: '18:00', updatedAt: t.updatedAt + 1 }));
@@ -311,6 +314,7 @@ describe('TaskEditor', () => {
     const t = await client.createTask({ title: 'Pulled', dueDay: '2026-10-09', dueTime: '17:00' });
     const note = 'Moved to Oct 9 5pm in Google Calendar';
     renderEditor(client, { ...t, gcalPulled: { at: Date.now(), note } });
+    await timersAdopted();
     expect(screen.getAllByRole('status').some((el) => el.textContent === note)).toBe(true);
   });
 
@@ -370,9 +374,10 @@ describe('TaskEditor', () => {
     expect(screen.queryByRole('button', { name: 'Send to Google' })).toBeNull();
   });
 
-  it('an old Google change is not repeated after the rollover', () => {
+  it('an old Google change is not repeated after the rollover', async () => {
     const client = api();
     renderEditor(client, mkTask({ gcalPulled: { at: Date.now() - 2 * 86_400_000, note: 'old' } }));
+    await timersAdopted();
     expect(screen.queryByText('old')).toBeNull();
   });
 
@@ -486,6 +491,7 @@ describe('TaskEditor', () => {
     await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
+    await timersAdopted();
     expect(screen.queryByLabelText('Estimate (min)')).toBeNull();
     expect(screen.getByText('Details')).toBeTruthy();
   });
@@ -1154,6 +1160,7 @@ describe('TaskEditor', () => {
       let t = await client.createTask({ title: 'Started', estimateMin: 30 });
       t = await client.transitionTask(t.id, 'in_progress');
       renderEditor(client, t);
+      await timersAdopted();
       expect(screen.getByRole('button', { name: /^Split/ })).toBeTruthy();
       expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
     });
@@ -1163,6 +1170,7 @@ describe('TaskEditor', () => {
       const roll = await client.upsertRoll({ name: 'LeetCode', categoryId: null, estimateMin: 30 });
       const { task: rep } = await client.pickRollToday(roll.id, '2026-08-04');
       renderEditor(client, rep);
+      await timersAdopted();
       expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy(); // the row rendered
       expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
@@ -1180,6 +1188,7 @@ describe('TaskEditor', () => {
       await client.getDay('2026-08-04');
       const occurrence = (await client.listTasks()).find((t) => t.seriesId)!;
       renderEditor(client, occurrence);
+      await timersAdopted();
       expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy();
       expect(screen.queryByRole('button', { name: /^Split/ })).toBeNull();
       expect(screen.queryByRole('button', { name: 'Break down…' })).toBeNull();
@@ -1193,6 +1202,7 @@ describe('TaskEditor', () => {
     await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
+    await timersAdopted();
     expect(screen.queryByLabelText('Due')).toBeNull(); // read-only once finished
     expect(screen.getByLabelText('Category')).toBeTruthy(); // recategorizing a done task still matters
   });
@@ -1359,6 +1369,7 @@ describe('TaskEditor', () => {
     await client.setTaskActual(t.id, 30);
     t = await client.transitionTask(t.id, 'done');
     renderEditor(client, t);
+    await timersAdopted();
     expect(screen.queryByRole('button', { name: /Split/ })).toBeNull();
   });
 
@@ -1420,9 +1431,10 @@ describe('TaskEditor', () => {
     );
   });
 
-  it('offers Drop but not Delete on a recurring occurrence', () => {
+  it('offers Drop but not Delete on a recurring occurrence', async () => {
     const client = api();
     renderEditor(client, mkTask({ seriesId: 'series-1' }));
+    await timersAdopted();
     expect(screen.getByRole('button', { name: /Drop task/ })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Delete task/ })).toBeNull();
   });
@@ -1443,12 +1455,14 @@ describe('TaskEditor', () => {
     const client = api();
     const undated = await client.createTask({ title: 'No due' });
     renderEditor(client, undated);
+    await timersAdopted();
     expect(screen.getByText(/Set a due day/)).toBeTruthy();
 
     const client2 = api();
     let dated = await client2.createTask({ title: 'Has due' });
     dated = await client2.setTaskDueDay(dated.id, '2026-10-01');
     renderEditor(client2, dated);
+    await timersAdopted();
     expect(screen.getByRole('button', { name: /Add to calendar/ })).toBeTruthy();
   });
 
@@ -1461,6 +1475,7 @@ describe('TaskEditor', () => {
           '**Bold** start\n- one\n- two\n\n[brief](https://example.com/b) [x](javascript:alert(1))',
       });
       renderEditor(client, t);
+      await timersAdopted();
       expect(screen.getByText('Bold').tagName).toBe('STRONG');
       expect(screen.getAllByRole('listitem')).toHaveLength(2);
       const link = screen.getByRole('link', { name: 'brief' });
@@ -1476,6 +1491,7 @@ describe('TaskEditor', () => {
       const legacy = mkTask({});
       delete (legacy as { notes?: unknown }).notes;
       renderEditor(api(), legacy);
+      await timersAdopted();
       expect(screen.getByRole('button', { name: 'Add notes…' })).toBeTruthy();
       expect(screen.queryByLabelText('Notes')).toBeNull();
     });
@@ -1533,6 +1549,7 @@ describe('TaskEditor', () => {
       await client.setTaskActual(t.id, 30);
       t = await client.transitionTask(t.id, 'done');
       renderEditor(client, t);
+      await timersAdopted();
       expect(screen.getByRole('button', { name: 'Add notes…' })).toBeTruthy();
     });
 
@@ -1638,10 +1655,12 @@ describe('TaskEditor', () => {
     it('an open task without a reflection shows no Reflection block; a done one offers to add', async () => {
       const client = api();
       renderEditor(client, await client.createTask({ title: 'Open' }));
+      await timersAdopted();
       expect(screen.queryByText('Reflection')).toBeNull();
       expect(screen.queryByRole('button', { name: 'Add a reflection…' })).toBeNull();
       cleanup();
       renderEditor(client, await doneTask(client));
+      await timersAdopted();
       expect(screen.getByRole('button', { name: 'Add a reflection…' })).toBeTruthy();
     });
 

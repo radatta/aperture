@@ -5,6 +5,7 @@ import { addDays, todayKey } from '@aperture/shared';
 import type { ApiClient } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import { renderApp } from '../../test/utils';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -53,7 +54,7 @@ describe('Right now card', () => {
       return [a, b, c, d].map((t) => rows.find((r) => r.taskId === t.id)?.order);
     };
     await waitFor(async () => expect((await orders())[2]).toBe(3)); // C has moved, D hasn't
-    await new Promise((r) => setTimeout(r, 50)); // the half-done order reaches the screen, if it can
+    await realWait(50); // the half-done order reaches the screen, if it can
     // The fast second tap: on every row still offering it, while the first tap's D is in flight.
     for (const again of screen.queryAllByRole('button', { name: 'Focus this' }))
       if (!(again as HTMLButtonElement).disabled) await user.click(again);
@@ -63,7 +64,7 @@ describe('Right now card', () => {
       for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
         expect((b as HTMLButtonElement).disabled).toBe(false);
     });
-    await new Promise((r) => setTimeout(r, 50));
+    await realWait(50);
     expect(new Set(await orders()).size).toBe(4);
     expect(screen.getAllByText(/^[ABCD]$/)).toHaveLength(4);
   });
@@ -104,7 +105,7 @@ describe('Right now card', () => {
     const buttons = await screen.findAllByRole('button', { name: 'Focus this' });
     await user.click(buttons.at(-1)!);
     await waitFor(() => expect(calls).toBe(3));
-    await new Promise((r) => setTimeout(r, 50));
+    await realWait(50);
     expect(screen.queryByText("Couldn't save that — try again.")).toBeNull();
     for (const b of screen.getAllByRole('button', { name: 'Focus this' }))
       expect((b as HTMLButtonElement).disabled).toBe(true);

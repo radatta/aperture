@@ -7,6 +7,7 @@ import { createStubClient, STUB_COACH_PICK_KEY } from '../../data/stubClient';
 import { ApiError } from '../../data/retry';
 import { addDays, AI_PICK_NOTICE } from '@aperture/shared';
 import type { CoachAiView, CoachToday } from '@aperture/shared';
+import { realWait } from '../../test/realWait';
 
 beforeEach(() => globalThis.localStorage?.clear());
 afterEach(() => {
@@ -826,7 +827,7 @@ describe('the Today card’s mocks', () => {
     (document.activeElement as HTMLElement | null)?.blur();
     fireEvent.click(cancel);
     await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 100));
+    await realWait(100);
     expect(within(queue).getByText('Mock interview')).toBeTruthy(); // the failed read left the row
     act(() => {
       focusManager.setFocused(false);

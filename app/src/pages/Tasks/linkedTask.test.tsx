@@ -4,6 +4,7 @@ import { taskPushPath } from '@aperture/shared';
 import { createStubClient } from '../../data/stubClient';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../../test/utils';
+import { realWait } from '../../test/realWait';
 
 const stub = () => createStubClient({ seed: false, storageKey: `linked-${Math.random()}` });
 
@@ -126,7 +127,7 @@ describe('Tasks: a reminder’s link', () => {
     expect(await screen.findByRole('dialog', { name: 'Task: Newer reminder' })).toBeTruthy();
     await waitFor(() => expect(router.state.location.search).toBe('?lens=today'));
     release(); // the older read answers now: nothing of it shows
-    await new Promise((r) => setTimeout(r, 30));
+    await realWait(30);
     expect(screen.queryByText(/That reminder’s task is gone/)).toBeNull();
     expect(screen.getByRole('dialog', { name: 'Task: Newer reminder' })).toBeTruthy();
   });
@@ -147,7 +148,7 @@ describe('Tasks: a reminder’s link', () => {
     await user.click(screen.getByRole('button', { name: /^Week/ }));
     await waitFor(() => expect(router.state.location.search).toBe('?lens=week'));
     release();
-    await new Promise((r) => setTimeout(r, 30));
+    await realWait(30);
     expect(screen.queryByRole('dialog', { name: 'Task: Read late' })).toBeNull();
     expect(screen.queryByText(/That reminder’s task/)).toBeNull();
     expect(router.state.location.search).toBe('?lens=week');

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { TASK_REFLECTION_MAX } from '@aperture/shared';
 import type { ApiClient, Task } from '@aperture/shared';
 import type { ReactNode } from 'react';
-import { renderWithProviders } from '../../test/utils';
+import { renderWithProviders, timersAdopted } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { usePomodoro } from '../pomodoro/pomodoro-context';
 import { useAllTasks } from '../../data/hooks/useTasks';
@@ -102,6 +102,7 @@ describe('DoneForm', () => {
     const client = api();
     const task = await started(client);
     renderDone(client, task);
+    await timersAdopted();
     const box = screen.getByLabelText('Reflection');
     expect(screen.queryByText(/\/ 1,000/)).toBeNull(); // the counter stays out of the way
 
@@ -227,6 +228,7 @@ describe('DoneForm', () => {
     it('a scoped task is not asked for an estimate', async () => {
       const client = api();
       renderDone(client, await started(client));
+      await timersAdopted();
       expect(screen.queryByLabelText('Estimate in hindsight')).toBeNull();
     });
 
@@ -301,6 +303,7 @@ describe('DoneForm', () => {
       const client = api();
       const task = await unscoped(client);
       renderDone(client, await client.setTaskEstimate(task.id, 50, null));
+      await timersAdopted();
       expect(screen.queryByLabelText('Estimate in hindsight')).toBeNull();
       expect(screen.getByText(/counted as estimated after the fact/)).toBeTruthy();
     });
@@ -309,6 +312,7 @@ describe('DoneForm', () => {
       const client = api();
       const scoped = await started(client);
       renderDone(client, await client.setTaskEstimate(scoped.id, null, null));
+      await timersAdopted();
       expect(screen.getByLabelText('Estimate in hindsight')).toBeTruthy();
       expect(screen.queryByText(/counts as estimated after the fact/)).toBeNull();
       expect(screen.getByText(/vs 30m estimated at start/)).toBeTruthy();
