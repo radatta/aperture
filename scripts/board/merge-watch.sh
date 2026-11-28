@@ -5,6 +5,7 @@
 #   11 = a handed-out Mac line finished, no merge (one RAN line each)
 #   74 = its own state file couldn't be written (stderr names it): a restart would announce the same again
 #   73 = another copy holds the lock (the line names its pid)   74 also = the lock or pid file unusable
+#   75 = the lock is held by no copy on file (a stopped copy's child): start again in a minute
 #   78 = jq is missing   2 = an argument (it takes none)
 # What it reads and keeps, and the checks a marker passes before it is read: docs/ops/SESSION-BOARD.md → Watchers.
 # Run: timeout 65m scripts/board/merge-watch.sh   (124 = an hour, nothing happened: restart it)

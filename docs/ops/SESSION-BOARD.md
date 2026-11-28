@@ -817,10 +817,12 @@ tick and **exits only when the hub should wake**, so the hub spends nothing whil
 the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
 has one home. A bad argument or env override is exit 2. **One copy each**: a watcher takes an `flock` on fd 8
 of `<board>/<watcher>.lock` before its first state write (`wl_singleton`, waiting up to 2 s) and writes its pid to
-`<watcher>.pid`; a second copy exits **73** naming the holder, and names a pid only when `/proc/<pid>/fd/8` is the lock
-(else "held, but not by the pid on file"). The kernel drops the lock with its last descriptor, so a dead copy's lock
-and pid files are simply taken over. The tick's `sleep` starts with `8>&-`: a copy stopped by pid would otherwise leave
-that sleep holding the lock for up to a tick; every other child ends within the 2 s wait. A lock or pid file that
+`<watcher>.pid`; a second copy exits **73** naming the holder, which it does only when `/proc/<pid>/fd/8` is the lock;
+a lock held by anything else ("held, but not by the pid on file") is **75**, so a 73 always means a copy runs. The
+kernel drops the lock with its last descriptor, so a dead copy's lock and pid files are simply taken over. The tick's
+`sleep` starts with `8>&-`: a copy stopped by pid would otherwise leave that sleep holding the lock for up to a tick.
+The other children are short (`jq`, `tee`, `date`; the meter scan reads newest-first and stops at its match), and the
+2 s wait rides out most of them; one still running makes the new copy's 75. A lock or pid file that
 can't be opened or written, or `flock` failing, is **74**. History files are named by local day with local-offset `t`. A
 `mac-load` row is `{t, mac, cpus, memFreePct, vm, power, vmCpuPct, top, sim, jobs}`: `t` is `mac-stats.json`'s own
 UTC stamp (it repeats while the Mac agent is stale), `mac` the Mac's load 1/5/15, `cpus` its cores, `memFreePct` its

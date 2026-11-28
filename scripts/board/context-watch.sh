@@ -6,6 +6,7 @@
 #   9 = a session reached urgentPct and wasn't alerted in the last realertSec (ctx-alerted.json keeps when each was)
 #   13 = the meter is blind: no usable row for staleSec while a session works (watch-lib.sh wl_meter_blind)
 #   73 = another copy holds the lock (the line names its pid)   74 = the lock, pid or meter-stale-fired file unusable
+#   75 = the lock is held by no copy on file (a stopped copy's child): start again in a minute
 #   78 = a limits.json key is missing or bad   2 = an argument (it takes none) or a bad override
 # Thresholds: limits.json → watchers.context (flagPct is the tower's warn line; this script only checks it sits below
 # urgent); APERTURE_CTX_WINDOW / _URGENT in the env override. windowTokens is the lanes' model's window (1M).

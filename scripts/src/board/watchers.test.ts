@@ -791,6 +791,8 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
       session({ state: 'idle' }),
       session({ pid: deadPid() }),
       session({ pidStart: '1' }),
+      session({ pidStart: undefined }), // no start tick: sb_alive would pass a bare live pid
+      session({ pidStart: '' }),
       session({ state: 'gone' }),
     ])
       expect(stale({ ...old, ...s }, 14).quiet, JSON.stringify(s)).toBe(true);
@@ -819,6 +821,13 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
     expect(r.quiet).toBe(true);
   });
 
+  it('a session with no name still counts, as ?', () => {
+    for (const name of ['', null])
+      expect(stale({ ...old, ...session({ name }) }).stdout, String(name)).toBe(
+        '10:10 METER STALE last usable row 11-17 07:30, working: ?\n',
+      );
+  });
+
   it('a bad session file hides nothing and counts for nothing', () => {
     const torn = stale({ ...old, 'board/sessions/1.json': '{"pid":1,"sta', ...session() });
     expect([torn.status, torn.tick]).toEqual([13, 10]);
@@ -826,7 +835,7 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
       '[1]',
       '5',
       'null',
-      JSON.stringify({ pid: `${process.pid}`, state: 'working' }),
+      JSON.stringify({ pid: `${process.pid}`, pidStart: startTick(process.pid), state: 'working' }),
     ])
       expect(stale({ ...old, 'board/sessions/9.json': text }, 14).quiet, text).toBe(true);
   });
@@ -840,6 +849,16 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
     const r = stale({ ...meter(rows), ...session() });
     expect([r.status, r.tick]).toEqual([13, 10]);
     expect(r.stdout).toContain('last usable row 11-17 07:30');
+    // newest-first across both files: a usable row in yesterday's file still counts
+    const two = stale(
+      {
+        'usage/meter-2026-11-16.jsonl': `${meterRow(T10 - 3600, 30)}\n`,
+        ...meter(rows.slice(1)),
+        ...session(),
+      },
+      13,
+    );
+    expect(two.quiet).toBe(true);
   });
 
   it("the row's own offset sets its age; a ts of another shape is dropped alone", () => {
@@ -874,6 +893,8 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
     const younger = stale({ ...old, ...session(), ...m(T10 + 601 - 7200) });
     expect([younger.status, younger.tick]).toEqual([13, 11]);
     expect(stale({ ...old, ...session(), ...m('garbage') }).tick).toBe(10);
+    const octal = stale({ ...old, ...session(), ...m('089') }); // octal to $((…))
+    expect([octal.status, octal.tick]).toEqual([13, 10]);
     expect(stale({ ...old, ...session(), ...m(T10 + 99999) }).tick).toBe(10);
     // restarted after its 13, it stays quiet
     writeFileSync(join(due.dir, 'tick'), '0\n');
@@ -929,6 +950,9 @@ describe('context-watch.sh: the meter gone blind (13)', () => {
       ...blank(3),
     ]);
     expect([urgent.status, urgent.tick]).toEqual([9, 0]);
+    const nameless = JSON.stringify({ ...JSON.parse(ctxRow(T10 - 30, 'a', 1000)), name: 5 });
+    const n = context([{ ...meter([nameless]), ...session() }, ...blank(3)]);
+    expect([n.status, n.tick]).toEqual([13, 2]);
   });
 });
 
@@ -974,15 +998,18 @@ async function holder(dir: string, w: W) {
     env: { ...envOf(dir), PATH: `${dir}/hbin:${process.env.PATH}` },
   });
   const exited = new Promise<void>((res) => p.once('exit', () => res()));
-  for (let i = 0; i < 200 && !existsSync(join(dir, 'sleeper')); i++)
-    await new Promise((r) => setTimeout(r, 50));
-  const sleeper = Number(readFileSync(join(dir, 'sleeper'), 'utf8'));
+  const sleeperOf = () =>
+    Number(existsSync(join(dir, 'sleeper')) && readFileSync(join(dir, 'sleeper'), 'utf8'));
+  for (let i = 0; i < 200 && !sleeperOf(); i++) await new Promise((r) => setTimeout(r, 50));
+  const sleeper = sleeperOf();
+  if (!sleeper) {
+    kill(p.pid);
+    throw new Error(`${w}: the holder never reached its sleep`);
+  }
   return { pid: p.pid!, sleeper, exited };
 }
 
 describe('the singleton lock (73)', () => {
-  vi.setConfig({ testTimeout: 60_000 });
-
   it('a second copy is refused with the holder’s pid, before it writes any state', async () => {
     const hs: { pid: number; sleeper: number }[] = [];
     try {
@@ -992,6 +1019,8 @@ describe('the singleton lock (73)', () => {
         hs.push(h);
         rmSync(join(dir, 'board/ctx-alerted.json'), { force: true });
         rmSync(join(dir, 'board/merge-announced'), { force: true });
+        rmSync(join(dir, 'board/pace.json'), { force: true });
+        rmSync(join(dir, 'board/usage-now.json'), { force: true });
         const r = run(dir, w, w === 'usage-watch.sh' ? ['--hard-only'] : []);
         expect(r.status, w).toBe(73);
         expect(r.stderr, w).toMatch(new RegExp(`already running as pid ${h.pid} `));
@@ -1001,6 +1030,8 @@ describe('the singleton lock (73)', () => {
         expect(pidOf(dir, w).trim(), w).toBe(String(h.pid));
         expect(existsSync(join(dir, 'board/ctx-alerted.json')), w).toBe(false);
         expect(existsSync(join(dir, 'board/merge-announced')), w).toBe(false);
+        expect(existsSync(join(dir, 'board/pace.json')), w).toBe(false);
+        expect(existsSync(join(dir, 'board/usage-now.json')), w).toBe(false);
       }
     } finally {
       hs.forEach((h) => (kill(h.pid), kill(h.sleeper)));
@@ -1025,15 +1056,34 @@ describe('the singleton lock (73)', () => {
     }
   });
 
-  it('a dead copy’s lock and pid files are taken over', () => {
-    for (const w of Object.keys(WATCHERS) as W[]) {
-      const dir = WATCHERS[w]();
-      const n = w.replace('.sh', '');
-      writeFileSync(join(dir, `board/${n}.lock`), '');
-      writeFileSync(join(dir, `board/${n}.pid`), `${deadPid()}\n`);
-      const r = run(dir, w);
-      expect(r.quiet, w).toBe(true);
-      expect(pidOf(dir, w).trim(), w).toBe(String(r.pid));
+  it('a dead copy’s lock and pid files are taken over, even when the pid now names a live process', () => {
+    for (const w of Object.keys(WATCHERS) as W[])
+      for (const pid of [deadPid(), process.pid]) {
+        const dir = WATCHERS[w]();
+        const n = w.replace('.sh', '');
+        writeFileSync(join(dir, `board/${n}.lock`), '');
+        writeFileSync(join(dir, `board/${n}.pid`), `${pid}\n`);
+        const r = run(dir, w);
+        expect(r.quiet, `${w} ${pid}`).toBe(true);
+        expect(pidOf(dir, w).trim(), w).toBe(String(r.pid));
+      }
+  });
+
+  it('a holder that lets go within the 2 s wait: the new copy starts', async () => {
+    const dir = WATCHERS['usage-watch.sh']();
+    const lock = join(dir, 'board/usage-watch.lock');
+    const h = spawn('bash', ['-c', 'exec 9>>"$0" && flock 9 && exec sleep 1', lock], {
+      stdio: 'ignore',
+    });
+    try {
+      for (let i = 0; i < 100 && spawnSync('flock', ['-n', lock, 'true']).status !== 1; i++)
+        await new Promise((r) => setTimeout(r, 20));
+      expect(spawnSync('flock', ['-n', lock, 'true']).status).toBe(1);
+      const r = run(dir, 'usage-watch.sh');
+      expect([r.quiet, r.stderr]).toEqual([true, '']);
+      expect(pidOf(dir, 'usage-watch.sh').trim()).toBe(String(r.pid));
+    } finally {
+      kill(h.pid);
     }
   });
 

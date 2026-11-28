@@ -7,6 +7,7 @@
 #   12 = the hub's hard stop is STOP_LEAD away (stop.json stopAt, set only by `pnpm board stop HH:MM|off`)
 #   74 = stop-fired, or the lock or pid file, unusable (fixing the board dir comes first)   2 = an argument (it takes none)
 #   73 = another copy holds the lock (the line names its pid): nothing to restart
+#   75 = the lock is held by no copy on file (a stopped copy's child): start again in a minute
 # The hub owns pace-control.json ({state: calm|hot, since: <epoch>, held, triggers: [{lane, load5Below}]}), stop.json
 # ({stopAt: <epoch>|null}) and queue.json; all are read-only here. Thresholds: limits.json → watchers.pace, plus four
 # of the gate's `pace` keys (psiMemFullMax, psiCpuBelow, anonMiBBelow, minSamples) so the trip and the gate share them.

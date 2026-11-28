@@ -4,6 +4,7 @@
 #   7 = soft stop (>= softPct)   8 = hard stop (>= hardPct, checked first)   78 = a limits.json key is missing or bad
 #   13 = the meter is blind: no usable row for staleSec while a session works (watch-lib.sh wl_meter_blind)
 #   73 = another copy holds the lock (the line names its pid)   74 = the lock, pid or meter-stale-fired file unusable
+#   75 = the lock is held by no copy on file (a stopped copy's child): start again in a minute
 #   2 = a bad argument or override
 # Thresholds: limits.json → watchers.usage; APERTURE_USAGE_SOFT / _HARD in the env override them. After a soft stop the
 # hub restarts it with --hard-only, which watches the hard line alone. Writes usage-now.json each reading; logs

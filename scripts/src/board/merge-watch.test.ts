@@ -360,7 +360,7 @@ describe('merge-watch.sh: its shape', () => {
 });
 
 describe('merge-watch.sh: the singleton lock', () => {
-  it('held by another process: 73, no wrong pid named, nothing seeded', async () => {
+  it('held by no copy on file: 75, no wrong pid named, nothing seeded', async () => {
     const dir = fake([{ [ev('2026-11-18')]: `${merged(220, sha('a'))}\n` }]);
     const lock = join(dir, 'board/merge-watch.lock');
     writeFileSync(join(dir, 'board/merge-watch.pid'), `${process.pid}\n`); // alive, but not the holder
@@ -372,7 +372,7 @@ describe('merge-watch.sh: the singleton lock', () => {
       for (let i = 0; i < 100 && spawnSync('flock', ['-n', lock, 'true']).status !== 1; i++)
         await new Promise((r) => setTimeout(r, 50));
       const r = run(dir);
-      expect(r.status).toBe(73);
+      expect(r.status).toBe(75);
       expect(r.stderr).toMatch(/held, but not by the pid in .*merge-watch\.pid/);
       expect(r.stderr).not.toContain(String(process.pid));
       expect(existsSync(join(dir, 'board/merge-announced'))).toBe(false);
