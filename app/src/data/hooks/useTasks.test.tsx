@@ -381,10 +381,13 @@ describe('what a task write refetches', () => {
 
     // settled: pending until that read lands.
     let done = false;
-    const p = hook.result.current.settled
-      .mutateAsync({ id: t.id, to: 'in_progress' })
-      .then(() => (done = true));
-    await new Promise((r) => setTimeout(r, 20));
+    let p!: Promise<boolean>;
+    await act(async () => {
+      p = hook.result.current.settled
+        .mutateAsync({ id: t.id, to: 'in_progress' })
+        .then(() => (done = true));
+      await new Promise((r) => setTimeout(r, 20));
+    });
     expect(done).toBe(false);
     await act(async () => {
       release(await real());

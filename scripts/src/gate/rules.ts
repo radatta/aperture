@@ -35,9 +35,9 @@ export const PACKAGES: Pkg[] = [
       {
         name: 'app',
         include: ['src/**/*.test.{ts,tsx}', 'pwa/**/*.test.ts'],
-        exclude: ['src/auth/auth.test.tsx'],
+        exclude: ['src/auth/auth.test.tsx', 'src/test/actEnv.test.tsx'],
       },
-      { name: 'isolated', include: ['src/auth/auth.test.tsx'] },
+      { name: 'isolated', include: ['src/auth/auth.test.tsx', 'src/test/actEnv.test.tsx'] },
     ],
   },
   { dir: 'lambdas', name: '@aperture/lambdas', reaches: ['packages/shared'], projects: SRC },

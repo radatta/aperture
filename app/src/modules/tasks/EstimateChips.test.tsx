@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ApiClient } from '@aperture/shared';
-import { renderWithProviders } from '../../test/utils';
+import { renderWithProviders, timersAdopted } from '../../test/utils';
 import { createStubClient } from '../../data/stubClient';
 import { EstimateChips } from './EstimateChips';
 
@@ -22,6 +22,7 @@ async function setup() {
     </>,
     { api: client },
   );
+  await timersAdopted();
   return { client, task, onClose, user: userEvent.setup() };
 }
 

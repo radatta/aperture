@@ -3,7 +3,7 @@ import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { PushStatus } from '@aperture/shared';
 import { createStubClient, STUB_VAPID_PUBLIC_KEY } from '../../data/stubClient';
-import { renderApp, renderWithProviders } from '../../test/utils';
+import { renderApp, renderWithProviders, timersAdopted } from '../../test/utils';
 import { rememberHere, resyncHere } from './browserPush';
 import { PushSyncNotice } from './PushSyncNotice';
 
@@ -99,10 +99,12 @@ describe('Home: reminders couldn’t refresh', () => {
     rememberHere(device, Date.now());
     await fail();
     const { unmount } = renderWithProviders(<PushSyncNotice enabled={false} />, { api: stub() });
+    await timersAdopted();
     expect(screen.queryByText(NOTICE)).toBeNull();
     unmount();
     localStorage.removeItem('aperture.push.enabled');
     renderWithProviders(<PushSyncNotice enabled />, { api: stub() });
+    await timersAdopted();
     expect(screen.queryByText(NOTICE)).toBeNull();
   });
 

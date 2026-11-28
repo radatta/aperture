@@ -12,11 +12,13 @@ import { resetFluxOutboxSends } from '../modules/flux/useFluxOutbox';
 import { resetPushSync } from '../modules/push/browserPush';
 import { failOnConsoleNoise } from '@aperture/shared/console-guard';
 
-// React's act() checking stays off here (Testing Library turns it on only under vitest globals, which this suite
-// doesn't use); a file that drives act() itself sets IS_REACT_ACT_ENVIRONMENT in its beforeEach. Reset after every
-// test so that never leaks into the next file, where it surfaced act() warnings that came and went with the shuffle.
-const resetActEnv = () =>
-  delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
+// React's act() checking is on for every test (Testing Library would turn it on only under vitest globals, which this
+// suite doesn't use): set as each file loads and again after every test, so a test that switches it off can't leak
+// that into the next. An update outside act() then warns and the guard fails it (docs/product/CONVENTIONS.md).
+const actEnvOn = () => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+};
+actEnvOn();
 
 // findBy*/waitFor wait 3 s, not Testing Library's 1 s: under CPU plus memory pressure, opening a Flux
 // exercise outran 1 s, and a worker cap alone didn't clear it (docs/ops/SESSION-BOARD.md). No assertion is
@@ -45,7 +47,7 @@ afterEach(() => {
   sessionStorage.clear();
   document.documentElement.removeAttribute('data-theme');
   window.history.replaceState(null, '', '/');
-  resetActEnv();
+  actEnvOn();
   // Last, after the unmount and the resets, so their noise counts and a throw skips none of them.
   failOnConsoleNoise(
     'by this test — or left by an earlier test or file still running a timer or promise (files share one jsdom; rerun with the printed seed)',

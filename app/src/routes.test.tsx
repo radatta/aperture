@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ReactElement } from 'react';
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import { AppShell } from './components/AppShell';
 import { lazyPage } from './lib/lazyPage';
 import { renderApp } from './test/utils';
@@ -35,7 +35,9 @@ describe('routes', () => {
     });
     expect(screen.getByRole('link', { name: 'Flux' })).toBeTruthy(); // the shell, at once
     expect(screen.getByText('Loading…')).toBeTruthy();
-    await new Promise((r) => setTimeout(r, 50));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
     expect(screen.queryByRole('heading', { name: 'Flux history landed' })).toBeNull(); // still held
     expect(screen.getByText('Loading…')).toBeTruthy();
     land();

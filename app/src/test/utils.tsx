@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, type RenderResult } from '@testing-library/react';
+import { act, render, type RenderResult } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
 import { useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
@@ -9,7 +9,29 @@ import { ThemeProvider } from '../components/ThemeProvider';
 import { HomeModeProvider } from '../modules/home/HomeModeProvider';
 import { PomodoroProvider } from '../modules/pomodoro/PomodoroProvider';
 import { createStubClient } from '../data/stubClient';
+import { qk } from '../data/queryKeys';
 import { routes } from '../routes';
+
+// Both helpers wrap PomodoroProvider, whose mount read (adopting running timers) sets state when it answers. A test
+// that renders and then only reads the screen ends before that, outside act(): await timersAdopted() after the
+// render. It waits on that read of the tree rendered last; with no read to wait on it throws
+// (docs/product/CONVENTIONS.md → the console guard).
+let adoptRead: Promise<void> | undefined;
+const noteAdopt = (client: QueryClient) => {
+  adoptRead = client
+    .getQueryCache()
+    .find({ queryKey: qk.runningSessions() })
+    ?.promise?.then(
+      () => {},
+      () => {},
+    );
+};
+export async function timersAdopted(): Promise<void> {
+  const read = adoptRead;
+  if (!read)
+    throw new Error('timersAdopted(): no adopt read found — render through these helpers first');
+  await act(async () => void (await read));
+}
 
 // Render a component with a fresh QueryClient and an injected (isolated) ApiClient.
 // A router is part of the baseline: in the real app nothing renders outside one, so any component
@@ -34,7 +56,9 @@ export function renderWithProviders(ui: ReactElement, opts: { api: ApiClient }):
       </QueryClientProvider>
     );
   }
-  return render(ui, { wrapper: Wrapper });
+  const result = render(ui, { wrapper: Wrapper });
+  noteAdopt(client);
+  return result;
 }
 
 // Render the whole app (real route table + all providers) at a starting path, over an isolated stub.
@@ -60,5 +84,6 @@ export function renderApp(
       </ApiContext>
     </QueryClientProvider>,
   );
+  noteAdopt(client);
   return Object.assign(result, { api, router });
 }

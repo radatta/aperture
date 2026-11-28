@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createStubClient } from '../../data/stubClient';
-import { renderApp } from '../../test/utils';
+import { renderApp, timersAdopted } from '../../test/utils';
 
 beforeEach(() => globalThis.localStorage?.clear());
 
@@ -62,8 +62,9 @@ describe('routing', () => {
     expect(await screen.findByText('Hours available today')).toBeTruthy();
   });
 
-  it('deep-links straight to the log', () => {
+  it('deep-links straight to the log', async () => {
     renderApp({ path: '/log' });
+    await timersAdopted();
     // The capture bar (global) and the log day-nav both render on the log route.
     expect(screen.getByLabelText('Capture log')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Today' })).toBeTruthy();

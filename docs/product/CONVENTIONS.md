@@ -92,9 +92,16 @@ jsdom's own errors ("Not implemented: …") included, which `app/src/test/guard.
 `packages/shared/src/consoleGuard.ts`). It sees only those two console methods — `process.emitWarning` and a direct `process.stderr.write` still print
 unguarded — and a call after a worker's last check is recorded and dropped, never shown. A test that expects the output spies it with `mockImplementation` and
 asserts on it; jsdom-only gaps get a per-file stub (`app/src/test/canvas.ts`). `lambdas` prints its handlers'
-`console.log` lines only for a failing test (`silent: 'passed-only'`). React's act() checking stays off in `app`
-(no vitest globals); a file that drives `act()` itself sets `IS_REACT_ACT_ENVIRONMENT`, and setup resets it after
-every test. Locally under Claude Code, vitest picks its `agent` reporter, which hides a passing test's logs: pass
+`console.log` lines only for a failing test (`silent: 'passed-only'`). React's act() checking is on for every `app`
+test: `app/src/test/setup.ts` sets `IS_REACT_ACT_ENVIRONMENT` as each file loads and again after every test, so a
+state update that lands outside `act()` warns and the guard fails the test (`app/src/test/actEnv.test.tsx` pins it).
+Testing Library's own waits (`findBy*`, `waitFor`, user-event) switch the check off while they wait, so it catches
+what lands outside them. Wait on the thing itself: `findBy*` or `waitFor` for what the screen shows; an awaited `act`
+around a trigger the test fires by hand (a resolved promise, a dispatched event, `focus()`), around a fake-timer
+advance, and around a real-time wait with a tree mounted; `timersAdopted()` (`app/src/test/utils.tsx`) for the timer
+engine's mount read in a test that renders and then only reads the screen. Never an empty `await act(async () => {})`,
+and never switch the check off to quiet a warning (the one off, in `TaskCard.test.tsx`, observes a render lag that
+`act()` would drain, and restores it in a `finally`). Locally under Claude Code, vitest picks its `agent` reporter, which hides a passing test's logs: pass
 `--reporter=default` to see what CI prints.
 
 **Testing Library queries: `within()` changes what a query asserts.** `getBy…`/`findBy…` assert

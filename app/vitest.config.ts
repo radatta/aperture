@@ -2,11 +2,12 @@ import { configDefaults, defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { lcExtensionVersion } from './pwa/extensionVersion.ts';
 
-// auth.test.tsx rebuilds the module registry (vi.resetModules), so it runs alone in an isolated
-// worker; every other file shares one jsdom and one module graph per worker — the per-file jsdom was
-// ~60% of the suite on CI's single worker. CI runs the suite as two --shard halves (ci.yml), each on
-// one worker. setup.ts resets the shared state between tests.
-const REBUILDS_MODULES = 'src/auth/auth.test.tsx';
+// Two files run alone in an isolated worker: auth.test.tsx rebuilds the module registry (vi.resetModules), and
+// actEnv.test.tsx reads the act() flag as it loads, which in the shared jsdom an earlier file's test would already
+// have set. Every other file shares one jsdom and one module graph per worker — the per-file jsdom was ~60% of the
+// suite on CI's single worker. CI runs the suite as two --shard halves (ci.yml), each on one worker. setup.ts resets
+// the shared state between tests.
+const RUNS_ALONE = ['src/auth/auth.test.tsx', 'src/test/actEnv.test.tsx'];
 
 // The app runs in the user's browser, so its tests run in the user's zone, whatever the shell or CI's
 // (UTC) is: a stub date bug then reads as it would on the phone. Set before vitest forks its workers,
@@ -36,11 +37,11 @@ export default defineConfig({
         test: {
           name: 'app',
           include: ['src/**/*.test.{ts,tsx}', 'pwa/**/*.test.ts'],
-          exclude: [...configDefaults.exclude, REBUILDS_MODULES],
+          exclude: [...configDefaults.exclude, ...RUNS_ALONE],
           isolate: false,
         },
       },
-      { extends: true, test: { name: 'isolated', include: [REBUILDS_MODULES] } },
+      { extends: true, test: { name: 'isolated', include: RUNS_ALONE } },
     ],
   },
 });

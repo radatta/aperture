@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createStubClient } from '../stubClient';
 import { renderWithProviders } from '../../test/utils';
@@ -82,7 +82,9 @@ describe('usePushSync (D7)', () => {
     rememberHere(device, Date.now());
     unmount();
     renderWithProviders(<Sync on={false} />, { api });
-    await new Promise((r) => setTimeout(r, 20));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
     expect(status).not.toHaveBeenCalled();
   });
 
@@ -168,11 +170,13 @@ describe('usePushSync (D7)', () => {
     });
     renderWithProviders(<Sync on />, { api });
     await waitFor(() => expect(api.getPushStatus).toHaveBeenCalled());
-    await new Promise((r) => setTimeout(r, 5));
-    rememberHere(device, Date.now()); // a fresh Enable while the read is out
-    await new Promise((r) => setTimeout(r, 5));
-    release();
-    await new Promise((r) => setTimeout(r, 30));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      rememberHere(device, Date.now()); // a fresh Enable while the read is out
+      await new Promise((r) => setTimeout(r, 5));
+      release();
+      await new Promise((r) => setTimeout(r, 30));
+    });
     await afterResync();
     expect(pm.subscribe).not.toHaveBeenCalled();
   });
