@@ -1,3 +1,4 @@
+import { expect } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, render, type RenderResult } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router';
@@ -14,24 +15,27 @@ import { routes } from '../routes';
 
 // Both helpers wrap PomodoroProvider, whose mount read (adopting running timers) sets state when it answers. A test
 // that renders and then only reads the screen ends before that, outside act(): await timersAdopted() after the
-// render. It waits on that read of the tree rendered last, once: a second call, or one with no helper render since the
-// last, throws rather than wait on a read already settled (docs/product/CONVENTIONS.md → the console guard).
-let adoptRead: Promise<void> | undefined;
+// render. It waits on that read of the tree this test rendered last, once: a second call, or one with no helper render
+// in this test since the last, throws rather than wait on a read already settled (docs/product/CONVENTIONS.md → the
+// console guard). The read is keyed to its test, as the module outlives tests in the shared jsdom.
+const thisTest = () => `${expect.getState().testPath} › ${expect.getState().currentTestName}`;
+let adoptRead: { test: string; read: Promise<void> } | undefined;
 const noteAdopt = (client: QueryClient) => {
-  adoptRead = client
+  const read = client
     .getQueryCache()
     .find({ queryKey: qk.runningSessions() })
     ?.promise?.then(
       () => {},
       () => {},
     );
+  adoptRead = read && { test: thisTest(), read };
 };
 export async function timersAdopted(): Promise<void> {
-  const read = adoptRead;
+  const noted = adoptRead;
   adoptRead = undefined;
-  if (!read)
+  if (noted?.test !== thisTest())
     throw new Error('timersAdopted(): no adopt read found — render through these helpers first');
-  await act(async () => void (await read));
+  await act(async () => void (await noted.read));
 }
 
 // Render a component with a fresh QueryClient and an injected (isolated) ApiClient.
