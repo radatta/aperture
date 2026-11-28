@@ -4,7 +4,15 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { analyse, checkCap, fetchLines, oneUser, parseLogs, render } from './read-cost.ts';
+import {
+  analyse,
+  checkCap,
+  fetchLines,
+  oneUser,
+  parseLogs,
+  render,
+  slotGroups,
+} from './read-cost.ts';
 import type { Analysis } from './read-cost.ts';
 import type { RunResult } from './report.ts';
 
@@ -17,7 +25,8 @@ pnpm devcheck:cost --report <report.json> --window
   --before   an earlier run's analysis JSON (written beside --out) for before/after columns
   --out      write the markdown here and the analysis JSON beside it (<out>.json); default: markdown to stdout
   --window   print the two \`pnpm bot logs\` fetches for the run's window and slot, and stop
-  Exit: 0 written · 1 refused (a fetch at its cap, failed, or missing a group; no units line in the run; a report
+  Exit: 0 written · 1 refused (a fetch at its cap, failed, missing a group or holding the other slot's; no units
+  line in the run across the fetches; a report
   without step stamps; a two-user run) · 2 a bad argument`;
 
 interface Args {
@@ -54,21 +63,32 @@ export function parseArgs(argv: string[]): Args {
   return a;
 }
 
-// Each --logs directory: every *.log in it, and both edges' groups (a partial artifact lacks one).
-function readLogs(dir: string): string[] {
-  const files = readdirSync(dir)
-    .filter((x) => x.endsWith('.log'))
-    .sort();
-  if (!files.length)
+// Each --logs directory: exactly the run's slot's two edge groups (a partial artifact lacks one; the other slot's
+// would put its own run's units in this run's windows). Other groups' files are left unread.
+const EDGE_GROUPS = (['dev', 'devb'] as const).flatMap((s) =>
+  slotGroups({ target: s } as RunResult),
+);
+function readLogs(dir: string, groups: string[]): string[] {
+  const all = readdirSync(dir).filter((x) => x.endsWith('.log'));
+  if (!all.length)
     throw new Error(`${dir}: no .log file — not a \`pnpm bot logs\` fetch directory`);
-  for (const edge of ['bff', 'mcp'])
-    if (!files.some((f) => f.startsWith(edge)))
-      throw new Error(`${dir}: no ${edge} group's log — a partial fetch; refetch both groups`);
-  return files.map((f) => {
-    const text = readFileSync(join(dir, f), 'utf8');
-    checkCap(join(dir, f), text);
-    return text;
-  });
+  const other = all.find(
+    (f) => EDGE_GROUPS.includes(f.slice(0, -4)) && !groups.includes(f.slice(0, -4)),
+  );
+  if (other)
+    throw new Error(
+      `${dir}: ${other} is the other slot's group — this run's are ${groups.join(', ')}`,
+    );
+  for (const g of groups)
+    if (!all.includes(`${g}.log`))
+      throw new Error(`${dir}: no ${g} group's log — a partial fetch; refetch both groups`);
+  return groups
+    .map((g) => `${g}.log`)
+    .map((f) => {
+      const text = readFileSync(join(dir, f), 'utf8');
+      checkCap(join(dir, f), text);
+      return text;
+    });
 }
 
 export function run(
@@ -94,7 +114,7 @@ export function run(
       out(`${fetchLines(report).join('\n')}\n`);
       return 0;
     }
-    const texts = a.logs.flatMap(readLogs);
+    const texts = a.logs.flatMap((d) => readLogs(d, slotGroups(report)));
     const analysis = analyse(report, parseLogs(texts));
     const before = a.before ? (JSON.parse(readFileSync(a.before, 'utf8')) as Analysis) : undefined;
     const md = render(analysis, before);

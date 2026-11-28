@@ -389,8 +389,10 @@ scenario, step, op and access, plus the top 10 requests:
 That is three of `pnpm bot logs`' ten fetches an hour (CI-BOT.md). The reader refuses, exit 1:
 
 - a fetch that hit its line cap or failed;
-- a fetch directory with no `.log` file, or missing one edge's group (a partial artifact);
-- a fetch with no units line inside the run (the wrong slot, a window that misses it, or an unmetered build);
+- a fetch directory with no `.log` file, missing one of the run's slot's edge groups (a partial artifact), or
+  holding the other slot's (its runs would land in this run's windows);
+- no units line inside the run across the fetches (a window that misses it, or an unmetered build); a REPORT
+  fetch from the wrong window shows only as the joins' "no REPORT line" count;
 - a report without the stamps;
 - a two-user report, parallel or serial. The merged report keeps one lane's windows, so the other lane's
   requests would land in the wrong step.

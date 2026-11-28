@@ -92,6 +92,7 @@ describe('parseLogs + analyse', () => {
       `2026-11-25T00:00:00.000Z s 2026-11-25T00:00:00.000Z\tr-bad\tINFO\t{"event":"ddb_units",broken`,
       '{"event":"ddb_units"}', // not a fetched line, but names the event: counted, never dropped silently
       units(10_700, 'listTasks', 3, 'not-an-array' as unknown as unknown[], 'r-shape'), // `by` the wrong shape
+      units(10_710, 'listTasks', 3, undefined, 'r-str').replace('"ru":3', '"ru":"3"'), // a number as a string
       'not a fetched line',
     ].join('\n');
     const reports = [
@@ -106,7 +107,7 @@ describe('parseLogs + analyse', () => {
 
   it('attributes each request to its window and sums it once', () => {
     const r = a();
-    expect([r.before, r.after, r.duplicates, r.malformed]).toEqual([1, 1, 1, 3]);
+    expect([r.before, r.after, r.duplicates, r.malformed]).toEqual([1, 1, 1, 4]);
     expect(r.totals).toMatchObject({ reqs: 5, ru: 66, wu: 5, calls: 5 });
     expect(r.phases.map((p) => [p.label, p.ru])).toEqual([
       ['setup', 1],
@@ -181,9 +182,9 @@ describe('parseLogs + analyse', () => {
     expect(() => analyse(report({ lanes: { mode: 'serial', browserMs: 9 } }), p)).not.toThrow();
   });
 
-  it('refuses a fetch with no units line inside the run (wrong slot, wrong window, no meter)', () => {
+  it('refuses fetches with no units line inside the run (wrong window, no meter)', () => {
     expect(() => analyse(report(), parseLogs([units(9_000, 'getDay', 1)]))).toThrow(
-      /no ddb_units line inside the run \(1 outside it\)/,
+      /no ddb_units line inside the run across the fetches \(1 outside it\)/,
     );
   });
 });
@@ -254,5 +255,23 @@ describe('CLI', () => {
     expect(cli(['--report', rep, '--logs', half]).code).toBe(0);
     const w = cli(['--report', rep, '--window']);
     expect([w.code, w.out.split('\n').length]).toEqual([0, 3]);
+    writeFileSync(join(half, 'bff-devb.log'), `${units(10_650, 'listTasks', 1)}\n`);
+    expect(cli(['--report', rep, '--logs', half]).err).toMatch(
+      /bff-devb\.log is the other slot's group/,
+    );
+    const b = join(root, 'b.json');
+    writeFileSync(b, JSON.stringify(report({ target: 'devb (https://example.test)' })));
+    expect(cli(['--report', b, '--logs', half]).err).toMatch(/bff\.log is the other slot's group/);
+  });
+  it('--window refuses a two-user run too', () => {
+    const root = mkdtempSync(join(tmpdir(), 'read-cost-'));
+    const rep = join(root, 'report.json');
+    writeFileSync(
+      rep,
+      JSON.stringify(report({ lanes: { mode: 'parallel' } } as Partial<RunResult>)),
+    );
+    const w = cli(['--report', rep, '--window']);
+    expect([w.code, w.out]).toEqual([1, '']);
+    expect(w.err).toMatch(/parallel two-lane/);
   });
 });

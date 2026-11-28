@@ -241,7 +241,7 @@ export function analyse(r: RunResult, p: Parsed): Analysis {
   const hasUnits = new Set(p.reqs.map((q) => q.reqId));
   if (!totals.reqs)
     throw new Error(
-      `no ddb_units line inside the run (${p.reqs.length} outside it): the wrong slot's --groups, a window that misses the run, or a build without the meter`,
+      `no ddb_units line inside the run across the fetches (${p.reqs.length} outside it): a window that misses the run, or a build without the meter`,
     );
   const phaseOrder = ['deployWait', 'open', 'setup', 'steps-gap', 'steps', 'cleanup'];
   return {
@@ -362,12 +362,14 @@ export function checkCap(name: string, text: string): void {
   if (text.startsWith('(fetch failed')) throw new Error(`${name}: ${text.trim()}`);
 }
 
+// The slot's two edge groups, from report.json's target (`pnpm bot logs`' group names; the files are <group>.log).
+export const slotGroups = (r: RunResult): string[] =>
+  (r.target ?? '').split(' ')[0] === 'devb' ? ['bff-devb', 'mcp-devb'] : ['bff', 'mcp'];
+
 // The run's fetch window (one minute before its start, two after its end) and the slot's groups, from report.json.
 export function fetchLines(r: RunResult): string[] {
   if (r.startedAt === undefined || !r.phases) throw new Error('report has no startedAt/phases');
   const end = r.startedAt + PHASES.reduce((t, k) => t + r.phases![k], 0);
-  const slot = (r.target ?? '').split(' ')[0];
-  const groups = slot === 'devb' ? 'bff-devb,mcp-devb' : 'bff,mcp';
-  const span = `--groups ${groups} --start ${new Date(r.startedAt - 60_000).toISOString()} --end ${new Date(end + 120_000).toISOString()}`;
+  const span = `--groups ${slotGroups(r).join(',')} --start ${new Date(r.startedAt - 60_000).toISOString()} --end ${new Date(end + 120_000).toISOString()}`;
   return [`pnpm bot logs ${span} --filter '%ddb_units%'`, `pnpm bot logs ${span} --filter REPORT`];
 }
