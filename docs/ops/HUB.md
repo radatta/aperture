@@ -470,6 +470,10 @@ follow-up, TOWER.md → _The automatic HOLD_), it still shows HOLD on a live loc
 knowingly, or keep ordering merges as before. A holder about to merge its own PR releases first (phase 10), or its
 merge waits on itself. To hurry a hotfix, ask the holder to release; never cancel the run.
 
+**The kill alarms' run count** caps both slots together: at most 12 full devchecks in any three hours and 6 in any
+hour (CI-BOT.md → _Dev deploy blast radius_ → Compute). Each lane counts before its own run and waits when it would
+pass them (DEV-CHECK.md → _Dev slots_), so a lane taking the lock below may still wait to run.
+
 **In a named dev order, lanes take the lock themselves** (the user, 2026-11-08). The hub sends the order and
 keeps it current as `devQueue` in `queue.json`, in file order; only the hub changes it. A lane is ready once its
 own local check is green (`pnpm devcheck:local`, phase 8); it sends the hub `[local]` as information and never

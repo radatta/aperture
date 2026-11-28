@@ -22,7 +22,7 @@ pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=
 ## Run it
 
 From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy running (no `pnpm test`, no dev
-server — CLAUDE.md → COI ceilings) but another session's dev check on the other slot, which is fine (_Dev slots_). Wrapped as
+server — CLAUDE.md → COI ceilings) but another session's dev check on the other slot, which is fine once the run count allows it (_Dev slots_). Wrapped as
 `HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …`, the run shows on the board with its peaks, and its job event
 carries where the time went — the deploy wait, sign-in, each scenario, cleanup (SESSION-BOARD.md → _Perf fields_):
 
@@ -65,9 +65,15 @@ per slot: the env file
 (`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
 scope (`config.ts` → `SLOT_TARGETS`). So is the run lock (`run.lock` for `dev`, `run.devb.lock`; `config.ts` → `runLockFile`): two
 sessions can each run one devcheck at once, one per slot — each slot's functions have their own reservations
-(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. Two at once stay well inside the kill
-alarms: a full run is ~95–106k Lambda ms and peaks near 810 calls a minute (measured 2026-11-13; the arithmetic is
-CI-BOT.md → _Dev deploy blast radius_ → Compute). On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
+(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. One slot at a time stays inside the kill
+alarms, but both slots on back-to-back full runs trip the three-hour Duration alarm in 2.0–2.6 h: a full run is
+~250k Lambda ms (measured 2026-11-26). So **before each run on dev, the lane counts** (the lock doesn't): the
+runs whose `run-start` falls in the last three hours and the last hour (ids and `t` are UTC) in
+`/workspace/localNotes/devcheck/`'s `ledger.dev.web.jsonl` and `ledger.dev.jsonl` (slot A: one run per id across the
+two; an id in `ledger.dev.jsonl` had iOS rows) and `ledger.devb.jsonl` (slot B: its own runs, even at the same id).
+Only ids ending `-smoke`, `-delta`, `-full` or `-all` are runs. If its own run would pass 12 in three hours or 6 in
+the hour (the counts and weights: CI-BOT.md → _Dev deploy blast radius_ → Compute), it waits until it wouldn't and
+tells the hub `[info]`. On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
 touches iOS paths the reason says to release devb and `deploy-dev` again, which sends such a branch to dev
 (CI-BOT.md → _Dev slots_). The `dev-slot-b` scenario's
 rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its
@@ -337,7 +343,7 @@ covers, so a JS filter after it saves nothing. A refused conditional write recor
 still running after the handler returns isn't on its line: both are small undercounts. The worker Lambdas
 aren't metered, and `devcheck:local` writes no line: its table is the in-memory doc (LOCAL-CHECK.md).
 
-**Its log cost.** The line is about 250 bytes, roughly 2 MB of CloudWatch ingest per full run on top of the
+**Its log cost.** The line is about 250 bytes, roughly 2 MB of CloudWatch ingest per full run (1.74 MB over 7,287 lines, measured 2026-11-26) on top of the
 Lambda's own START/END/REPORT lines. CloudWatch Logs' always-free tier is 5 GB a month, one figure for
 ingestion, storage and Logs Insights scans. The dev account's whole intake over the month before the meter
 (2026-10-27 to 11-26) was about 333 MB across every group, with 96 MB stored: about 120 full runs a month. At

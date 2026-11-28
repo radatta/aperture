@@ -186,7 +186,8 @@ hub message (the checkpoints stay).
      switch_ → _Opening the freeze_), asked through `[ask-maintainer]`.
    - Also send the user `code <Mac worktree path>`, to read the code directly, and a short checklist of
      what matters most to test on dev for this feature: a handful of items, not the review checklist.
-   - **Then run the dev check yourself** — `pnpm devcheck --tier full --feature <its scenario>`, plus a
+   - **Then run the dev check yourself**, each run after counting recent runs on both slots
+     (`docs/ops/DEV-CHECK.md` → _Dev slots_) — `pnpm devcheck --tier full --feature <its scenario>`, plus a
      `scenarios/<feature>.ts` whose rows encode the plan's matrix (`docs/ops/DEV-CHECK.md` → _Rows_); the report keeps
      the feature's rows apart from every other scenario's — and Read its screenshots; `ios` rows need the Mac awake —
      an unreachable Mac leaves them _Needs you_ with the reason, never a failure (`docs/ops/IOS-CHECK.md`); what they
