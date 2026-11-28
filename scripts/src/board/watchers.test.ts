@@ -341,6 +341,10 @@ describe('pace-watch.sh', () => {
     expect(pace(T10, 15, all({ queue: ready, files: { 'board/idle-fired': '\n' } }))).toMatchObject(
       { tick: 13 },
     );
+    // so does one with a leading 0, which $((…)) would read as octal and fail on
+    expect(
+      pace(T10, 15, all({ queue: ready, files: { 'board/idle-fired': '089\n' } })),
+    ).toMatchObject({ status: 6, tick: 13 });
     // idle-level readings while hot (the hub re-stamps since each tick, so it never recovers): never idle
     expect(pace(T10, 15, (i) => ({ queue: ready, ctl: hot(T10 + 60 * i) })).quiet).toBe(true);
     expect(pace(T10, 20, (i) => ({ queue: ready, l5: i === 8 ? 9 : 3 }))).toMatchObject({
@@ -849,7 +853,7 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
     const r = stale({ ...meter(rows), ...session() });
     expect([r.status, r.tick]).toEqual([13, 10]);
     expect(r.stdout).toContain('last usable row 11-17 07:30');
-    // newest-first across both files: a usable row in yesterday's file still counts
+    // across both files: a usable row in yesterday's file still counts
     const two = stale(
       {
         'usage/meter-2026-11-16.jsonl': `${meterRow(T10 - 3600, 30)}\n`,
@@ -859,6 +863,18 @@ describe('usage-watch.sh: the meter gone blind (13)', () => {
       13,
     );
     expect(two.quiet).toBe(true);
+    // the newest usable row wins, whatever the order the rows or files are in
+    const fresh = meterRow(T10 - 3600, 30);
+    for (const files of [
+      { 'usage/meter-2026-11-16.jsonl': `${OLD}\n`, ...meter([fresh]) },
+      { 'usage/meter-2026-11-16.jsonl': `${fresh}\n`, ...meter([OLD]) },
+      meter([OLD, fresh]),
+      meter([fresh, OLD]),
+    ])
+      expect(stale({ ...files, ...session() }, 13).quiet, JSON.stringify(files)).toBe(true);
+    // a torn last line (no newline) drops alone: the row before it still counts
+    const torn = { 'usage/meter-2026-11-17.jsonl': `${OLD}\n${fresh}\n{"ts":"2026-11-17T09:` };
+    expect(stale({ ...torn, ...session() }, 13).quiet).toBe(true);
   });
 
   it("the row's own offset sets its age; a ts of another shape is dropped alone", () => {

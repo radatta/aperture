@@ -148,7 +148,7 @@ while :; do
   if [ "$state" = calm ] && is "$l5+0 < $IDLE_L5 && $A+0 < $IDLE_ANON"; then
     [ "$idle_at" -eq 0 ] && idle_at=$now
     h=$(wl_at +%H) last=$(cat "$BOARD_DIR/idle-fired" 2>/dev/null)
-    [[ "$last" =~ ^[0-9]+$ ]] || last=0
+    [[ "$last" =~ ^[1-9][0-9]{0,11}$ ]] || last=0 # no leading 0: $((…)) reads octal
     if [ $((now - idle_at)) -ge "$IDLE_HOLD" ] && [ $((10#$h)) -ge "$IDLE_FROM" ] && [ $((now - last)) -ge "$IDLE_EVERY" ]; then
       ready=$(jq -r '([.devQueue[]?.branch] + [.autoStart[]?.branch]) as $live | [.autoStart[]? | select((.note // "") | test("^(LOW|HOLD)") | not) | select(all(.after[]?; . as $x | $live | index($x) | not)) | .branch] | join(",")' "$BOARD_DIR/queue.json" 2>/dev/null)
       [ -n "$ready" ] && { echo "$now" | sb_write "$BOARD_DIR/idle-fired"; wl_say $W "$line · IDLE ready=$ready"; exit 6; }

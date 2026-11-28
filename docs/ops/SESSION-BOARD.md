@@ -821,7 +821,7 @@ of `<board>/<watcher>.lock` before its first state write (`wl_singleton`, waitin
 a lock held by anything else ("held, but not by the pid on file") is **75**, so a 73 always means a copy runs. The
 kernel drops the lock with its last descriptor, so a dead copy's lock and pid files are simply taken over. The tick's
 `sleep` starts with `8>&-`: a copy stopped by pid would otherwise leave that sleep holding the lock for up to a tick.
-The other children are short (`jq`, `tee`, `date`; the meter scan reads newest-first and stops at its match), and the
+The other children are short (`jq`, `tee`, `date`; the blind meter's scan of two meter files, ~1 s), and the
 2 s wait rides out most of them; one still running makes the new copy's 75. A lock or pid file that
 can't be opened or written, or `flock` failing, is **74**. History files are named by local day with local-offset `t`. A
 `mac-load` row is `{t, mac, cpus, memFreePct, vm, power, vmCpuPct, top, sim, jobs}`: `t` is `mac-stats.json`'s own

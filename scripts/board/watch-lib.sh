@@ -91,19 +91,19 @@ wl_working() {
   printf '%s' "$out"
 }
 
-# Epoch of the last-written row in the two newest meter files that passes jq test $1 (a row the caller can use), or
-# nothing. The row's own offset is applied (jq's fromdateiso8601 reads only the Z form). Reads newest-first and
-# stops at the first match: a tail can be 40 minutes of rows with no weekly %, and the files run to tens of MB.
+# Epoch of the newest row in the two newest meter files that passes jq test $1 (a row the caller can use), or
+# nothing. The row's own offset is applied (jq's fromdateiso8601 reads only the Z form). Streams the files whole and
+# takes the largest epoch, so no row order is assumed and a torn line drops alone: a tail can be 40 minutes of rows
+# with no weekly %. ~1 s of CPU on a 38 MB day, and it runs only on a blind tick past the hold.
 wl_meter_last() {
   local files=("$USAGE_DIR"/meter-*.jsonl)
   [ -e "${files[0]}" ] || return 0
   local n=${#files[@]} pick=("${files[@]: -2}")
   [ "$n" -ge 2 ] || pick=("${files[0]}")
-  local i
-  for ((i = ${#pick[@]} - 1; i >= 0; i--)); do tac "${pick[i]}"; done 2>/dev/null | jq -Rn "def ok: $1;"'
+  cat "${pick[@]}" 2>/dev/null | jq -Rn "def ok: $1;"'
     def ep: (capture("^(?<d>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?<s>[+-])(?<h>[0-9]{2}):(?<m>[0-9]{2})$")
       | ((.d + "Z" | fromdateiso8601) - (if .s == "-" then -1 else 1 end) * ((.h | tonumber) * 3600 + (.m | tonumber) * 60)))? // empty;
-    first(inputs | fromjson? | objects | select(ok) | .ts | strings | ep) // empty' 2>/dev/null
+    reduce (inputs | fromjson? | objects | select(ok) | .ts | strings | ep) as $e (null; if . == null or $e > . then $e else . end) // empty' 2>/dev/null
 }
 
 # A tick with no reading (a dead status-line logger would leave the stop lines blind). Exits 13 when a live
