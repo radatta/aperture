@@ -233,3 +233,69 @@ describe('pulses on the table', () => {
     expect(rows.map((s) => s.wasWork)).toEqual([true]);
   });
 });
+
+// listSessionsForDay reads the running rows and the day's bucket, never the whole `sess#` history.
+describe("the day's sessions", () => {
+  const D = '2023-11-14';
+  async function seeded() {
+    const { doc, backend, now } = setup();
+    const t = await backend.createTask({ title: 'timed' });
+    const start = (day: string, kind: 'work' | 'break' = 'work') => {
+      now.t += MIN;
+      return backend.startSession({
+        taskId: kind === 'work' ? t.id : null,
+        categoryId: null,
+        kind,
+        day,
+      });
+    };
+    for (const day of ['2023-11-13', D, '2023-11-15']) {
+      const s = await start(day);
+      now.t += 5 * MIN;
+      await backend.stopSession(s.id, 'completed');
+    }
+    const brk = await start(D, 'break');
+    await backend.stopSession(brk.id, 'discarded');
+    const onDay = await start(D);
+    const elsewhere = await start('2023-11-15', 'break');
+    // An open pulse: its state row sits beside the sessions and is never one of them.
+    await backend.pulseTask({ taskId: t.id });
+    return { doc, backend, now, onDay, elsewhere };
+  }
+  // The reference: every session row, filtered by day, in key order (what the whole-prefix read returned).
+  const reference = async (doc: InMemoryDoc, day: string) =>
+    (await doc.query(pk(U), sk.sessionPrefix()))
+      .filter((i) => i.deletedAt == null && i.day === day)
+      .map((i) => i.id);
+
+  it('equals the whole-prefix read, order included, with no whole-prefix query', async () => {
+    const { doc, backend, onDay, elsewhere } = await seeded();
+    const want = await reference(doc, D);
+    doc.queries.length = 0;
+    const got = (await backend.listSessionsForDay(D)).map((s) => s.id);
+    expect(got).toEqual(want);
+    expect(got).toContain(onDay.id);
+    expect(got).not.toContain(elsewhere.id);
+    expect(want).toHaveLength(3); // the day's completed work, its discarded break, its running timer
+    expect(doc.queries.map((q) => [q.prefix, q.consistent])).toEqual([
+      [sk.sessionRunningPrefix(), true],
+      [sk.sessionDayPrefix(D), true],
+    ]);
+  });
+
+  it('a stop between the two reads lists the session once, as stopped', async () => {
+    const { doc, backend, onDay } = await seeded();
+    const query = doc.query.bind(doc);
+    let stopped = false;
+    vi.spyOn(doc, 'query').mockImplementation(async (p, prefix, opts) => {
+      const rows = await query(p, prefix, opts);
+      if (prefix === sk.sessionRunningPrefix() && !stopped) {
+        stopped = true;
+        await backend.stopSession(onDay.id, 'completed');
+      }
+      return rows;
+    });
+    const got = (await backend.listSessionsForDay(D)).filter((s) => s.id === onDay.id);
+    expect(got.map((s) => s.status)).toEqual(['completed']);
+  });
+});

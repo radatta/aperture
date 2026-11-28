@@ -46,7 +46,7 @@ ticks; locally the BFF gets a throwaway VAPID public key so Settings' opt-in run
 named scenario or step disappears.
 
 Never caught locally — dev's alone: DynamoDB eventual reads and timing races (the in-memory table is instant and
-consistent), Lambda concurrency and 429s, real Haiku output (parse is off: raw save; Flux's week note is its deterministic line), Google, Plaid, S3, Web Push, the
+consistent), Lambda concurrency and 429s, read units (the meter is dev-only and the in-memory doc reports none: DEV-CHECK.md → _Read cost_), real Haiku output (parse is off: raw save; Flux's week note is its deterministic line), Google, Plaid, S3, Web Push, the
 deployed shell and service worker, the Simulator.
 
 After the scenarios it runs the **iOS probe check** on its own stub-mode Vite (IOS-CHECK.md → _Probe check_, ~35 s,

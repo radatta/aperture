@@ -490,6 +490,7 @@ export const MODULE_READERS: Record<string, string> = {
   'scripts/src/board/tower/web/main.ts': `${RUNTIME}: lane files, /proc, --fixtures; limits.json (the scripts/board/ rule)`,
   'scripts/src/board/tower/web/server.ts': 'its own web/ dir (the board same-area rule)',
   'scripts/src/usage/cli.ts': `${RUNTIME}: the usage dir, settings, the lane archive, board history; hub.json only names the hub`,
+  'scripts/src/devcheck/read-cost-cli.ts': `${RUNTIME}: the report.json and devlogs directories it is given (gitignored localNotes)`,
   'scripts/src/plan-lint/cli.ts': `${RUNTIME}: the plan file it is given and the paths that plan names`,
   'scripts/src/usage/gh.ts': `${RUNTIME}: gh`,
   'scripts/src/usage/scan.ts': `${RUNTIME}: transcript files, the cgroup`,

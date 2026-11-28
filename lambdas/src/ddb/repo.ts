@@ -783,9 +783,27 @@ export class Repo {
       (await this.doc.query(this.p(), sk.sessionPrefix())).map((i) => toEntity<PomodoroSession>(i)),
     );
   }
-  async listRunningSessions(opts?: { consistent?: boolean }): Promise<PomodoroSession[]> {
+  // One day's sessions: the running rows on that day, then the day's bucket, never the whole `sess#` history.
+  // Running first: a stop between the two reads moves the row into the bucket, so it's in one read or both —
+  // never neither, except when both reads fall between stop's delete and its put (putSession), the same gap the
+  // whole-prefix read had. Both → the bucket's copy (the stopped one). Order as the old whole-prefix read: bucket, running.
+  // Both reads consistent: an eventual bucket beside a consistent running read would drop a session stopped just
+  // before, for as long as the replica lags. One day's bucket is small.
+  async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
+    const running = (await this.listRunningSessions()).filter((s) => s.day === day);
+    const done = alive(
+      (await this.doc.query(this.p(), sk.sessionDayPrefix(day), { consistent: true })).map((i) =>
+        toEntity<PomodoroSession>(i),
+      ),
+    );
+    const ids = new Set(done.map((s) => s.id));
+    return [...done, ...running.filter((s) => !ids.has(s.id))];
+  }
+  // Strongly consistent: every reader looks up a row it, or the request before it, may just have written or dropped
+  // (start's duplicate guard, the list after a stop, pulse's open timers), and the running prefix is small.
+  async listRunningSessions(): Promise<PomodoroSession[]> {
     return alive(
-      (await this.doc.query(this.p(), sk.sessionRunningPrefix(), opts)).map((i) =>
+      (await this.doc.query(this.p(), sk.sessionRunningPrefix(), { consistent: true })).map((i) =>
         toEntity<PomodoroSession>(i),
       ),
     );

@@ -1246,6 +1246,28 @@ export function runApiContract(
       void a;
     });
 
+    it('sessions: one day lists that day only — its stopped sessions, then its running ones', async () => {
+      const start = (label: string, day: string) =>
+        api.startSession({ taskId: null, categoryId: null, kind: 'work', label, day });
+      const done4 = await start('d4 done', '2026-08-04');
+      const run4 = await start('d4 running', '2026-08-04');
+      const done5 = await start('d5 done', '2026-08-05');
+      await start('d5 running', '2026-08-05');
+      advance(60_000);
+      await api.stopSession(done4.id, 'completed');
+      await api.stopSession(done5.id, 'completed');
+      const day4 = await api.listSessionsForDay('2026-08-04');
+      expect(day4.map((s) => [s.id, s.status])).toEqual([
+        [done4.id, 'completed'],
+        [run4.id, 'running'],
+      ]);
+      expect((await api.listSessionsForDay('2026-08-05')).map((s) => s.label)).toEqual([
+        'd5 done',
+        'd5 running',
+      ]);
+      expect(await api.listSessionsForDay('2026-08-06')).toEqual([]);
+    });
+
     it('sessions: a stop onto a finished task completes with its minutes but adds none to the task', async () => {
       // Mark done from the editor stops the timer first; this is the server's half for MCP and other devices.
       const task = await api.createTask({ title: 'Finished while timed', estimateMin: 30 });

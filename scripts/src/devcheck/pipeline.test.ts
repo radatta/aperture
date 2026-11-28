@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  COACH_ATTEMPT_VIA,
+  COACH_FOCUS_VIA,
   FINANCE_BUCKET_VIA,
   FINANCE_LINK_VIA,
   FINANCE_MARK_VIA,
@@ -99,6 +101,18 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
   const storiesDeleted: string[] = [];
   const mocks = new Map<string, DevMock>();
   const mocksDeleted: string[] = [];
+  // Coach attempts behind the export (exportData): every read counted, a rejected one included.
+  const coach = {
+    attempts: new Set<string>(),
+    reads: 0,
+    deletes: [] as string[],
+    onRead: undefined as (() => void) | undefined, // throws to fail that read
+    lagging: new Set<string>(), // ids a lagging export leaves out, for reads 1..lagReads
+    lagReads: 0,
+    onDelete: undefined as ((id: string) => 'keep' | void) | undefined, // throws to drop it; 'keep': answers, doesn't take
+    focus: false,
+    focusReads: 0,
+  };
   const places = new Map<string, DevPlace>();
   const placesDeleted: string[] = [];
   const categories = new Map<string, DevCategory>();
@@ -327,9 +341,25 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         ranking: [],
         patterns: [],
       }),
-      listCoachAttempts: async () => [],
+      listCoachAttempts: async () => {
+        coach.reads++;
+        coach.onRead?.();
+        const lag = coach.reads <= coach.lagReads ? coach.lagging : new Set<string>();
+        return [...coach.attempts]
+          .filter((id) => !lag.has(id))
+          .map((id) => ({
+            id,
+            slug: 's',
+            day: 'd',
+            outcome: 'clean',
+            help: 'none',
+          }));
+      },
       listMocks: async () => [...mocks.values()],
-      getCoachFocusRow: async () => null,
+      getCoachFocusRow: async () => {
+        coach.focusReads++;
+        return coach.focus ? ({} as never) : null;
+      },
       getCoachDay: async () => null,
       listCoachVoids: async () => [],
       draftSittingReview: async () => {
@@ -667,8 +697,9 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         mocksDeleted.push(id);
         mocks.delete(id);
       },
-      deleteCoachAttempt: async () => {
-        throw new Error('unused');
+      deleteCoachAttempt: async (id) => {
+        coach.deletes.push(id);
+        if (coach.onDelete?.(id) !== 'keep') coach.attempts.delete(id);
       },
       restoreCoachSlot: async () => {
         throw new Error('unused');
@@ -677,7 +708,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
         throw new Error('unused');
       },
       clearCoachFocus: async () => {
-        throw new Error('unused');
+        coach.focus = false;
       },
       setCoachFloor: async () => {
         throw new Error('unused');
@@ -758,6 +789,7 @@ function world(opts: { inPage?: string[]; shells?: string[]; existing?: string[]
     storiesDeleted,
     mocks,
     mocksDeleted,
+    coach,
     places,
     placesDeleted,
     placeToken,
@@ -2532,6 +2564,8 @@ describe('runPipeline', () => {
         ['quick', 'pass'],
       ]);
       expect(r.steps[0]!.note).toBe(DEFER_NOTE);
+      expect(r.steps[0]).not.toHaveProperty('at'); // a deferred step never ran: no read-cost window
+      expect(r.steps[1]!.at).toEqual(expect.any(Number));
       expect(r.coverage.map((x) => [x.row, x.status])).toEqual([
         ['slow', 'deferred'],
         ['cheap', 'pass'],
@@ -2974,5 +3008,284 @@ describe('the sitting budget', () => {
     const w2 = world();
     await w2.api.writes.updateSettings({ dayStartHour: 2 });
     expect((await run(w2, sc(w2), ledger())).sittingStarts).toBe(2);
+  });
+});
+
+// The read-cost reader's windows (devcheck:cost): each step that ran carries the clock at its start, the run its own.
+describe('step and run start stamps', () => {
+  it('stamps `at` before a step runs, on run steps only, and `startedAt` at the run start', async () => {
+    let t = 1_000;
+    const seen: number[] = [];
+    const sc = scenario(
+      async () => void seen.push(t),
+      async () => {
+        seen.push(t);
+        throw new Error('boom');
+      },
+      async () => void seen.push(t),
+    );
+    const r = await runPipeline(
+      deps(world(), [sc(world())], memLedger(), { now: () => (t += 10) }),
+    );
+    expect(r.startedAt).toBe(1_010);
+    expect(r.steps.map((s) => s.status)).toEqual(['pass', 'fail', 'skipped']);
+    const [a, b, c] = r.steps;
+    expect(seen).toHaveLength(2);
+    expect(a!.at).toBeGreaterThan(r.startedAt!);
+    expect(a!.at).toBeLessThanOrEqual(seen[0]!); // stamped before the step ran, not after
+    expect(b!.at).toBeGreaterThan(seen[0]!);
+    expect(b!.at).toBeLessThanOrEqual(seen[1]!);
+    expect(c).not.toHaveProperty('at');
+  });
+});
+
+// Cleanup's coach-attempt answers: one export read per pass, never a held answer across passes or a throw.
+describe('coach attempts: one export read per pass (F319)', () => {
+  type MemLedger = ReturnType<typeof memLedger>;
+  const terminated = () => new TypeError('terminated');
+  const record = (ledger: MemLedger, w: ReturnType<typeof world>, id: string, run = 'run1') => {
+    ledger.append({ run, op: 'created', id, via: COACH_ATTEMPT_VIA });
+    w.coach.attempts.add(id);
+  };
+  const go = (w: ReturnType<typeof world>, ledger: MemLedger, ...ids: string[]) =>
+    runPipeline(
+      deps(w, [scenario(async (x) => ids.forEach((id) => record(ledger, x, id)))(w)], ledger),
+    );
+  const finals = (r: Awaited<ReturnType<typeof runPipeline>>) =>
+    r.created.map((c) => [c.id, c.final]);
+  const ops = (ledger: MemLedger) =>
+    ledger.entries
+      .filter((e) => e.op === 'deleted' || e.op === 'gone' || e.op === 'swept')
+      .map((e) => [e.op, e.id]);
+
+  it('three attempts cost one export read to remove and one to read back', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const r = await go(w, ledger, 'a1', 'a2', 'a3');
+    expect(w.coach.reads).toBe(2); // 6 with a read per id
+    expect(w.coach.deletes).toEqual(['a3', 'a2', 'a1']);
+    expect(w.coach.attempts.size).toBe(0);
+    expect(finals(r)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'deleted'],
+      ['a3', 'deleted'],
+    ]);
+    expect(r.status).toBe('PASS');
+  });
+
+  it('an attempt already gone reads gone and gets no delete', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      for (const id of ['a1', 'a2', 'a3']) record(ledger, x, id);
+      x.coach.attempts.delete('a2'); // a step deleted it itself
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(w.coach.deletes).toEqual(['a3', 'a1']);
+    expect(ops(ledger)).toEqual([
+      ['deleted', 'a3'],
+      ['gone', 'a2'],
+      ['deleted', 'a1'],
+    ]);
+    expect(finals(r)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'gone'],
+      ['a3', 'deleted'],
+    ]);
+    expect(w.coach.reads).toBe(3); // its gone id is read back on its own
+  });
+
+  it('a coach delete that does not take is a leftover: the read-back is its own read', async () => {
+    const w = world();
+    w.coach.onDelete = (id) => (id === 'a2' ? 'keep' : undefined);
+    const r = await go(w, memLedger(), 'a1', 'a2');
+    expect(finals(r)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'left'],
+    ]);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(w.coach.reads).toBe(2); // 4 with a read per id
+  });
+
+  it('a dropped coach delete reads the export again before its retry', async () => {
+    // (a) the delete landed, its answer was lost: found gone on the retry, sent once, recorded deleted.
+    const landed = world();
+    let drops = 1;
+    landed.coach.onDelete = (id) => {
+      if (id !== 'a2' || drops-- <= 0) return;
+      landed.coach.attempts.delete(id);
+      throw terminated();
+    };
+    const la = memLedger();
+    const ra = await go(landed, la, 'a1', 'a2');
+    expect(landed.coach.deletes).toEqual(['a2', 'a1']);
+    expect(ops(la)).toEqual([
+      ['deleted', 'a2'],
+      ['deleted', 'a1'],
+    ]);
+    expect(ra.retried).toEqual(['a2: terminated (attempt 1 of 3)']);
+    expect(landed.coach.reads).toBe(3); // 5 with a read per id
+    // (b) dropped before it landed: the retry finds it and sends it again.
+    const lost = world();
+    let lose = 1;
+    lost.coach.onDelete = (id) => {
+      if (id === 'a2' && lose-- > 0) throw terminated();
+    };
+    const rb = await go(lost, memLedger(), 'a1', 'a2');
+    expect(lost.coach.deletes).toEqual(['a2', 'a2', 'a1']);
+    expect(finals(rb)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'deleted'],
+    ]);
+    expect(lost.coach.reads).toBe(3);
+  });
+
+  it('a throw from any removal drops the export answer', async () => {
+    const w = world();
+    const del = w.api.writes.deleteTask;
+    let drops = 1;
+    w.api.writes.deleteTask = async (id) => {
+      if (drops-- > 0) throw terminated();
+      await del(id);
+    };
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      record(ledger, x, 'a1');
+      ledger.append({ run: 'run1', op: 'created', id: 't1' }); // a task, between the two attempts
+      x.tasks.set('t1', { id: 't1', title: 't1' });
+      record(ledger, x, 'a2');
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.retried).toEqual(['t1: terminated (attempt 1 of 3)']);
+    expect(r.created.map((c) => c.final)).toEqual(['deleted', 'deleted', 'deleted']);
+    expect(w.coach.reads).toBe(3); // removals: a2, then a1 after the drop; one read-back (4 per id)
+  });
+
+  it('a delete that fails outright drops the export answer too', async () => {
+    const w = world();
+    w.api.writes.deleteTask = async () => {
+      throw new Error('deleteTask → HTTP 500: boom');
+    };
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      record(ledger, x, 'a1');
+      ledger.append({ run: 'run1', op: 'created', id: 't1' });
+      x.tasks.set('t1', { id: 't1', title: 't1' });
+      record(ledger, x, 'a2');
+    })(w);
+    const r = await runPipeline(deps(w, [sc], ledger));
+    expect(r.failedDeletes[0]).toBe('t1: deleteTask → HTTP 500: boom');
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(r.created.map((c) => [c.id, c.final])).toEqual([
+      ['a1', 'deleted'],
+      ['t1', 'left'],
+      ['a2', 'deleted'],
+    ]);
+    expect(w.coach.reads).toBe(3); // a2, then a fresh read for a1 after t1's failure; one read-back
+  });
+
+  it('an attempt recorded twice is deleted once, then reads gone', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const r = await go(w, ledger, 'a1', 'a1');
+    expect(w.coach.deletes).toEqual(['a1']);
+    expect(ops(ledger)).toEqual([
+      ['deleted', 'a1'],
+      ['gone', 'a1'],
+    ]);
+    expect(finals(r)).toEqual([
+      ['a1', 'gone'],
+      ['a1', 'gone'],
+    ]);
+    expect(w.coach.reads).toBe(3); // a1 read gone here: each record read back on its own
+  });
+
+  it("the sweep's export answer never reaches cleanup", async () => {
+    const w = world();
+    const ledger = memLedger();
+    record(ledger, w, 'old1', 'run0');
+    record(ledger, w, 'old2', 'run0');
+    const r = await go(w, ledger, 'a3');
+    expect(r.swept).toEqual(['old1', 'old2']);
+    expect(w.coach.deletes).toEqual(['old1', 'old2', 'a3']);
+    expect(finals(r)).toEqual([['a3', 'deleted']]);
+    expect(w.coach.reads).toBe(3); // sweep, removals, read-back
+    expect(r.status).toBe('PASS');
+  });
+
+  it('an export read-back that throws proves nothing', async () => {
+    // (a) an HTTP error on every read-back: each attempt stays left, one read-back line per id.
+    const w = world();
+    w.coach.onRead = () => {
+      if (w.coach.reads >= 2) throw new Error('exportData → HTTP 500: boom');
+    };
+    const r = await go(w, memLedger(), 'a1', 'a2');
+    expect(finals(r)).toEqual([
+      ['a1', 'left'],
+      ['a2', 'left'],
+    ]);
+    expect(r.failedDeletes).toEqual([
+      'a1: read-back: exportData → HTTP 500: boom',
+      'a2: read-back: exportData → HTTP 500: boom',
+    ]);
+    expect(r.codes).toContain('LEFTOVERS');
+    // (b) dropped once: retried, read again, both deleted.
+    const v = world();
+    v.coach.onRead = () => {
+      if (v.coach.reads === 2) throw terminated();
+    };
+    const rb = await go(v, memLedger(), 'a1', 'a2');
+    expect(rb.retried).toEqual(['a1: terminated (attempt 1 of 3)']);
+    expect(finals(rb)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'deleted'],
+    ]);
+    expect(v.coach.reads).toBe(3);
+  });
+
+  it('an export read that throws during removal is never held', async () => {
+    const w = world();
+    w.coach.onRead = () => {
+      if (w.coach.reads === 1) throw terminated();
+    };
+    const r = await go(w, memLedger(), 'a1', 'a2');
+    expect(r.retried).toEqual(['a2: terminated (attempt 1 of 3)']);
+    expect(finals(r)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'deleted'],
+    ]);
+    expect(w.coach.reads).toBe(3);
+  });
+
+  it('an attempt a lagging export called gone is read back on its own, so it fails LEFTOVERS', async () => {
+    const w = world();
+    w.coach.lagging.add('a2'); // logged last; the removal read and the held read-back both miss it
+    w.coach.lagReads = 2;
+    const ledger = memLedger();
+    const r = await go(w, ledger, 'a1', 'a2');
+    expect(w.coach.deletes).toEqual(['a1']);
+    expect(ops(ledger)).toEqual([
+      ['gone', 'a2'],
+      ['deleted', 'a1'],
+    ]);
+    expect(finals(r)).toEqual([
+      ['a1', 'deleted'],
+      ['a2', 'left'],
+    ]);
+    expect(r.codes).toContain('LEFTOVERS');
+    expect(w.coach.reads).toBe(3);
+  });
+
+  it('the focus row is still read once per record', async () => {
+    const w = world();
+    const ledger = memLedger();
+    const sc = scenario(async (x) => {
+      x.coach.focus = true;
+      for (let i = 0; i < 3; i++)
+        ledger.append({ run: 'run1', op: 'created', id: 'coach-focus:run1', via: COACH_FOCUS_VIA });
+    })(w);
+    await runPipeline(deps(w, [sc], ledger));
+    expect(w.coach.focusReads).toBe(6); // three pending records cleaned, three read back: as on main
+    expect(w.coach.reads).toBe(0);
   });
 });

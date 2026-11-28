@@ -48,7 +48,8 @@ export function leetcodeReads(c: Core) {
     getCatalogStatus: () => call<DevCatalogStatus>('getCatalogStatus', []),
     getCoachStats: () => call<DevCoachStats>('getCoachStats', []),
     listMocks: () => call<DevMock[]>('listMocks', []),
-    // The coach's stored attempts, alive (the export's; the test user's are a handful).
+    // The coach's stored attempts, alive (the export's; the test user's are a handful). A whole-partition export:
+    // cleanup asks it once per pass, never once per id (pipeline.ts exists, F319).
     listCoachAttempts: async () =>
       (await call<{ coachAttempts: DevCoachAttempt[] }>('exportData', [])).coachAttempts,
     // The stored focus override row, held or not (the plan's `focus.source` says only whether it still holds).

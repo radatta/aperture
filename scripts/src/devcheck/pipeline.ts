@@ -153,6 +153,11 @@ const loadUrl = (u: string) => {
 };
 const IN_PAGE_RELOADS = 3; // the PWA's service worker can serve the previous shell first (pwa-two-launch-refresh)
 
+// One pass's coach-attempt ids from one export read (exists, F319): created per pass, dropped on any throw.
+interface AttemptsSeen {
+  ids?: Set<string>;
+}
+
 export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   const t0 = d.now();
   // Where the run's time went, for heavy.sh's job event (heavy-detail.ts; SESSION-BOARD.md → Perf fields): each
@@ -168,6 +173,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   };
   const r: RunResult = {
     runId: d.runId,
+    startedAt: t0,
     tier: d.tier,
     feature: d.feature ?? [],
     expectedSha: d.expectedSha,
@@ -333,8 +339,9 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       (_method, status, text) => void (status !== 200 && noteRefusal(text)),
     );
     // A crashed earlier run's ids are still pending in the shared ledger: clean them first.
+    const sweepSeen: AttemptsSeen = {};
     for (const id of categoriesLast(pendingIds(d.ledger.read()))) {
-      const out = await clean(api, id);
+      const out = await clean(api, id, sweepSeen);
       if (out === 'gone') d.ledger.append({ run: d.runId, op: 'gone', id });
       else if (out === 'removed') {
         d.ledger.append({ run: d.runId, op: 'swept', id });
@@ -443,6 +450,7 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
           continue;
         }
         const s0 = d.now();
+        res.at = s0;
         stepNo++;
         refusal = null;
         bodyReads.length = 0;
@@ -663,7 +671,12 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // The reminder toggles, `reminder-toggles:<run>`, exist while any reads off; removing them switches all on.
   // A capture token exists while it's listed (a revoke cut short leaves it listed but dead — revoking again
   // finishes it); removing it revokes it by its recorded id.
-  async function exists(client: ApiClient, id: string): Promise<boolean> {
+  // A coach attempt is read from one export per pass (`seen`, F319): the export is the whole partition, and only
+  // request handlers by id write attempts, so inside one pass N reads equal one read less the pass's own
+  // confirmed deletes. The read is eventual and now decides the whole pass, not one id: a lagging export can call
+  // several fresh attempts gone (the read-back's own read still fails them LEFTOVERS) or a just-deleted one alive
+  // (a no-op delete, labelled deleted). The focus row keeps one read per record: the pick worker writes it on its own.
+  async function exists(client: ApiClient, id: string, seen: AttemptsSeen): Promise<boolean> {
     switch (ledgerKind(d.ledger.read(), id)) {
       case 'flux':
         return (await client.reads.getFluxSet(id)) !== null;
@@ -684,7 +697,8 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
       case 'lcRollLink':
         return (await client.reads.getSettings()).leetcodeRollId != null;
       case 'coachAttempt':
-        return (await client.reads.listCoachAttempts()).some((a) => a.id === id);
+        seen.ids ??= new Set((await client.reads.listCoachAttempts()).map((a) => a.id));
+        return seen.ids.has(id);
       case 'coachSlot': {
         const { day, slug } = coachSlotOf(id);
         const t = await client.reads.getCoachToday();
@@ -812,16 +826,23 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
   // One id's read-back and removal. A dropped connection is retried (CLEAN_BACKOFF_MS, each reported); any other
   // throw (a revoke racing another device, any delete's error) is caught here, so the loop goes on to the rest:
   // the id stays pending (the next run's sweep retries it), the error is reported, and the run fails LEFTOVERS.
-  async function clean(client: ApiClient, id: string): Promise<'gone' | 'removed' | 'kept'> {
+  async function clean(
+    client: ApiClient,
+    id: string,
+    seen: AttemptsSeen,
+  ): Promise<'gone' | 'removed' | 'kept'> {
     // A removal was under way: found gone on a retry, it landed and only its answer was lost — or, rarely, a read
     // before its write dropped and something else took the row; either way it's recorded removed, never re-sent.
     let sent = false;
     for (let attempt = 1; ; attempt++) {
       try {
-        if (!(await exists(client, id))) return sent ? 'removed' : 'gone';
+        if (!(await exists(client, id, seen))) return sent ? 'removed' : 'gone';
         sent = true;
-        return (await removeRecorded(client, id)) ? 'removed' : 'kept';
+        if (!(await removeRecorded(client, id))) return 'kept';
+        seen.ids?.delete(id); // its removal answered: that one id, and only it, leaves the held answer
+        return 'removed';
       } catch (err) {
+        seen.ids = undefined; // whatever threw, nothing read before it is trusted after it
         if (await retrying(id, err, attempt)) continue;
         const refs = /has references/i.test(String(err)) ? await referencesOf(client, id) : '';
         const what = `${id}: ${err instanceof Error ? err.message : String(err)}${refs}`;
@@ -907,18 +928,25 @@ export async function runPipeline(d: PipelineDeps): Promise<RunResult> {
     for (const e of mine)
       r.created.push({ id: e.id!, via: e.via ?? '?', title: e.title, final: 'left' });
     // Newest-first (a part before its parent), categories after everything.
+    const removeSeen: AttemptsSeen = {};
     for (const id of categoriesLast(mine.map((e) => e.id!).reverse())) {
       if (!pending.has(id)) continue;
-      const out = await clean(api, id);
+      const out = await clean(api, id, removeSeen);
       if (out === 'gone') d.ledger.append({ run: d.runId, op: 'gone', id });
       else if (out === 'removed') d.ledger.append({ run: d.runId, op: 'deleted', id });
     }
     // Verify by reading back, not by trusting the deletes. A read-back that throws proves nothing: 'left'.
+    // Its own held answer, filled after the last removal; never written by a delete. An id this run called gone
+    // got no delete, so a lagging export there would pass a stored row: it gets its own read, as on main.
     const after = d.ledger.read();
+    const goneHere = new Set(
+      after.filter((e) => e.op === 'gone' && e.run === d.runId).map((e) => e.id!),
+    );
+    const readBackSeen: AttemptsSeen = {};
     const stillThere = async (id: string): Promise<boolean> => {
       for (let attempt = 1; ; attempt++)
         try {
-          return await exists(api!, id);
+          return await exists(api!, id, goneHere.has(id) ? {} : readBackSeen);
         } catch (err) {
           if (await retrying(id, err, attempt)) continue;
           r.failedDeletes.push(

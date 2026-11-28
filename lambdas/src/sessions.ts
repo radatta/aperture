@@ -93,7 +93,7 @@ export class SessionService {
     return this.repo.putSession(extendSession(session, this.now(), opts?.capMin));
   }
   async listSessionsForDay(day: string): Promise<PomodoroSession[]> {
-    return (await this.repo.listAllSessions()).filter((s) => s.day === day);
+    return this.repo.listSessionsForDay(day);
   }
   async findRunningSession(): Promise<PomodoroSession | null> {
     return (await this.runningSessions())[0] ?? null;

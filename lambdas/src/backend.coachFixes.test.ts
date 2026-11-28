@@ -5,7 +5,7 @@ import { InMemoryDoc } from './ddb/DocClient';
 import { entityItem } from './ddb/mapping';
 import { Repo } from './ddb/repo';
 import { liveWrites } from './ddb/writes';
-import { pk } from './ddb/keys';
+import { pk, sk } from './ddb/keys';
 import { BackendClient } from './backend';
 
 // What the shared contract can't see: the table rows. The legacy capture's `lc#` rows are only ever read, and a
@@ -148,5 +148,20 @@ describe('the trace comment row', () => {
     await backend.lcSittingEvents({ sittingId: sitting.id, events: [snap(TRACE, T0 + 3000)] });
     expect(await traceRows()).toEqual([]);
     expect((await backend.getSitting(sitting.id)).sitting.summary.commentTrace).toBe('none');
+  });
+});
+
+describe('the coach reads strongly', () => {
+  it('a plan-mode change a moment ago is the plan mode getCoachToday serves', async () => {
+    const { doc, backend } = await setup();
+    await backend.updateSettings({ coachPlanMode: 'balanced' });
+    const old = await doc.get(pk('u1'), sk.settings());
+    await backend.updateSettings({ coachPlanMode: 'catch-up' });
+    doc.staleNextGets(pk('u1'), sk.settings(), old, 20); // an eventual get still serves 'balanced'
+    doc.queries.length = 0;
+    expect((await backend.getCoachToday()).planMode.setting).toBe('catch-up');
+    // The seven coach lists, too (PRs 191 and 225): none of the coach's queries is eventual. A pin on the whole
+    // path: a new eventual read here fails it on purpose, to be weighed (a stale coach answer) before it lands.
+    expect(doc.queries.filter((q) => !q.consistent).map((q) => q.prefix)).toEqual([]);
   });
 });

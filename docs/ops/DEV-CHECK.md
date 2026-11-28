@@ -22,7 +22,7 @@ pnpm bot deploy-dev ─► its run (gh) ─► edge serves <meta aperture-build=
 ## Run it
 
 From the worktree whose commit `pnpm bot deploy-dev` dispatched, with nothing else heavy running (no `pnpm test`, no dev
-server — CLAUDE.md → COI ceilings) but another session's dev check on the other slot, which is fine (_Dev slots_). Wrapped as
+server — CLAUDE.md → COI ceilings) but another session's dev check on the other slot, which is fine once the run count allows it (_Dev slots_). Wrapped as
 `HEAVY_CLASS=ui scripts/board/heavy.sh -- pnpm devcheck …`, the run shows on the board with its peaks, and its job event
 carries where the time went — the deploy wait, sign-in, each scenario, cleanup (SESSION-BOARD.md → _Perf fields_):
 
@@ -65,9 +65,15 @@ per slot: the env file
 (`ledger.<slot>.jsonl`) and every guard — the origin, the Files bucket, the Hosted UI host and the MCP
 scope (`config.ts` → `SLOT_TARGETS`). So is the run lock (`run.lock` for `dev`, `run.devb.lock`; `config.ts` → `runLockFile`): two
 sessions can each run one devcheck at once, one per slot — each slot's functions have their own reservations
-(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. Two at once stay well inside the kill
-alarms: a full run is ~95–106k Lambda ms and peaks near 810 calls a minute (measured 2026-11-13; the arithmetic is
-CI-BOT.md → _Dev deploy blast radius_ → Compute). On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
+(CI-BOT.md → _Dev deploy blast radius_ → Compute), and each run sweeps only its own slot's ledger and table. Back-to-back full runs can trip the three-hour
+Duration alarm — in 1.5–2.6 h on both slots, and on one slot alone at the fastest measured pace (cause unmeasured): a full run is ~231–259k
+Lambda ms (measured 2026-11-26 and 11-27). So **before each run on dev, the lane counts** (the lock doesn't): the
+runs whose `run-start` falls in the last three hours and the last hour (ids and `t` are UTC) in
+`/workspace/localNotes/devcheck/`'s `ledger.dev.web.jsonl` and `ledger.dev.jsonl` (slot A: one run per id across the
+two; an id in `ledger.dev.jsonl` had iOS rows) and `ledger.devb.jsonl` (slot B: its own runs, even at the same id).
+Only ids ending `-smoke`, `-delta`, `-full` or `-all` are runs. If its own run would pass 12 in three hours or 6 in
+the hour (the counts and weights: CI-BOT.md → _Dev deploy blast radius_ → Compute), it waits until it wouldn't and
+tells the hub `[info]`. On devb, iOS rows read needs-you (`SIM_SLOT_A_ONLY`: the sim is slot A's) — when the branch
 touches iOS paths the reason says to release devb and `deploy-dev` again, which sends such a branch to dev
 (CI-BOT.md → _Dev slots_). The `dev-slot-b` scenario's
 rows are slot-relative — the BFF's `/api/health` names the run's slot, the app and `/mcp` answer at its origin, its
@@ -267,7 +273,11 @@ session before launch`.
   (`siri-capture.ts`) — and a new kind's goes there too, not here
   (`git grep -l 'ledger kinds\? (DEV-CHECK' scripts/src/devcheck/scenarios` finds them).
 - **Verified, not assumed.** After cleanup every id this run created or swept is read back (`getTask` → null).
-  A task already gone (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
+  A coach attempt's answer is one export read per pass (sweep, removals, read-back), plus one per throw: the
+  export is an eventual read, any throw drops the held answer before the retry, a returned delete removes its
+  own id from it, and the read-back takes its own after the last removal — except for an attempt this run
+  called `gone`, which got no delete and so is read back on its own read. A task already gone
+  (deleted with its parent) is `gone`, not a failure. A create still in flight when a step
   fails is waited for (30 s) and recorded; one that never answers is a possible leak. Tasks the ledger doesn't
   know are never deleted: ones there before the run are listed, ones that appeared during it (a create path the
   recorder missed) fail the run — keep the test user free of recurring series, whose day's occurrence can
@@ -317,6 +327,75 @@ Simulator's cold Home loads land on the same reservation as the browser lane's s
 429, and the default serial run is how to tell the two apart.
 
 The test user's rows aren't all kept: dev's table expires tombstones ([TECH.md](../arch/TECH.md) §2.3, rule 4), so a scenario can't count on one being physically there. The `dead-rows` scenario covers the delete paths.
+
+## Read cost
+
+On the dev slots only (`isDevSlot(STAGE)`, so prod's handler and requests are unchanged), the BFF and `/mcp`
+Lambdas ask DynamoDB for `ReturnConsumedCapacity: 'TOTAL'` and log one line per request when it ends, a throw
+included (`lambdas/src/ddb/meter.ts`):
+`{"event":"ddb_units","v":1,"edge","op","status","at","ms","ru","wu","n","by"}`. `op` is the RPC method, a
+fixed route, or the MCP method plus a known tool name. Nothing from the request's own data reaches it.
+`ru`/`wu` are the read and write units, and `n` the calls. `by` holds the top 8 accesses as
+`[verb+c:kind, calls, units, items, dead]`, with the rest summed as `other`. The verb is `q`, `g`, `x` (a GSI
+query), `p`, `d`, `u` or `b`, with a `c` added for a consistent read. The kind is the sort key's leading word.
+`dead` counts the tombstoned rows the read returned. A read is billed on everything its key condition
+covers, so a JS filter after it saves nothing. A refused conditional write records no units, and DynamoDB work
+still running after the handler returns isn't on its line: both are small undercounts. The worker Lambdas
+aren't metered, and `devcheck:local` writes no line: its table is the in-memory doc (LOCAL-CHECK.md).
+
+**Its log cost.** The line is about 250 bytes, roughly 2 MB of CloudWatch ingest per full run (1.74 MB over 7,287 lines, measured 2026-11-26) on top of the
+Lambda's own START/END/REPORT lines. CloudWatch Logs' always-free tier is 5 GB a month, one figure for
+ingestion, storage and Logs Insights scans. The dev account's whole intake over the month before the meter
+(2026-10-27 to 11-26) was about 333 MB across every group, with 96 MB stored: about 120 full runs a month. At
+that pace the meter adds about 240 MB a month. Even at 30 full runs a day it adds about 1.8 GB, and the total
+stays under 2.2 GB. Not measured: prod's share, if the free tier is shared across the organization. Re-measure
+with the maintainer's break-glass profile. `IncomingBytes` is per log group, so a plain
+`get-metric-statistics` call reads almost nothing; sum the groups with a search:
+
+```
+aws cloudwatch get-metric-data --profile aperture-dev --region us-west-1 --start-time <iso> --end-time <iso> --metric-data-queries "[{\"Id\":\"logs\",\"Expression\":\"SUM(SEARCH('{AWS/Logs,LogGroupName} MetricName=\\\"IncomingBytes\\\"', 'Sum', 86400))\"}]" --query 'MetricDataResults[0].Values' --output text
+```
+
+The values are bytes per day; add them up. Past the free tier, the meter is the first thing to shorten.
+
+The harness stamps each step's start (`StepResult.at`) and the run's (`RunResult.startedAt`) into
+`report.json`. `pnpm devcheck:cost` joins the lines to those windows and prints units and Lambda ms per phase,
+scenario, step, op and access, plus the top 10 requests:
+
+1. About 3 min into the run, prove the line is there:
+   `pnpm bot logs --groups bff,mcp --since 5m --filter '%ddb_units%'` (`bff-devb,mcp-devb` on devb). Without
+   `--groups`, `bot logs` reads the held slot's groups, but falls back to slot A's when it can't read the lock,
+   so name them.
+2. The fetches cover a past window and the reader drops every request outside the run, so release the slot's
+   lock first. At least 2 min after the run ends (log delivery), print the run's two fetches, one minute
+   before its start to two after its end, with its slot's groups, and run both:
+
+   ```
+   pnpm devcheck:cost --report localNotes/devcheck/<run>/report.json --window
+   ```
+
+   One is `--filter '%ddb_units%'`; the other is `--filter REPORT`, for the Lambda's own Duration.
+
+3. Read the two fetch directories:
+
+   ```
+   pnpm devcheck:cost --report localNotes/devcheck/<run>/report.json --logs localNotes/devlogs/<units key> --logs localNotes/devlogs/<REPORT key> --out localNotes/read-cost-<run>.md
+   ```
+
+   Pass `--before <an earlier out>.json` for deltas. The steps that ran in one run only are named, because
+   the totals then compare different work. To compare two runs, give both the same slow-step selection
+   (`--feature`; _Slow tier_), because a diff that reaches a scenario's `slowPaths` changes which steps run.
+
+That is three of `pnpm bot logs`' ten fetches an hour (CI-BOT.md). The reader refuses, exit 1:
+
+- a fetch that hit its line cap or failed;
+- a fetch directory with no `.log` file, missing one of the run's slot's edge groups (a partial artifact), or
+  holding the other slot's (its runs would land in this run's windows);
+- no units line inside the run across the fetches (a window that misses it, or an unmetered build); a REPORT
+  fetch from the wrong window shows only as the joins' "no REPORT line" count;
+- a report without the stamps;
+- a two-user report, parallel or serial. The merged report keeps one lane's windows, so the other lane's
+  requests would land in the wrong step.
 
 ## Ledgers
 
