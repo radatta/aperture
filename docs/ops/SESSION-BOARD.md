@@ -815,7 +815,15 @@ Four no-AI loops the hub runs in the background (`docs/ops/HUB.md` → _Watchers
 tick and **exits only when the hub should wake**, so the hub spends nothing while they're quiet. They source
 `watch-lib.sh` (on `lib.sh`), read every threshold from `limits.json` → `watchers` at startup (an edit takes effect at
 the next restart), and exit **78** naming the key when one is missing or malformed — no built-in defaults, so a number
-has one home. A bad argument or env override is exit 2. History files are named by local day with local-offset `t`. A
+has one home. A bad argument or env override is exit 2. **One copy each**: a watcher takes an `flock` on fd 8
+of `<board>/<watcher>.lock` before its first state write (`wl_singleton`, waiting up to 2 s) and writes its pid to
+`<watcher>.pid`; a second copy exits **73** naming the holder, which it does only when `/proc/<pid>/fd/8` is the lock;
+a lock held by anything else ("held, but not by the pid on file") is **75**, so a 73 always means a copy runs. The
+kernel drops the lock with its last descriptor, so a dead copy's lock and pid files are simply taken over. The tick's
+`sleep` starts with `8>&-`: a copy stopped by pid would otherwise leave that sleep holding the lock for up to a tick.
+The other children are short (`jq`, `tee`, `date`; the blind meter's scan of two meter files, ~1 s), and the
+2 s wait rides out most of them; one still running makes the new copy's 75. A lock or pid file that
+can't be opened or written, or `flock` failing, is **74**. History files are named by local day with local-offset `t`. A
 `mac-load` row is `{t, mac, cpus, memFreePct, vm, power, vmCpuPct, top, sim, jobs}`: `t` is `mac-stats.json`'s own
 UTC stamp (it repeats while the Mac agent is stale), `mac` the Mac's load 1/5/15, `cpus` its cores, `memFreePct` its
 free memory, `vm` the **VM's** load5 from `/proc/loadavg` as a JSON string (lxcfs passes the VM's through — not the
@@ -834,8 +842,8 @@ _Lanes_), plus the inbox's waiting entries. Tests: `scripts/src/board/watchers.t
 | Watcher                        | Reads                                                                                                                                       | Writes (board dir)                                                                                                     | Exits                                                              |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
 | `pace-watch.sh`                | cgroup `{cpu,memory}.{stat,pressure}`, `/proc/loadavg`; `{pace-control,stop,queue,mac-stats}.json` and `.hostjobs/` (all of them read-only) | `pace.json` every minute, `idle-fired` and `stop-fired`, `history/{vm-pace,mac-load}-<day>.jsonl` and `pace-watch.log` | 3 trip, 0 recovered, 5 trigger, 4 hot 1 h, 6 idle + ready, 12 stop |
-| `usage-watch.sh [--hard-only]` | `localNotes/usage/meter-*.jsonl` (the two newest)                                                                                           | `usage-now.json`, `usage-watch.log`                                                                                    | 7 soft stop, 8 hard stop                                           |
-| `context-watch.sh`             | the same meter files                                                                                                                        | `ctx.json`, `ctx-alerted.json`, `history/ctx-<day>.jsonl`, `context-watch.log`                                         | 9 urgent                                                           |
+| `usage-watch.sh [--hard-only]` | `localNotes/usage/meter-*.jsonl` (the two newest)                                                                                           | `usage-now.json`, `meter-stale-fired`, `usage-watch.log`                                                               | 7 soft stop, 8 hard stop, 13 meter blind                           |
+| `context-watch.sh`             | the same meter files                                                                                                                        | `ctx.json`, `ctx-alerted.json`, `meter-stale-fired`, `history/ctx-<day>.jsonl`, `context-watch.log`                    | 9 urgent, 13 meter blind                                           |
 | `merge-watch.sh`               | `history/events-*.jsonl` (the two newest; `merged` rows), `ran/<id>`                                                                        | `merge-announced`, `ran-announced`, `merge-watch.log`                                                                  | 10 merged, 11 a Mac line ran                                       |
 
 **pace** samples every `intervalSec` (60) and averages the last `windowSamples` (5); nothing trips below the gate's
@@ -865,15 +873,31 @@ isn't a positive number never fires.
 **usage**: the account % is the max weekly `used_percentage` among meter rows from the last `freshSec` (600): a stale
 session reports an old value, a fresh row the live one. ≥ `hardPct` (60) → 8, else ≥ `softPct` (58) → 7, checked every
 `intervalSec` (60). After a soft stop the hub restarts it with `--hard-only` (the soft line would re-fire at once);
-`APERTURE_USAGE_SOFT` / `_HARD` in the env override the lines. No fresh row at all is quiet, not an exit: overnight, with
-no session active, that is the normal state, and an exit would wake the hub every restart; `usage-now.json`'s `at` shows
-the last reading's age. A row of the wrong shape (a torn line, a non-string `ts`) is dropped alone.
+`APERTURE_USAGE_SOFT` / `_HARD` in the env override the lines. No fresh row is quiet while nothing works (overnight,
+the normal state); `usage-now.json`'s `at` shows the last reading's age. A row of the wrong shape (a torn line, a
+non-string `ts`) is dropped alone.
+
+**The meter gone blind (13**; `wl_meter_blind`, both meter watchers): a dead status-line logger would leave 7, 8
+and 9 unable to fire. A tick with no reading exits 13 when all four hold: a live session is `working` (`sessions/*.json`
+`state`, its `pid` and `pidStart` alive — the hub's own session counts: its logger dying is the same failure); such
+ticks have added up to `freshSec` since this copy's last reading (ticks, not the clock, so a VM paused overnight doesn't
+fire on resume before the loggers write, and a reading resets them); the newest **usable** row in the two newest meter
+files is `staleSec` (7200, in each watcher's block) old, or there is none — usable is usage's numeric weekly %, or
+context's `ctx` object and string `name`, so healthy rows that lack them don't count as fresh, and the row's own UTC
+offset sets its age; and `meter-stale-fired`, one epoch shared by both watchers, is not within `staleSec` (garbled or
+in the future counts as never), so an outage wakes the hub once per `staleSec`, a restart included. The line is
+`HH:MM METER STALE last usable row MM-DD HH:MM, working: <names>` (or `no usable row in the two newest meter files`); an
+unwritable marker says it and exits 74. Known limits: a session interrupted mid-turn stays `working` until its next
+prompt (Stop hooks skip interrupts), so a really blind meter can wake the hub overnight, once per `staleSec`; a sign-in
+with no weekly window reads as blind for good (the hard stop is blind there too); `pnpm usage doctor` passes when rows
+land without a weekly %; a `staleSec` above a day fires early (the scan covers two files).
 
 **context**: every `intervalSec` (300), each session's latest fresh row: tokens = input + cache creation + cache read,
 pct = tokens / `windowTokens` (1M, the lanes' model's window), sorted into `ctx.json`. A session at ≥ `urgentPct` (50)
 exits 9 unless `ctx-alerted.json` stamped it within `realertSec` (6 h); only the sessions alerted now are stamped.
 `flagPct` (40) is the tower's warn line; the watcher only checks it sits at or under `urgentPct`.
-`APERTURE_CTX_WINDOW` / `_URGENT` in the env override (not `WINDOW`: GNU screen exports it).
+`APERTURE_CTX_WINDOW` / `_URGENT` in the env override (not `WINDOW`: GNU screen exports it). A tick with no session
+in `ctx.json` is blind by the rule above (13), with context's own usable test and its 300 s tick.
 
 **merge** (`merge-watch.sh`, tests `merge-watch.test.ts`): the one watcher with no `limits.json` keys — its 30 s tick is
 a constant, as nothing about it is a threshold. Each tick it reads the `merged` rows the main sync appends
@@ -912,6 +936,10 @@ carry the same list.
 - **Perf fields, after merge** (_History_ → _Perf fields_): the hub runs `scripts/board/board.sh sampler restart` from
   the main checkout and restarts `pace-watch.sh`; the user re-runs the Mac stats install line (`docs/ops/TOWER.md` →
   _Mac stats_ → _Install_) so the agent writes `vm.cpuPct`, `top` and `sim`.
+
+- **Watcher locks, after merge** (_Watchers_ → one copy each): once `/workspace` is on the new main, the hub stops each
+  of its four running watchers with its background task's own stop and starts them again: a copy started before the
+  merge holds no lock, so a new one beside it would not be refused (`timeout 65m` rolls each within the hour anyway).
 
 - **Phase logger, after merge** (_Watchers_ → the phase logger): the hub runs `scripts/board/board.sh sampler restart`
   from the main checkout; until then the running sampler keeps its old loop and nothing is logged.
